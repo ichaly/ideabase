@@ -103,10 +103,11 @@ func (my *Metadata) tableOption() error {
 
 		//构建字段
 		field := &internal.Field{
-			Type:        ast.NamedType(r.DataType, nil),
+			Type:        ast.NamedType(lo.Ternary(r.IsPrimary, "ID", my.cfg.Mapping[r.DataType]), nil),
 			Name:        column,
 			Table:       r.TableName,
 			Column:      r.ColumnName,
+			DataType:    r.DataType,
 			Description: r.ColumnDescription,
 		}
 

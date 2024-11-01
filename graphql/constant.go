@@ -63,6 +63,7 @@ const (
 const (
 	SCALAR_ID        = "ID"
 	SCALAR_INT       = "Int"
+	SCALAR_DATE      = "Date"
 	SCALAR_JSON      = "Json"
 	SCALAR_FLOAT     = "Float"
 	SCALAR_STRING    = "String"
@@ -113,20 +114,20 @@ const (
 // 内置的数据库到GraphQL的类型映射
 var dataTypes = map[string]string{
 	"timestamp with time zone": "DateTime",
-	"character varying":        "String",
-	"text":                     "String",
-	"smallint":                 "Int",
-	"integer":                  "Int",
-	"bigint":                   "Int",
-	"smallserial":              "Int",
-	"serial":                   "Int",
-	"bigserial":                "Int",
-	"decimal":                  "Float",
-	"numeric":                  "Float",
-	"real":                     "Float",
-	"double precision":         "Float",
-	"money":                    "Float",
-	"boolean":                  "Boolean",
+	"character varying":        SCALAR_STRING,
+	"text":                     SCALAR_STRING,
+	"smallint":                 SCALAR_INT,
+	"integer":                  SCALAR_INT,
+	"bigint":                   SCALAR_INT,
+	"smallserial":              SCALAR_INT,
+	"serial":                   SCALAR_INT,
+	"bigserial":                SCALAR_INT,
+	"decimal":                  SCALAR_FLOAT,
+	"numeric":                  SCALAR_FLOAT,
+	"real":                     SCALAR_FLOAT,
+	"double precision":         SCALAR_FLOAT,
+	"money":                    SCALAR_FLOAT,
+	"boolean":                  SCALAR_BOOLEAN,
 }
 
 // 顺序不要调整这个会影响内置标量的可用操作符
