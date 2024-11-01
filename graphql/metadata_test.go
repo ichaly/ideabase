@@ -1,7 +1,7 @@
 package graphql
 
 import (
-	"github.com/ichaly/ideabase/starter"
+	"github.com/ichaly/ideabase/service"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/suite"
 	"gorm.io/gorm"
@@ -20,9 +20,9 @@ func TestMetadata(t *testing.T) {
 
 func (my *_MetadataSuite) SetupSuite() {
 	var err error
-	my.v, err = starter.NewViper("../configs/dev.yml")
+	my.v, err = service.NewViper("../configs/dev.yml")
 	my.Require().NoError(err)
-	my.d, err = starter.NewConnect(my.v, []gorm.Plugin{starter.NewSonyFlake()}, []interface{}{})
+	my.d, err = service.NewConnect(my.v, []gorm.Plugin{service.NewSonyFlake()}, []interface{}{})
 	my.Require().NoError(err)
 }
 

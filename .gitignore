@@ -160,7 +160,8 @@ dist
 .LSOverride
 
 # Icon must end with two \r
-Icon
+Icon
+
 
 # Thumbnails
 ._*
@@ -270,4 +271,5 @@ docs/_book
 
 # TODO: where does this rule come from?
 test/
-
+.idea/**
+*.sum

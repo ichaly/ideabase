@@ -62,9 +62,9 @@ type Class struct {
 }
 
 type Field struct {
-	//Link        *Entry
-	//Join        *Entry
-	//Kind        ChainKind
+	Link        *Entry
+	Join        *Entry
+	Kind        ChainKind
 	Name        string
 	Type        *ast.Type
 	Table       string

@@ -1,4 +1,4 @@
-package starter
+package service
 
 import (
 	"github.com/ichaly/ideabase/utility"
