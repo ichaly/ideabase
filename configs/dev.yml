@@ -1,0 +1,73 @@
+app:
+  debug: true
+  name: "Go Next App"
+  port: 8080
+  root: /Users/Chaly/Downloads/YuGone/
+
+captcha:
+  length: 6
+  expired: 10m
+
+schema:
+  use-camel: true
+  prefixes:
+    - sys_
+    - cms_
+  block-list:
+    - secret
+    - password
+    - encrypted
+    - token
+    - casbin
+  mapping:
+    - json: String
+
+email:
+  port: 587
+  host: smtp.qq.com
+  from: Any Support <admin@te0.cn>
+  username:
+  password:
+
+phone:
+  sign_name:
+  template_code:
+  access_key_id:
+  access_key_secret:
+
+cache:
+  dialect: redis
+  host: 127.0.0.1
+  port: 6379
+  password: redis123
+
+database:
+  dialect: postgres
+  host: 127.0.0.1
+  port: 5678
+  name: demo
+  username: postgres
+  password: postgres
+
+oss:
+  #  vendor: 本地
+  #  bucket: /Users/Chaly/Downloads/upload
+  #  domain: http://127.0.0.1:8080
+  #  vendor: MINIO
+  #  region: 127.0.0.1:9000
+  #  bucket: eunut-tmp
+  #  domain: http://127.0.0.1:9000
+  #  vendor: 阿里
+  #  region: oss-cn-beijing.aliyuncs.com
+  #  bucket: eunut-img
+  #  domain: http://al.te0.cn
+  #  vendor: 腾讯
+  #  region: ap-beijing
+  #  bucket: eunut-1252629751
+  #  domain: https://tx.te0.cn
+  vendor: 七牛
+  region: z0
+  bucket: eunut-tmp
+  domain: http://qn.te0.cn
+  access_key:
+  secret_key:
