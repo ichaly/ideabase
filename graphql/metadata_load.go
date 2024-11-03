@@ -84,7 +84,7 @@ func (my *Metadata) tableOption() error {
 		return err
 	}
 
-	edge := make(utility.AnyMap[utility.AnyMap[*internal.Entry]])
+	data := make(utility.AnyMap[utility.AnyMap[*internal.Entry]])
 	//构建节点信息
 	for _, r := range list {
 		//判断是否包含黑名单关键字,执行忽略跳过
@@ -122,12 +122,12 @@ func (my *Metadata) tableOption() error {
 
 		//索引外键
 		if r.IsForeign {
-			maputil.GetOrSet(edge, table, make(map[string]*internal.Entry))[column] = r
+			maputil.GetOrSet(data, table, make(map[string]*internal.Entry))[column] = r
 		}
 	}
 
 	//构建关联信息
-	for _, v := range edge {
+	for _, v := range data {
 		for k, e := range v {
 			currentClass, currentField := my.Named(
 				e.TableName, e.ColumnName,
