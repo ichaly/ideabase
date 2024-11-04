@@ -95,15 +95,12 @@ func (my *Metadata) tableOption() error {
 			continue
 		}
 
-		//转化类型
-		r.DataType = lo.Ternary(r.IsPrimary, "ID", my.cfg.Mapping[r.DataType])
-
 		//规范命名
 		table, column := my.Named(r.TableName, r.ColumnName)
 
 		//构建字段
 		field := &internal.Field{
-			Type:        ast.NamedType(lo.Ternary(r.IsPrimary, "ID", my.cfg.Mapping[r.DataType]), nil),
+			Type:        ast.NamedType(lo.Ternary(r.IsPrimary, SCALAR_ID, my.cfg.Mapping[r.DataType]), nil),
 			Name:        column,
 			Table:       r.TableName,
 			Column:      r.ColumnName,

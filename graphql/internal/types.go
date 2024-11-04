@@ -65,8 +65,8 @@ type Field struct {
 	Link        *Entry
 	Join        *Entry
 	Kind        ChainKind
-	Name        string
 	Type        *ast.Type
+	Name        string
 	Table       string
 	Column      string
 	Virtual     bool

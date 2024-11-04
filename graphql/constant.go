@@ -113,7 +113,7 @@ const (
 
 // 内置的数据库到GraphQL的类型映射
 var dataTypes = map[string]string{
-	"timestamp with time zone": "DateTime",
+	"timestamp with time zone": SCALAR_DATE_TIME,
 	"character varying":        SCALAR_STRING,
 	"text":                     SCALAR_STRING,
 	"smallint":                 SCALAR_INT,
