@@ -1,7 +1,7 @@
-package service
+package starter
 
 import (
-	"github.com/ichaly/ideabase/service/internal"
+	"github.com/ichaly/ideabase/starter/internal"
 	"github.com/spf13/viper"
 )
 

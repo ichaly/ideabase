@@ -3,7 +3,7 @@ package graphql
 import (
 	"embed"
 	"github.com/ichaly/ideabase/graphql/internal"
-	"github.com/ichaly/ideabase/service"
+	"github.com/ichaly/ideabase/starter"
 	"github.com/ichaly/ideabase/utility"
 	"github.com/jinzhu/inflection"
 	"github.com/spf13/viper"
@@ -23,7 +23,7 @@ func init() {
 }
 
 type Config struct {
-	service.Config       `mapstructure:",squash"`
+	starter.Config       `mapstructure:",squash"`
 	internal.TableConfig `mapstructure:"schema"`
 }
 

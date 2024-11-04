@@ -1,8 +1,8 @@
-package service
+package starter
 
 import (
 	"fmt"
-	"github.com/ichaly/ideabase/service/internal"
+	"github.com/ichaly/ideabase/starter/internal"
 	"github.com/spf13/viper"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
