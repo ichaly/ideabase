@@ -159,10 +159,10 @@ func (my *Metadata) tableOption() error {
 			}
 			//OneToMany
 			my.Nodes[foreignClass].Fields[foreignField] = &internal.Field{
-				Name:      foreignField,
-				Type:      ast.ListType(ast.NamedType(currentClass, nil), nil),
-				Kind:      lo.Ternary(e.TableRelation == e.TableName, RECURSIVE, ONE_TO_MANY),
-				Link:      e,
+				Name: foreignField,
+				Type: ast.ListType(ast.NamedType(currentClass, nil), nil),
+				Kind: lo.Ternary(e.TableRelation == e.TableName, RECURSIVE, ONE_TO_MANY),
+				//Link:      e,
 				Arguments: append(args, inputs(currentClass)...),
 			}
 			//ManyToOne
@@ -170,12 +170,12 @@ func (my *Metadata) tableOption() error {
 				Name: currentField,
 				Type: ast.NamedType(foreignClass, nil),
 				Kind: lo.Ternary(e.TableRelation == e.TableName, RECURSIVE, MANY_TO_ONE),
-				Link: &internal.Entry{
-					TableName:      e.TableRelation,
-					ColumnName:     e.ColumnRelation,
-					TableRelation:  e.TableName,
-					ColumnRelation: e.ColumnName,
-				},
+				//Link: &internal.Entry{
+				//	TableName:      e.TableRelation,
+				//	ColumnName:     e.ColumnRelation,
+				//	TableRelation:  e.TableName,
+				//	ColumnRelation: e.ColumnName,
+				//},
 				Table:     e.TableName,
 				Column:    e.ColumnName,
 				Arguments: append(args, inputs(foreignClass)...),
@@ -195,13 +195,13 @@ func (my *Metadata) tableOption() error {
 					Name: field,
 					Type: ast.ListType(ast.NamedType(class, nil), nil),
 					Kind: MANY_TO_MANY,
-					Link: &internal.Entry{
-						TableName:      r.TableRelation,
-						ColumnName:     e.ColumnRelation,
-						TableRelation:  e.TableName,
-						ColumnRelation: r.ColumnName,
-					},
-					Join:      e,
+					//Link: &internal.Entry{
+					//	TableName:      r.TableRelation,
+					//	ColumnName:     e.ColumnRelation,
+					//	TableRelation:  e.TableName,
+					//	ColumnRelation: r.ColumnName,
+					//},
+					//Join:      e,
 					Arguments: inputs(class),
 				}
 			}
