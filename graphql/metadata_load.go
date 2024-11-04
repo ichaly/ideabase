@@ -2,6 +2,7 @@ package graphql
 
 import (
 	"github.com/duke-git/lancet/v2/maputil"
+	"github.com/duke-git/lancet/v2/slice"
 	"github.com/ichaly/ideabase/graphql/internal"
 	"github.com/ichaly/ideabase/utility"
 	"github.com/samber/lo"
@@ -88,19 +89,21 @@ func (my *Metadata) tableOption() error {
 	//构建节点信息
 	for _, r := range list {
 		//判断是否包含黑名单关键字,执行忽略跳过
-		if lo.Contains(my.cfg.BlockList, r.ColumnName) {
-			continue
-		}
-		if lo.Contains(my.cfg.BlockList, r.TableName) {
+		if slice.ContainBy(my.cfg.BlockList, func(item string) bool {
+			return item == r.ColumnName || item == r.TableName
+		}) {
 			continue
 		}
 
 		//规范命名
 		table, column := my.Named(r.TableName, r.ColumnName)
 
+		//类型转换
+		name := lo.Ternary(r.IsPrimary, SCALAR_ID, my.cfg.Mapping[r.DataType])
+
 		//构建字段
 		field := &internal.Field{
-			Type:        ast.NamedType(lo.Ternary(r.IsPrimary, SCALAR_ID, my.cfg.Mapping[r.DataType]), nil),
+			Type:        ast.NamedType(name, nil),
 			Name:        column,
 			Table:       r.TableName,
 			Column:      r.ColumnName,
@@ -109,13 +112,19 @@ func (my *Metadata) tableOption() error {
 		}
 
 		//索引节点
-		maputil.GetOrSet(my.Nodes, table, &internal.Class{
+		class := maputil.GetOrSet(my.Nodes, table, &internal.Class{
 			Name:        table,
 			Kind:        ast.Object,
 			Table:       r.TableName,
 			Description: r.TableDescription,
 			Fields:      make(map[string]*internal.Field),
-		}).Fields[column] = field
+		})
+		class.Fields[column] = field
+
+		//标记主键
+		if r.IsPrimary {
+			class.Primary = append(class.Primary, column)
+		}
 
 		//索引外键
 		if r.IsForeign {

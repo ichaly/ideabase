@@ -55,18 +55,17 @@ type Class struct {
 	Name        string
 	Table       string
 	Fields      map[string]*Field
-	Primary     map[string]*Field
-	Foreign     map[string]*Chain
+	Primary     []string
 	Virtual     bool
 	Description string
 }
 
 type Field struct {
-	Link        *Entry
-	Join        *Entry
 	Kind        ChainKind
 	Type        *ast.Type
 	Name        string
+	Link        *Entry
+	Join        *Entry
 	Table       string
 	Column      string
 	Virtual     bool
@@ -80,9 +79,6 @@ type Input struct {
 	Name        string
 	Default     string
 	Description string
-}
-
-type Chain struct {
 }
 
 type Value struct {
