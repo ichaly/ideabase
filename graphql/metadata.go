@@ -57,10 +57,10 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 	for _, o := range []internal.LoadOption{
 		my.expressions,
 		my.tableOption,
-		//my.orderOption,
-		//my.whereOption,
-		//my.inputOption,
-		//my.entryOption,
+		my.orderOption,
+		my.whereOption,
+		my.inputOption,
+		my.entryOption,
 	} {
 		if err := o(); err != nil {
 			return nil, err
