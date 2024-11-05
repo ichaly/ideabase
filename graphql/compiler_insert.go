@@ -61,7 +61,7 @@ func (my *compilerContext) renderInsert(id, pid int, f *ast.Field) {
 			raw, _ := v.value.Value(my.variables)
 			my.Wrap(`'`, raw)
 			my.Write(`::`)
-			my.Write("text") //TODO:需要转化为数据库对应的具体类型
+			my.Write(v.field.DataType)
 		}
 		if len(value.parents) > 0 {
 			for _, v := range value.parents {
