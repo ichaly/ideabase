@@ -1,16 +1,28 @@
 package graphql
 
 import (
+	"github.com/ichaly/ideabase/graphql/internal"
 	"github.com/samber/lo"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
+type updateItem struct {
+	index   int
+	field   *internal.Field
+	child   *ast.ChildValue
+	parents []*internal.Entry
+}
+
 func (my *compilerContext) renderUpdate(id, pid int, f *ast.Field) {
 	update := f.Arguments.ForName(UPDATE)
-	table, _ := my.meta.TableName(f.Definition.Type.Name(), false)
+	class := f.Definition.Type.Name()
+	table, _ := my.meta.TableName(class, false)
 
-	children := lo.Filter(update.Value.Children, func(item *ast.ChildValue, index int) bool {
+	children := lo.Map(lo.Filter(update.Value.Children, func(item *ast.ChildValue, index int) bool {
 		return item.Value.Definition.Kind == ast.Scalar
+	}), func(item *ast.ChildValue, index int) updateItem {
+		field, _ := my.meta.FindField(class, item.Name, false)
+		return updateItem{index: index, field: field, child: item}
 	})
 
 	my.Quoted(table)
@@ -21,17 +33,17 @@ func (my *compilerContext) renderUpdate(id, pid int, f *ast.Field) {
 		if i != 0 {
 			my.Write(`,`)
 		}
-		my.Quoted(v.Name)
+		my.Quoted(v.child.Name)
 	}
 	my.Space(`) = (SELECT`)
 	for i, v := range children {
 		if i != 0 {
 			my.Write(`,`)
 		}
-		raw, _ := v.Value.Value(my.variables)
+		raw, _ := v.child.Value.Value(my.variables)
 		my.Wrap(`'`, raw)
 		my.Write(`::`)
-		my.Write("text") //TODO:需要转化为数据库对应的具体类型
+		my.Write(v.field.DataType)
 	}
 	my.Space(`)`)
 
