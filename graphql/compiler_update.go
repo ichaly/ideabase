@@ -10,7 +10,7 @@ import (
 type updateItem struct {
 	index int
 	field *internal.Field
-	value *ast.ChildValue
+	child *ast.ChildValue
 }
 
 func (my *compilerContext) renderUpdate(id, pid int, f *ast.Field) {
@@ -22,7 +22,7 @@ func (my *compilerContext) renderUpdate(id, pid int, f *ast.Field) {
 		return item.Value.Definition.Kind == ast.Scalar
 	}), func(item *ast.ChildValue, index int) updateItem {
 		field, _ := my.meta.FindField(class, item.Name, false)
-		return updateItem{index: index, field: field, value: item}
+		return updateItem{index: index, field: field, child: item}
 	})
 
 	my.Quoted(table)
@@ -33,14 +33,14 @@ func (my *compilerContext) renderUpdate(id, pid int, f *ast.Field) {
 		if i != 0 {
 			my.Write(`,`)
 		}
-		my.Quoted(v.value.Name)
+		my.Quoted(v.child.Name)
 	}
 	my.Space(`) = (SELECT`)
 	for i, v := range children {
 		if i != 0 {
 			my.Write(`,`)
 		}
-		raw, _ := v.value.Value.Value(my.variables)
+		raw, _ := v.child.Value.Value(my.variables)
 		my.Wrap(`'`, raw)
 		my.Write(`::`)
 		my.Write(v.field.DataType)
