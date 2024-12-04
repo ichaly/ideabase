@@ -20,6 +20,7 @@ func (my *compilerContext) renderMutation(set ast.SelectionSet) {
 			} else if update != nil {
 				my.renderUpdate(id, 0, f)
 			} else if upsert != nil {
+				my.renderUpsert(id, 0, f)
 			} else if remove != nil {
 				my.renderRemove(id, 0, f)
 			}
