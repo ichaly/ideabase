@@ -5,19 +5,54 @@ globs:
 
 # 项目描述
 
-- 这是一个使用Golang开,能将graphgql编译为sql的中间件
-- 项目参考开源项目dosco/graphjin,开源地址:https://github.com/dosco/graphjin
-- Graphjin的使用文档地址:https://graphjin.com/
-- 中间件支持增删改查的sql编译
-- 先实现pgsql的支持,同时要为mysql的支持流出扩展接口
+- 这是一个使用Golang开,能将graphgql编译为sql的中间件,项目名ideabase
+- 项目参考开源项目dosco/graphjin
+
+# 代码风格
+
+- 代码要有很高的可阅读性
+- 代码命名规则尽量简短明了
+- 统一使用 my 作为扩展方法的接收器参数名
 - 项目已经写了一部分,请按照现在的编码风格
-- 项目要考虑良好的架构设计,同时要具有较高的性能
-- 项目代码要有很高的可阅读性
-- 支持一对多,多对一,多对多,自关联的复杂表结构
+
+# 功能要求
+
+- 中间件支持复杂的增删改查的sql编译
+- 支持一对多,多对一,多对多,自关联的复杂表结构级联操作
+- 先实现pgsql的支持,同时要为mysql的支持留出扩展接口
 - 可以支持直接读取数据库结构构件schema,同时也要考虑没有权限读取元数据怎么办,比如可以在开发模式提前预生成,正式环境直接加载
 - 支持配置化虚拟表,可以将配置和数据库真是关联上
 - 支持通过gql注解设置类似springboot的缓存实现
 - 缓存也是以接口的方式支持内存缓存或者redis等
-- 数据库连接使用开源的三方框架Gorm,开元地址:https://github.com/go-gorm/gorm
 - 支持数据库连接池,支持事物
 - 为支持定义resolver预留出很好的接口方便开发者再此基础上自定义gql的字段解析器
+
+# 架构要求
+
+- 项目要考虑良好的架构设计,同时要具有较高的性能
+- 使用Google Wire或Uber Dig/Fx作为依赖框架
+- 数据库连接使用开源的三方框架Gorm
+- 项目对配置有一个额外的强烈需求,配置系统使用viper作为统一配置管理,且每个模块有自己的配置项,做到统一且解耦
+- 尽量使用option的模式来设计配置
+
+# 项目结构
+
+- 项目根目录是一个go.work的主目录
+- 具有graphql/service/gateway等独立的子模块
+- 其中graphql模块是主要是gql变异为sql的主要模块可以独立使用
+- service模块主要负责将graphql模块发布为http服务等相关逻辑
+- gateway模块可以将多个service的graphql合并为一个整体的gql网管服务
+
+# 三方依赖
+
+- 使用 github.com/duke-git/lancet/v2 作为工具类库
+- 使用 github.com/samber/lo 作为工具类库
+- 使用 github.com/iancoleman/strcase 格式转换类库
+- 使用 /github.com/gofiber/fiber 作为web开发框架,如果有些目的达不到就使用github.com/gin-gonic/gin
+- 使用 github.com/spf13/viper 作为统一配置框架
+- 使用 github.com/vektah/gqlparser/v2 作为gql和schema解析库,如果达不到尽可能在这个基础上扩展且不对原项目侵入,方便依赖升级
+- 使用 gorm.io/gorm 作为orm框架
+
+# 单元测试
+
+- 选择一个合适的基于docker的临时数据库进行测试,做好基础数据的模拟
