@@ -1,84 +1,156 @@
 package utl
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+	"sync"
+)
 
+// AnyMap 是一个字符串键的泛型map
 type AnyMap[V any] map[string]V
 
 // TeeMap 用于存储两个不同类型的key对应同一个value的映射
 type TeeMap[L comparable, R comparable, V any] struct {
+	mu         sync.RWMutex
 	leftMap    map[L]V
 	rightMap   map[R]V
-	reverseMap map[interface{}]interface{}
+	reverseMap struct {
+		left  map[L]R
+		right map[R]L
+	}
 }
 
-// NewTeeMap 创建一个新的BiKeyMap实例
+// NewTeeMap 创建一个新的TeeMap实例
 func NewTeeMap[L comparable, R comparable, V any]() *TeeMap[L, R, V] {
 	return &TeeMap[L, R, V]{
-		leftMap:    make(map[L]V),
-		rightMap:   make(map[R]V),
-		reverseMap: make(map[interface{}]interface{}),
+		leftMap:  make(map[L]V),
+		rightMap: make(map[R]V),
+		reverseMap: struct {
+			left  map[L]R
+			right map[R]L
+		}{
+			left:  make(map[L]R),
+			right: make(map[R]L),
+		},
 	}
 }
 
 // Set 用于设置键值对，两个不同类型的key对应同一个value
 func (my *TeeMap[L, R, V]) Set(leftKey L, rightKey R, value V) {
+	my.mu.Lock()
+	defer my.mu.Unlock()
+
 	my.leftMap[leftKey] = value
 	my.rightMap[rightKey] = value
-	my.reverseMap[leftKey] = rightKey
-	my.reverseMap[rightKey] = leftKey
+	my.reverseMap.left[leftKey] = rightKey
+	my.reverseMap.right[rightKey] = leftKey
 }
 
-// Get 用于通过任一key获取对应的value
-func (my *TeeMap[L, R, V]) Get(key interface{}) (V, bool) {
-	var value V
-	var ok bool
+// GetLeft 通过左键获取值
+func (my *TeeMap[L, R, V]) GetLeft(key L) (V, bool) {
+	my.mu.RLock()
+	defer my.mu.RUnlock()
 
-	switch k := key.(type) {
-	case L:
-		value, ok = my.leftMap[k]
-	case R:
-		value, ok = my.rightMap[k]
-	}
+	value, ok := my.leftMap[key]
+	return value, ok
+}
 
+// GetRight 通过右键获取值
+func (my *TeeMap[L, R, V]) GetRight(key R) (V, bool) {
+	my.mu.RLock()
+	defer my.mu.RUnlock()
+
+	value, ok := my.rightMap[key]
 	return value, ok
 }
 
 // Delete 用于通过任一key删除对应的键值对
-func (my *TeeMap[L, R, V]) Delete(key interface{}) {
-	if otherKey, ok := my.reverseMap[key]; ok {
-		switch k := key.(type) {
-		case L:
+func (my *TeeMap[L, R, V]) Delete(key interface{}) error {
+	my.mu.Lock()
+	defer my.mu.Unlock()
+
+	switch k := key.(type) {
+	case L:
+		if rightKey, ok := my.reverseMap.left[k]; ok {
 			delete(my.leftMap, k)
-			delete(my.rightMap, otherKey.(R))
-		case R:
-			delete(my.rightMap, k)
-			delete(my.leftMap, otherKey.(L))
+			delete(my.rightMap, rightKey)
+			delete(my.reverseMap.left, k)
+			delete(my.reverseMap.right, rightKey)
 		}
-		delete(my.reverseMap, key)
-		delete(my.reverseMap, otherKey)
-	}
-}
-
-func QueryMap(data map[string]interface{}, path string) interface{} {
-	arr := strings.SplitN(path, ".", 2)
-	if len(arr) <= 1 {
-		return data[path]
-	}
-	if val, ok := data[arr[0]].(map[string]interface{}); ok {
-		return QueryMap(val, arr[1])
+	case R:
+		if leftKey, ok := my.reverseMap.right[k]; ok {
+			delete(my.rightMap, k)
+			delete(my.leftMap, leftKey)
+			delete(my.reverseMap.right, k)
+			delete(my.reverseMap.left, leftKey)
+		}
+	default:
+		return fmt.Errorf("unsupported key type: %T", key)
 	}
 	return nil
 }
 
-func EraseMap(data map[string]interface{}, path string) interface{} {
-	arr := strings.SplitN(path, ".", 2)
-	if len(arr) <= 1 {
-		res := data[path]
-		delete(data, path)
-		return res
+// QueryMap 递归查询嵌套map中的值
+func QueryMap(data map[string]interface{}, path string) (interface{}, error) {
+	if data == nil {
+		return nil, fmt.Errorf("nil map")
 	}
-	if val, ok := data[arr[0]].(map[string]interface{}); ok {
-		return EraseMap(val, arr[1])
+
+	if path == "" {
+		return nil, fmt.Errorf("empty path")
 	}
-	return nil
+
+	parts := strings.SplitN(path, ".", 2)
+	key := parts[0]
+
+	value, ok := data[key]
+	if !ok {
+		return nil, fmt.Errorf("key not found: %s", key)
+	}
+
+	if len(parts) == 1 {
+		return value, nil
+	}
+
+	nextData, ok := value.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("value at '%s' is not a map", key)
+	}
+
+	return QueryMap(nextData, parts[1])
+}
+
+// EraseMap 递归删除嵌套map中的值并返回被删除的值
+func EraseMap(data map[string]interface{}, path string) (interface{}, error) {
+	if data == nil {
+		return nil, fmt.Errorf("nil map")
+	}
+
+	if path == "" {
+		return nil, fmt.Errorf("empty path")
+	}
+
+	parts := strings.SplitN(path, ".", 2)
+	key := parts[0]
+
+	if len(parts) == 1 {
+		value, exists := data[key]
+		if !exists {
+			return nil, fmt.Errorf("key not found: %s", key)
+		}
+		delete(data, key)
+		return value, nil
+	}
+
+	value, ok := data[key]
+	if !ok {
+		return nil, fmt.Errorf("key not found: %s", key)
+	}
+
+	nextData, ok := value.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("value at '%s' is not a map", key)
+	}
+
+	return EraseMap(nextData, parts[1])
 }

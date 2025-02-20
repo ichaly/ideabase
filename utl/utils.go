@@ -3,13 +3,18 @@ package utl
 import (
 	"crypto/md5"
 	"encoding/hex"
-	"fmt"
 	"hash/crc32"
 	"math/rand"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
+)
+
+var (
+	globalRand = rand.New(rand.NewSource(time.Now().UnixNano()))
+	randMu     sync.Mutex
 )
 
 func MD5(s string) string {
@@ -29,18 +34,26 @@ func Hash(key string) int {
 }
 
 func Root() string {
-	_, filename, _, _ := runtime.Caller(0)
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return ""
+	}
 	return filepath.Dir(filepath.Dir(filename))
 }
 
 func RandomCode(width int) string {
-	numeric := [10]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-	r := len(numeric)
-	rand.New(rand.NewSource(time.Now().UnixNano()))
+	if width <= 0 {
+		return ""
+	}
 
-	var sb strings.Builder
+	sb := strings.Builder{}
+	sb.Grow(width)
+
+	randMu.Lock()
+	defer randMu.Unlock()
+
 	for i := 0; i < width; i++ {
-		_, _ = fmt.Fprintf(&sb, "%d", numeric[rand.Intn(r)])
+		sb.WriteByte('0' + byte(globalRand.Intn(10)))
 	}
 	return sb.String()
 }

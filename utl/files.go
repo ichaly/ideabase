@@ -3,47 +3,89 @@ package utl
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
 )
 
+// Md5File 计算文件内容的MD5值
 func Md5File(src io.Reader) string {
 	dst := md5.New()
 	_, _ = io.Copy(dst, src)
-	key := hex.EncodeToString(dst.Sum(nil))
-	return key
+	return hex.EncodeToString(dst.Sum(nil))
 }
 
 func CopyFile(src, dst string) error {
-	_ = os.MkdirAll(path.Dir(dst), 0777)
-	input, err := os.Open(path.Join(path.Dir(src), path.Base(src)))
+	if src == "" || dst == "" {
+		return fmt.Errorf("empty source or destination path")
+	}
+
+	// 创建目标目录
+	if err := os.MkdirAll(path.Dir(dst), 0755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+
+	// 打开源文件
+	input, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open source file: %w", err)
+	}
 	defer input.Close()
+
+	// 创建目标文件（如果文件已存在则返回错误）
+	output, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
-		return err
+		return fmt.Errorf("create destination file: %w", err)
 	}
-	output, err := os.Create(path.Join(path.Dir(dst), path.Base(dst)))
-	defer output.Close()
-	if err != nil {
-		return err
+	defer func() {
+		closeErr := output.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}()
+
+	// 复制文件内容
+	if _, err := io.Copy(output, input); err != nil {
+		return fmt.Errorf("copy content: %w", err)
 	}
-	_, err = io.Copy(output, input)
-	if err != nil {
-		return err
-	}
+
 	return nil
 }
 
+// WriteFile 将数据写入文件
 func WriteFile(source io.Reader, target string) error {
-	_ = os.MkdirAll(filepath.Dir(target), 0777)
-	file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE, 0666)
-	if err != nil {
-		return err
+	if source == nil {
+		return fmt.Errorf("nil source reader")
 	}
-	defer func(file *os.File) {
-		_ = file.Close()
-	}(file)
-	_, err = io.Copy(file, source)
-	return err
+
+	if target == "" {
+		return fmt.Errorf("empty target path")
+	}
+
+	// 创建目标目录
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+
+	// 创建或覆盖目标文件
+	file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+
+	defer func() {
+		closeErr := file.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}()
+
+	// 写入数据
+	if _, err := io.Copy(file, source); err != nil {
+		return fmt.Errorf("write data: %w", err)
+	}
+
+	return nil
 }
