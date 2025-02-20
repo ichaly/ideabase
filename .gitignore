@@ -274,3 +274,4 @@ test/
 .idea/**
 *.sum
 *.iml
+.vscode/settings.json
