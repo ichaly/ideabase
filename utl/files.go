@@ -3,11 +3,19 @@ package utl
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
+)
+
+// 文件操作相关的错误
+var (
+	errEmptyPath       = errors.New("empty source or destination path")
+	errNilSourceReader = errors.New("nil source reader")
+	errEmptyTarget     = errors.New("empty target path")
 )
 
 // Md5File 计算文件内容的MD5值
@@ -19,7 +27,7 @@ func Md5File(src io.Reader) string {
 
 func CopyFile(src, dst string) error {
 	if src == "" || dst == "" {
-		return fmt.Errorf("empty source or destination path")
+		return errEmptyPath
 	}
 
 	// 创建目标目录
@@ -32,7 +40,11 @@ func CopyFile(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("open source file: %w", err)
 	}
-	defer input.Close()
+	defer func() {
+		if err == nil {
+			err = input.Close()
+		}
+	}()
 
 	// 创建目标文件（如果文件已存在则返回错误）
 	output, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
@@ -40,9 +52,8 @@ func CopyFile(src, dst string) error {
 		return fmt.Errorf("create destination file: %w", err)
 	}
 	defer func() {
-		closeErr := output.Close()
 		if err == nil {
-			err = closeErr
+			err = output.Close()
 		}
 	}()
 
@@ -57,11 +68,11 @@ func CopyFile(src, dst string) error {
 // WriteFile 将数据写入文件
 func WriteFile(source io.Reader, target string) error {
 	if source == nil {
-		return fmt.Errorf("nil source reader")
+		return errNilSourceReader
 	}
 
 	if target == "" {
-		return fmt.Errorf("empty target path")
+		return errEmptyTarget
 	}
 
 	// 创建目标目录
@@ -76,9 +87,8 @@ func WriteFile(source io.Reader, target string) error {
 	}
 
 	defer func() {
-		closeErr := file.Close()
 		if err == nil {
-			err = closeErr
+			err = file.Close()
 		}
 	}()
 
