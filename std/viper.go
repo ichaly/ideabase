@@ -137,17 +137,10 @@ func mergeProfileConfig(v *viper.Viper, name, profile string) error {
 	if profile == "" {
 		return nil
 	}
-
-	profileName := utl.JoinString(name, "-", profile)
-	v.SetConfigName(profileName)
-
-	if err := v.MergeInConfig(); err != nil {
-		// 仅在文件存在但无法加载时返回错误
-		if !errors.Is(err, viper.ConfigFileNotFoundError{}) {
-			return fmt.Errorf("merge config file: %w", err)
-		}
+	v.SetConfigName(utl.JoinString(name, "-", profile))
+	if err := v.MergeInConfig(); err != nil && !errors.As(err, &viper.ConfigFileNotFoundError{}) {
+		return fmt.Errorf("merge config file: %w", err)
 	}
-
 	return nil
 }
 
