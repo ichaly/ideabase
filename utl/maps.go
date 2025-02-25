@@ -46,21 +46,26 @@ func (my *TeeMap[L, R, V]) Set(leftKey L, rightKey R, value V) {
 	my.reverseMap.right[rightKey] = leftKey
 }
 
-// GetLeft 通过左键获取值
-func (my *TeeMap[L, R, V]) GetLeft(key L) (V, bool) {
+// Get 通过任意类型的键获取值
+func (my *TeeMap[L, R, V]) Get(key interface{}) (V, bool) {
 	my.mu.RLock()
 	defer my.mu.RUnlock()
 
-	value, ok := my.leftMap[key]
-	return value, ok
-}
+	var value V
+	var ok bool
 
-// GetRight 通过右键获取值
-func (my *TeeMap[L, R, V]) GetRight(key R) (V, bool) {
-	my.mu.RLock()
-	defer my.mu.RUnlock()
+	// 先尝试作为左键查找
+	if leftKey, isLeft := key.(L); isLeft {
+		if value, ok = my.leftMap[leftKey]; ok {
+			return value, ok
+		}
+	}
 
-	value, ok := my.rightMap[key]
+	// 如果左键未找到或不是左键类型，尝试作为右键查找
+	if rightKey, isRight := key.(R); isRight {
+		value, ok = my.rightMap[rightKey]
+	}
+
 	return value, ok
 }
 
