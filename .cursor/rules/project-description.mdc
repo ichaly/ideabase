@@ -7,6 +7,7 @@ globs:
 
 - 这是一个使用Golang开,能将graphgql编译为sql的中间件,项目名ideabase
 - 项目参考开源项目dosco/graphjin
+- 代码提交注释也要使用中文
 
 # 代码风格
 
