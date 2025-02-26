@@ -172,10 +172,8 @@ func (my *_ExecutorSuite) TestExecutorSortOneToMany() {
 }
 
 func (my *_ExecutorSuite) TestMutationInsert() {
-	//input := `mutation{areaList(insert:{name:"重庆"}){id name}userList(insert:{name:"重庆管理员"}){id}}`
-	//input := `mutation{areaList(insert:{name:"重庆"}){id name}userList(insert:{name:"重庆管理员"}){id}a:areaList{id}}`
-	input := `mutation{areaList(insert:{name:"重庆",weight:99}){id name}}`
-	expect := `SELECT jsonb_build_object('areaList', __sj_0.json) AS __root FROM (SELECT true) AS __root_x LEFT OUTER JOIN LATERAL ( SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json FROM (  SELECT to_jsonb(__sr_0.*) AS json FROM (  SELECT "sys_area_0"."id" AS "id","sys_area_0"."name" AS "name","__sj_1"."json" AS "userList" FROM ( SELECT "sys_area"."id","sys_area"."name" FROM "sys_area" ORDER BY  "sys_area"."name" DESC NULLS LAST, "sys_area"."id" ASC LIMIT ? ) AS "sys_area_0" LEFT OUTER JOIN LATERAL ( SELECT COALESCE(jsonb_agg(__sj_1.json), '[]') AS json FROM (  SELECT to_jsonb(__sr_1.*) AS json FROM (  SELECT "sys_user_1"."id" AS "id","sys_user_1"."area_id" AS "areaId" FROM ( SELECT "sys_user"."id","sys_user"."area_id" FROM "sys_user" WHERE ((("sys_user"."area_id") = "sys_area_0"."id")) ORDER BY  "sys_user"."id" ASC LIMIT ? ) AS "sys_user_1" ) AS "__sr_1" ) AS "__sj_1" ) AS "__sj_1" ON true  ) AS "__sr_0" ) AS "__sj_0" ) AS "__sj_0" ON true`
+	input := `mutation{areaList(insert:{name:"重庆"}){id name}userList(insert:{name:"重庆管理员"}){id}}`
+	expect := `WITH "sys_area_0" AS (INSERT INTO "sys_area" ("name") SELECT '重庆'::character varying RETURNING "sys_area".* ),"sys_area" AS (  SELECT * FROM "sys_area_0"),"sys_user_0" AS (INSERT INTO "sys_user" ("name") SELECT '重庆管理员'::text RETURNING "sys_user".* ),"sys_user" AS (  SELECT * FROM "sys_user_0")SELECT jsonb_build_object('areaList', __sj_0.json,'userList', __sj_1.json) AS __root FROM (SELECT true) AS __root_x LEFT OUTER JOIN LATERAL ( SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json FROM (  SELECT to_jsonb(__sr_0.*) AS json FROM (  SELECT "sys_area_0"."id" AS "id","sys_area_0"."name" AS "name" FROM ( SELECT "sys_area"."id","sys_area"."name" FROM "sys_area" LIMIT ? ) AS "sys_area_0" ) AS "__sr_0" ) AS "__sj_0" ) AS "__sj_0" ON true  LEFT OUTER JOIN LATERAL ( SELECT COALESCE(jsonb_agg(__sj_1.json), '[]') AS json FROM (  SELECT to_jsonb(__sr_1.*) AS json FROM (  SELECT "sys_user_1"."id" AS "id" FROM ( SELECT "sys_user"."id" FROM "sys_user" LIMIT ? ) AS "sys_user_1" ) AS "__sr_1" ) AS "__sj_1" ) AS "__sj_1" ON true`
 	my.doCase(input, expect)
 }
 
