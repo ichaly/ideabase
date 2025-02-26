@@ -1,7 +1,7 @@
 ---
 description: 项目规则
 globs: 
-alwaysApply: false
+alwaysApply: true
 ---
 
 # 项目描述
