@@ -1,5 +1,5 @@
 ---
-description: 项目描述
+description: 项目规则
 globs: 
 alwaysApply: false
 ---
@@ -9,6 +9,7 @@ alwaysApply: false
 - 这是一个使用Golang开,能将graphgql编译为sql的中间件,项目名ideabase
 - 项目参考开源项目dosco/graphjin
 - 代码提交注释也要使用中文
+- 项目开发过程中每次尽量使用最小单元逐步进行开发,并编写单元测试代码,不要一次性写太多代码防止中断带来麻烦
 
 # 代码风格
 
@@ -41,10 +42,10 @@ alwaysApply: false
 # 项目结构
 
 - 项目根目录是一个go.work的主目录
-- 具有graphql/service/gateway等独立的子模块
-- 其中graphql模块是主要是gql变异为sql的主要模块可以独立使用
-- service模块主要负责将graphql模块发布为http服务等相关逻辑
-- gateway模块可以将多个service的graphql合并为一个整体的gql网管服务
+- 具有gql/svc/gtw等独立的子模块
+- 其中gql模块是主要是gql变异为sql的主要模块可以独立使用
+- svc模块主要负责将gql模块发布为http服务等相关逻辑
+- gtw模块可以将多个svc的graphql合并为一个整体的schema并对外提供服务的网关
 
 # 三方依赖
 
@@ -59,3 +60,5 @@ alwaysApply: false
 # 单元测试
 
 - 选择一个合适的基于docker的临时数据库进行测试,做好基础数据的模拟
+- 单元测试阶段可以使用go-sqlmock库完成单元测试
+- 集成测试结算采用testcontainers-go验证SQL 在真实环境中的执行结果
