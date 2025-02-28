@@ -107,30 +107,38 @@ func TestMySQL(t *testing.T) {
 // 通用测试函数
 func runDatabaseTests(t *testing.T, db *gorm.DB) {
 	// 创建测试表
-	var createTableSQL string
 	if db.Dialector.Name() == "mysql" {
-		createTableSQL = `
-			CREATE TABLE users (
+		// MySQL 需要分别执行每个语句
+		sqlStatements := []string{
+			`CREATE TABLE users (
 				id BIGINT AUTO_INCREMENT PRIMARY KEY,
 				name VARCHAR(255) NOT NULL,
 				email VARCHAR(255) UNIQUE NOT NULL,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			) COMMENT='用户表';
+			) COMMENT='用户表'`,
 
-			CREATE TABLE posts (
+			`CREATE TABLE posts (
 				id BIGINT AUTO_INCREMENT PRIMARY KEY,
 				title VARCHAR(255) NOT NULL COMMENT '标题',
 				content TEXT COMMENT '内容',
 				user_id BIGINT,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				FOREIGN KEY (user_id) REFERENCES users(id)
-			) COMMENT='文章表';
+			) COMMENT='文章表'`,
 
-			ALTER TABLE users MODIFY COLUMN name VARCHAR(255) NOT NULL COMMENT '用户名';
-			ALTER TABLE users MODIFY COLUMN email VARCHAR(255) NOT NULL COMMENT '邮箱';
-		`
+			`ALTER TABLE users MODIFY COLUMN name VARCHAR(255) NOT NULL COMMENT '用户名'`,
+			`ALTER TABLE users MODIFY COLUMN email VARCHAR(255) NOT NULL COMMENT '邮箱'`,
+		}
+
+		// 分别执行每个SQL语句
+		for _, stmt := range sqlStatements {
+			if err := db.Exec(stmt).Error; err != nil {
+				require.NoError(t, err)
+			}
+		}
 	} else {
-		createTableSQL = `
+		// PostgreSQL 可以一次执行多个语句
+		createTableSQL := `
 			CREATE TABLE users (
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(255) NOT NULL,
@@ -155,10 +163,10 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 			COMMENT ON COLUMN posts.content IS '内容';
 			COMMENT ON COLUMN posts.user_id IS '作者ID';
 		`
-	}
 
-	err := db.Exec(createTableSQL).Error
-	require.NoError(t, err)
+		err := db.Exec(createTableSQL).Error
+		require.NoError(t, err)
+	}
 
 	// 创建 DatabaseLoader
 	var schema string

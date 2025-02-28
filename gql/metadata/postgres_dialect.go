@@ -137,10 +137,30 @@ foreign_keys AS (
 )
 SELECT 
     json_build_object(
-        'tables', (SELECT json_agg(t) FROM tables t),
-        'columns', (SELECT json_agg(c) FROM columns c),
-        'primaryKeys', (SELECT json_agg(pk) FROM primary_keys pk),
-        'foreignKeys', (SELECT json_agg(fk) FROM foreign_keys fk)
+        'tables', (SELECT json_agg(json_build_object(
+            'table_name', t.table_name,
+            'table_description', t.table_description
+        )) FROM tables t),
+        'columns', (SELECT json_agg(json_build_object(
+            'table_name', c.table_name,
+            'column_name', c.column_name,
+            'data_type', c.data_type,
+            'is_nullable', c.is_nullable,
+            'character_maximum_length', c.character_maximum_length,
+            'numeric_precision', c.numeric_precision,
+            'numeric_scale', c.numeric_scale,
+            'column_description', c.column_description
+        )) FROM columns c),
+        'primaryKeys', (SELECT json_agg(json_build_object(
+            'table_name', pk.table_name,
+            'column_name', pk.column_name
+        )) FROM primary_keys pk),
+        'foreignKeys', (SELECT json_agg(json_build_object(
+            'source_table', fk.source_table,
+            'source_column', fk.source_column,
+            'target_table', fk.target_table,
+            'target_column', fk.target_column
+        )) FROM foreign_keys fk)
     ) as metadata
 `
 

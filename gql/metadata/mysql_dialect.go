@@ -98,47 +98,44 @@ foreign_keys AS (
     SELECT 
         k.table_name as source_table,
         k.column_name as source_column,
-        r.referenced_table_name as target_table,
-        r.referenced_column_name as target_column
+        k.referenced_table_name as target_table,
+        k.referenced_column_name as target_column
     FROM 
         information_schema.key_column_usage k
-    JOIN 
-        information_schema.referential_constraints r ON k.constraint_name = r.constraint_name
     WHERE 
         k.constraint_schema = ?
-        AND r.constraint_schema = ?
-        AND r.referenced_table_name IS NOT NULL
+        AND k.referenced_table_name IS NOT NULL
 )
 SELECT 
     JSON_OBJECT(
         'tables', IFNULL((SELECT JSON_ARRAYAGG(JSON_OBJECT(
-            'TableName', t.table_name, 
-            'TableDescription', t.table_description
+            'table_name', t.table_name, 
+            'table_description', t.table_description
         )) FROM tables t), JSON_ARRAY()),
         'columns', IFNULL((SELECT JSON_ARRAYAGG(JSON_OBJECT(
-            'TableName', c.table_name,
-            'ColumnName', c.column_name,
-            'DataType', c.data_type,
-            'IsNullable', c.is_nullable,
-            'CharMaxLength', c.character_maximum_length,
-            'NumericPrecision', c.numeric_precision,
-            'NumericScale', c.numeric_scale,
-            'ColumnDescription', c.column_description
+            'table_name', c.table_name,
+            'column_name', c.column_name,
+            'data_type', c.data_type,
+            'is_nullable', c.is_nullable,
+            'character_maximum_length', c.character_maximum_length,
+            'numeric_precision', c.numeric_precision,
+            'numeric_scale', c.numeric_scale,
+            'column_description', c.column_description
         )) FROM columns c), JSON_ARRAY()),
         'primaryKeys', IFNULL((SELECT JSON_ARRAYAGG(JSON_OBJECT(
-            'TableName', pk.table_name,
-            'ColumnName', pk.column_name
+            'table_name', pk.table_name,
+            'column_name', pk.column_name
         )) FROM primary_keys pk), JSON_ARRAY()),
         'foreignKeys', IFNULL((SELECT JSON_ARRAYAGG(JSON_OBJECT(
-            'SourceTable', fk.source_table,
-            'SourceColumn', fk.source_column,
-            'TargetTable', fk.target_table,
-            'TargetColumn', fk.target_column
+            'source_table', fk.source_table,
+            'source_column', fk.source_column,
+            'target_table', fk.target_table,
+            'target_column', fk.target_column
         )) FROM foreign_keys fk), JSON_ARRAY())
     ) as metadata
 `
 
 // GetMetadataQuery 获取MySQL元数据查询SQL和参数
 func (my *MySQLDialect) GetMetadataQuery() (string, []interface{}) {
-	return mysqlMetadataQuery, []interface{}{my.schema, my.schema, my.schema, my.schema, my.schema}
+	return mysqlMetadataQuery, []interface{}{my.schema, my.schema, my.schema, my.schema}
 }
