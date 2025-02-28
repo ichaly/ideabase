@@ -1,0 +1,11 @@
+go 1.23.6
+
+use (
+	./gql
+	./gtw
+	./log
+	./run
+	./std
+	./svc
+	./utl
+)
