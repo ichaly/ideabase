@@ -29,18 +29,32 @@ func isPostgresVersionSupported(db *gorm.DB) (bool, error) {
 	}
 
 	versionPart := parts[1]
-	majorVersionStr := strings.Split(versionPart, ".")[0]
+	versionNums := strings.Split(versionPart, ".")
 
-	// 检查版本是否为9.6+
-	isSupported := majorVersionStr == "10" ||
-		majorVersionStr == "11" ||
-		majorVersionStr == "12" ||
-		majorVersionStr == "13" ||
-		majorVersionStr == "14" ||
-		majorVersionStr == "15" ||
-		(majorVersionStr == "9" && strings.HasPrefix(versionPart, "9.6"))
+	// 解析主版本号
+	var majorVersion float64
+	if versionNums[0] == "9" && len(versionNums) > 1 {
+		// 对于9.x版本，需要考虑次版本号
+		majorVersion = 9.0
+		if minorVersion, err := parseFloat(versionNums[1]); err == nil {
+			majorVersion += minorVersion / 10
+		}
+	} else {
+		// 对于10及以上版本，主版本号就足够了
+		if mv, err := parseFloat(versionNums[0]); err == nil {
+			majorVersion = mv
+		}
+	}
 
-	return isSupported, nil
+	// 9.6及以上版本都支持
+	return majorVersion >= 9.6, nil
+}
+
+// parseFloat 辅助函数：将字符串转换为float64
+func parseFloat(s string) (float64, error) {
+	var result float64
+	_, err := fmt.Sscanf(s, "%f", &result)
+	return result, err
 }
 
 // PostgresDialect PostgreSQL 9.6+数据库方言
