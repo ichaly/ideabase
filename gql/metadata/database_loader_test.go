@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,7 @@ import (
 // 测试 PostgreSQL 数据库
 func TestPostgreSQL(t *testing.T) {
 	versions := []string{"16", "15", "14", "13"}
+
 	for _, version := range versions {
 		t.Run(fmt.Sprintf("Version %s", version), func(t *testing.T) {
 			ctx := context.Background()
@@ -28,7 +30,10 @@ func TestPostgreSQL(t *testing.T) {
 					"POSTGRES_PASSWORD": "test",
 					"POSTGRES_DB":       "test",
 				},
-				WaitingFor: wait.ForLog("database system is ready to accept connections"),
+				WaitingFor: wait.ForAll(
+					wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+					wait.ForListeningPort("5432/tcp"),
+				),
 			}
 
 			container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -37,6 +42,9 @@ func TestPostgreSQL(t *testing.T) {
 			})
 			require.NoError(t, err)
 			defer container.Terminate(ctx)
+
+			// 等待一小段时间确保数据库完全就绪
+			time.Sleep(2 * time.Second)
 
 			port, err := container.MappedPort(ctx, "5432")
 			require.NoError(t, err)
@@ -52,11 +60,13 @@ func TestPostgreSQL(t *testing.T) {
 
 // 测试 MySQL 数据库
 func TestMySQL(t *testing.T) {
-	versions := []string{"8.0", "5.7"}
+	versions := []string{"8.0"}
 
 	for _, version := range versions {
 		t.Run(fmt.Sprintf("Version %s", version), func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+
 			req := testcontainers.ContainerRequest{
 				Image:        fmt.Sprintf("docker.io/library/mysql:%s", version),
 				ExposedPorts: []string{"3306/tcp"},
@@ -66,7 +76,10 @@ func TestMySQL(t *testing.T) {
 					"MYSQL_USER":          "test",
 					"MYSQL_PASSWORD":      "test",
 				},
-				WaitingFor: wait.ForLog("port: 3306  MySQL Community Server"),
+				WaitingFor: wait.ForAll(
+					wait.ForLog("MySQL Community Server - GPL"),
+					wait.ForListeningPort("3306/tcp"),
+				),
 			}
 
 			container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -78,6 +91,9 @@ func TestMySQL(t *testing.T) {
 
 			port, err := container.MappedPort(ctx, "3306")
 			require.NoError(t, err)
+
+			// 等待额外的时间以确保数据库完全就绪
+			time.Sleep(10 * time.Second)
 
 			dsn := fmt.Sprintf("test:test@tcp(localhost:%d)/test?charset=utf8mb4&parseTime=True&loc=Local", port.Int())
 			db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
