@@ -1,0 +1,421 @@
+"""
+A cursor is an encoded string use for pagination
+"""
+scalar Cursor
+"""
+The `DateTime` scalar type represents a DateTime. The DateTime is serialized as an RFC 3339 quoted string
+"""
+scalar DateTime
+
+"The direction of result ordering."
+enum SortInput {
+    "Ascending order"
+    ASC
+    "Descending order"
+    DESC
+    "Ascending nulls first order"
+    ASC_NULLS_FIRST
+    "Descending nulls first order"
+    DESC_NULLS_FIRST
+    "Ascending nulls last order"
+    ASC_NULLS_LAST
+    "Descending nulls last order"
+    DESC_NULLS_LAST
+}
+
+"NULL or NOT"
+enum IsInput {
+    NULL
+    NOT_NULL
+}
+
+type Area {
+    children(level:Int=1,distinct:[String],limit:Int=20,offset:Int,sort:AreaSortInput,where:AreaWhereInput): [Area]
+    id: ID
+    name: String
+    parents(level:Int=1,distinct:[String],limit:Int=20,offset:Int,sort:AreaSortInput,where:AreaWhereInput): Area
+    pid: Int
+    userList(distinct:[String],limit:Int=20,offset:Int,sort:UserSortInput,where:UserWhereInput): [User]
+}
+input AreaSortInput {
+    id: SortInput
+    name: SortInput
+    pid: SortInput
+}
+input AreaWhereInput {
+    and: [AreaWhereInput!]
+    id: IDExpression
+    name: StringExpression
+    not: AreaWhereInput
+    or: [AreaWhereInput!]
+    pid: IntExpression
+}
+input BooleanExpression {
+    """
+    Equals value
+    """
+    eq: Boolean
+    """
+    Is in list of values
+    """
+    in: [Boolean!]
+}
+input BooleanListExpression {
+    """
+    Equals value
+    """
+    eq: Boolean
+    """
+    Is in list of values
+    """
+    in: [Boolean!]
+}
+type Edge {
+    team(distinct:[String],limit:Int=20,offset:Int,sort:TeamSortInput,where:TeamWhereInput): Team
+    teamId: ID
+    user(distinct:[String],limit:Int=20,offset:Int,sort:UserSortInput,where:UserWhereInput): User
+    userId: ID
+}
+input EdgeSortInput {
+    teamId: SortInput
+    userId: SortInput
+}
+input EdgeWhereInput {
+    and: [EdgeWhereInput!]
+    not: EdgeWhereInput
+    or: [EdgeWhereInput!]
+    teamId: IDExpression
+    userId: IDExpression
+}
+input FloatExpression {
+    """
+    Equals value
+    """
+    eq: Float
+    """
+    Is greater than or equal to value
+    """
+    ge: Float
+    """
+    Is greater than value
+    """
+    gt: Float
+    """
+    Is in list of values
+    """
+    in: [Float!]
+    """
+    Is value null (true) or not null (false)
+    """
+    is: IsInput
+    """
+    Is less than or equal to value
+    """
+    le: Float
+    """
+    Is less than value
+    """
+    lt: Float
+    """
+    Does not equal value
+    """
+    ne: Float
+}
+input FloatListExpression {
+    """
+    Equals value
+    """
+    eq: Float
+    """
+    Is greater than or equal to value
+    """
+    ge: Float
+    """
+    Is greater than value
+    """
+    gt: Float
+    """
+    Is in list of values
+    """
+    in: [Float!]
+    """
+    Is value null (true) or not null (false)
+    """
+    is: IsInput
+    """
+    Is less than or equal to value
+    """
+    le: Float
+    """
+    Is less than value
+    """
+    lt: Float
+    """
+    Does not equal value
+    """
+    ne: Float
+}
+input IDExpression {
+    """
+    Equals value
+    """
+    eq: ID
+    """
+    Is greater than or equal to value
+    """
+    ge: ID
+    """
+    Is greater than value
+    """
+    gt: ID
+    """
+    Is in list of values
+    """
+    in: [ID!]
+    """
+    Is less than or equal to value
+    """
+    le: ID
+    """
+    Is less than value
+    """
+    lt: ID
+}
+input IDListExpression {
+    """
+    Equals value
+    """
+    eq: ID
+    """
+    Is greater than or equal to value
+    """
+    ge: ID
+    """
+    Is greater than value
+    """
+    gt: ID
+    """
+    Is in list of values
+    """
+    in: [ID!]
+    """
+    Is less than or equal to value
+    """
+    le: ID
+    """
+    Is less than value
+    """
+    lt: ID
+}
+input IntExpression {
+    """
+    Equals value
+    """
+    eq: Int
+    """
+    Is greater than or equal to value
+    """
+    ge: Int
+    """
+    Is greater than value
+    """
+    gt: Int
+    """
+    Is in list of values
+    """
+    in: [Int!]
+    """
+    Is value null (true) or not null (false)
+    """
+    is: IsInput
+    """
+    Is less than or equal to value
+    """
+    le: Int
+    """
+    Is less than value
+    """
+    lt: Int
+    """
+    Does not equal value
+    """
+    ne: Int
+}
+input IntListExpression {
+    """
+    Equals value
+    """
+    eq: Int
+    """
+    Is greater than or equal to value
+    """
+    ge: Int
+    """
+    Is greater than value
+    """
+    gt: Int
+    """
+    Is in list of values
+    """
+    in: [Int!]
+    """
+    Is value null (true) or not null (false)
+    """
+    is: IsInput
+    """
+    Is less than or equal to value
+    """
+    le: Int
+    """
+    Is less than value
+    """
+    lt: Int
+    """
+    Does not equal value
+    """
+    ne: Int
+}
+type Mutation {
+    areaList(distinct:[String],limit:Int=20,offset:Int,sort:AreaSortInput,where:AreaWhereInput): [Area]
+    edgeList(distinct:[String],limit:Int=20,offset:Int,sort:EdgeSortInput,where:EdgeWhereInput): [Edge]
+    teamList(distinct:[String],limit:Int=20,offset:Int,sort:TeamSortInput,where:TeamWhereInput): [Team]
+    userList(distinct:[String],limit:Int=20,offset:Int,sort:UserSortInput,where:UserWhereInput): [User]
+}
+type Query {
+    areaList(distinct:[String],limit:Int=20,offset:Int,sort:AreaSortInput,where:AreaWhereInput): [Area]
+    edgeList(distinct:[String],limit:Int=20,offset:Int,sort:EdgeSortInput,where:EdgeWhereInput): [Edge]
+    teamList(distinct:[String],limit:Int=20,offset:Int,sort:TeamSortInput,where:TeamWhereInput): [Team]
+    userList(distinct:[String],limit:Int=20,offset:Int,sort:UserSortInput,where:UserWhereInput): [User]
+}
+input StringExpression {
+    """
+    Equals value
+    """
+    eq: String
+    """
+    Is greater than or equal to value
+    """
+    ge: String
+    """
+    Is greater than value
+    """
+    gt: String
+    """
+    Value matching (case-insensitive) pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values not having 'r' in second position
+    """
+    iLike: String
+    """
+    Value matching (case-insensitive) regex pattern
+    """
+    iRegex: String
+    """
+    Is in list of values
+    """
+    in: [String!]
+    """
+    Is value null (true) or not null (false)
+    """
+    is: IsInput
+    """
+    Is less than or equal to value
+    """
+    le: String
+    """
+    Value matching pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values having 'r' in second position
+    """
+    like: String
+    """
+    Is less than value
+    """
+    lt: String
+    """
+    Does not equal value
+    """
+    ne: String
+    """
+    Value matching regular pattern
+    """
+    regex: String
+}
+input StringListExpression {
+    """
+    Equals value
+    """
+    eq: String
+    """
+    Is greater than or equal to value
+    """
+    ge: String
+    """
+    Is greater than value
+    """
+    gt: String
+    """
+    Value matching (case-insensitive) pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values not having 'r' in second position
+    """
+    iLike: String
+    """
+    Value matching (case-insensitive) regex pattern
+    """
+    iRegex: String
+    """
+    Is in list of values
+    """
+    in: [String!]
+    """
+    Is value null (true) or not null (false)
+    """
+    is: IsInput
+    """
+    Is less than or equal to value
+    """
+    le: String
+    """
+    Value matching pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values having 'r' in second position
+    """
+    like: String
+    """
+    Is less than value
+    """
+    lt: String
+    """
+    Does not equal value
+    """
+    ne: String
+    """
+    Value matching regular pattern
+    """
+    regex: String
+}
+type Team {
+    edgeList(distinct:[String],limit:Int=20,offset:Int,sort:EdgeSortInput,where:EdgeWhereInput): [Edge]
+    id: ID
+    userList(distinct:[String],limit:Int=20,offset:Int,sort:UserSortInput,where:UserWhereInput): [User]
+}
+input TeamSortInput {
+    id: SortInput
+}
+input TeamWhereInput {
+    and: [TeamWhereInput!]
+    id: IDExpression
+    not: TeamWhereInput
+    or: [TeamWhereInput!]
+}
+type User {
+    area(distinct:[String],limit:Int=20,offset:Int,sort:AreaSortInput,where:AreaWhereInput): Area
+    areaId: Int
+    edgeList(distinct:[String],limit:Int=20,offset:Int,sort:EdgeSortInput,where:EdgeWhereInput): [Edge]
+    id: ID
+    teamList(distinct:[String],limit:Int=20,offset:Int,sort:TeamSortInput,where:TeamWhereInput): [Team]
+}
+input UserSortInput {
+    areaId: SortInput
+    id: SortInput
+}
+input UserWhereInput {
+    and: [UserWhereInput!]
+    areaId: IntExpression
+    id: IDExpression
+    not: UserWhereInput
+    or: [UserWhereInput!]
+}
