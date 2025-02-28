@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	github.com/duke-git/lancet/v2 v2.3.3
+	github.com/ichaly/ideabase/utl v0.0.0-20250228111901-475eea8d4811
 	github.com/invzhi/next v1.1.1
 	github.com/joho/godotenv v1.5.1
 	github.com/sony/sonyflake v1.2.0
