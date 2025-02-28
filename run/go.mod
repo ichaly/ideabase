@@ -1,3 +1,3 @@
-module github.com/ichaly/run
+module github.com/ichaly/ideabase/run
 
-go 1.23.1
+go 1.22

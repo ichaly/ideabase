@@ -323,7 +323,11 @@ func (my *Metadata) loadFromDatabase() error {
 	log.Info().Msg("开始从数据库加载元数据")
 
 	// 创建数据库加载器
-	loader := metadata.NewDatabaseLoader(my.db, my.cfg.Schema)
+	loader, err := metadata.NewDatabaseLoader(my.db, my.cfg.Schema)
+	if err != nil {
+		log.Error().Err(err).Msg("创建数据库加载器失败")
+		return err
+	}
 	log.Debug().Str("schema", my.cfg.Schema).Msg("创建数据库加载器")
 
 	// 加载元数据

@@ -1,3 +1,3 @@
-module github.com/ichaly/ideabase/service
+module github.com/ichaly/ideabase/svc
 
-go 1.23.1
+go 1.22

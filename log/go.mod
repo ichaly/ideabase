@@ -1,6 +1,6 @@
 module github.com/ichaly/ideabase/log
 
-go 1.23.6
+go 1.22
 
 require (
 	github.com/rs/zerolog v1.33.0

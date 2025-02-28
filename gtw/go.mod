@@ -1,3 +1,3 @@
-module github.com/ichaly/gtw
+module github.com/ichaly/ideabase/gtw
 
-go 1.23.1
+go 1.22

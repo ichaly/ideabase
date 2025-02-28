@@ -1,10 +1,10 @@
 module github.com/ichaly/ideabase/std
 
-go 1.23.1
+go 1.22
 
 require (
 	github.com/duke-git/lancet/v2 v2.3.3
-	github.com/ichaly/ideabase/utl v0.0.0
+	github.com/ichaly/ideabase/utl v0.0.1
 	github.com/invzhi/next v1.1.1
 	github.com/joho/godotenv v1.5.1
 	github.com/sony/sonyflake v1.2.0
@@ -15,8 +15,6 @@ require (
 	gorm.io/driver/postgres v1.5.9
 	gorm.io/gorm v1.25.12
 )
-
-replace github.com/ichaly/ideabase/utl => ../utl
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
