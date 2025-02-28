@@ -11,8 +11,21 @@ IdeaBase是一个基于Golang开发的GraphQL到SQL编译中间件，能够自�
 - 🔌 模块化设计，支持独立使用或服务化部署
 
 ## 数据库支持
-- ✅ PostgreSQL (已实现)
-- 🔜 MySQL (计划中)
+- ✅ PostgreSQL 9.6+ (已实现)
+  - 利用JSON聚合功能实现高效单查询
+  - 需要PostgreSQL 9.6或更高版本
+- ✅ MySQL 8.0+ (已实现)
+  - 利用CTE和JSON函数实现高效单查询
+  - 需要MySQL 8.0或更高版本
+
+## 版本兼容性说明
+本项目对数据库版本有严格要求，以充分利用现代数据库特性：
+- **PostgreSQL**: 要求9.6+版本，利用`json_agg`和`json_build_object`等函数
+- **MySQL**: 要求8.0+版本，利用CTE(WITH语句)和JSON_OBJECT等函数
+
+使用低于要求版本的数据库将导致初始化失败，并返回明确的错误信息。
+
+详细的兼容性说明请参考[数据库兼容性文档](doc/database-compatibility.md)。
 
 ## 项目结构
 ```
