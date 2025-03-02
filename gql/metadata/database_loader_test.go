@@ -126,8 +126,37 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 				FOREIGN KEY (user_id) REFERENCES users(id)
 			) COMMENT='文章表'`,
 
+			`CREATE TABLE comments (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				content TEXT NOT NULL COMMENT '评论内容',
+				user_id BIGINT NOT NULL COMMENT '评论者',
+				post_id BIGINT NOT NULL COMMENT '评论文章',
+				parent_id BIGINT COMMENT '父评论ID',
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY (user_id) REFERENCES users(id),
+				FOREIGN KEY (post_id) REFERENCES posts(id),
+				FOREIGN KEY (parent_id) REFERENCES comments(id)
+			) COMMENT='评论表'`,
+
+			`CREATE TABLE tags (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				name VARCHAR(50) NOT NULL UNIQUE COMMENT '标签名称',
+				description TEXT COMMENT '标签描述',
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			) COMMENT='标签表'`,
+
+			`CREATE TABLE post_tags (
+				post_id BIGINT NOT NULL COMMENT '文章ID',
+				tag_id BIGINT NOT NULL COMMENT '标签ID',
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (post_id, tag_id),
+				FOREIGN KEY (post_id) REFERENCES posts(id),
+				FOREIGN KEY (tag_id) REFERENCES tags(id)
+			) COMMENT='文章标签关联表'`,
+
 			`ALTER TABLE users MODIFY COLUMN name VARCHAR(255) NOT NULL COMMENT '用户名'`,
 			`ALTER TABLE users MODIFY COLUMN email VARCHAR(255) NOT NULL COMMENT '邮箱'`,
+			`ALTER TABLE posts MODIFY COLUMN user_id BIGINT COMMENT '作者ID'`,
 		}
 
 		// 分别执行每个SQL语句
@@ -154,6 +183,29 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 			);
 
+			CREATE TABLE comments (
+				id SERIAL PRIMARY KEY,
+				content TEXT NOT NULL,
+				user_id INTEGER NOT NULL REFERENCES users(id),
+				post_id INTEGER NOT NULL REFERENCES posts(id),
+				parent_id INTEGER REFERENCES comments(id),
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			);
+
+			CREATE TABLE tags (
+				id SERIAL PRIMARY KEY,
+				name VARCHAR(50) NOT NULL UNIQUE,
+				description TEXT,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			);
+
+			CREATE TABLE post_tags (
+				post_id INTEGER NOT NULL REFERENCES posts(id),
+				tag_id INTEGER NOT NULL REFERENCES tags(id),
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (post_id, tag_id)
+			);
+
 			COMMENT ON TABLE users IS '用户表';
 			COMMENT ON COLUMN users.name IS '用户名';
 			COMMENT ON COLUMN users.email IS '邮箱';
@@ -162,6 +214,20 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 			COMMENT ON COLUMN posts.title IS '标题';
 			COMMENT ON COLUMN posts.content IS '内容';
 			COMMENT ON COLUMN posts.user_id IS '作者ID';
+
+			COMMENT ON TABLE comments IS '评论表';
+			COMMENT ON COLUMN comments.content IS '评论内容';
+			COMMENT ON COLUMN comments.user_id IS '评论者';
+			COMMENT ON COLUMN comments.post_id IS '评论文章';
+			COMMENT ON COLUMN comments.parent_id IS '父评论ID';
+
+			COMMENT ON TABLE tags IS '标签表';
+			COMMENT ON COLUMN tags.name IS '标签名称';
+			COMMENT ON COLUMN tags.description IS '标签描述';
+
+			COMMENT ON TABLE post_tags IS '文章标签关联表';
+			COMMENT ON COLUMN post_tags.post_id IS '文章ID';
+			COMMENT ON COLUMN post_tags.tag_id IS '标签ID';
 		`
 
 		err := db.Exec(createTableSQL).Error
@@ -185,13 +251,13 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 
 	// 验证类信息
 	t.Run("验证类信息", func(t *testing.T) {
-		require.Len(t, classes, 2)
+		require.Len(t, classes, 5) // 现在应该有5个类：users, posts, comments, tags, post_tags
 
+		// 验证users表
 		users, ok := classes["users"]
 		require.True(t, ok)
 		require.Equal(t, "users", users.Table)
 		require.Equal(t, "用户表", users.Description)
-
 		require.Len(t, users.Fields, 4)
 		require.Contains(t, users.Fields, "id")
 		require.Contains(t, users.Fields, "name")
@@ -203,29 +269,108 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.Equal(t, "用户名", nameField.Description)
 		require.False(t, nameField.Nullable)
 
+		// 验证posts表
 		posts, ok := classes["posts"]
 		require.True(t, ok)
 		require.Equal(t, "posts", posts.Table)
 		require.Equal(t, "文章表", posts.Description)
-
 		require.Len(t, posts.Fields, 5)
 		require.Contains(t, posts.Fields, "id")
 		require.Contains(t, posts.Fields, "title")
 		require.Contains(t, posts.Fields, "content")
 		require.Contains(t, posts.Fields, "user_id")
 		require.Contains(t, posts.Fields, "created_at")
+
+		// 验证comments表
+		comments, ok := classes["comments"]
+		require.True(t, ok)
+		require.Equal(t, "comments", comments.Table)
+		require.Equal(t, "评论表", comments.Description)
+		require.Len(t, comments.Fields, 6)
+		require.Contains(t, comments.Fields, "id")
+		require.Contains(t, comments.Fields, "content")
+		require.Contains(t, comments.Fields, "user_id")
+		require.Contains(t, comments.Fields, "post_id")
+		require.Contains(t, comments.Fields, "parent_id")
+		require.Contains(t, comments.Fields, "created_at")
+
+		// 验证tags表
+		tags, ok := classes["tags"]
+		require.True(t, ok)
+		require.Equal(t, "tags", tags.Table)
+		require.Equal(t, "标签表", tags.Description)
+		require.Len(t, tags.Fields, 4)
+		require.Contains(t, tags.Fields, "id")
+		require.Contains(t, tags.Fields, "name")
+		require.Contains(t, tags.Fields, "description")
+		require.Contains(t, tags.Fields, "created_at")
+
+		// 验证post_tags表
+		postTags, ok := classes["post_tags"]
+		require.True(t, ok)
+		require.Equal(t, "post_tags", postTags.Table)
+		require.Equal(t, "文章标签关联表", postTags.Description)
+		require.Len(t, postTags.Fields, 3)
+		require.Contains(t, postTags.Fields, "post_id")
+		require.Contains(t, postTags.Fields, "tag_id")
+		require.Contains(t, postTags.Fields, "created_at")
 	})
 
 	// 验证关系信息
 	t.Run("验证关系信息", func(t *testing.T) {
+		// 验证posts表的关系
 		postsRelations, ok := relationships["posts"]
 		require.True(t, ok)
 		require.Len(t, postsRelations, 1)
-
 		userIdFK, ok := postsRelations["user_id"]
 		require.True(t, ok)
 		require.Equal(t, "users", userIdFK.TableName)
 		require.Equal(t, "id", userIdFK.ColumnName)
 		require.Equal(t, internal.MANY_TO_ONE, userIdFK.Kind)
+
+		// 验证comments表的关系
+		commentsRelations, ok := relationships["comments"]
+		require.True(t, ok)
+		require.Len(t, commentsRelations, 3)
+
+		// 验证评论与用户的关系
+		commentUserFK, ok := commentsRelations["user_id"]
+		require.True(t, ok)
+		require.Equal(t, "users", commentUserFK.TableName)
+		require.Equal(t, "id", commentUserFK.ColumnName)
+		require.Equal(t, internal.MANY_TO_ONE, commentUserFK.Kind)
+
+		// 验证评论与文章的关系
+		commentPostFK, ok := commentsRelations["post_id"]
+		require.True(t, ok)
+		require.Equal(t, "posts", commentPostFK.TableName)
+		require.Equal(t, "id", commentPostFK.ColumnName)
+		require.Equal(t, internal.MANY_TO_ONE, commentPostFK.Kind)
+
+		// 验证评论的自关联
+		commentParentFK, ok := commentsRelations["parent_id"]
+		require.True(t, ok)
+		require.Equal(t, "comments", commentParentFK.TableName)
+		require.Equal(t, "id", commentParentFK.ColumnName)
+		require.Equal(t, internal.MANY_TO_ONE, commentParentFK.Kind)
+
+		// 验证post_tags表的关系
+		postTagsRelations, ok := relationships["post_tags"]
+		require.True(t, ok)
+		require.Len(t, postTagsRelations, 2)
+
+		// 验证post_tags与posts的关系
+		postTagPostFK, ok := postTagsRelations["post_id"]
+		require.True(t, ok)
+		require.Equal(t, "posts", postTagPostFK.TableName)
+		require.Equal(t, "id", postTagPostFK.ColumnName)
+		require.Equal(t, internal.MANY_TO_ONE, postTagPostFK.Kind)
+
+		// 验证post_tags与tags的关系
+		postTagTagFK, ok := postTagsRelations["tag_id"]
+		require.True(t, ok)
+		require.Equal(t, "tags", postTagTagFK.TableName)
+		require.Equal(t, "id", postTagTagFK.ColumnName)
+		require.Equal(t, internal.MANY_TO_ONE, postTagTagFK.Kind)
 	})
 }
