@@ -578,3 +578,21 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# 环境配置
+.env
+.env.local
+.env.*.local
+
+# 编译输出
+/bin
+/dist
+
+# IDE配置
+.idea
+.vscode
+*.swp
+*.swo
+
+# 依赖目录
+/vendor/

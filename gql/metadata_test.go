@@ -7,12 +7,20 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+func init() {
+	// 加载.env文件
+	if err := godotenv.Load("../.env"); err != nil {
+		println("警告: 未能加载 .env 文件:", err)
+	}
+}
 
 // 测试数据库加载
 func TestLoadMetadataFromDatabase(t *testing.T) {
