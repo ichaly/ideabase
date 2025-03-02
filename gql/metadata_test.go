@@ -47,7 +47,6 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 
 	// 验证元数据已加载
 	assert.NotEmpty(t, meta.Nodes, "应该有加载的类")
-	assert.NotEmpty(t, meta.tableToClass, "应该有表名到类名的映射")
 }
 
 // 测试文件加载
@@ -57,31 +56,36 @@ func TestLoadMetadataFromFile(t *testing.T) {
 	cachePath := filepath.Join(tempDir, "metadata_cache.json")
 
 	// 创建测试元数据
-	testCache := MetadataCache{
-		Classes: []*internal.Class{
-			{
-				Name:    "User",
-				Table:   "users",
+	userClass := &internal.Class{
+		Name:    "User",
+		Table:   "users",
+		Virtual: false,
+		Fields: map[string]*internal.Field{
+			"id": {
+				Name:      "id",
+				Column:    "id",
+				Type:      "integer",
+				Virtual:   false,
+				IsPrimary: true,
+			},
+			"name": {
+				Name:    "name",
+				Column:  "name",
+				Type:    "character varying",
 				Virtual: false,
-				Fields: map[string]*internal.Field{
-					"id": {
-						Name:      "id",
-						Column:    "id",
-						Type:      "integer",
-						Virtual:   false,
-						IsPrimary: true,
-					},
-					"name": {
-						Name:    "name",
-						Column:  "name",
-						Type:    "character varying",
-						Virtual: false,
-					},
-				},
-				PrimaryKeys: []string{"id"},
 			},
 		},
-		Relationships: map[string]map[string]*internal.ForeignKey{},
+		PrimaryKeys: []string{"id"},
+	}
+
+	node := NewNode(userClass)
+	node.TableNames["users"] = false
+
+	testCache := MetadataCache{
+		Nodes: map[string]*Node{
+			"User":  node,
+			"users": node,
+		},
 	}
 
 	// 写入临时文件
@@ -101,11 +105,19 @@ func TestLoadMetadataFromFile(t *testing.T) {
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 验证元数据已加载
-	assert.Len(t, meta.Nodes, 1, "应该有1个加载的类")
-	assert.Contains(t, meta.Nodes, "User", "应该包含User类")
-	assert.Len(t, meta.Nodes["User"].Fields, 2, "User类应该有2个字段")
-	assert.Contains(t, meta.Nodes["User"].Fields, "id", "应该包含id字段")
-	assert.Contains(t, meta.Nodes["User"].Fields, "name", "应该包含name字段")
+	assert.Len(t, meta.Nodes, 2, "应该有2个Node索引")
+
+	// 通过类名查找
+	userNode, ok := meta.Nodes["User"]
+	assert.True(t, ok, "应该能通过类名找到Node")
+	assert.Equal(t, "User", userNode.Name, "类名应该正确")
+	assert.Equal(t, "users", userNode.Table, "表名应该正确")
+	assert.Len(t, userNode.Fields, 2, "应该有2个字段")
+
+	// 通过表名查找
+	tableNode, ok := meta.Nodes["users"]
+	assert.True(t, ok, "应该能通过表名找到Node")
+	assert.Same(t, userNode, tableNode, "通过类名和表名找到的应该是同一个Node")
 }
 
 // 测试配置加载
@@ -144,11 +156,19 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 验证元数据已加载
-	assert.Len(t, meta.Nodes, 1, "应该有1个加载的类")
-	assert.Contains(t, meta.Nodes, "User", "应该包含User类")
-	assert.Len(t, meta.Nodes["User"].Fields, 2, "User类应该有2个字段")
-	assert.Contains(t, meta.Nodes["User"].Fields, "id", "应该包含id字段")
-	assert.Contains(t, meta.Nodes["User"].Fields, "name", "应该包含name字段")
+	assert.Len(t, meta.Nodes, 2, "应该有2个Node索引")
+
+	// 通过类名查找
+	userNode, ok := meta.Nodes["User"]
+	assert.True(t, ok, "应该能通过类名找到Node")
+	assert.Equal(t, "User", userNode.Name, "类名应该正确")
+	assert.Equal(t, "users", userNode.Table, "表名应该正确")
+	assert.Len(t, userNode.Fields, 2, "应该有2个字段")
+
+	// 通过表名查找
+	tableNode, ok := meta.Nodes["users"]
+	assert.True(t, ok, "应该能通过表名找到Node")
+	assert.Same(t, userNode, tableNode, "通过类名和表名找到的应该是同一个Node")
 }
 
 // 测试名称转换
@@ -157,7 +177,7 @@ func TestNameConversion(t *testing.T) {
 	v := viper.New()
 	v.Set("schema.source", internal.SourceConfig)
 	v.Set("schema.enable-camel-case", true)
-	v.Set("schema.table-prefix", "tbl_")
+	v.Set("schema.table-prefix", []string{"tbl_"})
 
 	// 设置测试元数据配置
 	v.Set("metadata.tables", []map[string]interface{}{
@@ -181,9 +201,16 @@ func TestNameConversion(t *testing.T) {
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 验证名称转换
-	assert.Contains(t, meta.Nodes, "UserProfiles", "应该去除前缀并转为驼峰命名")
-	assert.Contains(t, meta.Nodes["UserProfiles"].Fields, "userId", "应该转换为驼峰命名")
-	assert.Contains(t, meta.Nodes["UserProfiles"].Fields, "firstName", "应该转换为驼峰命名")
+	userProfilesNode, ok := meta.Nodes["UserProfiles"]
+	assert.True(t, ok, "应该能通过转换后的类名找到Node")
+	assert.Contains(t, userProfilesNode.Fields, "userId", "应该转换为驼峰命名")
+	assert.Contains(t, userProfilesNode.Fields, "firstName", "应该转换为驼峰命名")
+
+	// 验证原始表名索引
+	origTableNode, ok := meta.Nodes["tbl_user_profiles"]
+	assert.True(t, ok, "应该能通过原始表名找到Node")
+	assert.Same(t, userProfilesNode, origTableNode, "应该是同一个Node")
+	assert.True(t, origTableNode.TableNames["tbl_user_profiles"], "原始表名标记应该为true")
 }
 
 // 测试表和字段过滤
@@ -237,7 +264,8 @@ func TestTableAndFieldFiltering(t *testing.T) {
 	assert.NotContains(t, meta.Nodes, "posts", "不应该包含posts表")
 
 	// 验证字段过滤
-	assert.Contains(t, meta.Nodes["users"].Fields, "id", "应该包含id字段")
-	assert.Contains(t, meta.Nodes["users"].Fields, "name", "应该包含name字段")
-	assert.NotContains(t, meta.Nodes["users"].Fields, "password", "不应该包含password字段")
+	usersNode := meta.Nodes["users"]
+	assert.Contains(t, usersNode.Fields, "id", "应该包含id字段")
+	assert.Contains(t, usersNode.Fields, "name", "应该包含name字段")
+	assert.NotContains(t, usersNode.Fields, "password", "不应该包含password字段")
 }

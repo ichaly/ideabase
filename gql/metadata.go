@@ -14,7 +14,6 @@ import (
 	"github.com/ichaly/ideabase/gql/metadata"
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/spf13/viper"
 	"gorm.io/gorm"
@@ -28,6 +27,7 @@ var pgsql string
 
 func init() {
 	inflection.AddUncountable("children")
+	strcase.ConfigureAcronym("ID", "Id")
 }
 
 // Config 表示GraphQL配置
@@ -43,23 +43,34 @@ type Metadata struct {
 	cfg *Config
 	tpl *template.Template
 
-	// 主索引 - 类名 -> 类定义
-	Nodes utl.AnyMap[*internal.Class]
+	// 统一索引: 支持类名、表名、原始表名查找
+	Nodes map[string]*Node
+}
 
-	// 辅助索引 - 表名 -> 类名
-	tableToClass map[string]string
+// Node 表示一个类节点的完整信息
+type Node struct {
+	// 类定义
+	*internal.Class
 
-	// 辅助索引 - 原始表名 -> 类名
-	rawTableToClass map[string]string
+	// 表名索引 (key: 表名, value: true表示是原始表名)
+	TableNames map[string]bool
 
-	// 外键关系缓存
-	relationships map[string]map[string]*internal.ForeignKey
+	// 外键关系索引 (key: 字段名或列名)
+	ForeignKeys map[string]*internal.ForeignKey
+}
+
+// NewNode 创建新的Node实例
+func NewNode(class *internal.Class) *Node {
+	return &Node{
+		Class:       class,
+		TableNames:  make(map[string]bool),
+		ForeignKeys: make(map[string]*internal.ForeignKey),
+	}
 }
 
 // MetadataCache 元数据缓存结构
 type MetadataCache struct {
-	Classes       []*internal.Class                          `json:"classes"`
-	Relationships map[string]map[string]*internal.ForeignKey `json:"relationships"`
+	Nodes map[string]*Node `json:"nodes"`
 }
 
 // NewMetadata 创建一个新的元数据处理器
@@ -85,14 +96,11 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 	}
 
 	my := &Metadata{
-		v:               v,
-		db:              d,
-		cfg:             cfg,
-		tpl:             tpl,
-		Nodes:           make(utl.AnyMap[*internal.Class]),
-		tableToClass:    make(map[string]string),
-		rawTableToClass: make(map[string]string),
-		relationships:   make(map[string]map[string]*internal.ForeignKey),
+		v:     v,
+		db:    d,
+		cfg:   cfg,
+		tpl:   tpl,
+		Nodes: make(map[string]*Node),
 	}
 
 	// 加载元数据
@@ -120,12 +128,6 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 // loadMetadata 加载元数据
 func (my *Metadata) loadMetadata() error {
 	log.Info().Msg("开始加载元数据")
-
-	// 初始化数据结构
-	my.Nodes = make(map[string]*internal.Class)
-	my.tableToClass = make(map[string]string)
-	my.rawTableToClass = make(map[string]string)
-	my.relationships = make(map[string]map[string]*internal.ForeignKey)
 
 	// 根据环境决定加载方式
 	switch my.cfg.Source {
@@ -179,143 +181,9 @@ func (my *Metadata) loadMetadata() error {
 
 	log.Info().
 		Int("classes", len(my.Nodes)).
-		Int("relationships", len(my.relationships)).
 		Msg("元数据加载完成")
 	log.Debug().Msg("元数据加载过程结束")
 	return nil
-}
-
-// mergeMetadata 合并元数据
-func (my *Metadata) mergeMetadata(classes map[string]*internal.Class, relationships map[string]map[string]*internal.ForeignKey) {
-	log.Info().Msg("开始合并元数据")
-	mergedClasses := 0
-	mergedRelations := 0
-
-	// 合并类
-	for tableName, class := range classes {
-		// 检查是否应包含此表
-		if !my.shouldIncludeTable(tableName) {
-			log.Debug().Str("table", tableName).Msg("排除表")
-			continue
-		}
-
-		// 转换类名
-		className := my.convertTableName(tableName)
-		if className != tableName {
-			log.Debug().Str("table", tableName).Str("class", className).Msg("表名转换")
-		}
-
-		// 更新类名
-		class.Name = className
-
-		// 处理字段
-		filteredFields := 0
-		renamedFields := 0
-		for columnName, field := range class.Fields {
-			// 检查是否应包含此字段
-			if !my.shouldIncludeField(columnName) {
-				delete(class.Fields, columnName)
-				filteredFields++
-				continue
-			}
-
-			// 转换字段名
-			fieldName := my.convertFieldName(tableName, columnName)
-
-			// 如果字段名发生了变化，需要更新
-			if fieldName != columnName {
-				// 创建新的条目
-				class.Fields[fieldName] = field
-				field.Name = fieldName
-
-				// 删除旧的条目
-				delete(class.Fields, columnName)
-				renamedFields++
-			}
-		}
-
-		if filteredFields > 0 || renamedFields > 0 {
-			log.Debug().Str("table", tableName).Int("filtered", filteredFields).Int("renamed", renamedFields).Msg("字段处理")
-		}
-
-		// 检查类是否已存在
-		if existingClass, ok := my.Nodes[className]; ok {
-			// 合并字段
-			mergedFields := 0
-			for fieldName, field := range class.Fields {
-				if _, exists := existingClass.Fields[fieldName]; !exists {
-					existingClass.Fields[fieldName] = field
-					mergedFields++
-				}
-			}
-
-			if mergedFields > 0 {
-				log.Debug().Str("class", className).Int("fields", mergedFields).Msg("合并字段到现有类")
-			}
-		} else {
-			// 添加新类
-			my.Nodes[className] = class
-			my.tableToClass[class.Table] = className
-			if class.Table != tableName {
-				my.rawTableToClass[tableName] = className
-			}
-			mergedClasses++
-			log.Debug().Str("class", className).Int("fields", len(class.Fields)).Msg("添加新类")
-		}
-	}
-
-	// 合并关系
-	for tableName, relations := range relationships {
-		// 检查是否应包含此表
-		if !my.shouldIncludeTable(tableName) {
-			continue
-		}
-
-		// 转换表名
-		className := my.convertTableName(tableName)
-
-		// 获取或创建关系映射
-		tableRelations, exists := my.relationships[className]
-		if !exists {
-			tableRelations = make(map[string]*internal.ForeignKey)
-			my.relationships[className] = tableRelations
-		}
-
-		// 处理表的所有关系
-		for columnName, fk := range relations {
-			// 检查是否应包含此字段
-			if !my.shouldIncludeField(columnName) {
-				continue
-			}
-
-			// 转换字段名
-			fieldName := my.convertFieldName(tableName, columnName)
-
-			// 转换目标表名和字段名
-			targetClassName := my.convertTableName(fk.TableName)
-			targetFieldName := my.convertFieldName(fk.TableName, fk.ColumnName)
-
-			// 更新外键信息
-			fk.TableName = targetClassName
-			fk.ColumnName = targetFieldName
-
-			// 添加到关系映射
-			tableRelations[fieldName] = fk
-			mergedRelations++
-
-			log.Debug().
-				Str("source", className).
-				Str("field", fieldName).
-				Str("target", targetClassName).
-				Str("target_field", targetFieldName).
-				Msg("添加关系")
-		}
-	}
-
-	log.Info().
-		Int("classes", mergedClasses).
-		Int("relations", mergedRelations).
-		Msg("元数据合并完成")
 }
 
 // loadFromDatabase 从数据库加载元数据
@@ -338,6 +206,9 @@ func (my *Metadata) loadFromDatabase() error {
 		return err
 	}
 	log.Debug().Int("tables", len(classes)).Int("relations", len(relationships)).Msg("数据库元数据加载完成")
+
+	// 初始化Nodes
+	my.Nodes = make(map[string]*Node)
 
 	// 处理命名转换和过滤
 	log.Debug().Msg("开始处理元数据命名转换和过滤")
@@ -392,15 +263,20 @@ func (my *Metadata) loadFromDatabase() error {
 			class.PrimaryKeys[i] = my.convertFieldName(tableName, pkName)
 		}
 
-		// 添加到Nodes集合
-		my.Nodes[className] = class
+		// 创建新的Node
+		node := NewNode(class)
 
-		// 添加到表名索引
-		my.tableToClass[class.Table] = className
+		// 添加到Nodes集合(支持通过类名查找)
+		my.Nodes[className] = node
 
-		// 添加到原始表名索引（如果名称转换后不同）
+		// 添加表名索引
+		node.TableNames[class.Table] = false
+		my.Nodes[class.Table] = node
+
+		// 如果原始表名不同，添加原始表名索引
 		if class.Table != tableName {
-			my.rawTableToClass[tableName] = className
+			node.TableNames[tableName] = true
+			my.Nodes[tableName] = node
 		}
 	}
 
@@ -412,11 +288,12 @@ func (my *Metadata) loadFromDatabase() error {
 			continue
 		}
 
-		// 转换表名
+		// 转换表名并获取Node
 		className := my.convertTableName(tableName)
-
-		// 创建关系映射
-		tableRelations := make(map[string]*internal.ForeignKey)
+		node := my.Nodes[className]
+		if node == nil {
+			continue
+		}
 
 		// 处理表的所有关系
 		for columnName, fk := range relations {
@@ -436,8 +313,9 @@ func (my *Metadata) loadFromDatabase() error {
 			fk.TableName = targetClassName
 			fk.ColumnName = targetFieldName
 
-			// 添加到关系映射
-			tableRelations[fieldName] = fk
+			// 添加到外键映射(支持字段名和列名)
+			node.ForeignKeys[fieldName] = fk
+			node.ForeignKeys[columnName] = fk
 			processedRelations++
 
 			log.Debug().
@@ -447,11 +325,6 @@ func (my *Metadata) loadFromDatabase() error {
 				Str("target_field", targetFieldName).
 				Str("kind", string(fk.Kind)).
 				Msg("关系映射")
-		}
-
-		// 添加到全局关系映射
-		if len(tableRelations) > 0 {
-			my.relationships[className] = tableRelations
 		}
 	}
 
@@ -472,26 +345,31 @@ func (my *Metadata) loadMetadataFromFile(filePath string) error {
 		return err
 	}
 
-	var metadataCache struct {
-		Nodes           map[string]*internal.Class
-		TableToClass    map[string]string
-		RawTableToClass map[string]string
-		Relationships   map[string]map[string]*internal.ForeignKey
-	}
-
-	if err := json.Unmarshal(data, &metadataCache); err != nil {
+	var cache MetadataCache
+	if err := json.Unmarshal(data, &cache); err != nil {
 		log.Error().Err(err).Str("file", filePath).Msg("解析元数据JSON失败")
 		return err
 	}
 
-	my.Nodes = metadataCache.Nodes
-	my.tableToClass = metadataCache.TableToClass
-	my.rawTableToClass = metadataCache.RawTableToClass
-	my.relationships = metadataCache.Relationships
+	// 重新创建Node实例以确保指针一致性
+	my.Nodes = make(map[string]*Node)
+	for className, node := range cache.Nodes {
+		// 只为每个类创建一次Node
+		if _, exists := my.Nodes[node.Name]; !exists {
+			newNode := NewNode(node.Class)
+			newNode.TableNames = node.TableNames
+			newNode.ForeignKeys = node.ForeignKeys
+
+			// 添加所有索引
+			for tableName := range node.TableNames {
+				my.Nodes[tableName] = newNode
+			}
+			my.Nodes[className] = newNode
+		}
+	}
 
 	log.Info().
 		Int("tables", len(my.Nodes)).
-		Int("relations", len(my.relationships)).
 		Str("file", filePath).
 		Msg("文件元数据加载完成")
 	return nil
@@ -502,20 +380,12 @@ func (my *Metadata) saveMetadataToFile(filePath string) error {
 	log.Info().Str("file", filePath).Msg("开始保存元数据到文件")
 
 	// 创建要保存的数据结构
-	metadataCache := struct {
-		Nodes           map[string]*internal.Class
-		TableToClass    map[string]string
-		RawTableToClass map[string]string
-		Relationships   map[string]map[string]*internal.ForeignKey
-	}{
-		Nodes:           my.Nodes,
-		TableToClass:    my.tableToClass,
-		RawTableToClass: my.rawTableToClass,
-		Relationships:   my.relationships,
+	cache := MetadataCache{
+		Nodes: my.Nodes,
 	}
 
 	// 转换为JSON
-	data, err := json.MarshalIndent(metadataCache, "", "  ")
+	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
 		log.Error().Err(err).Msg("元数据序列化为JSON失败")
 		return err
@@ -536,7 +406,6 @@ func (my *Metadata) saveMetadataToFile(filePath string) error {
 
 	log.Info().
 		Int("tables", len(my.Nodes)).
-		Int("relationships", len(my.relationships)).
 		Str("file", filePath).
 		Int("size", len(data)).
 		Msg("元数据缓存已保存到文件")
@@ -583,12 +452,11 @@ func (my *Metadata) convertFieldName(tableName, rawName string) string {
 	}
 
 	// 转换为驼峰命名
-	name := rawName
 	if my.cfg.EnableCamelCase {
-		name = strcase.ToCamel(name)
+		return strcase.ToLowerCamel(rawName)
 	}
 
-	return name
+	return rawName
 }
 
 // shouldIncludeTable 检查是否应该包含表
@@ -636,11 +504,17 @@ func (my *Metadata) Marshal() (string, error) {
 
 // FindClass 根据类名查找类
 func (my *Metadata) FindClass(className string, virtual bool) (*internal.Class, bool) {
-	class, ok := my.Nodes[className]
-	if !ok || class.Virtual != virtual {
-		return nil, false
+	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
+		return &internal.Class{
+			Name:        node.Name,
+			Table:       node.Table,
+			Virtual:     node.Virtual,
+			Fields:      node.Fields,
+			PrimaryKeys: node.PrimaryKeys,
+			Description: node.Description,
+		}, true
 	}
-	return class, true
+	return nil, false
 }
 
 // FindField 根据类名和字段名查找字段
@@ -658,49 +532,44 @@ func (my *Metadata) FindField(className, fieldName string, virtual bool) (*inter
 
 // FindClassByTable 根据表名查找类
 func (my *Metadata) FindClassByTable(tableName string) (*internal.Class, bool) {
-	className, ok := my.tableToClass[tableName]
-	if !ok {
-		// 尝试使用原始表名查找
-		className, ok = my.rawTableToClass[tableName]
-		if !ok {
-			return nil, false
-		}
+	if node, ok := my.Nodes[tableName]; ok {
+		return &internal.Class{
+			Name:        node.Name,
+			Table:       node.Table,
+			Virtual:     node.Virtual,
+			Fields:      node.Fields,
+			PrimaryKeys: node.PrimaryKeys,
+			Description: node.Description,
+		}, true
 	}
-
-	return my.Nodes[className], true
+	return nil, false
 }
 
-// GetForeignKey 获取外键关系
-func (my *Metadata) GetForeignKey(sourceTable, sourceColumn string) (*internal.ForeignKey, bool) {
-	tableRels, ok := my.relationships[sourceTable]
-	if !ok {
-		return nil, false
+// GetForeignKey 获取外键关系(支持字段名或列名)
+func (my *Metadata) GetForeignKey(sourceTable, nameOrColumn string) (*internal.ForeignKey, bool) {
+	if node, ok := my.Nodes[sourceTable]; ok {
+		fk, exists := node.ForeignKeys[nameOrColumn]
+		return fk, exists
 	}
-
-	fk, ok := tableRels[sourceColumn]
-	return fk, ok
+	return nil, false
 }
 
 // TableName 获取类的表名
 func (my *Metadata) TableName(className string, virtual bool) (string, bool) {
-	class, ok := my.Nodes[className]
-	if !ok || class.Virtual != virtual {
-		return "", false
+	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
+		return node.Table, len(node.Table) > 0
 	}
-	return class.Table, len(class.Table) > 0
+	return "", false
 }
 
 // ColumnName 获取字段的列名
 func (my *Metadata) ColumnName(className, fieldName string, virtual bool) (string, bool) {
-	class, ok := my.Nodes[className]
-	if !ok || class.Virtual != virtual {
-		return "", false
+	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
+		if field, ok := node.Fields[fieldName]; ok && field.Virtual == virtual {
+			return field.Column, len(field.Column) > 0
+		}
 	}
-	field, ok := class.Fields[fieldName]
-	if !ok || field.Virtual != virtual {
-		return "", false
-	}
-	return field.Column, len(field.Column) > 0
+	return "", false
 }
 
 // 以下是加载选项的实现
@@ -757,8 +626,103 @@ func (my *Metadata) loadFromConfig() error {
 	}
 	log.Debug().Int("classes", len(classes)).Int("relations", len(relationships)).Msg("配置元数据加载完成")
 
-	// 使用合并函数处理元数据
-	my.mergeMetadata(classes, relationships)
+	// 处理命名转换和过滤
+	for tableName, class := range classes {
+		// 检查是否应包含此表
+		if !my.shouldIncludeTable(tableName) {
+			continue
+		}
+
+		// 转换类名
+		className := my.convertTableName(tableName)
+		class.Name = className
+
+		// 处理字段
+		for columnName, field := range class.Fields {
+			// 检查是否应包含此字段
+			if !my.shouldIncludeField(columnName) {
+				delete(class.Fields, columnName)
+				continue
+			}
+
+			// 转换字段名
+			fieldName := my.convertFieldName(tableName, columnName)
+			if fieldName != columnName {
+				// 创建新的字段
+				newField := &internal.Field{
+					Name:        fieldName,
+					Column:      columnName, // 保留原始列名
+					Type:        field.Type,
+					Virtual:     field.Virtual,
+					Description: field.Description,
+				}
+				class.Fields[fieldName] = newField
+				delete(class.Fields, columnName)
+			}
+		}
+
+		// 创建或更新Node
+		node, exists := my.Nodes[className]
+		if !exists {
+			node = NewNode(class)
+			my.Nodes[className] = node
+		} else {
+			// 合并字段
+			for fieldName, field := range class.Fields {
+				if _, exists := node.Fields[fieldName]; !exists {
+					node.Fields[fieldName] = field
+				}
+			}
+		}
+
+		// 添加表名索引，确保原始表名标记正确
+		node.TableNames[tableName] = true // 原始表名标记为true
+		my.Nodes[tableName] = node
+
+		// 如果类名不同于原始表名，添加类名索引
+		if className != tableName {
+			my.Nodes[className] = node
+		}
+
+		// 如果表名与原始表名不同，添加表名索引
+		if class.Table != tableName {
+			node.TableNames[class.Table] = false
+			my.Nodes[class.Table] = node
+		}
+	}
+
+	// 处理关系
+	for tableName, relations := range relationships {
+		if !my.shouldIncludeTable(tableName) {
+			continue
+		}
+
+		className := my.convertTableName(tableName)
+		node := my.Nodes[className]
+		if node == nil {
+			continue
+		}
+
+		for columnName, fk := range relations {
+			if !my.shouldIncludeField(columnName) {
+				continue
+			}
+
+			fieldName := my.convertFieldName(tableName, columnName)
+			targetClassName := my.convertTableName(fk.TableName)
+			targetFieldName := my.convertFieldName(fk.TableName, fk.ColumnName)
+
+			// 更新外键信息
+			fk.TableName = targetClassName
+			fk.ColumnName = targetFieldName
+
+			// 添加到外键映射
+			node.ForeignKeys[fieldName] = fk
+			if fieldName != columnName {
+				node.ForeignKeys[columnName] = fk // 保持原始列名的映射
+			}
+		}
+	}
 
 	return nil
 }
