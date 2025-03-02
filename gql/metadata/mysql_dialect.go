@@ -66,42 +66,53 @@ tables AS (
     WHERE 
         table_schema = ?
         AND table_type = 'BASE TABLE'
+        AND table_name REGEXP '^[a-zA-Z][a-zA-Z0-9_]*$'  -- 允许字母开头，字母数字下划线组合
 ),
 columns AS (
     SELECT 
-        table_name,
-        column_name,
-        data_type,
-        is_nullable = 'YES' as is_nullable,
-        character_maximum_length,
-        numeric_precision,
-        numeric_scale,
-        column_comment as column_description
+        c.table_name,
+        c.column_name,
+        c.data_type,
+        c.is_nullable = 'YES' as is_nullable,
+        c.character_maximum_length,
+        c.numeric_precision,
+        c.numeric_scale,
+        c.column_comment as column_description
     FROM 
-        information_schema.columns
+        information_schema.columns c
+    JOIN 
+        tables t ON c.table_name = t.table_name
     WHERE 
-        table_schema = ?
+        c.table_schema = ?
 ),
 primary_keys AS (
-    SELECT 
+    SELECT DISTINCT
         k.table_name,
         k.column_name
     FROM 
         information_schema.table_constraints t
     JOIN 
-        information_schema.key_column_usage k ON t.constraint_name = k.constraint_name
+        information_schema.key_column_usage k 
+        ON t.constraint_name = k.constraint_name
+        AND t.table_schema = k.table_schema
+    JOIN 
+        tables tab ON k.table_name = tab.table_name
     WHERE 
         t.constraint_type = 'PRIMARY KEY'
         AND t.table_schema = ?
 ),
 foreign_keys AS (
-    SELECT 
+    SELECT DISTINCT
         k.table_name as source_table,
         k.column_name as source_column,
         k.referenced_table_name as target_table,
         k.referenced_column_name as target_column
     FROM 
         information_schema.key_column_usage k
+    JOIN 
+        tables t1 ON k.table_name = t1.table_name
+    JOIN 
+        tables t2 ON k.referenced_table_name = t2.table_name
     WHERE 
         k.constraint_schema = ?
         AND k.referenced_table_name IS NOT NULL
