@@ -66,7 +66,6 @@ tables AS (
     WHERE 
         table_schema = ?
         AND table_type = 'BASE TABLE'
-        AND table_name REGEXP '^[a-zA-Z][a-zA-Z0-9_]*$'  -- 允许字母开头，字母数字下划线组合
 ),
 columns AS (
     SELECT 
