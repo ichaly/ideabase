@@ -54,7 +54,6 @@ type MetadataSource string
 const (
 	SourceDatabase MetadataSource = "database" // 数据库源
 	SourceFile     MetadataSource = "file"     // 文件源
-	SourceConfig   MetadataSource = "config"   // 配置源
 )
 
 // TableConfig 表示表配置

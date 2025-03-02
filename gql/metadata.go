@@ -129,7 +129,7 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 func (my *Metadata) loadMetadata() error {
 	log.Info().Msg("开始加载元数据")
 
-	// 根据环境决定加载方式
+	// 首先从主要来源加载基础元数据
 	switch my.cfg.Source {
 	case internal.SourceDatabase:
 		// 开发环境：从数据库加载
@@ -156,27 +156,16 @@ func (my *Metadata) loadMetadata() error {
 			return fmt.Errorf("从文件加载元数据失败: %w", err)
 		}
 
-	case internal.SourceConfig:
-		// 配置环境：从配置加载
-		log.Info().Msg("从配置加载元数据")
-		if err := my.loadFromConfig(); err != nil {
-			log.Error().Err(err).Msg("从配置加载元数据失败")
-			return fmt.Errorf("从配置加载元数据失败: %w", err)
-		}
-
 	default:
 		log.Error().Str("source", string(my.cfg.Source)).Msg("未知的元数据加载来源")
 		return fmt.Errorf("未知的元数据加载来源: %s", my.cfg.Source)
 	}
 
-	// 合并配置的元数据 - 从数据库或文件加载后，尝试从配置合并额外定义
-	if my.cfg.Source != internal.SourceConfig {
-		// 尝试从配置加载额外元数据并合并
-		log.Info().Msg("尝试从配置合并额外元数据")
-		if err := my.loadFromConfig(); err != nil {
-			// 记录错误但不中断流程
-			log.Warn().Err(err).Msg("合并配置元数据失败，继续使用现有元数据")
-		}
+	// 加载并合并配置中的元数据（具有更高优先级）
+	log.Info().Msg("加载配置元数据并合并")
+	if err := my.loadFromConfig(); err != nil {
+		log.Error().Err(err).Msg("加载配置元数据失败")
+		return fmt.Errorf("加载配置元数据失败: %w", err)
 	}
 
 	log.Info().
@@ -358,7 +347,28 @@ func (my *Metadata) loadMetadataFromFile(filePath string) error {
 		if _, exists := my.Nodes[node.Name]; !exists {
 			newNode := NewNode(node.Class)
 			newNode.TableNames = node.TableNames
-			newNode.ForeignKeys = node.ForeignKeys
+
+			// 确保相同的外键关系共享同一个指针
+			fkCache := make(map[string]*internal.ForeignKey) // 用于缓存已创建的外键
+
+			for k, v := range node.ForeignKeys {
+				// 创建外键的唯一标识
+				fkKey := fmt.Sprintf("%s:%s:%s", v.TableName, v.ColumnName, v.Kind)
+
+				// 检查是否已经创建过这个外键
+				if cached, exists := fkCache[fkKey]; exists {
+					newNode.ForeignKeys[k] = cached
+				} else {
+					// 创建新的外键并缓存
+					newFk := &internal.ForeignKey{
+						TableName:  v.TableName,
+						ColumnName: v.ColumnName,
+						Kind:       v.Kind,
+					}
+					fkCache[fkKey] = newFk
+					newNode.ForeignKeys[k] = newFk
+				}
+			}
 
 			// 添加所有索引
 			for tableName := range node.TableNames {
