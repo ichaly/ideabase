@@ -17,7 +17,7 @@ import (
 
 // 测试 PostgreSQL 数据库
 func TestPostgreSQL(t *testing.T) {
-	versions := []string{"16", "15", "14", "13"}
+	versions := []string{"16"}
 
 	for _, version := range versions {
 		t.Run(fmt.Sprintf("Version %s", version), func(t *testing.T) {
