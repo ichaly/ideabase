@@ -44,33 +44,12 @@ type Metadata struct {
 	tpl *template.Template
 
 	// 统一索引: 支持类名、表名、原始表名查找
-	Nodes map[string]*Node
-}
-
-// Node 表示一个类节点的完整信息
-type Node struct {
-	// 类定义
-	*internal.Class
-
-	// 表名索引 (key: 表名, value: true表示是原始表名)
-	TableNames map[string]bool
-
-	// 外键关系索引 (key: 字段名或列名)
-	ForeignKeys map[string]*internal.ForeignKey
-}
-
-// NewNode 创建新的Node实例
-func NewNode(class *internal.Class) *Node {
-	return &Node{
-		Class:       class,
-		TableNames:  make(map[string]bool),
-		ForeignKeys: make(map[string]*internal.ForeignKey),
-	}
+	Nodes map[string]*internal.Class
 }
 
 // MetadataCache 元数据缓存结构
 type MetadataCache struct {
-	Nodes map[string]*Node `json:"nodes"`
+	Nodes map[string]*internal.Class `json:"nodes"`
 }
 
 // NewMetadata 创建一个新的元数据处理器
@@ -100,7 +79,7 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 		db:    d,
 		cfg:   cfg,
 		tpl:   tpl,
-		Nodes: make(map[string]*Node),
+		Nodes: make(map[string]*internal.Class),
 	}
 
 	// 加载元数据
@@ -129,10 +108,10 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 func (my *Metadata) loadMetadata() error {
 	log.Info().Msg("开始加载元数据")
 
-	// 首先从主要来源加载基础元数据
+	// 从主要来源加载基础元数据
 	switch my.cfg.Source {
 	case internal.SourceDatabase:
-		// 开发环境：从数据库加载
+		// 从数据库加载
 		log.Info().Msg("从数据库加载元数据")
 		if err := my.loadFromDatabase(); err != nil {
 			log.Error().Err(err).Msg("从数据库加载元数据失败")
@@ -149,7 +128,7 @@ func (my *Metadata) loadMetadata() error {
 		}
 
 	case internal.SourceFile:
-		// 生产环境：从预设文件加载
+		// 从预设文件加载
 		log.Info().Str("file", my.cfg.CachePath).Msg("从预设文件加载元数据")
 		if err := my.loadMetadataFromFile(my.cfg.CachePath); err != nil {
 			log.Error().Err(err).Str("file", my.cfg.CachePath).Msg("从预设文件加载元数据失败")
@@ -171,7 +150,6 @@ func (my *Metadata) loadMetadata() error {
 	log.Info().
 		Int("classes", len(my.Nodes)).
 		Msg("元数据加载完成")
-	log.Debug().Msg("元数据加载过程结束")
 	return nil
 }
 
@@ -197,7 +175,7 @@ func (my *Metadata) loadFromDatabase() error {
 	log.Debug().Int("tables", len(classes)).Int("relations", len(relationships)).Msg("数据库元数据加载完成")
 
 	// 初始化Nodes
-	my.Nodes = make(map[string]*Node)
+	my.Nodes = make(map[string]*internal.Class)
 
 	// 处理命名转换和过滤
 	log.Debug().Msg("开始处理元数据命名转换和过滤")
@@ -252,136 +230,143 @@ func (my *Metadata) loadFromDatabase() error {
 			class.PrimaryKeys[i] = my.convertFieldName(tableName, pkName)
 		}
 
-		// 创建新的Node
-		node := NewNode(class)
+		// 初始化表名索引
+		if class.TableNames == nil {
+			class.TableNames = make(map[string]bool)
+		}
 
 		// 添加到Nodes集合(支持通过类名查找)
-		my.Nodes[className] = node
+		my.Nodes[className] = class
 
 		// 添加表名索引
-		node.TableNames[class.Table] = false
-		my.Nodes[class.Table] = node
+		class.TableNames[class.Table] = false
+		my.Nodes[class.Table] = class
 
 		// 如果原始表名不同，添加原始表名索引
 		if class.Table != tableName {
-			node.TableNames[tableName] = true
-			my.Nodes[tableName] = node
+			class.TableNames[tableName] = true
+			my.Nodes[tableName] = class
 		}
 	}
 
 	// 处理关系
-	processedRelations := 0
-	for tableName, relations := range relationships {
-		// 检查是否应包含此表
-		if !my.shouldIncludeTable(tableName) {
+	for sourceTable, relations := range relationships {
+		if !my.shouldIncludeTable(sourceTable) {
 			continue
 		}
 
-		// 转换表名并获取Node
-		className := my.convertTableName(tableName)
-		node := my.Nodes[className]
-		if node == nil {
-			continue
-		}
-
-		// 处理表的所有关系
-		for columnName, fk := range relations {
-			// 检查是否应包含此字段
-			if !my.shouldIncludeField(columnName) {
+		for sourceColumn, relation := range relations {
+			if !my.shouldIncludeField(sourceColumn) {
 				continue
 			}
 
-			// 转换字段名
-			fieldName := my.convertFieldName(tableName, columnName)
+			// 获取源类和字段
+			sourceClass := my.Nodes[my.convertTableName(sourceTable)]
+			if sourceClass == nil {
+				continue
+			}
 
-			// 转换目标表名和字段名
-			targetClassName := my.convertTableName(fk.TableName)
-			targetFieldName := my.convertFieldName(fk.TableName, fk.ColumnName)
+			sourceField := sourceClass.GetField(my.convertFieldName(sourceTable, sourceColumn))
+			if sourceField == nil {
+				// 创建关系字段
+				sourceField = &internal.Field{
+					Name:    my.convertFieldName(sourceTable, sourceColumn),
+					Column:  sourceColumn,
+					Type:    my.convertTableName(relation.TargetClass),
+					Virtual: true,
+				}
+				sourceClass.AddField(sourceField)
+			}
 
-			// 更新外键信息
-			fk.TableName = targetClassName
-			fk.ColumnName = targetFieldName
-
-			// 添加到外键映射(支持字段名和列名)
-			node.ForeignKeys[fieldName] = fk
-			node.ForeignKeys[columnName] = fk
-			processedRelations++
-
-			log.Debug().
-				Str("source_table", className).
-				Str("source_field", fieldName).
-				Str("target_table", targetClassName).
-				Str("target_field", targetFieldName).
-				Str("kind", string(fk.Kind)).
-				Msg("关系映射")
+			// 设置字段的关系引用
+			sourceField.Relation = relation
 		}
 	}
 
-	log.Info().
-		Int("tables", len(my.Nodes)).
-		Int("relations", processedRelations).
-		Msg("数据库元数据处理完成")
 	return nil
 }
 
 // loadMetadataFromFile 从文件加载元数据
-func (my *Metadata) loadMetadataFromFile(filePath string) error {
-	log.Info().Str("file", filePath).Msg("开始从文件加载元数据")
+func (my *Metadata) loadMetadataFromFile(path string) error {
+	log.Info().Str("file", path).Msg("开始从文件加载元数据")
 
-	data, err := os.ReadFile(filePath)
+	// 读取文件
+	data, err := os.ReadFile(path)
 	if err != nil {
-		log.Error().Err(err).Str("file", filePath).Msg("读取元数据文件失败")
-		return err
+		log.Error().Err(err).Str("file", path).Msg("读取文件失败")
+		return fmt.Errorf("读取文件失败: %w", err)
 	}
 
+	// 解析JSON
 	var cache MetadataCache
-	if err := json.Unmarshal(data, &cache); err != nil {
-		log.Error().Err(err).Str("file", filePath).Msg("解析元数据JSON失败")
-		return err
+	if err = json.Unmarshal(data, &cache); err != nil {
+		log.Error().Err(err).Str("file", path).Msg("解析JSON失败")
+		return fmt.Errorf("解析JSON失败: %w", err)
 	}
 
-	// 重新创建Node实例以确保指针一致性
-	my.Nodes = make(map[string]*Node)
-	for className, node := range cache.Nodes {
-		// 只为每个类创建一次Node
-		if _, exists := my.Nodes[node.Name]; !exists {
-			newNode := NewNode(node.Class)
-			newNode.TableNames = node.TableNames
+	// 初始化映射
+	my.Nodes = make(map[string]*internal.Class)
 
-			// 确保相同的外键关系共享同一个指针
-			fkCache := make(map[string]*internal.ForeignKey) // 用于缓存已创建的外键
+	// 处理类定义
+	for className, oldClass := range cache.Nodes {
+		// 创建新的类实例
+		class := &internal.Class{
+			Name:        oldClass.Name,
+			Table:       oldClass.Table,
+			Description: oldClass.Description,
+			Virtual:     oldClass.Virtual,
+			PrimaryKeys: oldClass.PrimaryKeys,
+			Fields:      make(map[string]*internal.Field),
+			TableNames:  make(map[string]bool),
+		}
 
-			for k, v := range node.ForeignKeys {
-				// 创建外键的唯一标识
-				fkKey := fmt.Sprintf("%s:%s:%s", v.TableName, v.ColumnName, v.Kind)
+		// 复制字段
+		for fieldName, oldField := range oldClass.Fields {
+			field := &internal.Field{
+				Name:        oldField.Name,
+				Column:      oldField.Column,
+				Type:        oldField.Type,
+				Description: oldField.Description,
+				IsPrimary:   oldField.IsPrimary,
+				Virtual:     oldField.Virtual,
+			}
 
-				// 检查是否已经创建过这个外键
-				if cached, exists := fkCache[fkKey]; exists {
-					newNode.ForeignKeys[k] = cached
-				} else {
-					// 创建新的外键并缓存
-					newFk := &internal.ForeignKey{
-						TableName:  v.TableName,
-						ColumnName: v.ColumnName,
-						Kind:       v.Kind,
-					}
-					fkCache[fkKey] = newFk
-					newNode.ForeignKeys[k] = newFk
+			// 如果有关系，复制关系信息
+			if oldField.Relation != nil {
+				field.Relation = &internal.Relation{
+					SourceClass: oldField.Relation.SourceClass,
+					SourceField: oldField.Relation.SourceField,
+					TargetClass: oldField.Relation.TargetClass,
+					TargetField: oldField.Relation.TargetField,
 				}
 			}
 
-			// 添加所有索引
-			for tableName := range node.TableNames {
-				my.Nodes[tableName] = newNode
+			class.Fields[fieldName] = field
+		}
+
+		// 复制表名映射
+		for tableName, isOriginal := range oldClass.TableNames {
+			class.TableNames[tableName] = isOriginal
+		}
+
+		// 添加到Nodes集合
+		my.Nodes[className] = class
+
+		// 添加表名索引，指向同一个实例
+		my.Nodes[class.Table] = class
+
+		// 添加其他表名索引
+		for tableName := range class.TableNames {
+			if tableName != class.Table {
+				my.Nodes[tableName] = class
 			}
-			my.Nodes[className] = newNode
 		}
 	}
 
 	log.Info().
-		Int("tables", len(my.Nodes)).
-		Str("file", filePath).
-		Msg("文件元数据加载完成")
+		Int("classes", len(cache.Nodes)).
+		Msg("从文件加载元数据完成")
+
 	return nil
 }
 
@@ -394,31 +379,30 @@ func (my *Metadata) saveMetadataToFile(filePath string) error {
 		Nodes: my.Nodes,
 	}
 
-	// 转换为JSON
+	// 序列化为JSON
 	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
-		log.Error().Err(err).Msg("元数据序列化为JSON失败")
-		return err
+		log.Error().Err(err).Str("file", filePath).Msg("序列化元数据失败")
+		return fmt.Errorf("序列化元数据失败: %w", err)
 	}
 
 	// 确保目录存在
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Error().Err(err).Str("dir", dir).Msg("创建目录失败")
-		return err
+		return fmt.Errorf("创建目录失败: %w", err)
 	}
 
 	// 写入文件
 	if err := os.WriteFile(filePath, data, 0644); err != nil {
 		log.Error().Err(err).Str("file", filePath).Msg("写入元数据文件失败")
-		return err
+		return fmt.Errorf("写入元数据文件失败: %w", err)
 	}
 
 	log.Info().
-		Int("tables", len(my.Nodes)).
-		Str("file", filePath).
-		Int("size", len(data)).
-		Msg("元数据缓存已保存到文件")
+		Int("classes", len(my.Nodes)).
+		Msg("保存元数据到文件完成")
+
 	return nil
 }
 
@@ -529,37 +513,20 @@ func (my *Metadata) FindClass(className string, virtual bool) (*internal.Class, 
 
 // FindField 根据类名和字段名查找字段
 func (my *Metadata) FindField(className, fieldName string, virtual bool) (*internal.Field, bool) {
-	class, ok := my.Nodes[className]
-	if !ok || class.Virtual != virtual {
-		return nil, false
-	}
-	field, ok := class.Fields[fieldName]
-	if !ok || field.Virtual != virtual {
-		return nil, false
-	}
-	return field, true
-}
-
-// FindClassByTable 根据表名查找类
-func (my *Metadata) FindClassByTable(tableName string) (*internal.Class, bool) {
-	if node, ok := my.Nodes[tableName]; ok {
-		return &internal.Class{
-			Name:        node.Name,
-			Table:       node.Table,
-			Virtual:     node.Virtual,
-			Fields:      node.Fields,
-			PrimaryKeys: node.PrimaryKeys,
-			Description: node.Description,
-		}, true
+	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
+		if field := node.GetField(fieldName); field != nil && field.Virtual == virtual {
+			return field, true
+		}
 	}
 	return nil, false
 }
 
 // GetForeignKey 获取外键关系(支持字段名或列名)
-func (my *Metadata) GetForeignKey(sourceTable, nameOrColumn string) (*internal.ForeignKey, bool) {
+func (my *Metadata) GetForeignKey(sourceTable, nameOrColumn string) (*internal.Relation, bool) {
 	if node, ok := my.Nodes[sourceTable]; ok {
-		fk, exists := node.ForeignKeys[nameOrColumn]
-		return fk, exists
+		if field := node.GetField(nameOrColumn); field != nil {
+			return field.Relation, field.Relation != nil
+		}
 	}
 	return nil, false
 }
@@ -575,7 +542,7 @@ func (my *Metadata) TableName(className string, virtual bool) (string, bool) {
 // ColumnName 获取字段的列名
 func (my *Metadata) ColumnName(className, fieldName string, virtual bool) (string, bool) {
 	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
-		if field, ok := node.Fields[fieldName]; ok && field.Virtual == virtual {
+		if field := node.GetField(fieldName); field != nil && field.Virtual == virtual {
 			return field.Column, len(field.Column) > 0
 		}
 	}
@@ -624,115 +591,130 @@ func (my *Metadata) entryOption() error {
 func (my *Metadata) loadFromConfig() error {
 	log.Info().Msg("开始从配置加载元数据")
 
-	// 创建配置加载器
-	loader := metadata.NewConfigLoader(my.v)
-	log.Debug().Msg("创建配置加载器")
-
-	// 加载元数据
-	classes, relationships, err := loader.LoadMetadata()
-	if err != nil {
-		log.Error().Err(err).Msg("配置加载元数据失败")
-		return err
+	// 获取配置中的表定义
+	var tables []map[string]interface{}
+	if err := my.v.UnmarshalKey("metadata.tables", &tables); err != nil {
+		log.Error().Err(err).Msg("解析表配置失败")
+		return fmt.Errorf("解析表配置失败: %w", err)
 	}
-	log.Debug().Int("classes", len(classes)).Int("relations", len(relationships)).Msg("配置元数据加载完成")
 
-	// 处理命名转换和过滤
-	for tableName, class := range classes {
+	// 处理每个表
+	for _, table := range tables {
+		// 获取表名
+		tableName, ok := table["name"].(string)
+		if !ok || tableName == "" {
+			log.Warn().Interface("table", table).Msg("表名无效")
+			continue
+		}
+
 		// 检查是否应包含此表
 		if !my.shouldIncludeTable(tableName) {
+			log.Debug().Str("table", tableName).Msg("排除表")
 			continue
 		}
 
-		// 转换类名
-		className := my.convertTableName(tableName)
-		class.Name = className
+		// 获取表的显示名称（类名）
+		className := tableName
+		if displayName, ok := table["display_name"].(string); ok && displayName != "" {
+			className = displayName
+		} else {
+			className = my.convertTableName(tableName)
+		}
+
+		// 获取表描述
+		description := ""
+		if desc, ok := table["description"].(string); ok {
+			description = desc
+		}
+
+		// 创建类定义
+		class := &internal.Class{
+			Name:        className,
+			Table:       tableName,
+			Description: description,
+			Fields:      make(map[string]*internal.Field),
+			TableNames:  make(map[string]bool),
+		}
+
+		// 设置原始表名
+		class.TableNames[tableName] = true
+
+		// 处理主键
+		if primaryKeys, ok := table["primary_keys"].([]interface{}); ok {
+			for _, pk := range primaryKeys {
+				if pkStr, ok := pk.(string); ok {
+					class.PrimaryKeys = append(class.PrimaryKeys, pkStr)
+				}
+			}
+		}
 
 		// 处理字段
-		for columnName, field := range class.Fields {
-			// 检查是否应包含此字段
-			if !my.shouldIncludeField(columnName) {
-				delete(class.Fields, columnName)
-				continue
-			}
+		if columns, ok := table["columns"].([]map[string]interface{}); ok {
+			for _, colMap := range columns {
+				// 获取字段名
+				columnName, ok := colMap["name"].(string)
+				if !ok || columnName == "" {
+					continue
+				}
 
-			// 转换字段名
-			fieldName := my.convertFieldName(tableName, columnName)
-			if fieldName != columnName {
-				// 创建新的字段
-				newField := &internal.Field{
+				// 检查是否应包含此字段
+				if !my.shouldIncludeField(columnName) {
+					continue
+				}
+
+				// 获取字段的显示名称
+				fieldName := columnName
+				if displayName, ok := colMap["display_name"].(string); ok && displayName != "" {
+					fieldName = displayName
+				} else if my.cfg.EnableCamelCase {
+					fieldName = strcase.ToLowerCamel(columnName)
+				}
+
+				// 获取字段类型
+				fieldType := "string"
+				if t, ok := colMap["type"].(string); ok {
+					fieldType = t
+				}
+
+				// 获取字段描述
+				fieldDesc := ""
+				if desc, ok := colMap["description"].(string); ok {
+					fieldDesc = desc
+				}
+
+				// 获取是否主键
+				isPrimary := false
+				if p, ok := colMap["is_primary"].(bool); ok {
+					isPrimary = p
+				}
+
+				// 创建字段定义
+				field := &internal.Field{
 					Name:        fieldName,
-					Column:      columnName, // 保留原始列名
-					Type:        field.Type,
-					Virtual:     field.Virtual,
-					Description: field.Description,
+					Column:      columnName,
+					Type:        fieldType,
+					Description: fieldDesc,
+					IsPrimary:   isPrimary,
 				}
-				class.Fields[fieldName] = newField
-				delete(class.Fields, columnName)
-			}
-		}
 
-		// 创建或更新Node
-		node, exists := my.Nodes[className]
-		if !exists {
-			node = NewNode(class)
-			my.Nodes[className] = node
-		} else {
-			// 合并字段
-			for fieldName, field := range class.Fields {
-				if _, exists := node.Fields[fieldName]; !exists {
-					node.Fields[fieldName] = field
+				// 添加字段
+				class.Fields[fieldName] = field
+
+				// 如果是主键，添加到主键列表
+				if isPrimary {
+					class.PrimaryKeys = append(class.PrimaryKeys, columnName)
 				}
 			}
 		}
 
-		// 添加表名索引，确保原始表名标记正确
-		node.TableNames[tableName] = true // 原始表名标记为true
-		my.Nodes[tableName] = node
-
-		// 如果类名不同于原始表名，添加类名索引
-		if className != tableName {
-			my.Nodes[className] = node
-		}
-
-		// 如果表名与原始表名不同，添加表名索引
-		if class.Table != tableName {
-			node.TableNames[class.Table] = false
-			my.Nodes[class.Table] = node
-		}
+		// 添加类定义到映射
+		my.Nodes[className] = class
+		my.Nodes[tableName] = class
 	}
 
-	// 处理关系
-	for tableName, relations := range relationships {
-		if !my.shouldIncludeTable(tableName) {
-			continue
-		}
-
-		className := my.convertTableName(tableName)
-		node := my.Nodes[className]
-		if node == nil {
-			continue
-		}
-
-		for columnName, fk := range relations {
-			if !my.shouldIncludeField(columnName) {
-				continue
-			}
-
-			fieldName := my.convertFieldName(tableName, columnName)
-			targetClassName := my.convertTableName(fk.TableName)
-			targetFieldName := my.convertFieldName(fk.TableName, fk.ColumnName)
-
-			// 更新外键信息
-			fk.TableName = targetClassName
-			fk.ColumnName = targetFieldName
-
-			// 添加到外键映射
-			node.ForeignKeys[fieldName] = fk
-			if fieldName != columnName {
-				node.ForeignKeys[columnName] = fk // 保持原始列名的映射
-			}
-		}
-	}
+	log.Info().
+		Int("classes", len(my.Nodes)).
+		Msg("元数据加载完成")
 
 	return nil
 }

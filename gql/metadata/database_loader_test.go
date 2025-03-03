@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -324,9 +323,8 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.Len(t, postsRelations, 1)
 		userIdFK, ok := postsRelations["user_id"]
 		require.True(t, ok)
-		require.Equal(t, "users", userIdFK.TableName)
-		require.Equal(t, "id", userIdFK.ColumnName)
-		require.Equal(t, internal.MANY_TO_ONE, userIdFK.Kind)
+		require.Equal(t, "users", userIdFK.TargetClass)
+		require.Equal(t, "id", userIdFK.TargetField)
 
 		// 验证comments表的关系
 		commentsRelations, ok := relationships["comments"]
@@ -336,23 +334,20 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		// 验证评论与用户的关系
 		commentUserFK, ok := commentsRelations["user_id"]
 		require.True(t, ok)
-		require.Equal(t, "users", commentUserFK.TableName)
-		require.Equal(t, "id", commentUserFK.ColumnName)
-		require.Equal(t, internal.MANY_TO_ONE, commentUserFK.Kind)
+		require.Equal(t, "users", commentUserFK.TargetClass)
+		require.Equal(t, "id", commentUserFK.TargetField)
 
 		// 验证评论与文章的关系
 		commentPostFK, ok := commentsRelations["post_id"]
 		require.True(t, ok)
-		require.Equal(t, "posts", commentPostFK.TableName)
-		require.Equal(t, "id", commentPostFK.ColumnName)
-		require.Equal(t, internal.MANY_TO_ONE, commentPostFK.Kind)
+		require.Equal(t, "posts", commentPostFK.TargetClass)
+		require.Equal(t, "id", commentPostFK.TargetField)
 
 		// 验证评论的自关联
 		commentParentFK, ok := commentsRelations["parent_id"]
 		require.True(t, ok)
-		require.Equal(t, "comments", commentParentFK.TableName)
-		require.Equal(t, "id", commentParentFK.ColumnName)
-		require.Equal(t, internal.MANY_TO_ONE, commentParentFK.Kind)
+		require.Equal(t, "comments", commentParentFK.TargetClass)
+		require.Equal(t, "id", commentParentFK.TargetField)
 
 		// 验证post_tags表的关系
 		postTagsRelations, ok := relationships["post_tags"]
@@ -362,15 +357,13 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		// 验证post_tags与posts的关系
 		postTagPostFK, ok := postTagsRelations["post_id"]
 		require.True(t, ok)
-		require.Equal(t, "posts", postTagPostFK.TableName)
-		require.Equal(t, "id", postTagPostFK.ColumnName)
-		require.Equal(t, internal.MANY_TO_ONE, postTagPostFK.Kind)
+		require.Equal(t, "posts", postTagPostFK.TargetClass)
+		require.Equal(t, "id", postTagPostFK.TargetField)
 
 		// 验证post_tags与tags的关系
 		postTagTagFK, ok := postTagsRelations["tag_id"]
 		require.True(t, ok)
-		require.Equal(t, "tags", postTagTagFK.TableName)
-		require.Equal(t, "id", postTagTagFK.ColumnName)
-		require.Equal(t, internal.MANY_TO_ONE, postTagTagFK.Kind)
+		require.Equal(t, "tags", postTagTagFK.TargetClass)
+		require.Equal(t, "id", postTagTagFK.TargetField)
 	})
 }

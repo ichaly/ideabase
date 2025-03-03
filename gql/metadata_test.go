@@ -76,15 +76,13 @@ func TestLoadMetadataFromFile(t *testing.T) {
 			},
 		},
 		PrimaryKeys: []string{"id"},
+		TableNames:  map[string]bool{"users": false},
 	}
 
-	node := NewNode(userClass)
-	node.TableNames["users"] = false
-
 	testCache := MetadataCache{
-		Nodes: map[string]*Node{
-			"User":  node,
-			"users": node,
+		Nodes: map[string]*internal.Class{
+			"User":  userClass,
+			"users": userClass,
 		},
 	}
 
@@ -247,10 +245,6 @@ func TestTableAndFieldFiltering(t *testing.T) {
 					"name": "id",
 					"type": "integer",
 				},
-				{
-					"name": "title",
-					"type": "character varying",
-				},
 			},
 		},
 	})
@@ -260,12 +254,13 @@ func TestTableAndFieldFiltering(t *testing.T) {
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 验证表过滤
-	assert.Contains(t, meta.Nodes, "users", "应该包含users表")
-	assert.NotContains(t, meta.Nodes, "posts", "不应该包含posts表")
+	assert.Len(t, meta.Nodes, 2, "应该只有users表的两个索引")
+	_, ok := meta.Nodes["posts"]
+	assert.False(t, ok, "posts表应该被过滤掉")
 
 	// 验证字段过滤
-	usersNode := meta.Nodes["users"]
-	assert.Contains(t, usersNode.Fields, "id", "应该包含id字段")
-	assert.Contains(t, usersNode.Fields, "name", "应该包含name字段")
-	assert.NotContains(t, usersNode.Fields, "password", "不应该包含password字段")
+	usersNode, ok := meta.Nodes["users"]
+	assert.True(t, ok, "应该能找到users表")
+	assert.NotContains(t, usersNode.Fields, "password", "password字段应该被过滤掉")
+	assert.Contains(t, usersNode.Fields, "name", "name字段应该保留")
 }

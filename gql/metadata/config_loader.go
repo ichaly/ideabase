@@ -51,10 +51,10 @@ func NewConfigLoader(config *viper.Viper) *ConfigLoader {
 }
 
 // LoadMetadata 从配置加载元数据
-func (l *ConfigLoader) LoadMetadata() (map[string]*internal.Class, map[string]map[string]*internal.ForeignKey, error) {
+func (l *ConfigLoader) LoadMetadata() (map[string]*internal.Class, map[string]map[string]*internal.Relation, error) {
 	// 创建结果容器
 	classes := make(map[string]*internal.Class)
-	relationships := make(map[string]map[string]*internal.ForeignKey)
+	relationships := make(map[string]map[string]*internal.Relation)
 
 	// 从配置读取元数据
 	var metadata configMetadata
@@ -102,34 +102,35 @@ func (l *ConfigLoader) LoadMetadata() (map[string]*internal.Class, map[string]ma
 
 			// 处理外键
 			if column.ForeignKey != nil {
-				// 创建外键对象
-				foreignKey := &internal.ForeignKey{
-					TableName:  column.ForeignKey.Table,
-					ColumnName: column.ForeignKey.Column,
-				}
-
-				// 设置关联类型
+				// 确定关系类型
+				var kind internal.ChainKind
 				switch column.ForeignKey.Kind {
 				case "one_to_many":
-					foreignKey.Kind = internal.ONE_TO_MANY
+					kind = internal.ONE_TO_MANY
 				case "many_to_one":
-					foreignKey.Kind = internal.MANY_TO_ONE
+					kind = internal.MANY_TO_ONE
 				case "many_to_many":
-					foreignKey.Kind = internal.MANY_TO_MANY
+					kind = internal.MANY_TO_MANY
 				case "recursive":
-					foreignKey.Kind = internal.RECURSIVE
+					kind = internal.RECURSIVE
 				default:
-					foreignKey.Kind = internal.MANY_TO_ONE // 默认为多对一
+					kind = internal.MANY_TO_ONE // 默认为多对一
 				}
 
-				// 设置字段外键
-				field.ForeignKey = foreignKey
+				// 创建关系字段
+				field.Relation = &internal.Relation{
+					SourceClass: className,
+					SourceField: fieldName,
+					TargetClass: column.ForeignKey.Table,
+					TargetField: column.ForeignKey.Column,
+					Kind:        kind,
+				}
 
 				// 添加到关系映射
 				if _, ok := relationships[table.Name]; !ok {
-					relationships[table.Name] = make(map[string]*internal.ForeignKey)
+					relationships[table.Name] = make(map[string]*internal.Relation)
 				}
-				relationships[table.Name][column.Name] = foreignKey
+				relationships[table.Name][column.Name] = field.Relation
 			}
 		}
 	}

@@ -172,21 +172,16 @@ func (my *DatabaseLoader) loadMetadataFromDB() ([]tableInfo, []columnInfo, []pri
 }
 
 // LoadMetadata 加载数据库元数据
-func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, map[string]map[string]*internal.ForeignKey, error) {
+func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, map[string]map[string]*internal.Relation, error) {
 	// 创建结果容器
 	classes := make(map[string]*internal.Class)
-	relationships := make(map[string]map[string]*internal.ForeignKey)
+	relationships := make(map[string]map[string]*internal.Relation)
 
 	// 从数据库加载元数据
 	tables, columns, primaryKeys, foreignKeys, err := my.loadMetadataFromDB()
 	if err != nil {
 		return nil, nil, err
 	}
-
-	fmt.Printf("加载到的表信息: %+v\n", tables)
-	fmt.Printf("加载到的列信息: %+v\n", columns)
-	fmt.Printf("加载到的主键信息: %+v\n", primaryKeys)
-	fmt.Printf("加载到的外键信息: %+v\n", foreignKeys)
 
 	// 初始化类结构
 	for _, table := range tables {
@@ -201,15 +196,12 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, map[string
 		}
 	}
 
-	fmt.Printf("初始化的类结构: %+v\n", classes)
-
 	// 初始化字段
 	for _, column := range columns {
 		tableName := strings.ToLower(column.TableName)
 		columnName := strings.ToLower(column.ColumnName)
 		class, ok := classes[tableName]
 		if !ok {
-			fmt.Printf("未找到表 %s 的类定义\n", tableName)
 			continue
 		}
 
@@ -223,29 +215,23 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, map[string
 		}
 	}
 
-	fmt.Printf("添加字段后的类结构: %+v\n", classes)
-
 	// 设置主键
 	for _, pk := range primaryKeys {
 		tableName := strings.ToLower(pk.TableName)
 		columnName := strings.ToLower(pk.ColumnName)
 		class, ok := classes[tableName]
 		if !ok {
-			fmt.Printf("未找到表 %s 的类定义（主键）\n", tableName)
 			continue
 		}
 
 		field, ok := class.Fields[columnName]
 		if !ok {
-			fmt.Printf("未找到表 %s 的字段 %s（主键）\n", tableName, columnName)
 			continue
 		}
 
 		field.IsPrimary = true
 		class.PrimaryKeys = append(class.PrimaryKeys, columnName)
 	}
-
-	fmt.Printf("添加主键后的类结构: %+v\n", classes)
 
 	// 设置外键关系
 	for _, fk := range foreignKeys {
@@ -254,39 +240,56 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, map[string
 		targetTable := strings.ToLower(fk.TargetTable)
 		targetColumn := strings.ToLower(fk.TargetColumn)
 
-		fmt.Printf("处理外键关系: %s.%s -> %s.%s\n", sourceTable, sourceColumn, targetTable, targetColumn)
-
 		// 获取源类和字段
-		sourceClass, okSource := classes[sourceTable]
-		if !okSource {
-			fmt.Printf("未找到表 %s 的类定义（外键）\n", sourceTable)
-			continue
-		}
-		sourceField, okSourceField := sourceClass.Fields[sourceColumn]
-		if !okSourceField {
-			fmt.Printf("未找到表 %s 的字段 %s（外键）\n", sourceTable, sourceColumn)
+		sourceClass, ok := classes[sourceTable]
+		if !ok {
 			continue
 		}
 
-		// 初始化关系映射
+		sourceField, ok := sourceClass.Fields[sourceColumn]
+		if !ok {
+			continue
+		}
+
+		// 获取目标类和字段
+		targetClass, ok := classes[targetTable]
+		if !ok {
+			continue
+		}
+
+		targetField, ok := targetClass.Fields[targetColumn]
+		if !ok {
+			continue
+		}
+
+		// 创建正向关系
+		sourceField.Relation = &internal.Relation{
+			SourceClass: sourceTable,
+			SourceField: sourceColumn,
+			TargetClass: targetTable,
+			TargetField: targetColumn,
+			Kind:        internal.MANY_TO_ONE,
+		}
+
+		// 创建反向关系
+		targetField.Relation = &internal.Relation{
+			SourceClass: targetTable,
+			SourceField: targetColumn,
+			TargetClass: sourceTable,
+			TargetField: sourceColumn,
+			Kind:        internal.ONE_TO_MANY,
+		}
+
+		// 设置双向引用
+		sourceField.Relation.Reverse = targetField.Relation
+		targetField.Relation.Reverse = sourceField.Relation
+
+		// 添加到关系映射
 		if _, ok := relationships[sourceTable]; !ok {
-			relationships[sourceTable] = make(map[string]*internal.ForeignKey)
+			relationships[sourceTable] = make(map[string]*internal.Relation)
 		}
-
-		// 创建外键信息
-		foreignKey := &internal.ForeignKey{
-			TableName:  targetTable,
-			ColumnName: targetColumn,
-			Kind:       internal.MANY_TO_ONE, // 默认为多对一
-		}
-
-		// 设置外键
-		relationships[sourceTable][sourceColumn] = foreignKey
-		sourceField.ForeignKey = foreignKey
+		relationships[sourceTable][sourceColumn] = sourceField.Relation
 	}
-
-	fmt.Printf("最终的类结构: %+v\n", classes)
-	fmt.Printf("最终的关系结构: %+v\n", relationships)
 
 	return classes, relationships, nil
 }
