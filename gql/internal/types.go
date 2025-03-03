@@ -55,41 +55,41 @@ type Relation struct {
 }
 
 // AddField 添加字段到类中
-func (c *Class) AddField(field *Field) {
-	if c.fields == nil {
-		c.fields = make(map[string]*Field)
+func (my *Class) AddField(field *Field) {
+	if my.fields == nil {
+		my.fields = make(map[string]*Field)
 	}
-	if c.Fields == nil {
-		c.Fields = make(map[string]*Field)
+	if my.Fields == nil {
+		my.Fields = make(map[string]*Field)
 	}
 
 	// 添加到导出字段映射
-	c.Fields[field.Name] = field
+	my.Fields[field.Name] = field
 
 	// 添加到内部索引
-	c.fields[field.Name] = field
+	my.fields[field.Name] = field
 	if field.Column != "" && field.Column != field.Name {
-		c.fields[field.Column] = field
+		my.fields[field.Column] = field
 	}
 }
 
 // GetField 获取字段定义(支持字段名或列名)
-func (c *Class) GetField(nameOrColumn string) *Field {
-	return c.fields[nameOrColumn]
+func (my *Class) GetField(nameOrColumn string) *Field {
+	return my.fields[nameOrColumn]
 }
 
 // RemoveField 移除字段
-func (c *Class) RemoveField(field *Field) {
+func (my *Class) RemoveField(field *Field) {
 	if field == nil {
 		return
 	}
 	// 从导出字段映射中删除
-	delete(c.Fields, field.Name)
+	delete(my.Fields, field.Name)
 
 	// 从内部索引中删除
-	delete(c.fields, field.Name)
+	delete(my.fields, field.Name)
 	if field.Column != "" && field.Column != field.Name {
-		delete(c.fields, field.Column)
+		delete(my.fields, field.Column)
 	}
 }
 

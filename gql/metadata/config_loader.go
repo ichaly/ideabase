@@ -51,14 +51,14 @@ func NewConfigLoader(config *viper.Viper) *ConfigLoader {
 }
 
 // LoadMetadata 从配置加载元数据
-func (l *ConfigLoader) LoadMetadata() (map[string]*internal.Class, map[string]map[string]*internal.Relation, error) {
+func (my *ConfigLoader) LoadMetadata() (map[string]*internal.Class, map[string]map[string]*internal.Relation, error) {
 	// 创建结果容器
 	classes := make(map[string]*internal.Class)
 	relationships := make(map[string]map[string]*internal.Relation)
 
 	// 从配置读取元数据
 	var metadata configMetadata
-	if err := l.config.UnmarshalKey("metadata", &metadata); err != nil {
+	if err := my.config.UnmarshalKey("metadata", &metadata); err != nil {
 		return nil, nil, err
 	}
 
