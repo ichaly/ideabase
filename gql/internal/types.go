@@ -51,7 +51,7 @@ type Relation struct {
 	TargetClass string    // 目标类名
 	TargetField string    // 目标字段名
 	Kind        ChainKind // 关系类型
-	Reverse     *Relation // 反向关系引用
+	Reverse     *Relation `json:"-"` // 反向关系引用
 }
 
 // AddField 添加字段到类中

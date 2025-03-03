@@ -39,7 +39,7 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 	v.Set("schema.source", internal.SourceDatabase)
 	v.Set("schema.schema", "public")
 	v.Set("schema.enable-camel-case", true)
-	v.Set("schema.enable-cache", false)
+	v.Set("schema.enable-cache", true)
 
 	// 创建元数据加载器
 	meta, err := NewMetadata(v, db)
