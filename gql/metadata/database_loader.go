@@ -144,25 +144,6 @@ func (my *DatabaseLoader) loadMetadataFromDB() ([]tableInfo, []columnInfo, []pri
 		return nil, nil, nil, nil, fmt.Errorf("解析元数据JSON失败: %w", err)
 	}
 
-	// 将所有表名和字段名转换为小写
-	for i := range result.Tables {
-		result.Tables[i].TableName = strings.ToLower(result.Tables[i].TableName)
-	}
-	for i := range result.Columns {
-		result.Columns[i].TableName = strings.ToLower(result.Columns[i].TableName)
-		result.Columns[i].ColumnName = strings.ToLower(result.Columns[i].ColumnName)
-	}
-	for i := range result.PrimaryKeys {
-		result.PrimaryKeys[i].TableName = strings.ToLower(result.PrimaryKeys[i].TableName)
-		result.PrimaryKeys[i].ColumnName = strings.ToLower(result.PrimaryKeys[i].ColumnName)
-	}
-	for i := range result.ForeignKeys {
-		result.ForeignKeys[i].SourceTable = strings.ToLower(result.ForeignKeys[i].SourceTable)
-		result.ForeignKeys[i].SourceColumn = strings.ToLower(result.ForeignKeys[i].SourceColumn)
-		result.ForeignKeys[i].TargetTable = strings.ToLower(result.ForeignKeys[i].TargetTable)
-		result.ForeignKeys[i].TargetColumn = strings.ToLower(result.ForeignKeys[i].TargetColumn)
-	}
-
 	// 检查返回数据有效性
 	if len(result.Tables) == 0 {
 		return nil, nil, nil, nil, fmt.Errorf("未找到任何表信息，请检查schema配置: %s", my.schema)
@@ -185,7 +166,7 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, map[string
 
 	// 初始化类结构
 	for _, table := range tables {
-		tableName := strings.ToLower(table.TableName)
+		tableName := table.TableName
 		classes[tableName] = &internal.Class{
 			Name:        tableName,
 			Table:       tableName,
@@ -198,8 +179,8 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, map[string
 
 	// 初始化字段
 	for _, column := range columns {
-		tableName := strings.ToLower(column.TableName)
-		columnName := strings.ToLower(column.ColumnName)
+		tableName := column.TableName
+		columnName := column.ColumnName
 		class, ok := classes[tableName]
 		if !ok {
 			continue
@@ -217,8 +198,8 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, map[string
 
 	// 设置主键
 	for _, pk := range primaryKeys {
-		tableName := strings.ToLower(pk.TableName)
-		columnName := strings.ToLower(pk.ColumnName)
+		tableName := pk.TableName
+		columnName := pk.ColumnName
 		class, ok := classes[tableName]
 		if !ok {
 			continue
@@ -235,10 +216,10 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, map[string
 
 	// 设置外键关系
 	for _, fk := range foreignKeys {
-		sourceTable := strings.ToLower(fk.SourceTable)
-		sourceColumn := strings.ToLower(fk.SourceColumn)
-		targetTable := strings.ToLower(fk.TargetTable)
-		targetColumn := strings.ToLower(fk.TargetColumn)
+		sourceTable := fk.SourceTable
+		sourceColumn := fk.SourceColumn
+		targetTable := fk.TargetTable
+		targetColumn := fk.TargetColumn
 
 		// 获取源类和字段
 		sourceClass, ok := classes[sourceTable]

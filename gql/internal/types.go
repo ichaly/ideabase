@@ -25,10 +25,8 @@ type Class struct {
 	Virtual     bool              // 是否为虚拟类
 	PrimaryKeys []string          // 主键列表
 	Description string            // 描述信息
-	Fields      map[string]*Field // 字段映射表(导出字段,用于序列化)
+	Fields      map[string]*Field // 字段映射表(包含字段名和列名的索引)
 	TableNames  map[string]bool   // 表名索引 (key: 表名, value: true表示是原始表名)
-
-	fields map[string]*Field // 内部字段索引,支持字段名和列名查询
 }
 
 // Field 表示类的一个字段
@@ -56,26 +54,22 @@ type Relation struct {
 
 // AddField 添加字段到类中
 func (my *Class) AddField(field *Field) {
-	if my.fields == nil {
-		my.fields = make(map[string]*Field)
-	}
 	if my.Fields == nil {
 		my.Fields = make(map[string]*Field)
 	}
 
-	// 添加到导出字段映射
+	// 添加字段名索引
 	my.Fields[field.Name] = field
 
-	// 添加到内部索引
-	my.fields[field.Name] = field
+	// 如果列名与字段名不同，添加列名索引
 	if field.Column != "" && field.Column != field.Name {
-		my.fields[field.Column] = field
+		my.Fields[field.Column] = field
 	}
 }
 
 // GetField 获取字段定义(支持字段名或列名)
 func (my *Class) GetField(nameOrColumn string) *Field {
-	return my.fields[nameOrColumn]
+	return my.Fields[nameOrColumn]
 }
 
 // RemoveField 移除字段
@@ -83,13 +77,12 @@ func (my *Class) RemoveField(field *Field) {
 	if field == nil {
 		return
 	}
-	// 从导出字段映射中删除
+	// 删除字段名索引
 	delete(my.Fields, field.Name)
 
-	// 从内部索引中删除
-	delete(my.fields, field.Name)
+	// 如果列名与字段名不同，删除列名索引
 	if field.Column != "" && field.Column != field.Name {
-		delete(my.fields, field.Column)
+		delete(my.Fields, field.Column)
 	}
 }
 

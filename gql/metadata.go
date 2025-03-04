@@ -120,7 +120,7 @@ func (my *Metadata) loadMetadata() error {
 		// 如果启用了缓存，保存到文件
 		if my.cfg.EnableCache {
 			log.Info().Str("cache", my.cfg.CachePath).Msg("保存元数据到缓存文件")
-			if err := my.saveMetadataToFile(my.cfg.CachePath); err != nil {
+			if err := my.saveToFile(my.cfg.CachePath); err != nil {
 				log.Error().Err(err).Str("cache", my.cfg.CachePath).Msg("保存元数据到缓存文件失败")
 				return fmt.Errorf("保存元数据缓存失败: %w", err)
 			}
@@ -472,7 +472,7 @@ func (my *Metadata) loadFromFile(path string) error {
 }
 
 // saveMetadataToFile 保存元数据到文件
-func (my *Metadata) saveMetadataToFile(filePath string) error {
+func (my *Metadata) saveToFile(filePath string) error {
 	log.Info().Str("file", filePath).Msg("开始保存元数据到文件")
 
 	// 确保目录存在
