@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
@@ -44,7 +45,8 @@ type Metadata struct {
 	tpl *template.Template
 
 	// 统一索引: 支持类名、表名、原始表名查找
-	Nodes map[string]*internal.Class
+	Nodes   map[string]*internal.Class
+	Version string
 }
 
 // NewMetadata 创建一个新的元数据处理器
@@ -75,6 +77,8 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 		cfg:   cfg,
 		tpl:   tpl,
 		Nodes: make(map[string]*internal.Class),
+		//使用当前时间戳初始化版本
+		Version: time.Now().Format("20060102150405"),
 	}
 
 	// 加载元数据
@@ -125,7 +129,7 @@ func (my *Metadata) loadMetadata() error {
 	case internal.SourceFile:
 		// 从预设文件加载
 		log.Info().Str("file", my.cfg.CachePath).Msg("从预设文件加载元数据")
-		if err := my.loadMetadataFromFile(my.cfg.CachePath); err != nil {
+		if err := my.loadFromFile(my.cfg.CachePath); err != nil {
 			log.Error().Err(err).Str("file", my.cfg.CachePath).Msg("从预设文件加载元数据失败")
 			return fmt.Errorf("从文件加载元数据失败: %w", err)
 		}
@@ -413,8 +417,8 @@ func (my *Metadata) loadFromDatabase() error {
 	return nil
 }
 
-// loadMetadataFromFile 从文件加载元数据
-func (my *Metadata) loadMetadataFromFile(path string) error {
+// loadFromFile 从文件加载元数据
+func (my *Metadata) loadFromFile(path string) error {
 	log.Info().Str("file", path).Msg("开始从文件加载元数据")
 
 	data, err := os.ReadFile(path)
@@ -478,8 +482,8 @@ func (my *Metadata) saveMetadataToFile(filePath string) error {
 		return fmt.Errorf("创建目录失败: %w", err)
 	}
 
-	// 序列化为JSON
-	data, err := json.MarshalIndent(my.Nodes, "", "  ")
+	// 使用自定义序列化为JSON
+	data, err := json.MarshalIndent(my, "", "  ")
 	if err != nil {
 		log.Error().Err(err).Str("file", filePath).Msg("序列化元数据失败")
 		return fmt.Errorf("序列化元数据失败: %w", err)
