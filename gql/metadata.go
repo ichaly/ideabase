@@ -47,11 +47,6 @@ type Metadata struct {
 	Nodes map[string]*internal.Class
 }
 
-// MetadataCache 元数据缓存结构
-type MetadataCache struct {
-	Nodes map[string]*internal.Class `json:"nodes"`
-}
-
 // NewMetadata 创建一个新的元数据处理器
 func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 	//初始化模板

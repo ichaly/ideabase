@@ -1,9 +1,7 @@
 package gql
 
 import (
-	"encoding/json"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/internal"
@@ -47,75 +45,6 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 
 	// 验证元数据已加载
 	assert.NotEmpty(t, meta.Nodes, "应该有加载的类")
-}
-
-// 测试文件加载
-func TestLoadMetadataFromFile(t *testing.T) {
-	// 创建临时文件
-	tempDir := t.TempDir()
-	cachePath := filepath.Join(tempDir, "metadata_cache.json")
-
-	// 创建测试元数据
-	userClass := &internal.Class{
-		Name:    "User",
-		Table:   "users",
-		Virtual: false,
-		Fields: map[string]*internal.Field{
-			"id": {
-				Name:      "id",
-				Column:    "id",
-				Type:      "integer",
-				Virtual:   false,
-				IsPrimary: true,
-			},
-			"name": {
-				Name:    "name",
-				Column:  "name",
-				Type:    "character varying",
-				Virtual: false,
-			},
-		},
-		PrimaryKeys: []string{"id"},
-		TableNames:  map[string]bool{"users": false},
-	}
-
-	testCache := MetadataCache{
-		Nodes: map[string]*internal.Class{
-			"User":  userClass,
-			"users": userClass,
-		},
-	}
-
-	// 写入临时文件
-	data, err := json.MarshalIndent(testCache, "", "  ")
-	require.NoError(t, err, "序列化测试缓存失败")
-	err = os.WriteFile(cachePath, data, 0644)
-	require.NoError(t, err, "写入临时文件失败")
-
-	// 创建配置
-	v := viper.New()
-	v.Set("schema.source", internal.SourceFile)
-	v.Set("schema.cache-path", cachePath)
-	v.Set("schema.enable-camel-case", true)
-
-	// 创建元数据加载器
-	meta, err := NewMetadata(v, nil)
-	require.NoError(t, err, "创建元数据加载器失败")
-
-	// 验证元数据已加载
-	assert.Len(t, meta.Nodes, 2, "应该有2个Node索引")
-
-	// 通过类名查找
-	userNode, ok := meta.Nodes["User"]
-	assert.True(t, ok, "应该能通过类名找到Node")
-	assert.Equal(t, "User", userNode.Name, "类名应该正确")
-	assert.Equal(t, "users", userNode.Table, "表名应该正确")
-	assert.Len(t, userNode.Fields, 2, "应该有2个字段")
-
-	// 通过表名查找
-	tableNode, ok := meta.Nodes["users"]
-	assert.True(t, ok, "应该能通过表名找到Node")
-	assert.Same(t, userNode, tableNode, "通过类名和表名找到的应该是同一个Node")
 }
 
 // 测试配置加载
