@@ -1,6 +1,8 @@
 package internal
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 // ChainKind 表示关系链接类型
 type ChainKind string
@@ -33,25 +35,25 @@ type Class struct {
 
 // Field 表示类的一个字段
 type Field struct {
-	Name        string    // 字段名
-	Column      string    // 列名
-	Type        string    // 类型
-	Virtual     bool      // 是否虚拟字段
-	Nullable    bool      // 是否可空
-	IsPrimary   bool      // 是否主键
-	IsUnique    bool      // 是否唯一
-	Description string    // 描述信息
-	Relation    *Relation // 若为关系字段,指向关系定义
+	Type        string    `json:"type"`        // 类型
+	Name        string    `json:"name"`        // 字段名
+	Column      string    `json:"column"`      // 列名
+	Virtual     bool      `json:"virtual"`     // 是否虚拟字段
+	Nullable    bool      `json:"nullable"`    // 是否可空
+	IsPrimary   bool      `json:"isPrimary"`   // 是否主键
+	IsUnique    bool      `json:"isUnique"`    // 是否唯一
+	Description string    `json:"description"` // 描述信息
+	Relation    *Relation `json:"relation"`    // 若为关系字段,指向关系定义
 }
 
 // Relation 表示类之间的关系
 type Relation struct {
-	SourceClass string    // 源类名
-	SourceField string    // 源字段名
-	TargetClass string    // 目标类名
-	TargetField string    // 目标字段名
-	Kind        ChainKind // 关系类型
-	Reverse     *Relation `json:"-"` // 反向关系引用
+	SourceClass string    `json:"sourceClass"` // 源类名
+	SourceField string    `json:"sourceField"` // 源字段名
+	TargetClass string    `json:"targetClass"` // 目标类名
+	TargetField string    `json:"targetField"` // 目标字段名
+	Kind        ChainKind `json:"kind"`        // 关系类型
+	Reverse     *Relation `json:"-"`           // 反向关系引用
 }
 
 // AddField 添加字段到类中
@@ -104,10 +106,10 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		Name        string            `json:"name"`
 		Table       string            `json:"table"`
 		Virtual     bool              `json:"virtual"`
-		PrimaryKeys []string          `json:"primary_keys"`
+		PrimaryKeys []string          `json:"primaryKeys"`
 		Description string            `json:"description"`
 		Fields      map[string]*Field `json:"fields"`
-		TableNames  map[string]bool   `json:"table_names"`
+		TableNames  map[string]bool   `json:"tableNames"`
 	}{
 		Name:        my.Name,
 		Table:       my.Table,

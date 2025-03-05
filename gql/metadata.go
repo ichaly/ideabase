@@ -562,8 +562,8 @@ func (my *Metadata) MarshalJSON() ([]byte, error) {
 	}
 
 	return json.Marshal(struct {
-		Nodes   map[string]interface{}
-		Version string
+		Nodes   map[string]interface{} `json:"nodes"`
+		Version string                 `json:"version"`
 	}{
 		Nodes:   nodes,
 		Version: my.Version,
