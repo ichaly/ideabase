@@ -1,0 +1,363 @@
+{
+  "nodes": {
+    "Comments": {
+      "name": "Comments",
+      "table": "comments",
+      "virtual": false,
+      "primaryKeys": [
+        "id"
+      ],
+      "description": "评论表",
+      "fields": {
+        "content": {
+          "type": "text",
+          "name": "content",
+          "column": "content",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "评论内容",
+          "relation": null
+        },
+        "createdAt": {
+          "type": "timestamp without time zone",
+          "name": "createdAt",
+          "column": "created_at",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
+          "relation": null
+        },
+        "id": {
+          "type": "integer",
+          "name": "id",
+          "column": "id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": true,
+          "isUnique": false,
+          "description": "",
+          "relation": {
+            "sourceClass": "comments",
+            "sourceField": "id",
+            "targetClass": "comments",
+            "targetField": "parent_id",
+            "kind": "one_to_many"
+          }
+        },
+        "parentId": {
+          "type": "integer",
+          "name": "parentId",
+          "column": "parent_id",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "父评论ID",
+          "relation": {
+            "sourceClass": "comments",
+            "sourceField": "parent_id",
+            "targetClass": "comments",
+            "targetField": "id",
+            "kind": "many_to_one"
+          }
+        },
+        "postId": {
+          "type": "integer",
+          "name": "postId",
+          "column": "post_id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "评论文章",
+          "relation": {
+            "sourceClass": "comments",
+            "sourceField": "post_id",
+            "targetClass": "posts",
+            "targetField": "id",
+            "kind": "many_to_one"
+          }
+        },
+        "userId": {
+          "type": "integer",
+          "name": "userId",
+          "column": "user_id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "评论者",
+          "relation": {
+            "sourceClass": "comments",
+            "sourceField": "user_id",
+            "targetClass": "users",
+            "targetField": "id",
+            "kind": "many_to_one"
+          }
+        }
+      }
+    },
+    "PostTags": {
+      "name": "PostTags",
+      "table": "post_tags",
+      "virtual": false,
+      "primaryKeys": [
+        "postId",
+        "tagId"
+      ],
+      "description": "文章标签关联表",
+      "fields": {
+        "createdAt": {
+          "type": "timestamp without time zone",
+          "name": "createdAt",
+          "column": "created_at",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
+          "relation": null
+        },
+        "postId": {
+          "type": "integer",
+          "name": "postId",
+          "column": "post_id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": true,
+          "isUnique": false,
+          "description": "文章ID",
+          "relation": {
+            "sourceClass": "post_tags",
+            "sourceField": "post_id",
+            "targetClass": "posts",
+            "targetField": "id",
+            "kind": "many_to_one"
+          }
+        },
+        "tagId": {
+          "type": "integer",
+          "name": "tagId",
+          "column": "tag_id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": true,
+          "isUnique": false,
+          "description": "标签ID",
+          "relation": {
+            "sourceClass": "post_tags",
+            "sourceField": "tag_id",
+            "targetClass": "tags",
+            "targetField": "id",
+            "kind": "many_to_one"
+          }
+        }
+      }
+    },
+    "Posts": {
+      "name": "Posts",
+      "table": "posts",
+      "virtual": false,
+      "primaryKeys": [
+        "id"
+      ],
+      "description": "文章表",
+      "fields": {
+        "content": {
+          "type": "text",
+          "name": "content",
+          "column": "content",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "内容",
+          "relation": null
+        },
+        "createdAt": {
+          "type": "timestamp without time zone",
+          "name": "createdAt",
+          "column": "created_at",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
+          "relation": null
+        },
+        "id": {
+          "type": "integer",
+          "name": "id",
+          "column": "id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": true,
+          "isUnique": false,
+          "description": "",
+          "relation": {
+            "sourceClass": "posts",
+            "sourceField": "id",
+            "targetClass": "post_tags",
+            "targetField": "post_id",
+            "kind": "one_to_many"
+          }
+        },
+        "title": {
+          "type": "character varying",
+          "name": "title",
+          "column": "title",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "标题",
+          "relation": null
+        },
+        "userId": {
+          "type": "integer",
+          "name": "userId",
+          "column": "user_id",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "作者ID",
+          "relation": {
+            "sourceClass": "posts",
+            "sourceField": "user_id",
+            "targetClass": "users",
+            "targetField": "id",
+            "kind": "many_to_one"
+          }
+        }
+      }
+    },
+    "Tags": {
+      "name": "Tags",
+      "table": "tags",
+      "virtual": false,
+      "primaryKeys": [
+        "id"
+      ],
+      "description": "标签表",
+      "fields": {
+        "createdAt": {
+          "type": "timestamp without time zone",
+          "name": "createdAt",
+          "column": "created_at",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
+          "relation": null
+        },
+        "description": {
+          "type": "text",
+          "name": "description",
+          "column": "description",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "标签描述",
+          "relation": null
+        },
+        "id": {
+          "type": "integer",
+          "name": "id",
+          "column": "id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": true,
+          "isUnique": false,
+          "description": "",
+          "relation": {
+            "sourceClass": "tags",
+            "sourceField": "id",
+            "targetClass": "post_tags",
+            "targetField": "tag_id",
+            "kind": "one_to_many"
+          }
+        },
+        "name": {
+          "type": "character varying",
+          "name": "name",
+          "column": "name",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "标签名称",
+          "relation": null
+        }
+      }
+    },
+    "Users": {
+      "name": "Users",
+      "table": "users",
+      "virtual": false,
+      "primaryKeys": [
+        "id"
+      ],
+      "description": "用户表",
+      "fields": {
+        "createdAt": {
+          "type": "timestamp without time zone",
+          "name": "createdAt",
+          "column": "created_at",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
+          "relation": null
+        },
+        "email": {
+          "type": "character varying",
+          "name": "email",
+          "column": "email",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "邮箱",
+          "relation": null
+        },
+        "id": {
+          "type": "integer",
+          "name": "id",
+          "column": "id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": true,
+          "isUnique": false,
+          "description": "",
+          "relation": {
+            "sourceClass": "users",
+            "sourceField": "id",
+            "targetClass": "comments",
+            "targetField": "user_id",
+            "kind": "one_to_many"
+          }
+        },
+        "name": {
+          "type": "character varying",
+          "name": "name",
+          "column": "name",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "用户名",
+          "relation": null
+        }
+      }
+    }
+  },
+  "version": "20250305170531"
+}

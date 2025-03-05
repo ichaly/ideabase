@@ -45,8 +45,8 @@ type Metadata struct {
 	tpl *template.Template
 
 	// 统一索引: 支持类名、表名、原始表名查找
-	Nodes   map[string]*internal.Class
-	Version string
+	Nodes   map[string]*internal.Class `json:"nodes"`
+	Version string                     `json:"version"`
 }
 
 // NewMetadata 创建一个新的元数据处理器
@@ -112,7 +112,7 @@ func (my *Metadata) loadMetadata() error {
 	case internal.SourceDatabase:
 		// 从数据库加载
 		log.Info().Msg("从数据库加载元数据")
-		if err := my.loadFromDatabase(); err != nil {
+		if err := my.loadDatabase(); err != nil {
 			log.Error().Err(err).Msg("从数据库加载元数据失败")
 			return fmt.Errorf("加载数据库元数据失败: %w", err)
 		}
@@ -282,8 +282,8 @@ func (my *Metadata) loadFromConfig() error {
 	return nil
 }
 
-// loadFromDatabase 从数据库加载元数据
-func (my *Metadata) loadFromDatabase() error {
+// loadDatabase 从数据库加载元数据
+func (my *Metadata) loadDatabase() error {
 	log.Info().Msg("开始从数据库加载元数据")
 
 	// 创建数据库加载器
@@ -381,21 +381,43 @@ func (my *Metadata) loadFromFile(path string) error {
 		return fmt.Errorf("读取文件失败: %w", err)
 	}
 
-	// 先创建一个临时map来存储反序列化的结果
-	nodes := make(map[string]*internal.Class)
-	if err = json.Unmarshal(data, &nodes); err != nil {
+	// 创建一个临时结构来存储文件内容
+	var mate Metadata
+
+	// 解析JSON数据
+	if err = json.Unmarshal(data, &mate); err != nil {
 		log.Error().Err(err).Str("file", path).Msg("解析JSON失败")
 		return fmt.Errorf("解析JSON失败: %w", err)
 	}
 
-	// 初始化主map
+	// 更新元数据
+	my.Version = mate.Version
 	my.Nodes = make(map[string]*internal.Class)
 
 	// 处理所有类
-	for className, class := range nodes {
+	for className, class := range mate.Nodes {
 		// 只添加大写开头的类名（主类名）
 		if className == class.Name {
+			// 初始化字段映射
+			fields := make(map[string]*internal.Field)
+
+			// 处理每个字段
+			for fieldName, field := range class.Fields {
+				// 添加字段名索引
+				fields[fieldName] = field
+
+				// 如果列名与字段名不同，添加列名索引
+				if field.Column != "" && field.Column != fieldName {
+					fields[field.Column] = field
+				}
+			}
+
+			// 更新类的字段映射
+			class.Fields = fields
+
+			// 添加类到Nodes映射
 			my.Nodes[className] = class
+
 			// 添加表名索引，指向同一个实例
 			if class.Table != class.Name {
 				my.Nodes[class.Table] = class
@@ -542,18 +564,14 @@ func (my *Metadata) Marshal() (string, error) {
 // MarshalJSON 简化版的自定义JSON序列化
 func (my *Metadata) MarshalJSON() ([]byte, error) {
 	// 仅导出key和类名相同的节点
-	nodes := make(map[string]interface{})
+	nodes := make(map[string]*internal.Class)
 	for key, class := range my.Nodes {
 		if key == class.Name {
 			// 直接使用原始对象，减少字段复制
 			nodes[key] = class
 		}
 	}
-
-	return json.Marshal(struct {
-		Nodes   map[string]interface{} `json:"nodes"`
-		Version string                 `json:"version"`
-	}{
+	return json.Marshal(Metadata{
 		Nodes:   nodes,
 		Version: my.Version,
 	})

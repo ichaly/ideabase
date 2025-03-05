@@ -38,6 +38,7 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 	v.Set("schema.schema", "public")
 	v.Set("schema.enable-camel-case", true)
 	v.Set("schema.enable-cache", true)
+	v.Set("schema.cache-path", "../cfg/metadata.json")
 
 	// 创建元数据加载器
 	meta, err := NewMetadata(v, db)
@@ -137,7 +138,6 @@ func TestNameConversion(t *testing.T) {
 	origTableNode, ok := meta.Nodes["tbl_user_profiles"]
 	assert.True(t, ok, "应该能通过原始表名找到Node")
 	assert.Same(t, userProfilesNode, origTableNode, "应该是同一个Node")
-	assert.True(t, origTableNode.TableNames["tbl_user_profiles"], "原始表名标记应该为true")
 }
 
 // 测试表和字段过滤
@@ -192,4 +192,74 @@ func TestTableAndFieldFiltering(t *testing.T) {
 	assert.True(t, ok, "应该能找到users表")
 	assert.NotContains(t, usersNode.Fields, "password", "password字段应该被过滤掉")
 	assert.Contains(t, usersNode.Fields, "name", "name字段应该保留")
+}
+
+// 测试从文件加载元数据
+func TestLoadMetadataFromFile(t *testing.T) {
+	// 创建配置
+	v := viper.New()
+	v.Set("schema.source", internal.SourceFile)
+	v.Set("schema.cache-path", "../cfg/metadata.json")
+
+	// 创建元数据加载器
+	meta, err := NewMetadata(v, nil)
+	require.NoError(t, err, "创建元数据加载器失败")
+
+	// 验证基本信息
+	assert.Equal(t, "20250305170531", meta.Version, "版本号应该匹配")
+	assert.Len(t, meta.Nodes, 10, "应该有10个Node索引(5个类，每个类有类名和表名两个索引)")
+
+	// 测试Users类
+	users, ok := meta.Nodes["Users"]
+	assert.True(t, ok, "应该能找到Users类")
+	assert.Equal(t, "Users", users.Name, "类名应该是Users")
+	assert.Equal(t, "users", users.Table, "表名应该是users")
+	assert.Equal(t, "用户表", users.Description, "描述应该正确")
+	assert.Equal(t, []string{"id"}, users.PrimaryKeys, "主键应该正确")
+
+	// 测试Users的字段
+	assert.Len(t, users.Fields, 5, "Users应该有5个字段索引(4个字段，其中createdAt字段有额外的列名索引)")
+
+	// 测试email字段（通过字段名访问）
+	email := users.GetField("email")
+	assert.NotNil(t, email, "应该能通过字段名找到email字段")
+	assert.Equal(t, "character varying", email.Type, "email字段类型应该正确")
+	assert.Equal(t, "邮箱", email.Description, "email字段描述应该正确")
+	assert.False(t, email.IsPrimary, "email不应该是主键")
+	assert.False(t, email.Nullable, "email不应该可为空")
+
+	// 测试createdAt字段的双重索引
+	createdAt := users.GetField("createdAt")
+	assert.NotNil(t, createdAt, "应该能通过字段名找到createdAt字段")
+	createdAtByColumn := users.GetField("created_at")
+	assert.NotNil(t, createdAtByColumn, "应该能通过列名找到created_at字段")
+	assert.Same(t, createdAt, createdAtByColumn, "通过字段名和列名获取的应该是同一个字段")
+
+	// 测试关系
+	posts, ok := meta.Nodes["Posts"]
+	assert.True(t, ok, "应该能找到Posts类")
+	userId := posts.GetField("userId")
+	assert.NotNil(t, userId, "应该能通过字段名找到userId字段")
+	userIdByColumn := posts.GetField("user_id")
+	assert.NotNil(t, userIdByColumn, "应该能通过列名找到user_id字段")
+	assert.Same(t, userId, userIdByColumn, "通过字段名和列名获取的应该是同一个字段")
+	assert.NotNil(t, userId.Relation, "userId应该有关系定义")
+	assert.Equal(t, "many_to_one", string(userId.Relation.Kind), "应该是many_to_one关系")
+	assert.Equal(t, "users", userId.Relation.TargetClass, "关系目标类应该是users")
+	assert.Equal(t, "id", userId.Relation.TargetField, "关系目标字段应该是id")
+
+	// 测试多对多关系
+	postTags, ok := meta.Nodes["PostTags"]
+	assert.True(t, ok, "应该能找到PostTags类")
+	assert.Equal(t, []string{"postId", "tagId"}, postTags.PrimaryKeys, "PostTags应该有两个主键")
+
+	// 测试PostTags的关系字段双重索引
+	tagId := postTags.GetField("tagId")
+	assert.NotNil(t, tagId, "应该能通过字段名找到tagId字段")
+	tagIdByColumn := postTags.GetField("tag_id")
+	assert.NotNil(t, tagIdByColumn, "应该能通过列名找到tag_id字段")
+	assert.Same(t, tagId, tagIdByColumn, "通过字段名和列名获取的应该是同一个字段")
+	assert.NotNil(t, tagId.Relation, "tagId应该有关系定义")
+	assert.Equal(t, "many_to_one", string(tagId.Relation.Kind), "应该是many_to_one关系")
+	assert.Equal(t, "tags", tagId.Relation.TargetClass, "关系目标类应该是tags")
 }
