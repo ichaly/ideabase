@@ -60,7 +60,6 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 	v.Set("schema.schema", schema)
 	v.Set("schema.enable-camel-case", true)
 	v.Set("schema.enable-cache", true)
-	v.Set("schema.cache-path", "../cfg/metadata.json")
 
 	// 创建元数据加载器
 	meta, err := NewMetadata(v, db)
@@ -284,14 +283,4 @@ func TestLoadMetadataFromFile(t *testing.T) {
 	assert.NotNil(t, tagId.Relation, "tagId应该有关系定义")
 	assert.Equal(t, "many_to_one", string(tagId.Relation.Kind), "应该是many_to_one关系")
 	assert.Equal(t, "tags", tagId.Relation.TargetClass, "关系目标类应该是tags")
-}
-
-// firstNonEmpty 返回第一个非空字符串，用于设置默认值
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
