@@ -153,15 +153,14 @@ func (my *DatabaseLoader) loadMetadataFromDB() ([]tableInfo, []columnInfo, []pri
 }
 
 // LoadMetadata 加载数据库元数据
-func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, map[string]map[string]*internal.Relation, error) {
+func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, error) {
 	// 创建结果容器
 	classes := make(map[string]*internal.Class)
-	relationships := make(map[string]map[string]*internal.Relation)
 
 	// 从数据库加载元数据
 	tables, columns, primaryKeys, foreignKeys, err := my.loadMetadataFromDB()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// 初始化类结构
@@ -264,13 +263,7 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, map[string
 		// 设置双向引用
 		sourceField.Relation.Reverse = targetField.Relation
 		targetField.Relation.Reverse = sourceField.Relation
-
-		// 添加到关系映射
-		if _, ok := relationships[sourceTable]; !ok {
-			relationships[sourceTable] = make(map[string]*internal.Relation)
-		}
-		relationships[sourceTable][sourceColumn] = sourceField.Relation
 	}
 
-	return classes, relationships, nil
+	return classes, nil
 }

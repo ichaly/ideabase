@@ -298,12 +298,12 @@ func (my *Metadata) loadFromDatabase() error {
 
 	// 加载元数据
 	log.Debug().Msg("开始从数据库加载元数据")
-	classes, relationships, err := loader.LoadMetadata()
+	classes, err := loader.LoadMetadata()
 	if err != nil {
 		log.Error().Err(err).Msg("数据库加载元数据失败")
 		return err
 	}
-	log.Debug().Int("tables", len(classes)).Int("relations", len(relationships)).Msg("数据库元数据加载完成")
+	log.Debug().Int("tables", len(classes)).Msg("数据库元数据加载完成")
 
 	// 初始化Nodes
 	my.Nodes = make(map[string]*internal.Class)
@@ -350,7 +350,11 @@ func (my *Metadata) loadFromDatabase() error {
 		}
 
 		if filteredFields > 0 || renamedFields > 0 {
-			log.Debug().Str("table", tableName).Int("filtered", filteredFields).Int("renamed", renamedFields).Msg("字段处理")
+			log.Debug().
+				Str("table", tableName).
+				Int("filtered", filteredFields).
+				Int("renamed", renamedFields).
+				Msg("字段处理")
 		}
 
 		// 更新主键列表（转换字段名）
@@ -370,40 +374,6 @@ func (my *Metadata) loadFromDatabase() error {
 		if class.Name != tableName {
 			class.TableNames[tableName] = true
 			my.Nodes[tableName] = class
-		}
-	}
-
-	// 处理关系
-	for sourceTable, relations := range relationships {
-		if !my.shouldIncludeTable(sourceTable) {
-			continue
-		}
-
-		for sourceColumn, relation := range relations {
-			if !my.shouldIncludeField(sourceColumn) {
-				continue
-			}
-
-			// 获取源类和字段
-			sourceClass := my.Nodes[my.convertTableName(sourceTable)]
-			if sourceClass == nil {
-				continue
-			}
-
-			sourceField := sourceClass.GetField(my.convertFieldName(sourceTable, sourceColumn))
-			if sourceField == nil {
-				// 创建关系字段
-				sourceField = &internal.Field{
-					Name:    my.convertFieldName(sourceTable, sourceColumn),
-					Column:  sourceColumn,
-					Type:    my.convertTableName(relation.TargetClass),
-					Virtual: true,
-				}
-				sourceClass.AddField(sourceField)
-			}
-
-			// 设置字段的关系引用
-			sourceField.Relation = relation
 		}
 	}
 

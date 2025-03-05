@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -245,7 +246,7 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 	require.NoError(t, err)
 
 	// 加载元数据
-	classes, relationships, err := loader.LoadMetadata()
+	classes, err := loader.LoadMetadata()
 	require.NoError(t, err)
 
 	// 验证类信息
@@ -293,6 +294,19 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.Contains(t, comments.Fields, "parent_id")
 		require.Contains(t, comments.Fields, "created_at")
 
+		// 验证关系
+		userIdField := comments.Fields["user_id"]
+		require.NotNil(t, userIdField.Relation)
+		require.Equal(t, "users", userIdField.Relation.TargetClass)
+		require.Equal(t, "id", userIdField.Relation.TargetField)
+		require.Equal(t, internal.MANY_TO_ONE, userIdField.Relation.Kind)
+
+		postIdField := comments.Fields["post_id"]
+		require.NotNil(t, postIdField.Relation)
+		require.Equal(t, "posts", postIdField.Relation.TargetClass)
+		require.Equal(t, "id", postIdField.Relation.TargetField)
+		require.Equal(t, internal.MANY_TO_ONE, postIdField.Relation.Kind)
+
 		// 验证tags表
 		tags, ok := classes["tags"]
 		require.True(t, ok)
@@ -313,57 +327,5 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.Contains(t, postTags.Fields, "post_id")
 		require.Contains(t, postTags.Fields, "tag_id")
 		require.Contains(t, postTags.Fields, "created_at")
-	})
-
-	// 验证关系信息
-	t.Run("验证关系信息", func(t *testing.T) {
-		// 验证posts表的关系
-		postsRelations, ok := relationships["posts"]
-		require.True(t, ok)
-		require.Len(t, postsRelations, 1)
-		userIdFK, ok := postsRelations["user_id"]
-		require.True(t, ok)
-		require.Equal(t, "users", userIdFK.TargetClass)
-		require.Equal(t, "id", userIdFK.TargetField)
-
-		// 验证comments表的关系
-		commentsRelations, ok := relationships["comments"]
-		require.True(t, ok)
-		require.Len(t, commentsRelations, 3)
-
-		// 验证评论与用户的关系
-		commentUserFK, ok := commentsRelations["user_id"]
-		require.True(t, ok)
-		require.Equal(t, "users", commentUserFK.TargetClass)
-		require.Equal(t, "id", commentUserFK.TargetField)
-
-		// 验证评论与文章的关系
-		commentPostFK, ok := commentsRelations["post_id"]
-		require.True(t, ok)
-		require.Equal(t, "posts", commentPostFK.TargetClass)
-		require.Equal(t, "id", commentPostFK.TargetField)
-
-		// 验证评论的自关联
-		commentParentFK, ok := commentsRelations["parent_id"]
-		require.True(t, ok)
-		require.Equal(t, "comments", commentParentFK.TargetClass)
-		require.Equal(t, "id", commentParentFK.TargetField)
-
-		// 验证post_tags表的关系
-		postTagsRelations, ok := relationships["post_tags"]
-		require.True(t, ok)
-		require.Len(t, postTagsRelations, 2)
-
-		// 验证post_tags与posts的关系
-		postTagPostFK, ok := postTagsRelations["post_id"]
-		require.True(t, ok)
-		require.Equal(t, "posts", postTagPostFK.TargetClass)
-		require.Equal(t, "id", postTagPostFK.TargetField)
-
-		// 验证post_tags与tags的关系
-		postTagTagFK, ok := postTagsRelations["tag_id"]
-		require.True(t, ok)
-		require.Equal(t, "tags", postTagTagFK.TargetClass)
-		require.Equal(t, "id", postTagTagFK.TargetField)
 	})
 }
