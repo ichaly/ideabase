@@ -595,8 +595,8 @@ func (my *Metadata) FindField(className, fieldName string, virtual bool) (*inter
 	return nil, false
 }
 
-// GetForeignKey 获取外键关系(支持字段名或列名)
-func (my *Metadata) GetForeignKey(sourceTable, nameOrColumn string) (*internal.Relation, bool) {
+// FindRelation 获取外键关系(支持字段名或列名)
+func (my *Metadata) FindRelation(sourceTable, nameOrColumn string) (*internal.Relation, bool) {
 	if node, ok := my.Nodes[sourceTable]; ok {
 		if field := node.GetField(nameOrColumn); field != nil {
 			return field.Relation, field.Relation != nil
