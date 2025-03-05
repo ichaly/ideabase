@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -22,20 +23,41 @@ func init() {
 
 // 测试数据库加载
 func TestLoadMetadataFromDatabase(t *testing.T) {
-	// 跳过测试，如果数据库连接环境变量没设置
-	dsn := os.Getenv("TEST_DB_DSN")
-	if dsn == "" {
-		t.Skip("跳过测试：未设置TEST_DB_DSN环境变量")
+	dbType := os.Getenv("TEST_DB_TYPE")
+	if dbType == "" {
+		t.Skip("跳过测试：未设置TEST_DB_TYPE环境变量")
+	}
+	schema := os.Getenv("TEST_DB_SCHEMA")
+	if schema == "" {
+		t.Skip("跳过测试：未设置TEST_DB_SCHEMA环境变量")
 	}
 
-	// 连接数据库
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	var dialector gorm.Dialector
+	switch dbType {
+	case "mysql":
+		dsn := os.Getenv("TEST_MYSQL_DSN")
+		if dsn == "" {
+			t.Skip("跳过测试：未设置TEST_MYSQL_DSN环境变量")
+		}
+
+		dialector = mysql.Open(dsn)
+	case "postgres":
+		dsn := os.Getenv("TEST_PGSQL_DSN")
+		if dsn == "" {
+			t.Skip("跳过测试：未设置TEST_PGSQL_DSN环境变量")
+		}
+
+		dialector = postgres.Open(dsn)
+	default:
+		t.Fatalf("不支持的数据库类型: %s", dbType)
+	}
+	db, err := gorm.Open(dialector, &gorm.Config{})
 	require.NoError(t, err, "连接数据库失败")
 
 	// 创建配置
 	v := viper.New()
 	v.Set("schema.source", internal.SourceDatabase)
-	v.Set("schema.schema", "public")
+	v.Set("schema.schema", schema)
 	v.Set("schema.enable-camel-case", true)
 	v.Set("schema.enable-cache", true)
 	v.Set("schema.cache-path", "../cfg/metadata.json")
@@ -262,4 +284,14 @@ func TestLoadMetadataFromFile(t *testing.T) {
 	assert.NotNil(t, tagId.Relation, "tagId应该有关系定义")
 	assert.Equal(t, "many_to_one", string(tagId.Relation.Kind), "应该是many_to_one关系")
 	assert.Equal(t, "tags", tagId.Relation.TargetClass, "关系目标类应该是tags")
+}
+
+// firstNonEmpty 返回第一个非空字符串，用于设置默认值
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
