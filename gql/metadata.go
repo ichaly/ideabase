@@ -580,6 +580,26 @@ func (my *Metadata) Marshal() (string, error) {
 	return w.String(), nil
 }
 
+// MarshalJSON 简化版的自定义JSON序列化
+func (my *Metadata) MarshalJSON() ([]byte, error) {
+	// 仅导出key和类名相同的节点
+	nodes := make(map[string]interface{})
+	for key, class := range my.Nodes {
+		if key == class.Name {
+			// 直接使用原始对象，减少字段复制
+			nodes[key] = class
+		}
+	}
+
+	return json.Marshal(struct {
+		Nodes   map[string]interface{}
+		Version string
+	}{
+		Nodes:   nodes,
+		Version: my.Version,
+	})
+}
+
 // FindClass 根据类名查找类
 func (my *Metadata) FindClass(className string, virtual bool) (*internal.Class, bool) {
 	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {

@@ -1,5 +1,7 @@
 package internal
 
+import "encoding/json"
+
 // ChainKind 表示关系链接类型
 type ChainKind string
 
@@ -84,6 +86,37 @@ func (my *Class) RemoveField(field *Field) {
 	if field.Column != "" && field.Column != field.Name {
 		delete(my.Fields, field.Column)
 	}
+}
+
+// MarshalJSON 实现自定义的JSON序列化
+func (my *Class) MarshalJSON() ([]byte, error) {
+	// 创建一个新的Fields映射，只包含主字段
+	fields := make(map[string]*Field)
+	for key, field := range my.Fields {
+		// 只添加字段名等于Name的字段（主字段）
+		if field.Name == key {
+			fields[key] = field
+		}
+	}
+
+	// 使用匿名结构体并直接初始化进行序列化
+	return json.Marshal(struct {
+		Name        string            `json:"name"`
+		Table       string            `json:"table"`
+		Virtual     bool              `json:"virtual"`
+		PrimaryKeys []string          `json:"primary_keys"`
+		Description string            `json:"description"`
+		Fields      map[string]*Field `json:"fields"`
+		TableNames  map[string]bool   `json:"table_names"`
+	}{
+		Name:        my.Name,
+		Table:       my.Table,
+		Fields:      fields,
+		Virtual:     my.Virtual,
+		PrimaryKeys: my.PrimaryKeys,
+		Description: my.Description,
+		TableNames:  my.TableNames,
+	})
 }
 
 // MetadataSource 元数据来源类型
