@@ -345,9 +345,6 @@ func (my *Metadata) loadFromDatabase() error {
 				// 创建新的条目
 				class.Fields[fieldName] = field
 				field.Name = fieldName
-
-				// 删除旧的条目
-				delete(class.Fields, columnName)
 				renamedFields++
 			}
 		}
@@ -368,10 +365,6 @@ func (my *Metadata) loadFromDatabase() error {
 
 		// 添加到Nodes集合(支持通过类名查找)
 		my.Nodes[className] = class
-
-		// 添加表名索引
-		class.TableNames[class.Table] = false
-		my.Nodes[class.Table] = class
 
 		// 如果原始表名不同，添加原始表名索引
 		if class.Table != tableName {
