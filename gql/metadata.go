@@ -198,11 +198,7 @@ func (my *Metadata) loadFromConfig() error {
 			Table:       tableName,
 			Description: description,
 			Fields:      make(map[string]*internal.Field),
-			TableNames:  make(map[string]bool),
 		}
-
-		// 设置原始表名
-		class.TableNames[tableName] = true
 
 		// 处理主键
 		if primaryKeys, ok := table["primary_keys"].([]interface{}); ok {
@@ -274,7 +270,9 @@ func (my *Metadata) loadFromConfig() error {
 
 		// 添加类定义到映射
 		my.Nodes[className] = class
-		my.Nodes[tableName] = class
+		if className != tableName {
+			my.Nodes[tableName] = class
+		}
 	}
 
 	log.Info().
@@ -323,8 +321,9 @@ func (my *Metadata) loadFromDatabase() error {
 			log.Debug().Str("table", tableName).Str("class", className).Msg("表名转换")
 		}
 
-		// 更新类名
+		// 更新类名和表名
 		class.Name = className
+		class.Table = tableName
 
 		// 处理字段
 		filteredFields := 0
@@ -362,17 +361,9 @@ func (my *Metadata) loadFromDatabase() error {
 			class.PrimaryKeys[i] = my.convertFieldName(tableName, pkName)
 		}
 
-		// 初始化表名索引
-		if class.TableNames == nil {
-			class.TableNames = make(map[string]bool)
-		}
-
-		// 添加到Nodes集合(支持通过类名查找)
+		// 添加到Nodes集合(支持通过类名和表名查找)
 		my.Nodes[className] = class
-
-		// 如果原始表名不同，添加原始表名索引
-		if class.Name != tableName {
-			class.TableNames[tableName] = true
+		if className != tableName {
 			my.Nodes[tableName] = class
 		}
 	}
@@ -400,16 +391,14 @@ func (my *Metadata) loadFromFile(path string) error {
 	// 初始化主map
 	my.Nodes = make(map[string]*internal.Class)
 
-	// 只处理主键（类名），避免重复
+	// 处理所有类
 	for className, class := range nodes {
 		// 只添加大写开头的类名（主类名）
 		if className == class.Name {
 			my.Nodes[className] = class
 			// 添加表名索引，指向同一个实例
-			my.Nodes[class.Table] = class
-			// 添加其他表名索引，也指向同一个实例
-			for tableName := range class.TableNames {
-				my.Nodes[tableName] = class
+			if class.Table != class.Name {
+				my.Nodes[class.Table] = class
 			}
 		}
 	}

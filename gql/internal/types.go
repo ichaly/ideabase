@@ -24,13 +24,12 @@ type Symbol struct {
 
 // Class 表示一个数据类/表的完整定义
 type Class struct {
-	Name        string            // 类名
-	Table       string            // 表名
+	Name        string            // 类名（可能是转换后的名称）
+	Table       string            // 原始表名
 	Virtual     bool              // 是否为虚拟类
 	PrimaryKeys []string          // 主键列表
 	Description string            // 描述信息
 	Fields      map[string]*Field // 字段映射表(包含字段名和列名的索引)
-	TableNames  map[string]bool   // 表名索引 (key: 表名, value: true表示是原始表名)
 }
 
 // Field 表示类的一个字段
@@ -109,7 +108,6 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		PrimaryKeys []string          `json:"primaryKeys"`
 		Description string            `json:"description"`
 		Fields      map[string]*Field `json:"fields"`
-		TableNames  map[string]bool   `json:"tableNames"`
 	}{
 		Name:        my.Name,
 		Table:       my.Table,
@@ -117,7 +115,6 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		Virtual:     my.Virtual,
 		PrimaryKeys: my.PrimaryKeys,
 		Description: my.Description,
-		TableNames:  my.TableNames,
 	})
 }
 
