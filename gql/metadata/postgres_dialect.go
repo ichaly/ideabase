@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ichaly/ideabase/log"
 	"gorm.io/gorm"
 )
 
@@ -73,7 +74,8 @@ func NewPostgresDialect(db *gorm.DB, schema string) (DatabaseDialect, error) {
 		return nil, fmt.Errorf("不支持的PostgreSQL版本，需要PostgreSQL 9.6或以上版本")
 	}
 
-	fmt.Println("检测到PostgreSQL 9.6+版本，使用现代方言")
+	log.Debug().Msg("检测到PostgreSQL 9.6+版本，使用现代方言")
+
 	return &PostgresDialect{
 		schema: schema,
 	}, nil

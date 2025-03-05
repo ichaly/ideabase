@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ichaly/ideabase/log"
 	"gorm.io/gorm"
 )
 
@@ -48,7 +49,8 @@ func NewMySQLDialect(db *gorm.DB, schema string) (DatabaseDialect, error) {
 		return nil, fmt.Errorf("不支持的MySQL版本，需要MySQL 8.0或以上版本")
 	}
 
-	fmt.Println("检测到MySQL 8.0+版本，使用现代方言")
+	log.Debug().Msg("检测到MySQL 8.0+版本，使用现代方言")
+
 	return &MySQLDialect{
 		schema: schema,
 	}, nil

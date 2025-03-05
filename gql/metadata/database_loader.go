@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/log"
 	"gorm.io/gorm"
 )
 
@@ -138,7 +139,7 @@ func (my *DatabaseLoader) loadMetadataFromDB() ([]tableInfo, []columnInfo, []pri
 		return nil, nil, nil, nil, fmt.Errorf("扫描元数据结果失败: %w", err)
 	}
 
-	fmt.Printf("原始JSON数据: %s\n", string(jsonData))
+	log.Debug().RawJSON("metadata", jsonData).Msg("从数据库加载的原始元数据")
 
 	if err := json.Unmarshal(jsonData, &result); err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("解析元数据JSON失败: %w", err)
