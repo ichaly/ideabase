@@ -367,7 +367,7 @@ func (my *Metadata) loadFromDatabase() error {
 		my.Nodes[className] = class
 
 		// 如果原始表名不同，添加原始表名索引
-		if class.Table != tableName {
+		if class.Name != tableName {
 			class.TableNames[tableName] = true
 			my.Nodes[tableName] = class
 		}
