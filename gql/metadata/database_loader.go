@@ -13,22 +13,22 @@ import (
 // NullableType 自定义类型，用于处理MySQL和PostgreSQL的可空字段
 type NullableType bool
 
-func (n NullableType) Bool() bool {
-	return bool(n)
+func (my NullableType) Bool() bool {
+	return bool(my)
 }
 
-func (n *NullableType) UnmarshalJSON(data []byte) error {
+func (my *NullableType) UnmarshalJSON(data []byte) error {
 	var v interface{}
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
 	}
 	switch value := v.(type) {
 	case bool:
-		*n = NullableType(value)
+		*my = NullableType(value)
 	case float64:
-		*n = value != 0
+		*my = value != 0
 	case string:
-		*n = value == "1" || value == "true"
+		*my = value == "1" || value == "true"
 	default:
 		return fmt.Errorf("unexpected type for nullable: %T", v)
 	}
