@@ -169,6 +169,7 @@ func (my *Metadata) loadFromConfig() error {
 		if len(table.PrimaryKeys) > 0 {
 			class.PrimaryKeys = table.PrimaryKeys
 		}
+		class.Virtual = table.Virtual
 
 		// 合并字段和处理关系
 		for columnName, column := range table.Columns {

@@ -1,14 +1,20 @@
 package gql
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"testing"
+	"time"
 
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -19,6 +25,280 @@ func init() {
 	if err := godotenv.Load("../.env"); err != nil {
 		println("警告: 未能加载 .env 文件:", err)
 	}
+}
+
+// setupTestDatabase 初始化测试数据库
+func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
+	ctx := context.Background()
+
+	// 创建PostgreSQL容器请求
+	req := testcontainers.ContainerRequest{
+		Image:        "postgres:15-alpine",
+		ExposedPorts: []string{"5432/tcp"},
+		Env: map[string]string{
+			"POSTGRES_DB":       "test",
+			"POSTGRES_USER":     "test",
+			"POSTGRES_PASSWORD": "test",
+		},
+		WaitingFor: wait.ForLog("database system is ready to accept connections"),
+	}
+
+	// 启动容器
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	require.NoError(t, err, "创建PostgreSQL容器失败")
+
+	// 获取连接信息
+	host, err := container.Host(ctx)
+	require.NoError(t, err, "获取容器主机失败")
+	port, err := container.MappedPort(ctx, "5432")
+	require.NoError(t, err, "获取容器端口失败")
+
+	// 等待数据库就绪
+	time.Sleep(2 * time.Second)
+
+	// 构建连接字符串
+	dsn := fmt.Sprintf("host=%s port=%s user=test password=test dbname=test sslmode=disable", host, port.Port())
+
+	// 连接数据库
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	require.NoError(t, err, "连接数据库失败")
+
+	// 创建测试表结构
+	err = db.Exec(`
+		-- 创建注释表
+		CREATE TABLE table_comments (
+			table_name TEXT PRIMARY KEY,
+			comment TEXT NOT NULL
+		);
+
+		CREATE TABLE column_comments (
+			table_name TEXT NOT NULL,
+			column_name TEXT NOT NULL,
+			comment TEXT NOT NULL,
+			PRIMARY KEY (table_name, column_name)
+		);
+
+		-- 创建业务表
+		CREATE TABLE users (
+			id SERIAL PRIMARY KEY,
+			name TEXT NOT NULL,
+			email TEXT NOT NULL UNIQUE,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP
+		);
+
+		CREATE TABLE posts (
+			id SERIAL PRIMARY KEY,
+			title TEXT NOT NULL,
+			content TEXT,
+			user_id INTEGER NOT NULL REFERENCES users(id),
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
+		CREATE TABLE tags (
+			id SERIAL PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
+		CREATE TABLE post_tags (
+			post_id INTEGER NOT NULL REFERENCES posts(id),
+			tag_id INTEGER NOT NULL REFERENCES tags(id),
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (post_id, tag_id)
+		);
+
+		-- 插入表注释
+		INSERT INTO table_comments (table_name, comment) VALUES
+		('users', '用户表'),
+		('posts', '文章表'),
+		('tags', '标签表'),
+		('post_tags', '文章标签关联表');
+
+		-- 插入字段注释
+		INSERT INTO column_comments (table_name, column_name, comment) VALUES
+		('users', 'email', '邮箱');
+
+		-- 设置表注释
+		COMMENT ON TABLE users IS '用户表';
+		COMMENT ON TABLE posts IS '文章表';
+		COMMENT ON TABLE tags IS '标签表';
+		COMMENT ON TABLE post_tags IS '文章标签关联表';
+
+		-- 设置字段注释
+		COMMENT ON COLUMN users.email IS '邮箱';
+	`).Error
+	require.NoError(t, err, "创建测试表结构失败")
+
+	// 返回清理函数
+	cleanup := func() {
+		sqlDB, err := db.DB()
+		if err == nil {
+			_ = sqlDB.Close()
+		}
+		if err := container.Terminate(ctx); err != nil {
+			t.Logf("终止容器失败: %v", err)
+		}
+	}
+
+	return db, cleanup
+}
+
+// TestMetadataLoadingModes 测试三种元数据加载模式
+func TestMetadataLoadingModes(t *testing.T) {
+	// 初始化测试数据库
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+
+	// 1. 测试从数据库加载
+	t.Run("从数据库加载", func(t *testing.T) {
+		v := viper.New()
+		v.Set("mode", "dev")
+		v.Set("app.root", utl.Root())
+		v.Set("schema.schema", "public")
+		v.Set("schema.enable-camel-case", true)
+
+		meta, err := NewMetadata(v, db)
+		require.NoError(t, err, "创建元数据加载器失败")
+		assert.NotEmpty(t, meta.Nodes, "应该从数据库加载到元数据")
+
+		// 验证表的加载
+		tables := []string{"Users", "Posts", "Tags", "PostTags"}
+		for _, tableName := range tables {
+			class, exists := meta.Nodes[tableName]
+			assert.True(t, exists, "应该存在表 %s", tableName)
+			if exists {
+				assert.NotEmpty(t, class.Fields, "表 %s 应该有字段", tableName)
+			}
+		}
+
+		// 验证关系加载
+		posts, exists := meta.Nodes["Posts"]
+		assert.True(t, exists, "应该存在Posts表")
+		if exists {
+			// 验证many-to-one关系
+			userId := posts.GetField("userId")
+			assert.NotNil(t, userId, "应该有userId字段")
+			if userId != nil {
+				assert.NotNil(t, userId.Relation, "userId应该有关系定义")
+				assert.Equal(t, internal.MANY_TO_ONE, userId.Relation.Kind, "应该是many-to-one关系")
+				assert.Equal(t, "users", userId.Relation.TargetClass, "关系目标类应该是users")
+			}
+		}
+
+		// 验证many-to-many关系
+		postTags, exists := meta.Nodes["PostTags"]
+		assert.True(t, exists, "应该存在PostTags表")
+		if exists {
+			// 验证与Posts的关系
+			postId := postTags.GetField("postId")
+			assert.NotNil(t, postId, "应该有postId字段")
+			if postId != nil {
+				assert.NotNil(t, postId.Relation, "postId应该有关系定义")
+				assert.Equal(t, internal.MANY_TO_ONE, postId.Relation.Kind, "应该是many-to-one关系")
+				assert.Equal(t, "posts", postId.Relation.TargetClass, "关系目标类应该是posts")
+			}
+
+			// 验证与Tags的关系
+			tagId := postTags.GetField("tagId")
+			assert.NotNil(t, tagId, "应该有tagId字段")
+			if tagId != nil {
+				assert.NotNil(t, tagId.Relation, "tagId应该有关系定义")
+				assert.Equal(t, internal.MANY_TO_ONE, tagId.Relation.Kind, "应该是many-to-one关系")
+				assert.Equal(t, "tags", tagId.Relation.TargetClass, "关系目标类应该是tags")
+			}
+		}
+	})
+
+	// 2. 测试从文件加载
+	t.Run("从文件加载", func(t *testing.T) {
+		// 先从数据库加载并保存到test.json
+		v1 := viper.New()
+		v1.Set("mode", "dev")
+		v1.Set("app.root", "../")
+		loader, err := NewMetadata(v1, db)
+		require.NoError(t, err, "从数据库创建元数据加载器失败")
+		err = loader.loadMetadata()
+		require.NoError(t, err, "从数据库加载元数据失败")
+		err = loader.saveToFile("../cfg/metadata.test.json")
+		require.NoError(t, err, "保存元数据到文件失败")
+
+		// 从test.json加载
+		v2 := viper.New()
+		v2.Set("mode", "test")
+		v2.Set("app.root", "../")
+		v2.Set("metadata.file", "../cfg/metadata.test.json")
+		loader2, err := NewMetadata(v2, nil)
+		require.NoError(t, err, "从文件创建元数据加载器失败")
+		err = loader2.loadMetadata()
+		require.NoError(t, err, "从文件加载元数据失败")
+		require.NotEmpty(t, loader2.Nodes, "元数据不应为空")
+	})
+
+	// 3. 测试配置增强
+	t.Run("配置增强", func(t *testing.T) {
+		// 创建配置
+		v := viper.New()
+		v.Set("mode", "test")
+		v.Set("app.root", "../")
+		v.Set("metadata.tables", map[string]*internal.TableConfig{
+			"users": {
+				Description: "用户表",
+				Columns: map[string]*internal.ColumnConfig{
+					"id": {
+						Name:        "id",
+						Type:        "int",
+						Description: "用户ID",
+						IsPrimary:   true,
+					},
+					"name": {
+						Name:        "name",
+						Type:        "string",
+						Description: "用户名",
+					},
+				},
+			},
+			"virtual_table": {
+				Description: "虚拟表",
+				Virtual:     true,
+				Columns: map[string]*internal.ColumnConfig{
+					"id": {
+						Name:      "id",
+						Type:      "int",
+						IsPrimary: true,
+					},
+				},
+			},
+		})
+
+		// 创建元数据加载器
+		loader, err := NewMetadata(v, nil)
+		require.NoError(t, err, "创建元数据加载器失败")
+		err = loader.loadMetadata()
+		require.NoError(t, err, "加载元数据失败")
+
+		// 验证元数据
+		users, exists := loader.Nodes["users"]
+		require.True(t, exists, "应该存在users表")
+		require.Equal(t, "用户表", users.Description, "表描述应该正确")
+
+		id, exists := users.Fields["id"]
+		require.True(t, exists, "应该存在id字段")
+		require.Equal(t, "用户ID", id.Description, "字段描述应该正确")
+		require.True(t, id.IsPrimary, "id应该是主键")
+
+		name, exists := users.Fields["name"]
+		require.True(t, exists, "应该存在name字段")
+		require.Equal(t, "用户名", name.Description, "字段描述应该正确")
+
+		vt, exists := loader.Nodes["virtual_table"]
+		require.True(t, exists, "应该存在virtual_table表")
+		require.Equal(t, "虚拟表", vt.Description, "虚拟表描述应该正确")
+		require.True(t, vt.Virtual, "virtual_table应该是虚拟表")
+	})
 }
 
 // 测试数据库加载
