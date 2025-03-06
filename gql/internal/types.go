@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 )
 
-// ChainKind 表示关系链接类型
+// ChainKind 表示关系类型
 type ChainKind string
 
 // 关系类型常量
@@ -120,3 +120,35 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 
 // LoadOption 元数据加载选项
 type LoadOption func() error
+
+// FromString 从字符串转换为关系类型
+func (my ChainKind) FromString(kind string) ChainKind {
+	switch kind {
+	case string(ONE_TO_MANY):
+		return ONE_TO_MANY
+	case string(MANY_TO_ONE):
+		return MANY_TO_ONE
+	case string(MANY_TO_MANY):
+		return MANY_TO_MANY
+	case string(RECURSIVE):
+		return RECURSIVE
+	default:
+		return MANY_TO_ONE // 默认为多对一
+	}
+}
+
+// Reverse 获取反向关系类型
+func (my ChainKind) Reverse() ChainKind {
+	switch my {
+	case ONE_TO_MANY:
+		return MANY_TO_ONE
+	case MANY_TO_ONE:
+		return ONE_TO_MANY
+	case MANY_TO_MANY:
+		return MANY_TO_MANY
+	case RECURSIVE:
+		return RECURSIVE
+	default:
+		return ONE_TO_MANY // 默认为一对多
+	}
+}

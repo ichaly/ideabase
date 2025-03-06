@@ -170,7 +170,7 @@ func (my *Metadata) loadFromConfig() error {
 			class.PrimaryKeys = table.PrimaryKeys
 		}
 
-		// 合并字段
+		// 合并字段和处理关系
 		for columnName, column := range table.Columns {
 			if columnName == "" || !my.shouldIncludeField(columnName) {
 				continue
@@ -201,6 +201,45 @@ func (my *Metadata) loadFromConfig() error {
 			}
 			if column.IsPrimary {
 				field.IsPrimary = true
+			}
+
+			// 处理字段关系
+			if column.Relation != nil {
+				// 获取目标类
+				targetClass := my.Nodes[column.Relation.TargetClass]
+				if targetClass != nil {
+					// 设置关系类型
+					kind := internal.ChainKind("").FromString(column.Relation.Kind)
+
+					// 设置关系
+					field.Relation = &internal.Relation{
+						SourceClass: class.Name,
+						SourceField: field.Name,
+						TargetClass: column.Relation.TargetClass,
+						TargetField: column.Relation.TargetField,
+						Kind:        kind,
+					}
+
+					// 创建反向关系(非递归关系)
+					if kind != internal.RECURSIVE {
+						reverseField := &internal.Field{
+							Name:    column.Relation.TargetField,
+							Virtual: true,
+							Relation: &internal.Relation{
+								SourceClass: column.Relation.TargetClass,
+								SourceField: column.Relation.TargetField,
+								TargetClass: class.Name,
+								TargetField: field.Name,
+								Kind:        kind.Reverse(),
+							},
+						}
+						targetClass.Fields[reverseField.Name] = reverseField
+
+						// 建立双向引用
+						field.Relation.Reverse = reverseField.Relation
+						reverseField.Relation.Reverse = field.Relation
+					}
+				}
 			}
 		}
 
