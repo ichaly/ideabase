@@ -140,15 +140,15 @@ func (my *Metadata) loadFromConfig() error {
 		return nil
 	}
 
-	for _, table := range tables {
-		if table.Name == "" || !my.shouldIncludeTable(table.Name) {
+	for tableName, table := range tables {
+		if tableName == "" || !my.shouldIncludeTable(tableName) {
 			continue
 		}
 
 		// 确定类名
-		className := my.convertTableName(table.Name)
-		if table.DisplayName != "" {
-			className = table.DisplayName
+		className := my.convertTableName(tableName)
+		if table.Name != "" {
+			className = table.Name
 		}
 
 		// 获取或创建class
@@ -156,7 +156,7 @@ func (my *Metadata) loadFromConfig() error {
 		if !exists {
 			class = &internal.Class{
 				Name:   className,
-				Table:  table.Name,
+				Table:  tableName,
 				Fields: make(map[string]*internal.Field),
 			}
 			my.Nodes[className] = class
@@ -171,15 +171,15 @@ func (my *Metadata) loadFromConfig() error {
 		}
 
 		// 合并字段
-		for _, column := range table.Columns {
-			if column.Name == "" || !my.shouldIncludeField(column.Name) {
+		for columnName, column := range table.Columns {
+			if columnName == "" || !my.shouldIncludeField(columnName) {
 				continue
 			}
 
-			// 使用convertFieldName处理字段名
-			fieldName := my.convertFieldName(table.Name, column.Name)
-			if column.DisplayName != "" {
-				fieldName = column.DisplayName
+			// 确定字段名
+			fieldName := my.convertFieldName(tableName, columnName)
+			if column.Name != "" {
+				fieldName = column.Name
 			}
 
 			// 获取或创建field
@@ -187,7 +187,7 @@ func (my *Metadata) loadFromConfig() error {
 			if !exists {
 				field = &internal.Field{
 					Name:   fieldName,
-					Column: column.Name,
+					Column: columnName,
 				}
 				class.Fields[fieldName] = field
 			}
@@ -205,8 +205,8 @@ func (my *Metadata) loadFromConfig() error {
 		}
 
 		// 更新表名索引
-		if className != table.Name {
-			my.Nodes[table.Name] = class
+		if className != tableName {
+			my.Nodes[tableName] = class
 		}
 	}
 

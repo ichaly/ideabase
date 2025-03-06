@@ -44,17 +44,14 @@ type SchemaConfig struct {
 
 // MetadataConfig 表示元数据配置
 type MetadataConfig struct {
-	// 表定义列表
-	Tables []TableConfig `mapstructure:"tables"`
+	// 表定义映射(key: 原始表名)
+	Tables map[string]*TableConfig `mapstructure:"tables"`
 }
 
 // TableConfig 表示表配置
 type TableConfig struct {
-	// 表名
+	// 转换后的表名
 	Name string `mapstructure:"name"`
-
-	// 显示名称（类名）
-	DisplayName string `mapstructure:"display_name"`
 
 	// 描述
 	Description string `mapstructure:"description"`
@@ -62,8 +59,8 @@ type TableConfig struct {
 	// 主键列表
 	PrimaryKeys []string `mapstructure:"primary_keys"`
 
-	// 列定义列表
-	Columns []ColumnConfig `mapstructure:"columns"`
+	// 列定义映射(key: 原始列名)
+	Columns map[string]*ColumnConfig `mapstructure:"columns"`
 
 	// 是否虚拟表
 	Virtual bool `mapstructure:"virtual"`
@@ -74,11 +71,8 @@ type TableConfig struct {
 
 // ColumnConfig 表示列配置
 type ColumnConfig struct {
-	// 列名
+	// 转换后的字段名
 	Name string `mapstructure:"name"`
-
-	// 显示名称（字段名）
-	DisplayName string `mapstructure:"display_name"`
 
 	// 数据类型
 	Type string `mapstructure:"type"`
