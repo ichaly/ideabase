@@ -11,9 +11,6 @@ type Config struct {
 
 // SchemaConfig 表示Schema相关配置
 type SchemaConfig struct {
-	// 元数据来源: database, file
-	Source MetadataSource `mapstructure:"source"`
-
 	// 数据库schema
 	Schema string `mapstructure:"schema"`
 

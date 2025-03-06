@@ -118,13 +118,5 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// MetadataSource 元数据来源类型
-type MetadataSource string
-
-const (
-	SourceDatabase MetadataSource = "database" // 数据库源
-	SourceFile     MetadataSource = "file"     // 文件源
-)
-
 // LoadOption 元数据加载选项
 type LoadOption func() error
