@@ -98,60 +98,37 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 }
 
 // loadMetadata 加载元数据
-// 1.根据配置中的CachePath来决定加载模式
-// 2.如果CachePath存在，则从CachePath加载元数据
-// 3.如果CachePath不存在，则直接从数据库加载元数据
-// 4.最后从配置加载元数据,并和前3步加载的元数据合并,配置文件具有最高优先级
 func (my *Metadata) loadMetadata() error {
 	log.Info().Msg("开始加载元数据")
 
-	// 检查是否有配置元数据
-	var tables []map[string]interface{}
-	if err := my.v.UnmarshalKey("metadata.tables", &tables); err != nil {
-		log.Error().Err(err).Msg("解析表配置失败")
-		return fmt.Errorf("解析表配置失败: %w", err)
-	}
+	mode := my.cfg.Mode
+	name := fmt.Sprintf("metadata.%s.json", mode)
+	path := filepath.Join(my.cfg.Root, "cfg", name)
 
-	// 如果配置中有元数据定义，直接使用配置
-	if len(tables) > 0 {
-		log.Info().Msg("使用配置中的元数据定义")
-		if err := my.loadFromConfig(); err != nil {
-			log.Error().Err(err).Msg("加载配置元数据失败")
-			return fmt.Errorf("加载配置元数据失败: %w", err)
-		}
-		return nil
-	}
-
-	// 从主要来源加载基础元数据
-	switch my.cfg.Schema.Source {
-	case internal.SourceDatabase:
-		// 从数据库加载
+	if mode == "dev" {
 		log.Info().Msg("从数据库加载元数据")
 		if err := my.loadDatabase(); err != nil {
 			log.Error().Err(err).Msg("从数据库加载元数据失败")
 			return fmt.Errorf("加载数据库元数据失败: %w", err)
 		}
 
-		// 如果启用了缓存，保存到文件
-		if my.cfg.Schema.EnableCache {
-			log.Info().Str("cache", my.cfg.Schema.CachePath).Msg("保存元数据到缓存文件")
-			if err := my.saveToFile(my.cfg.Schema.CachePath); err != nil {
-				log.Error().Err(err).Str("cache", my.cfg.Schema.CachePath).Msg("保存元数据到缓存文件失败")
-				return fmt.Errorf("保存元数据缓存失败: %w", err)
-			}
+		log.Info().Str("path", path).Msg("保存元数据到预设文件")
+		if err := my.saveToFile(path); err != nil {
+			log.Error().Err(err).Str("path", path).Msg("保存元数据到预设文件失败")
+			return fmt.Errorf("保存元数据缓存失败: %w", err)
 		}
-
-	case internal.SourceFile:
-		// 从预设文件加载
-		log.Info().Str("file", my.cfg.Schema.CachePath).Msg("从预设文件加载元数据")
-		if err := my.loadFromFile(my.cfg.Schema.CachePath); err != nil {
-			log.Error().Err(err).Str("file", my.cfg.Schema.CachePath).Msg("从预设文件加载元数据失败")
-			return fmt.Errorf("从文件加载元数据失败: %w", err)
+	} else {
+		log.Info().Msg("从预设文件加载元数据")
+		if err := my.loadFromFile(path); err != nil {
+			log.Error().Err(err).Msg("从预设文件加载元数据失败")
+			return fmt.Errorf("从预设文件加载元数据失败: %w", err)
 		}
+	}
 
-	default:
-		log.Error().Str("source", string(my.cfg.Schema.Source)).Msg("未知的元数据加载来源")
-		return fmt.Errorf("未知的元数据加载来源: %s", my.cfg.Schema.Source)
+	log.Info().Msg("使用配置中的元数据定义并合并")
+	if err := my.loadFromConfig(); err != nil {
+		log.Error().Err(err).Msg("加载配置元数据失败")
+		return fmt.Errorf("加载配置元数据失败: %w", err)
 	}
 
 	log.Info().
