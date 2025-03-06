@@ -82,6 +82,13 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 		);
 
 		-- 创建业务表
+		CREATE TABLE organizations (
+			id SERIAL PRIMARY KEY,
+			name TEXT NOT NULL,
+			parent_id INTEGER REFERENCES organizations(id),
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
 		CREATE TABLE users (
 			id SERIAL PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -116,20 +123,24 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 		('users', '用户表'),
 		('posts', '文章表'),
 		('tags', '标签表'),
-		('post_tags', '文章标签关联表');
+		('post_tags', '文章标签关联表'),
+		('organizations', '组织架构表');
 
 		-- 插入字段注释
 		INSERT INTO column_comments (table_name, column_name, comment) VALUES
-		('users', 'email', '邮箱');
+		('users', 'email', '邮箱'),
+		('organizations', 'parent_id', '父组织ID');
 
 		-- 设置表注释
 		COMMENT ON TABLE users IS '用户表';
 		COMMENT ON TABLE posts IS '文章表';
 		COMMENT ON TABLE tags IS '标签表';
 		COMMENT ON TABLE post_tags IS '文章标签关联表';
+		COMMENT ON TABLE organizations IS '组织架构表';
 
 		-- 设置字段注释
 		COMMENT ON COLUMN users.email IS '邮箱';
+		COMMENT ON COLUMN organizations.parent_id IS '父组织ID';
 	`).Error
 	require.NoError(t, err, "创建测试表结构失败")
 
@@ -209,6 +220,28 @@ func TestMetadataLoadingModes(t *testing.T) {
 				assert.NotNil(t, tagId.Relation, "tagId应该有关系定义")
 				assert.Equal(t, internal.MANY_TO_ONE, tagId.Relation.Kind, "应该是many-to-one关系")
 				assert.Equal(t, "tags", tagId.Relation.TargetClass, "关系目标类应该是tags")
+			}
+		}
+
+		// 验证自关联关系
+		organizations, exists := meta.Nodes["Organizations"]
+		assert.True(t, exists, "应该存在Organizations表")
+		if exists {
+			// 验证parentId字段
+			parentId := organizations.GetField("parentId")
+			assert.NotNil(t, parentId, "应该有parentId字段")
+			if parentId != nil {
+				assert.NotNil(t, parentId.Relation, "parentId应该有关系定义")
+				assert.Equal(t, internal.RECURSIVE, parentId.Relation.Kind, "应该是recursive关系")
+				assert.Equal(t, "organizations", parentId.Relation.TargetClass, "关系目标类应该是organizations")
+				assert.Equal(t, "id", parentId.Relation.TargetField, "关系目标字段应该是id")
+
+				// 验证反向关系
+				assert.NotNil(t, parentId.Relation.Reverse, "应该有反向关系")
+				if parentId.Relation.Reverse != nil {
+					assert.Equal(t, internal.RECURSIVE, parentId.Relation.Reverse.Kind, "反向关系也应该是recursive")
+					assert.Equal(t, "organizations", parentId.Relation.Reverse.TargetClass, "反向关系目标类应该是organizations")
+				}
 			}
 		}
 	})
