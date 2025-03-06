@@ -98,6 +98,10 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 }
 
 // loadMetadata 加载元数据
+// 1.根据配置中的CachePath来决定加载模式
+// 2.如果CachePath存在，则从CachePath加载元数据
+// 3.如果CachePath不存在，则直接从数据库加载元数据
+// 4.最后从配置加载元数据,并和前3步加载的元数据合并,配置文件具有最高优先级
 func (my *Metadata) loadMetadata() error {
 	log.Info().Msg("开始加载元数据")
 
