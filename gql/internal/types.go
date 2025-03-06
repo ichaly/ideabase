@@ -126,47 +126,5 @@ const (
 	SourceFile     MetadataSource = "file"     // 文件源
 )
 
-// TableConfig 表示表配置
-type TableConfig struct {
-	// 数据类型映射
-	Mapping map[string]string `mapstructure:"mapping"`
-
-	// 元数据加载源，可以是database、file或config
-	Source MetadataSource `mapstructure:"source"`
-
-	// 数据库schema名称
-	Schema string `mapstructure:"schema"`
-
-	// 元数据缓存文件路径
-	CachePath string `mapstructure:"cache-path"`
-
-	// 是否启用缓存
-	EnableCache bool `mapstructure:"enable-cache"`
-
-	// 表名前缀（用于去除）
-	TablePrefix []string `mapstructure:"table-prefix"`
-
-	// 是否启用下划线转驼峰
-	EnableCamelCase bool `mapstructure:"enable-camel-case"`
-
-	// 要包含的表（空表示包含所有）
-	IncludeTables []string `mapstructure:"include-tables"`
-
-	// 要排除的表
-	ExcludeTables []string `mapstructure:"exclude-tables"`
-
-	// 要排除的字段
-	ExcludeFields []string `mapstructure:"exclude-fields"`
-
-	// 字段名映射（用于自定义命名）
-	FieldMapping map[string]string `mapstructure:"field-mapping"`
-
-	// 表名映射（用于自定义命名）
-	TableMapping map[string]string `mapstructure:"table-mapping"`
-
-	// 默认分页限制
-	DefaultLimit int `mapstructure:"default-limit"`
-}
-
 // LoadOption 元数据加载选项
 type LoadOption func() error

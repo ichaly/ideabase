@@ -14,7 +14,6 @@ import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
 	"github.com/ichaly/ideabase/log"
-	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/spf13/viper"
@@ -32,17 +31,11 @@ func init() {
 	strcase.ConfigureAcronym("ID", "Id")
 }
 
-// Config 表示GraphQL配置
-type Config struct {
-	std.Config           `mapstructure:",squash"`
-	internal.TableConfig `mapstructure:"schema"`
-}
-
 // Metadata 表示GraphQL元数据
 type Metadata struct {
 	v   *viper.Viper
 	db  *gorm.DB
-	cfg *Config
+	cfg *internal.Config
 	tpl *template.Template
 
 	// 统一索引: 支持类名、表名、原始表名查找
@@ -59,7 +52,7 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 	}
 
 	//初始化配置
-	cfg := &Config{TableConfig: internal.TableConfig{Mapping: dataTypes}}
+	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: dataTypes}}
 	v.SetDefault("schema.default-limit", 10)
 	v.SetDefault("schema.source", internal.SourceDatabase)
 	v.SetDefault("schema.enable-camel-case", true)
@@ -126,7 +119,7 @@ func (my *Metadata) loadMetadata() error {
 	}
 
 	// 从主要来源加载基础元数据
-	switch my.cfg.Source {
+	switch my.cfg.Schema.Source {
 	case internal.SourceDatabase:
 		// 从数据库加载
 		log.Info().Msg("从数据库加载元数据")
@@ -136,25 +129,25 @@ func (my *Metadata) loadMetadata() error {
 		}
 
 		// 如果启用了缓存，保存到文件
-		if my.cfg.EnableCache {
-			log.Info().Str("cache", my.cfg.CachePath).Msg("保存元数据到缓存文件")
-			if err := my.saveToFile(my.cfg.CachePath); err != nil {
-				log.Error().Err(err).Str("cache", my.cfg.CachePath).Msg("保存元数据到缓存文件失败")
+		if my.cfg.Schema.EnableCache {
+			log.Info().Str("cache", my.cfg.Schema.CachePath).Msg("保存元数据到缓存文件")
+			if err := my.saveToFile(my.cfg.Schema.CachePath); err != nil {
+				log.Error().Err(err).Str("cache", my.cfg.Schema.CachePath).Msg("保存元数据到缓存文件失败")
 				return fmt.Errorf("保存元数据缓存失败: %w", err)
 			}
 		}
 
 	case internal.SourceFile:
 		// 从预设文件加载
-		log.Info().Str("file", my.cfg.CachePath).Msg("从预设文件加载元数据")
-		if err := my.loadFromFile(my.cfg.CachePath); err != nil {
-			log.Error().Err(err).Str("file", my.cfg.CachePath).Msg("从预设文件加载元数据失败")
+		log.Info().Str("file", my.cfg.Schema.CachePath).Msg("从预设文件加载元数据")
+		if err := my.loadFromFile(my.cfg.Schema.CachePath); err != nil {
+			log.Error().Err(err).Str("file", my.cfg.Schema.CachePath).Msg("从预设文件加载元数据失败")
 			return fmt.Errorf("从文件加载元数据失败: %w", err)
 		}
 
 	default:
-		log.Error().Str("source", string(my.cfg.Source)).Msg("未知的元数据加载来源")
-		return fmt.Errorf("未知的元数据加载来源: %s", my.cfg.Source)
+		log.Error().Str("source", string(my.cfg.Schema.Source)).Msg("未知的元数据加载来源")
+		return fmt.Errorf("未知的元数据加载来源: %s", my.cfg.Schema.Source)
 	}
 
 	log.Info().
@@ -238,7 +231,7 @@ func (my *Metadata) loadFromConfig() error {
 				fieldName := columnName
 				if displayName, ok := colMap["display_name"].(string); ok && displayName != "" {
 					fieldName = displayName
-				} else if my.cfg.EnableCamelCase {
+				} else if my.cfg.Schema.EnableCamelCase {
 					fieldName = strcase.ToLowerCamel(columnName)
 				}
 
@@ -298,12 +291,12 @@ func (my *Metadata) loadDatabase() error {
 	log.Info().Msg("开始从数据库加载元数据")
 
 	// 创建数据库加载器
-	loader, err := metadata.NewDatabaseLoader(my.db, my.cfg.Schema)
+	loader, err := metadata.NewDatabaseLoader(my.db, my.cfg.Schema.Schema)
 	if err != nil {
 		log.Error().Err(err).Msg("创建数据库加载器失败")
 		return err
 	}
-	log.Debug().Str("schema", my.cfg.Schema).Msg("创建数据库加载器")
+	log.Debug().Str("schema", my.cfg.Schema.Schema).Msg("创建数据库加载器")
 
 	// 加载元数据
 	log.Debug().Msg("开始从数据库加载元数据")
@@ -490,7 +483,7 @@ func (my *Metadata) convertTableName(rawName string) string {
 	name := rawName
 
 	// 检查所有前缀
-	for _, prefix := range my.cfg.TablePrefix {
+	for _, prefix := range my.cfg.Schema.TablePrefix {
 		if prefix != "" && strings.HasPrefix(name, prefix) {
 			name = name[len(prefix):]
 			break // 一旦找到匹配的前缀就停止
@@ -498,12 +491,12 @@ func (my *Metadata) convertTableName(rawName string) string {
 	}
 
 	// 应用自定义映射
-	if mappedName, ok := my.cfg.TableMapping[name]; ok {
+	if mappedName, ok := my.cfg.Schema.TableMapping[name]; ok {
 		return mappedName
 	}
 
 	// 转换为驼峰命名
-	if my.cfg.EnableCamelCase {
+	if my.cfg.Schema.EnableCamelCase {
 		name = strcase.ToCamel(name)
 	}
 
@@ -514,15 +507,15 @@ func (my *Metadata) convertTableName(rawName string) string {
 func (my *Metadata) convertFieldName(tableName, rawName string) string {
 	// 应用自定义映射
 	key := tableName + "." + rawName
-	if mappedName, ok := my.cfg.FieldMapping[key]; ok {
+	if mappedName, ok := my.cfg.Schema.FieldMapping[key]; ok {
 		return mappedName
 	}
-	if mappedName, ok := my.cfg.FieldMapping[rawName]; ok {
+	if mappedName, ok := my.cfg.Schema.FieldMapping[rawName]; ok {
 		return mappedName
 	}
 
 	// 转换为驼峰命名
-	if my.cfg.EnableCamelCase {
+	if my.cfg.Schema.EnableCamelCase {
 		return strcase.ToLowerCamel(rawName)
 	}
 
@@ -532,15 +525,15 @@ func (my *Metadata) convertFieldName(tableName, rawName string) string {
 // shouldIncludeTable 检查是否应该包含表
 func (my *Metadata) shouldIncludeTable(tableName string) bool {
 	// 检查排除列表
-	for _, excluded := range my.cfg.ExcludeTables {
+	for _, excluded := range my.cfg.Schema.ExcludeTables {
 		if excluded == tableName {
 			return false
 		}
 	}
 
 	// 检查包含列表
-	if len(my.cfg.IncludeTables) > 0 {
-		for _, included := range my.cfg.IncludeTables {
+	if len(my.cfg.Schema.IncludeTables) > 0 {
+		for _, included := range my.cfg.Schema.IncludeTables {
 			if included == tableName {
 				return true
 			}
@@ -554,7 +547,7 @@ func (my *Metadata) shouldIncludeTable(tableName string) bool {
 // shouldIncludeField 检查是否应该包含字段
 func (my *Metadata) shouldIncludeField(fieldName string) bool {
 	// 检查排除列表
-	for _, excluded := range my.cfg.ExcludeFields {
+	for _, excluded := range my.cfg.Schema.ExcludeFields {
 		if excluded == fieldName {
 			return false
 		}
