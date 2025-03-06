@@ -21,7 +21,7 @@
           "relation": null
         },
         "createdAt": {
-          "type": "timestamp without time zone",
+          "type": "timestamp",
           "name": "createdAt",
           "column": "created_at",
           "virtual": false,
@@ -32,7 +32,7 @@
           "relation": null
         },
         "id": {
-          "type": "integer",
+          "type": "bigint",
           "name": "id",
           "column": "id",
           "virtual": false,
@@ -49,7 +49,7 @@
           }
         },
         "parentId": {
-          "type": "integer",
+          "type": "bigint",
           "name": "parentId",
           "column": "parent_id",
           "virtual": false,
@@ -66,7 +66,7 @@
           }
         },
         "postId": {
-          "type": "integer",
+          "type": "bigint",
           "name": "postId",
           "column": "post_id",
           "virtual": false,
@@ -83,7 +83,7 @@
           }
         },
         "userId": {
-          "type": "integer",
+          "type": "bigint",
           "name": "userId",
           "column": "user_id",
           "virtual": false,
@@ -112,7 +112,7 @@
       "description": "文章标签关联表",
       "fields": {
         "createdAt": {
-          "type": "timestamp without time zone",
+          "type": "timestamp",
           "name": "createdAt",
           "column": "created_at",
           "virtual": false,
@@ -123,7 +123,7 @@
           "relation": null
         },
         "postId": {
-          "type": "integer",
+          "type": "bigint",
           "name": "postId",
           "column": "post_id",
           "virtual": false,
@@ -140,7 +140,7 @@
           }
         },
         "tagId": {
-          "type": "integer",
+          "type": "bigint",
           "name": "tagId",
           "column": "tag_id",
           "virtual": false,
@@ -179,7 +179,7 @@
           "relation": null
         },
         "createdAt": {
-          "type": "timestamp without time zone",
+          "type": "timestamp",
           "name": "createdAt",
           "column": "created_at",
           "virtual": false,
@@ -190,7 +190,7 @@
           "relation": null
         },
         "id": {
-          "type": "integer",
+          "type": "bigint",
           "name": "id",
           "column": "id",
           "virtual": false,
@@ -207,7 +207,7 @@
           }
         },
         "title": {
-          "type": "character varying",
+          "type": "varchar",
           "name": "title",
           "column": "title",
           "virtual": false,
@@ -218,7 +218,7 @@
           "relation": null
         },
         "userId": {
-          "type": "integer",
+          "type": "bigint",
           "name": "userId",
           "column": "user_id",
           "virtual": false,
@@ -246,7 +246,7 @@
       "description": "标签表",
       "fields": {
         "createdAt": {
-          "type": "timestamp without time zone",
+          "type": "timestamp",
           "name": "createdAt",
           "column": "created_at",
           "virtual": false,
@@ -268,7 +268,7 @@
           "relation": null
         },
         "id": {
-          "type": "integer",
+          "type": "bigint",
           "name": "id",
           "column": "id",
           "virtual": false,
@@ -285,7 +285,7 @@
           }
         },
         "name": {
-          "type": "character varying",
+          "type": "varchar",
           "name": "name",
           "column": "name",
           "virtual": false,
@@ -307,7 +307,7 @@
       "description": "用户表",
       "fields": {
         "createdAt": {
-          "type": "timestamp without time zone",
+          "type": "timestamp",
           "name": "createdAt",
           "column": "created_at",
           "virtual": false,
@@ -318,7 +318,7 @@
           "relation": null
         },
         "email": {
-          "type": "character varying",
+          "type": "varchar",
           "name": "email",
           "column": "email",
           "virtual": false,
@@ -329,7 +329,7 @@
           "relation": null
         },
         "id": {
-          "type": "integer",
+          "type": "bigint",
           "name": "id",
           "column": "id",
           "virtual": false,
@@ -340,13 +340,13 @@
           "relation": {
             "sourceClass": "users",
             "sourceField": "id",
-            "targetClass": "comments",
+            "targetClass": "posts",
             "targetField": "user_id",
             "kind": "one_to_many"
           }
         },
         "name": {
-          "type": "character varying",
+          "type": "varchar",
           "name": "name",
           "column": "name",
           "virtual": false,
@@ -359,5 +359,5 @@
       }
     }
   },
-  "version": "20250305170531"
+  "version": "20250306102220"
 }

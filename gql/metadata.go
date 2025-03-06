@@ -108,6 +108,23 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 func (my *Metadata) loadMetadata() error {
 	log.Info().Msg("开始加载元数据")
 
+	// 检查是否有配置元数据
+	var tables []map[string]interface{}
+	if err := my.v.UnmarshalKey("metadata.tables", &tables); err != nil {
+		log.Error().Err(err).Msg("解析表配置失败")
+		return fmt.Errorf("解析表配置失败: %w", err)
+	}
+
+	// 如果配置中有元数据定义，直接使用配置
+	if len(tables) > 0 {
+		log.Info().Msg("使用配置中的元数据定义")
+		if err := my.loadFromConfig(); err != nil {
+			log.Error().Err(err).Msg("加载配置元数据失败")
+			return fmt.Errorf("加载配置元数据失败: %w", err)
+		}
+		return nil
+	}
+
 	// 从主要来源加载基础元数据
 	switch my.cfg.Source {
 	case internal.SourceDatabase:
@@ -138,13 +155,6 @@ func (my *Metadata) loadMetadata() error {
 	default:
 		log.Error().Str("source", string(my.cfg.Source)).Msg("未知的元数据加载来源")
 		return fmt.Errorf("未知的元数据加载来源: %s", my.cfg.Source)
-	}
-
-	// 加载并合并配置中的元数据（具有更高优先级）
-	log.Info().Msg("加载配置元数据并合并")
-	if err := my.loadFromConfig(); err != nil {
-		log.Error().Err(err).Msg("加载配置元数据失败")
-		return fmt.Errorf("加载配置元数据失败: %w", err)
 	}
 
 	log.Info().
