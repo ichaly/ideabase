@@ -148,12 +148,6 @@ func main() {
     v.Set("schema.schema", "public")
     v.Set("schema.enable-camel-case", true)
     v.Set("schema.table-prefix", []string{"tbl_", "app_"})
-    v.Set("schema.enable-cache", true) // 可选：启用缓存以便导出给生产环境使用
-    v.Set("schema.cache-path", "./metadata_cache.json")
-    
-    // 生产环境配置示例
-    // v.Set("debug", false) // 设置为生产环境，将从文件加载元数据
-    // v.Set("schema.cache-path", "./metadata_cache.json") // 指定预设的元数据文件
     
     // 数据库连接（开发环境需要）
     db, _ := gorm.Open(postgres.Open(dsn), &gorm.Config{})

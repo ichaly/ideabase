@@ -14,7 +14,6 @@ import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
 	"github.com/ichaly/ideabase/log"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/spf13/viper"
 	"gorm.io/gorm"
@@ -54,10 +53,7 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 	//初始化配置
 	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: dataTypes}}
 	v.SetDefault("schema.default-limit", 10)
-	v.SetDefault("schema.source", internal.SourceDatabase)
 	v.SetDefault("schema.enable-camel-case", true)
-	v.SetDefault("schema.enable-cache", false)
-	v.SetDefault("schema.cache-path", filepath.Join(utl.Root(), "cfg", "metadata.json"))
 	v.SetDefault("schema.schema", "public")
 	v.SetDefault("schema.table-prefix", []string{})
 

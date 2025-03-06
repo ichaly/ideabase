@@ -17,12 +17,6 @@ type SchemaConfig struct {
 	// 是否启用驼峰命名
 	EnableCamelCase bool `mapstructure:"enable-camel-case"`
 
-	// 是否启用缓存
-	EnableCache bool `mapstructure:"enable-cache"`
-
-	// 缓存文件路径
-	CachePath string `mapstructure:"cache-path"`
-
 	// 表名前缀（用于去除）
 	TablePrefix []string `mapstructure:"table-prefix"`
 

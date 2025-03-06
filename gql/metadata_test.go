@@ -4,7 +4,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -57,10 +56,8 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 
 	// 创建配置
 	v := viper.New()
-	v.Set("schema.source", internal.SourceDatabase)
 	v.Set("schema.schema", schema)
 	v.Set("schema.enable-camel-case", true)
-	v.Set("schema.enable-cache", true)
 
 	// 创建元数据加载器
 	meta, err := NewMetadata(v, db)
@@ -74,9 +71,7 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 func TestLoadMetadataFromConfig(t *testing.T) {
 	// 创建配置
 	v := viper.New()
-	v.Set("schema.source", internal.SourceFile)
 	v.Set("schema.enable-camel-case", true)
-	v.Set("schema.cache-path", "../cfg/metadata.json")
 
 	// 设置测试元数据配置
 	v.Set("metadata.tables", []map[string]interface{}{
@@ -126,10 +121,8 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 func TestNameConversion(t *testing.T) {
 	// 创建配置
 	v := viper.New()
-	v.Set("schema.source", internal.SourceFile)
 	v.Set("schema.enable-camel-case", true)
 	v.Set("schema.table-prefix", []string{"tbl_"})
-	v.Set("schema.cache-path", "../cfg/metadata.json")
 
 	// 设置测试元数据配置
 	v.Set("metadata.tables", []map[string]interface{}{
@@ -168,10 +161,8 @@ func TestNameConversion(t *testing.T) {
 func TestTableAndFieldFiltering(t *testing.T) {
 	// 创建配置
 	v := viper.New()
-	v.Set("schema.source", internal.SourceFile)
 	v.Set("schema.include-tables", []string{"users"})
 	v.Set("schema.exclude-fields", []string{"password"})
-	v.Set("schema.cache-path", "../cfg/metadata.json")
 
 	// 设置测试元数据配置
 	v.Set("metadata.tables", []map[string]interface{}{
@@ -223,8 +214,6 @@ func TestTableAndFieldFiltering(t *testing.T) {
 func TestLoadMetadataFromFile(t *testing.T) {
 	// 创建配置
 	v := viper.New()
-	v.Set("schema.source", internal.SourceFile)
-	v.Set("schema.cache-path", "../cfg/metadata.json")
 
 	// 创建元数据加载器
 	meta, err := NewMetadata(v, nil)
