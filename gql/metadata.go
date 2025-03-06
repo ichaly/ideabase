@@ -135,130 +135,80 @@ func (my *Metadata) loadMetadata() error {
 
 // loadFromConfig 从配置加载元数据
 func (my *Metadata) loadFromConfig() error {
-	log.Info().Msg("开始从配置加载元数据")
-
-	// 获取配置中的表定义
-	var tables []map[string]interface{}
-	if err := my.v.UnmarshalKey("metadata.tables", &tables); err != nil {
-		log.Error().Err(err).Msg("解析表配置失败")
-		return fmt.Errorf("解析表配置失败: %w", err)
+	tables := my.cfg.Metadata.Tables
+	if len(tables) == 0 {
+		return nil
 	}
 
-	// 处理每个表
 	for _, table := range tables {
-		// 获取表名
-		tableName, ok := table["name"].(string)
-		if !ok || tableName == "" {
-			log.Warn().Interface("table", table).Msg("表名无效")
+		if table.Name == "" || !my.shouldIncludeTable(table.Name) {
 			continue
 		}
 
-		// 检查是否应包含此表
-		if !my.shouldIncludeTable(tableName) {
-			log.Debug().Str("table", tableName).Msg("排除表")
-			continue
+		// 确定类名
+		className := my.convertTableName(table.Name)
+		if table.DisplayName != "" {
+			className = table.DisplayName
 		}
 
-		// 获取表的显示名称（类名）
-		className := tableName
-		if displayName, ok := table["display_name"].(string); ok && displayName != "" {
-			className = displayName
-		} else {
-			className = my.convertTableName(tableName)
-		}
-
-		// 获取表描述
-		description := ""
-		if desc, ok := table["description"].(string); ok {
-			description = desc
-		}
-
-		// 创建类定义
-		class := &internal.Class{
-			Name:        className,
-			Table:       tableName,
-			Description: description,
-			Fields:      make(map[string]*internal.Field),
-		}
-
-		// 处理主键
-		if primaryKeys, ok := table["primary_keys"].([]interface{}); ok {
-			for _, pk := range primaryKeys {
-				if pkStr, ok := pk.(string); ok {
-					class.PrimaryKeys = append(class.PrimaryKeys, pkStr)
-				}
+		// 获取或创建class
+		class, exists := my.Nodes[className]
+		if !exists {
+			class = &internal.Class{
+				Name:   className,
+				Table:  table.Name,
+				Fields: make(map[string]*internal.Field),
 			}
+			my.Nodes[className] = class
 		}
 
-		// 处理字段
-		if columns, ok := table["columns"].([]map[string]interface{}); ok {
-			for _, colMap := range columns {
-				// 获取字段名
-				columnName, ok := colMap["name"].(string)
-				if !ok || columnName == "" {
-					continue
-				}
+		// 更新class属性
+		if table.Description != "" {
+			class.Description = table.Description
+		}
+		if len(table.PrimaryKeys) > 0 {
+			class.PrimaryKeys = table.PrimaryKeys
+		}
 
-				// 检查是否应包含此字段
-				if !my.shouldIncludeField(columnName) {
-					continue
-				}
+		// 合并字段
+		for _, column := range table.Columns {
+			if column.Name == "" || !my.shouldIncludeField(column.Name) {
+				continue
+			}
 
-				// 获取字段的显示名称
-				fieldName := columnName
-				if displayName, ok := colMap["display_name"].(string); ok && displayName != "" {
-					fieldName = displayName
-				} else if my.cfg.Schema.EnableCamelCase {
-					fieldName = strcase.ToLowerCamel(columnName)
-				}
+			// 使用convertFieldName处理字段名
+			fieldName := my.convertFieldName(table.Name, column.Name)
+			if column.DisplayName != "" {
+				fieldName = column.DisplayName
+			}
 
-				// 获取字段类型
-				fieldType := "string"
-				if t, ok := colMap["type"].(string); ok {
-					fieldType = t
+			// 获取或创建field
+			field, exists := class.Fields[fieldName]
+			if !exists {
+				field = &internal.Field{
+					Name:   fieldName,
+					Column: column.Name,
 				}
-
-				// 获取字段描述
-				fieldDesc := ""
-				if desc, ok := colMap["description"].(string); ok {
-					fieldDesc = desc
-				}
-
-				// 获取是否主键
-				isPrimary := false
-				if p, ok := colMap["is_primary"].(bool); ok {
-					isPrimary = p
-				}
-
-				// 创建字段定义
-				field := &internal.Field{
-					Name:        fieldName,
-					Column:      columnName,
-					Type:        fieldType,
-					Description: fieldDesc,
-					IsPrimary:   isPrimary,
-				}
-
-				// 添加字段
 				class.Fields[fieldName] = field
+			}
 
-				// 如果是主键，添加到主键列表
-				if isPrimary {
-					class.PrimaryKeys = append(class.PrimaryKeys, columnName)
-				}
+			// 更新field属性
+			if column.Type != "" {
+				field.Type = column.Type
+			}
+			if column.Description != "" {
+				field.Description = column.Description
+			}
+			if column.IsPrimary {
+				field.IsPrimary = true
 			}
 		}
 
-		// 添加类定义到映射
-		my.Nodes[className] = class
-		if className != tableName {
-			my.Nodes[tableName] = class
+		// 更新表名索引
+		if className != table.Name {
+			my.Nodes[table.Name] = class
 		}
 	}
-
-	log.Info().
-		Int("classes", len(my.Nodes)).
-		Msg("元数据加载完成")
 
 	return nil
 }
