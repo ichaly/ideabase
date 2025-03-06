@@ -22,9 +22,6 @@ import (
 //go:embed assets/tpl/*
 var templates embed.FS
 
-//go:embed assets/sql/pgsql.sql
-var pgsql string
-
 func init() {
 	inflection.AddUncountable("children")
 	strcase.ConfigureAcronym("ID", "Id")
