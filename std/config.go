@@ -8,7 +8,7 @@ import (
 // Config 表示标准配置
 type Config struct {
 	internal.AppConfig `mapstructure:"app"`
-	Debug              bool `mapstructure:"debug"`
+	Mode               string `mapstructure:"mode"`
 }
 
 func NewConfig(v *viper.Viper) (*Config, error) {

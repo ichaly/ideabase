@@ -75,6 +75,7 @@ func setupBaseConfig(v *viper.Viper, path, name string) error {
 	// 设置默认值
 	v.SetDefault("mode", "dev")
 	v.SetDefault("profiles.active", "")
+	v.SetDefault("app.root", filepath.Dir(utl.Root()))
 
 	return nil
 }
