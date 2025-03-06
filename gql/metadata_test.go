@@ -216,26 +216,68 @@ func TestMetadataLoadingModes(t *testing.T) {
 	// 2. 测试从文件加载
 	t.Run("从文件加载", func(t *testing.T) {
 		// 先从数据库加载并保存到test.json
-		v1 := viper.New()
-		v1.Set("mode", "dev")
-		v1.Set("app.root", "../")
-		loader, err := NewMetadata(v1, db)
+		v := viper.New()
+		v.Set("mode", "dev")
+
+		v.Set("app.root", "../")
+		loader1, err := NewMetadata(v, db)
 		require.NoError(t, err, "从数据库创建元数据加载器失败")
-		err = loader.loadMetadata()
-		require.NoError(t, err, "从数据库加载元数据失败")
-		err = loader.saveToFile("../cfg/metadata.test.json")
+		err = loader1.saveToFile("../cfg/metadata.test.json")
 		require.NoError(t, err, "保存元数据到文件失败")
 
 		// 从test.json加载
-		v2 := viper.New()
-		v2.Set("mode", "test")
-		v2.Set("app.root", "../")
-		v2.Set("metadata.file", "../cfg/metadata.test.json")
-		loader2, err := NewMetadata(v2, nil)
+		v.Set("mode", "test")
+		loader2, err := NewMetadata(v, nil)
 		require.NoError(t, err, "从文件创建元数据加载器失败")
-		err = loader2.loadMetadata()
-		require.NoError(t, err, "从文件加载元数据失败")
 		require.NotEmpty(t, loader2.Nodes, "元数据不应为空")
+
+		// 验证两个加载器的内部构成是否一致
+		assert.Equal(t, len(loader1.Nodes), len(loader2.Nodes), "节点数量应该相同")
+		assert.Equal(t, loader1.Version, loader2.Version, "版本应该相同")
+
+		// 遍历所有节点进行深度比较
+		for name, class1 := range loader1.Nodes {
+			class2, exists := loader2.Nodes[name]
+			assert.True(t, exists, "节点 %s 应该存在于两个加载器中", name)
+			if exists {
+				// 比较类的基本属性
+				assert.Equal(t, class1.Name, class2.Name, "类名应该相同")
+				assert.Equal(t, class1.Table, class2.Table, "表名应该相同")
+				assert.Equal(t, class1.Virtual, class2.Virtual, "虚拟属性应该相同")
+				assert.Equal(t, class1.Description, class2.Description, "描述应该相同")
+				assert.Equal(t, class1.PrimaryKeys, class2.PrimaryKeys, "主键应该相同")
+
+				// 比较字段
+				assert.Equal(t, len(class1.Fields), len(class2.Fields), "字段数量应该相同")
+				for fieldName, field1 := range class1.Fields {
+					field2, fieldExists := class2.Fields[fieldName]
+					assert.True(t, fieldExists, "字段 %s 应该存在于两个类中", fieldName)
+					if fieldExists {
+						// 比较字段属性
+						assert.Equal(t, field1.Name, field2.Name, "字段名应该相同")
+						assert.Equal(t, field1.Type, field2.Type, "字段类型应该相同")
+						assert.Equal(t, field1.Column, field2.Column, "列名应该相同")
+						assert.Equal(t, field1.Virtual, field2.Virtual, "虚拟属性应该相同")
+						assert.Equal(t, field1.Nullable, field2.Nullable, "可空属性应该相同")
+						assert.Equal(t, field1.IsPrimary, field2.IsPrimary, "主键属性应该相同")
+						assert.Equal(t, field1.IsUnique, field2.IsUnique, "唯一属性应该相同")
+						assert.Equal(t, field1.Description, field2.Description, "描述应该相同")
+
+						// 比较关系定义
+						if field1.Relation != nil {
+							assert.NotNil(t, field2.Relation, "关系定义应该同时存在或不存在")
+							if field2.Relation != nil {
+								assert.Equal(t, field1.Relation.Kind, field2.Relation.Kind, "关系类型应该相同")
+								assert.Equal(t, field1.Relation.TargetClass, field2.Relation.TargetClass, "目标类应该相同")
+								assert.Equal(t, field1.Relation.TargetField, field2.Relation.TargetField, "目标字段应该相同")
+							}
+						} else {
+							assert.Nil(t, field2.Relation, "关系定义应该同时存在或不存在")
+						}
+					}
+				}
+			}
+		}
 	})
 
 	// 3. 测试配置增强

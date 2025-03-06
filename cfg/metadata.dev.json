@@ -1,103 +1,47 @@
 {
   "nodes": {
-    "Comments": {
-      "name": "Comments",
-      "table": "comments",
+    "ColumnComments": {
+      "name": "ColumnComments",
+      "table": "column_comments",
       "virtual": false,
       "primaryKeys": [
-        "id"
+        "tableName",
+        "columnName"
       ],
-      "description": "评论表",
+      "description": "",
       "fields": {
-        "content": {
+        "columnName": {
           "type": "text",
-          "name": "content",
-          "column": "content",
-          "virtual": false,
-          "nullable": false,
-          "isPrimary": false,
-          "isUnique": false,
-          "description": "评论内容",
-          "relation": null
-        },
-        "createdAt": {
-          "type": "timestamp",
-          "name": "createdAt",
-          "column": "created_at",
-          "virtual": false,
-          "nullable": true,
-          "isPrimary": false,
-          "isUnique": false,
-          "description": "",
-          "relation": null
-        },
-        "id": {
-          "type": "bigint",
-          "name": "id",
-          "column": "id",
+          "name": "columnName",
+          "column": "column_name",
           "virtual": false,
           "nullable": false,
           "isPrimary": true,
           "isUnique": false,
           "description": "",
-          "relation": {
-            "sourceClass": "comments",
-            "sourceField": "id",
-            "targetClass": "comments",
-            "targetField": "parent_id",
-            "kind": "one_to_many"
-          }
+          "relation": null
         },
-        "parentId": {
-          "type": "bigint",
-          "name": "parentId",
-          "column": "parent_id",
-          "virtual": false,
-          "nullable": true,
-          "isPrimary": false,
-          "isUnique": false,
-          "description": "父评论ID",
-          "relation": {
-            "sourceClass": "comments",
-            "sourceField": "parent_id",
-            "targetClass": "comments",
-            "targetField": "id",
-            "kind": "many_to_one"
-          }
-        },
-        "postId": {
-          "type": "bigint",
-          "name": "postId",
-          "column": "post_id",
+        "comment": {
+          "type": "text",
+          "name": "comment",
+          "column": "comment",
           "virtual": false,
           "nullable": false,
           "isPrimary": false,
           "isUnique": false,
-          "description": "评论文章",
-          "relation": {
-            "sourceClass": "comments",
-            "sourceField": "post_id",
-            "targetClass": "posts",
-            "targetField": "id",
-            "kind": "many_to_one"
-          }
+          "description": "",
+          "relation": null
         },
-        "userId": {
-          "type": "bigint",
-          "name": "userId",
-          "column": "user_id",
+        "tableName": {
+          "type": "text",
+          "name": "tableName",
+          "column": "table_name",
           "virtual": false,
           "nullable": false,
-          "isPrimary": false,
+          "isPrimary": true,
           "isUnique": false,
-          "description": "评论者",
-          "relation": {
-            "sourceClass": "comments",
-            "sourceField": "user_id",
-            "targetClass": "users",
-            "targetField": "id",
-            "kind": "many_to_one"
-          }
+          "description": "",
+          "relation": null
         }
       }
     },
@@ -112,25 +56,25 @@
       "description": "文章标签关联表",
       "fields": {
         "createdAt": {
-          "type": "timestamp",
+          "type": "timestamp without time zone",
           "name": "createdAt",
           "column": "created_at",
           "virtual": false,
-          "nullable": true,
+          "nullable": false,
           "isPrimary": false,
           "isUnique": false,
           "description": "",
           "relation": null
         },
         "postId": {
-          "type": "bigint",
+          "type": "integer",
           "name": "postId",
           "column": "post_id",
           "virtual": false,
           "nullable": false,
           "isPrimary": true,
           "isUnique": false,
-          "description": "文章ID",
+          "description": "",
           "relation": {
             "sourceClass": "post_tags",
             "sourceField": "post_id",
@@ -140,14 +84,14 @@
           }
         },
         "tagId": {
-          "type": "bigint",
+          "type": "integer",
           "name": "tagId",
           "column": "tag_id",
           "virtual": false,
           "nullable": false,
           "isPrimary": true,
           "isUnique": false,
-          "description": "标签ID",
+          "description": "",
           "relation": {
             "sourceClass": "post_tags",
             "sourceField": "tag_id",
@@ -175,22 +119,22 @@
           "nullable": true,
           "isPrimary": false,
           "isUnique": false,
-          "description": "内容",
+          "description": "",
           "relation": null
         },
         "createdAt": {
-          "type": "timestamp",
+          "type": "timestamp without time zone",
           "name": "createdAt",
           "column": "created_at",
           "virtual": false,
-          "nullable": true,
+          "nullable": false,
           "isPrimary": false,
           "isUnique": false,
           "description": "",
           "relation": null
         },
         "id": {
-          "type": "bigint",
+          "type": "integer",
           "name": "id",
           "column": "id",
           "virtual": false,
@@ -207,25 +151,25 @@
           }
         },
         "title": {
-          "type": "varchar",
+          "type": "text",
           "name": "title",
           "column": "title",
           "virtual": false,
           "nullable": false,
           "isPrimary": false,
           "isUnique": false,
-          "description": "标题",
+          "description": "",
           "relation": null
         },
         "userId": {
-          "type": "bigint",
+          "type": "integer",
           "name": "userId",
           "column": "user_id",
           "virtual": false,
-          "nullable": true,
+          "nullable": false,
           "isPrimary": false,
           "isUnique": false,
-          "description": "作者ID",
+          "description": "",
           "relation": {
             "sourceClass": "posts",
             "sourceField": "user_id",
@@ -233,6 +177,39 @@
             "targetField": "id",
             "kind": "many_to_one"
           }
+        }
+      }
+    },
+    "TableComments": {
+      "name": "TableComments",
+      "table": "table_comments",
+      "virtual": false,
+      "primaryKeys": [
+        "tableName"
+      ],
+      "description": "",
+      "fields": {
+        "comment": {
+          "type": "text",
+          "name": "comment",
+          "column": "comment",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
+          "relation": null
+        },
+        "tableName": {
+          "type": "text",
+          "name": "tableName",
+          "column": "table_name",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": true,
+          "isUnique": false,
+          "description": "",
+          "relation": null
         }
       }
     },
@@ -246,29 +223,18 @@
       "description": "标签表",
       "fields": {
         "createdAt": {
-          "type": "timestamp",
+          "type": "timestamp without time zone",
           "name": "createdAt",
           "column": "created_at",
           "virtual": false,
-          "nullable": true,
+          "nullable": false,
           "isPrimary": false,
           "isUnique": false,
           "description": "",
           "relation": null
         },
-        "description": {
-          "type": "text",
-          "name": "description",
-          "column": "description",
-          "virtual": false,
-          "nullable": true,
-          "isPrimary": false,
-          "isUnique": false,
-          "description": "标签描述",
-          "relation": null
-        },
         "id": {
-          "type": "bigint",
+          "type": "integer",
           "name": "id",
           "column": "id",
           "virtual": false,
@@ -285,14 +251,14 @@
           }
         },
         "name": {
-          "type": "varchar",
+          "type": "text",
           "name": "name",
           "column": "name",
           "virtual": false,
           "nullable": false,
           "isPrimary": false,
           "isUnique": false,
-          "description": "标签名称",
+          "description": "",
           "relation": null
         }
       }
@@ -307,18 +273,18 @@
       "description": "用户表",
       "fields": {
         "createdAt": {
-          "type": "timestamp",
+          "type": "timestamp without time zone",
           "name": "createdAt",
           "column": "created_at",
           "virtual": false,
-          "nullable": true,
+          "nullable": false,
           "isPrimary": false,
           "isUnique": false,
           "description": "",
           "relation": null
         },
         "email": {
-          "type": "varchar",
+          "type": "text",
           "name": "email",
           "column": "email",
           "virtual": false,
@@ -329,7 +295,7 @@
           "relation": null
         },
         "id": {
-          "type": "bigint",
+          "type": "integer",
           "name": "id",
           "column": "id",
           "virtual": false,
@@ -346,18 +312,29 @@
           }
         },
         "name": {
-          "type": "varchar",
+          "type": "text",
           "name": "name",
           "column": "name",
           "virtual": false,
           "nullable": false,
           "isPrimary": false,
           "isUnique": false,
-          "description": "用户名",
+          "description": "",
+          "relation": null
+        },
+        "updatedAt": {
+          "type": "timestamp without time zone",
+          "name": "updatedAt",
+          "column": "updated_at",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
           "relation": null
         }
       }
     }
   },
-  "version": "20250306194556"
+  "version": "20250306205149"
 }
