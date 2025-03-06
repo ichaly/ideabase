@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/ichaly/ideabase/utl"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -56,6 +57,8 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 
 	// 创建配置
 	v := viper.New()
+	v.Set("mode", "dev")
+	v.Set("app.root", utl.Root())
 	v.Set("schema.schema", schema)
 	v.Set("schema.enable-camel-case", true)
 
@@ -71,6 +74,8 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 func TestLoadMetadataFromConfig(t *testing.T) {
 	// 创建配置
 	v := viper.New()
+	v.Set("mode", "dev")
+	v.Set("app.root", utl.Root())
 	v.Set("schema.enable-camel-case", true)
 
 	// 设置测试元数据配置
@@ -121,6 +126,8 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 func TestNameConversion(t *testing.T) {
 	// 创建配置
 	v := viper.New()
+	v.Set("mode", "dev")
+	v.Set("app.root", utl.Root())
 	v.Set("schema.enable-camel-case", true)
 	v.Set("schema.table-prefix", []string{"tbl_"})
 
@@ -161,6 +168,8 @@ func TestNameConversion(t *testing.T) {
 func TestTableAndFieldFiltering(t *testing.T) {
 	// 创建配置
 	v := viper.New()
+	v.Set("mode", "dev")
+	v.Set("app.root", utl.Root())
 	v.Set("schema.include-tables", []string{"users"})
 	v.Set("schema.exclude-fields", []string{"password"})
 
@@ -214,6 +223,8 @@ func TestTableAndFieldFiltering(t *testing.T) {
 func TestLoadMetadataFromFile(t *testing.T) {
 	// 创建配置
 	v := viper.New()
+	v.Set("mode", "dev")
+	v.Set("app.root", utl.Root())
 
 	// 创建元数据加载器
 	meta, err := NewMetadata(v, nil)
