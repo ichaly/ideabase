@@ -7,6 +7,7 @@ import (
 
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/log"
+	"github.com/samber/lo"
 	"gorm.io/gorm"
 )
 
@@ -243,13 +244,16 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, error) {
 			continue
 		}
 
+		// 判断是否为自关联
+		isRecursive := sourceTable == targetTable
+
 		// 创建正向关系
 		sourceField.Relation = &internal.Relation{
 			SourceClass: sourceTable,
 			SourceField: sourceColumn,
 			TargetClass: targetTable,
 			TargetField: targetColumn,
-			Kind:        internal.MANY_TO_ONE,
+			Kind:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.MANY_TO_ONE),
 		}
 
 		// 创建反向关系
@@ -258,7 +262,7 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, error) {
 			SourceField: targetColumn,
 			TargetClass: sourceTable,
 			TargetField: sourceColumn,
-			Kind:        internal.ONE_TO_MANY,
+			Kind:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.ONE_TO_MANY),
 		}
 
 		// 设置双向引用
