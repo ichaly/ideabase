@@ -3,10 +3,14 @@ package metadata
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -96,7 +100,9 @@ func TestMySQL(t *testing.T) {
 			// 等待额外的时间以确保数据库完全就绪
 			time.Sleep(10 * time.Second)
 
-			dsn := fmt.Sprintf("test:test@tcp(localhost:%d)/test?charset=utf8mb4&parseTime=True&loc=Local", port.Int())
+			host, err := container.Host(ctx)
+			require.NoError(t, err)
+			dsn := fmt.Sprintf("test:test@tcp(%s:%d)/test?charset=utf8mb4&parseTime=True&loc=Local", host, port.Int())
 			db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 			require.NoError(t, err)
 
@@ -108,130 +114,42 @@ func TestMySQL(t *testing.T) {
 // 通用测试函数
 func runDatabaseTests(t *testing.T, db *gorm.DB) {
 	// 创建测试表
+	var sqlFile string
 	if db.Dialector.Name() == "mysql" {
-		// MySQL 需要分别执行每个语句
-		sqlStatements := []string{
-			`CREATE TABLE users (
-				id BIGINT AUTO_INCREMENT PRIMARY KEY,
-				name VARCHAR(255) NOT NULL,
-				email VARCHAR(255) UNIQUE NOT NULL,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			) COMMENT='用户表'`,
+		sqlFile = "mysql.sql"
+	} else {
+		sqlFile = "pgsql.sql"
+	}
 
-			`CREATE TABLE posts (
-				id BIGINT AUTO_INCREMENT PRIMARY KEY,
-				title VARCHAR(255) NOT NULL COMMENT '标题',
-				content TEXT COMMENT '内容',
-				user_id BIGINT,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				FOREIGN KEY (user_id) REFERENCES users(id)
-			) COMMENT='文章表'`,
+	// 读取SQL文件
+	sqlBytes, err := os.ReadFile(filepath.Join(utl.Root(), "gql/assets/sql/", sqlFile))
+	require.NoError(t, err, "读取SQL文件失败")
 
-			`CREATE TABLE comments (
-				id BIGINT AUTO_INCREMENT PRIMARY KEY,
-				content TEXT NOT NULL COMMENT '评论内容',
-				user_id BIGINT NOT NULL COMMENT '评论者',
-				post_id BIGINT NOT NULL COMMENT '评论文章',
-				parent_id BIGINT COMMENT '父评论ID',
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				FOREIGN KEY (user_id) REFERENCES users(id),
-				FOREIGN KEY (post_id) REFERENCES posts(id),
-				FOREIGN KEY (parent_id) REFERENCES comments(id)
-			) COMMENT='评论表'`,
-
-			`CREATE TABLE tags (
-				id BIGINT AUTO_INCREMENT PRIMARY KEY,
-				name VARCHAR(50) NOT NULL UNIQUE COMMENT '标签名称',
-				description TEXT COMMENT '标签描述',
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			) COMMENT='标签表'`,
-
-			`CREATE TABLE post_tags (
-				post_id BIGINT NOT NULL COMMENT '文章ID',
-				tag_id BIGINT NOT NULL COMMENT '标签ID',
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				PRIMARY KEY (post_id, tag_id),
-				FOREIGN KEY (post_id) REFERENCES posts(id),
-				FOREIGN KEY (tag_id) REFERENCES tags(id)
-			) COMMENT='文章标签关联表'`,
-
-			`ALTER TABLE users MODIFY COLUMN name VARCHAR(255) NOT NULL COMMENT '用户名'`,
-			`ALTER TABLE users MODIFY COLUMN email VARCHAR(255) NOT NULL COMMENT '邮箱'`,
-			`ALTER TABLE posts MODIFY COLUMN user_id BIGINT COMMENT '作者ID'`,
-		}
-
-		// 分别执行每个SQL语句
-		for _, stmt := range sqlStatements {
-			if err := db.Exec(stmt).Error; err != nil {
-				require.NoError(t, err)
+	// 执行SQL语句
+	if db.Dialector.Name() == "mysql" {
+		// MySQL需要按照依赖顺序执行语句
+		sqlStatements := strings.Split(string(sqlBytes), ";")
+		// 定义表创建顺序
+		tableOrder := []string{"users", "posts", "tags", "comments", "post_tags"}
+		
+		// 按顺序执行建表语句
+		for _, tableName := range tableOrder {
+			for _, stmt := range sqlStatements {
+				stmt = strings.TrimSpace(stmt)
+				if stmt == "" || strings.HasPrefix(stmt, "--") {
+					continue
+				}
+				if strings.Contains(stmt, fmt.Sprintf("CREATE TABLE %s", tableName)) {
+					if err := db.Exec(stmt).Error; err != nil {
+						require.NoError(t, err)
+					}
+					break
+				}
 			}
 		}
 	} else {
-		// PostgreSQL 可以一次执行多个语句
-		createTableSQL := `
-			CREATE TABLE users (
-				id SERIAL PRIMARY KEY,
-				name VARCHAR(255) NOT NULL,
-				email VARCHAR(255) UNIQUE NOT NULL,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			);
-
-			CREATE TABLE posts (
-				id SERIAL PRIMARY KEY,
-				title VARCHAR(255) NOT NULL,
-				content TEXT,
-				user_id INTEGER REFERENCES users(id),
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			);
-
-			CREATE TABLE comments (
-				id SERIAL PRIMARY KEY,
-				content TEXT NOT NULL,
-				user_id INTEGER NOT NULL REFERENCES users(id),
-				post_id INTEGER NOT NULL REFERENCES posts(id),
-				parent_id INTEGER REFERENCES comments(id),
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			);
-
-			CREATE TABLE tags (
-				id SERIAL PRIMARY KEY,
-				name VARCHAR(50) NOT NULL UNIQUE,
-				description TEXT,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			);
-
-			CREATE TABLE post_tags (
-				post_id INTEGER NOT NULL REFERENCES posts(id),
-				tag_id INTEGER NOT NULL REFERENCES tags(id),
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				PRIMARY KEY (post_id, tag_id)
-			);
-
-			COMMENT ON TABLE users IS '用户表';
-			COMMENT ON COLUMN users.name IS '用户名';
-			COMMENT ON COLUMN users.email IS '邮箱';
-
-			COMMENT ON TABLE posts IS '文章表';
-			COMMENT ON COLUMN posts.title IS '标题';
-			COMMENT ON COLUMN posts.content IS '内容';
-			COMMENT ON COLUMN posts.user_id IS '作者ID';
-
-			COMMENT ON TABLE comments IS '评论表';
-			COMMENT ON COLUMN comments.content IS '评论内容';
-			COMMENT ON COLUMN comments.user_id IS '评论者';
-			COMMENT ON COLUMN comments.post_id IS '评论文章';
-			COMMENT ON COLUMN comments.parent_id IS '父评论ID';
-
-			COMMENT ON TABLE tags IS '标签表';
-			COMMENT ON COLUMN tags.name IS '标签名称';
-			COMMENT ON COLUMN tags.description IS '标签描述';
-
-			COMMENT ON TABLE post_tags IS '文章标签关联表';
-			COMMENT ON COLUMN post_tags.post_id IS '文章ID';
-			COMMENT ON COLUMN post_tags.tag_id IS '标签ID';
-		`
-
-		err := db.Exec(createTableSQL).Error
+		// PostgreSQL可以一次执行多个语句
+		err = db.Exec(string(sqlBytes)).Error
 		require.NoError(t, err)
 	}
 
@@ -259,7 +177,7 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.True(t, ok)
 		require.Equal(t, "users", users.Table)
 		require.Equal(t, "用户表", users.Description)
-		require.Len(t, users.Fields, 4)
+		require.Len(t, users.Fields, 5)
 		require.Contains(t, users.Fields, "id")
 		require.Contains(t, users.Fields, "name")
 		require.Contains(t, users.Fields, "email")
@@ -314,10 +232,9 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.True(t, ok)
 		require.Equal(t, "tags", tags.Table)
 		require.Equal(t, "标签表", tags.Description)
-		require.Len(t, tags.Fields, 5)
+		require.Len(t, tags.Fields, 4)
 		require.Contains(t, tags.Fields, "id")
 		require.Contains(t, tags.Fields, "name")
-		require.Contains(t, tags.Fields, "description")
 		require.Contains(t, tags.Fields, "created_at")
 		require.Contains(t, tags.Fields, "postsList")
 

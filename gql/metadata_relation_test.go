@@ -3,11 +3,12 @@ package gql
 import (
 	"testing"
 
-	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/utl"
 )
 
 // TestManyToManyRelationLoading 测试多对多关系的配置加载

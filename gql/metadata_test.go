@@ -68,81 +68,12 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 	require.NoError(t, err, "连接数据库失败")
 
 	// 创建测试表结构
-	err = db.Exec(`
-		-- 创建注释表
-		CREATE TABLE table_comments (
-			table_name TEXT PRIMARY KEY,
-			comment TEXT NOT NULL
-		);
+	// 读取PostgreSQL建表SQL文件
+	sqlBytes, err := os.ReadFile(filepath.Join(utl.Root(), "gql/assets/sql/pgsql.sql"))
+	require.NoError(t, err, "读取SQL文件失败")
 
-		CREATE TABLE column_comments (
-			table_name TEXT NOT NULL,
-			column_name TEXT NOT NULL,
-			comment TEXT NOT NULL,
-			PRIMARY KEY (table_name, column_name)
-		);
-
-		-- 创建业务表
-		CREATE TABLE organizations (
-			id SERIAL PRIMARY KEY,
-			name TEXT NOT NULL,
-			parent_id INTEGER REFERENCES organizations(id),
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		);
-
-		CREATE TABLE users (
-			id SERIAL PRIMARY KEY,
-			name TEXT NOT NULL,
-			email TEXT NOT NULL UNIQUE,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP
-		);
-
-		CREATE TABLE posts (
-			id SERIAL PRIMARY KEY,
-			title TEXT NOT NULL,
-			content TEXT,
-			user_id INTEGER NOT NULL REFERENCES users(id),
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		);
-
-		CREATE TABLE tags (
-			id SERIAL PRIMARY KEY,
-			name TEXT NOT NULL UNIQUE,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		);
-
-		CREATE TABLE post_tags (
-			post_id INTEGER NOT NULL REFERENCES posts(id),
-			tag_id INTEGER NOT NULL REFERENCES tags(id),
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (post_id, tag_id)
-		);
-
-		-- 插入表注释
-		INSERT INTO table_comments (table_name, comment) VALUES
-		('users', '用户表'),
-		('posts', '文章表'),
-		('tags', '标签表'),
-		('post_tags', '文章标签关联表'),
-		('organizations', '组织架构表');
-
-		-- 插入字段注释
-		INSERT INTO column_comments (table_name, column_name, comment) VALUES
-		('users', 'email', '邮箱'),
-		('organizations', 'parent_id', '父组织ID');
-
-		-- 设置表注释
-		COMMENT ON TABLE users IS '用户表';
-		COMMENT ON TABLE posts IS '文章表';
-		COMMENT ON TABLE tags IS '标签表';
-		COMMENT ON TABLE post_tags IS '文章标签关联表';
-		COMMENT ON TABLE organizations IS '组织架构表';
-
-		-- 设置字段注释
-		COMMENT ON COLUMN users.email IS '邮箱';
-		COMMENT ON COLUMN organizations.parent_id IS '父组织ID';
-	`).Error
+	// 执行建表SQL
+	err = db.Exec(string(sqlBytes)).Error
 	require.NoError(t, err, "创建测试表结构失败")
 
 	// 返回清理函数

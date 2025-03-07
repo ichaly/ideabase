@@ -1,59 +1,25 @@
 {
   "nodes": {
-    "ColumnComments": {
-      "name": "ColumnComments",
-      "table": "column_comments",
-      "virtual": false,
-      "primaryKeys": [
-        "tableName",
-        "columnName"
-      ],
-      "description": "",
-      "fields": {
-        "columnName": {
-          "type": "text",
-          "name": "columnName",
-          "column": "column_name",
-          "virtual": false,
-          "nullable": false,
-          "isPrimary": true,
-          "isUnique": false,
-          "description": "",
-          "relation": null
-        },
-        "comment": {
-          "type": "text",
-          "name": "comment",
-          "column": "comment",
-          "virtual": false,
-          "nullable": false,
-          "isPrimary": false,
-          "isUnique": false,
-          "description": "",
-          "relation": null
-        },
-        "tableName": {
-          "type": "text",
-          "name": "tableName",
-          "column": "table_name",
-          "virtual": false,
-          "nullable": false,
-          "isPrimary": true,
-          "isUnique": false,
-          "description": "",
-          "relation": null
-        }
-      }
-    },
-    "Organizations": {
-      "name": "Organizations",
-      "table": "organizations",
+    "Comments": {
+      "name": "Comments",
+      "table": "comments",
       "virtual": false,
       "primaryKeys": [
         "id"
       ],
-      "description": "组织架构表",
+      "description": "评论表",
       "fields": {
+        "content": {
+          "type": "text",
+          "name": "content",
+          "column": "content",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "评论内容",
+          "relation": null
+        },
         "createdAt": {
           "type": "timestamp without time zone",
           "name": "createdAt",
@@ -75,23 +41,12 @@
           "isUnique": false,
           "description": "",
           "relation": {
-            "sourceClass": "organizations",
+            "sourceClass": "comments",
             "sourceField": "id",
-            "targetClass": "organizations",
+            "targetClass": "comments",
             "targetField": "parent_id",
             "type": "recursive"
           }
-        },
-        "name": {
-          "type": "text",
-          "name": "name",
-          "column": "name",
-          "virtual": false,
-          "nullable": false,
-          "isPrimary": false,
-          "isUnique": false,
-          "description": "",
-          "relation": null
         },
         "parentId": {
           "type": "integer",
@@ -101,13 +56,47 @@
           "nullable": true,
           "isPrimary": false,
           "isUnique": false,
-          "description": "父组织ID",
+          "description": "父评论ID",
           "relation": {
-            "sourceClass": "organizations",
+            "sourceClass": "comments",
             "sourceField": "parent_id",
-            "targetClass": "organizations",
+            "targetClass": "comments",
             "targetField": "id",
             "type": "recursive"
+          }
+        },
+        "postId": {
+          "type": "integer",
+          "name": "postId",
+          "column": "post_id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "评论文章",
+          "relation": {
+            "sourceClass": "comments",
+            "sourceField": "post_id",
+            "targetClass": "posts",
+            "targetField": "id",
+            "type": "many_to_one"
+          }
+        },
+        "userId": {
+          "type": "integer",
+          "name": "userId",
+          "column": "user_id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "评论者",
+          "relation": {
+            "sourceClass": "comments",
+            "sourceField": "user_id",
+            "targetClass": "users",
+            "targetField": "id",
+            "type": "many_to_one"
           }
         }
       }
@@ -141,7 +130,7 @@
           "nullable": false,
           "isPrimary": true,
           "isUnique": false,
-          "description": "",
+          "description": "文章ID",
           "relation": {
             "sourceClass": "post_tags",
             "sourceField": "post_id",
@@ -158,7 +147,7 @@
           "nullable": false,
           "isPrimary": true,
           "isUnique": false,
-          "description": "",
+          "description": "标签ID",
           "relation": {
             "sourceClass": "post_tags",
             "sourceField": "tag_id",
@@ -186,7 +175,7 @@
           "nullable": true,
           "isPrimary": false,
           "isUnique": false,
-          "description": "",
+          "description": "内容",
           "relation": null
         },
         "createdAt": {
@@ -247,7 +236,7 @@
           "nullable": false,
           "isPrimary": false,
           "isUnique": false,
-          "description": "",
+          "description": "标题",
           "relation": null
         },
         "userId": {
@@ -258,7 +247,7 @@
           "nullable": false,
           "isPrimary": false,
           "isUnique": false,
-          "description": "",
+          "description": "作者ID",
           "relation": {
             "sourceClass": "posts",
             "sourceField": "user_id",
@@ -266,39 +255,6 @@
             "targetField": "id",
             "type": "many_to_one"
           }
-        }
-      }
-    },
-    "TableComments": {
-      "name": "TableComments",
-      "table": "table_comments",
-      "virtual": false,
-      "primaryKeys": [
-        "tableName"
-      ],
-      "description": "",
-      "fields": {
-        "comment": {
-          "type": "text",
-          "name": "comment",
-          "column": "comment",
-          "virtual": false,
-          "nullable": false,
-          "isPrimary": false,
-          "isUnique": false,
-          "description": "",
-          "relation": null
-        },
-        "tableName": {
-          "type": "text",
-          "name": "tableName",
-          "column": "table_name",
-          "virtual": false,
-          "nullable": false,
-          "isPrimary": true,
-          "isUnique": false,
-          "description": "",
-          "relation": null
         }
       }
     },
@@ -347,7 +303,7 @@
           "nullable": false,
           "isPrimary": false,
           "isUnique": false,
-          "description": "",
+          "description": "标签名称",
           "relation": null
         },
         "postsList": {
@@ -417,7 +373,7 @@
           "relation": {
             "sourceClass": "users",
             "sourceField": "id",
-            "targetClass": "posts",
+            "targetClass": "comments",
             "targetField": "user_id",
             "type": "one_to_many"
           }
@@ -430,7 +386,7 @@
           "nullable": false,
           "isPrimary": false,
           "isUnique": false,
-          "description": "",
+          "description": "用户名",
           "relation": null
         },
         "updatedAt": {
@@ -447,5 +403,5 @@
       }
     }
   },
-  "version": "20250307153145"
+  "version": "20250307193507"
 }
