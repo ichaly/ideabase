@@ -253,7 +253,7 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, error) {
 			SourceField: sourceColumn,
 			TargetClass: targetTable,
 			TargetField: targetColumn,
-			Kind:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.MANY_TO_ONE),
+			Type:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.MANY_TO_ONE),
 		}
 
 		// 创建反向关系
@@ -262,7 +262,7 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, error) {
 			SourceField: targetColumn,
 			TargetClass: sourceTable,
 			TargetField: sourceColumn,
-			Kind:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.ONE_TO_MANY),
+			Type:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.ONE_TO_MANY),
 		}
 
 		// 设置双向引用
@@ -270,5 +270,159 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, error) {
 		targetField.Relation.Reverse = sourceField.Relation
 	}
 
+	// 检测并处理多对多关系
+	my.detectManyToManyRelations(classes, foreignKeys, primaryKeys)
+
 	return classes, nil
+}
+
+// detectManyToManyRelations 检测并处理多对多关系
+func (my *DatabaseLoader) detectManyToManyRelations(classes map[string]*internal.Class, foreignKeys []foreignKeyInfo, primaryKeys []primaryKeyInfo) {
+	// 1. 收集每个表的外键信息
+	tableToFKs := make(map[string][]foreignKeyInfo)
+	for _, fk := range foreignKeys {
+		tableToFKs[fk.SourceTable] = append(tableToFKs[fk.SourceTable], fk)
+	}
+
+	// 2. 收集每个表的主键信息
+	tableToPKs := make(map[string][]string)
+	for _, pk := range primaryKeys {
+		tableToPKs[pk.TableName] = append(tableToPKs[pk.TableName], pk.ColumnName)
+	}
+
+	// 3. 检测可能的多对多关系表
+	for tableName, fks := range tableToFKs {
+		// 条件1: 表包含且仅包含两个外键
+		if len(fks) != 2 {
+			continue
+		}
+
+		class := classes[tableName]
+		if class == nil {
+			continue
+		}
+
+		// 条件2: 主键由这两个外键组成
+		pks := tableToPKs[tableName]
+		if !containsSameElements(pks, []string{fks[0].SourceColumn, fks[1].SourceColumn}) {
+			// 不满足条件2，检查条件3
+			// 条件3: 表名符合 table1_table2 格式
+			if !isThroughTableByName(tableName, fks[0].TargetTable, fks[1].TargetTable) {
+				continue
+			}
+		}
+
+		// 识别为多对多关系表，创建多对多关系
+		createManyToManyRelation(classes, tableName, fks[0], fks[1])
+	}
+}
+
+// containsSameElements 检查两个字符串切片是否包含相同的元素(不考虑顺序)
+func containsSameElements(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	// 创建map来跟踪元素出现次数
+	counts := make(map[string]int)
+	for _, item := range a {
+		counts[item]++
+	}
+
+	// 检查b中的元素是否与a中的匹配
+	for _, item := range b {
+		counts[item]--
+		if counts[item] < 0 {
+			return false
+		}
+	}
+
+	// 所有计数器应为0
+	for _, count := range counts {
+		if count != 0 {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isThroughTableByName 通过表名检查是否是中间表
+func isThroughTableByName(tableName, table1, table2 string) bool {
+	// 检查表名是否符合 table1_table2 或 table2_table1 格式
+	expectedName1 := table1 + "_" + table2
+	expectedName2 := table2 + "_" + table1
+
+	return tableName == expectedName1 || tableName == expectedName2
+}
+
+// createManyToManyRelation 创建多对多关系
+func createManyToManyRelation(classes map[string]*internal.Class, throughTable string, fk1, fk2 foreignKeyInfo) {
+	// 获取相关类
+	table1 := fk1.TargetTable
+	table2 := fk2.TargetTable
+	class1 := classes[table1]
+	class2 := classes[table2]
+
+	if class1 == nil || class2 == nil {
+		return
+	}
+
+	// 创建中间表配置
+	through1 := &internal.Through{
+		Table:     throughTable,
+		SourceKey: fk1.SourceColumn,
+		TargetKey: fk2.SourceColumn,
+	}
+
+	through2 := &internal.Through{
+		Table:     throughTable,
+		SourceKey: fk2.SourceColumn,
+		TargetKey: fk1.SourceColumn,
+	}
+
+	// 创建从表1到表2的多对多关系的虚拟字段
+	field1Name := getVirtualFieldName(table2)
+	field1 := &internal.Field{
+		Name:    field1Name,
+		Virtual: true,
+		Relation: &internal.Relation{
+			SourceClass: table1,
+			SourceField: fk1.TargetColumn,
+			TargetClass: table2,
+			TargetField: fk2.TargetColumn,
+			Type:        internal.MANY_TO_MANY,
+			Through:     through1,
+		},
+	}
+
+	// 创建从表2到表1的多对多关系的虚拟字段
+	field2Name := getVirtualFieldName(table1)
+	field2 := &internal.Field{
+		Name:    field2Name,
+		Virtual: true,
+		Relation: &internal.Relation{
+			SourceClass: table2,
+			SourceField: fk2.TargetColumn,
+			TargetClass: table1,
+			TargetField: fk1.TargetColumn,
+			Type:        internal.MANY_TO_MANY,
+			Through:     through2,
+		},
+	}
+
+	// 设置双向引用
+	field1.Relation.Reverse = field2.Relation
+	field2.Relation.Reverse = field1.Relation
+
+	// 添加虚拟字段到各自的类
+	class1.Fields[field1Name] = field1
+	class2.Fields[field2Name] = field2
+}
+
+// getVirtualFieldName 获取多对多关系的虚拟字段名
+func getVirtualFieldName(tableName string) string {
+	// 默认使用目标表名作为关系字段名
+	// 可以进行复数化或其他转换
+	return tableName + "List"
 }

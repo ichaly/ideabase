@@ -114,5 +114,5 @@ type RelationConfig struct {
 	TargetField string `mapstructure:"target_field"`
 
 	// 关系类型: many_to_one, one_to_many, many_to_many, recursive
-	Kind string `mapstructure:"kind"`
+	Type string `mapstructure:"type"`
 }

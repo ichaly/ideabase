@@ -207,7 +207,7 @@ func (my *Metadata) loadFromConfig() error {
 				targetClass := my.Nodes[column.Relation.TargetClass]
 				if targetClass != nil {
 					// 设置关系类型
-					kind := internal.ChainKind("").FromString(column.Relation.Kind)
+					kind := internal.RelationType("").FromString(column.Relation.Type)
 
 					// 设置关系
 					field.Relation = &internal.Relation{
@@ -215,7 +215,7 @@ func (my *Metadata) loadFromConfig() error {
 						SourceField: field.Name,
 						TargetClass: column.Relation.TargetClass,
 						TargetField: column.Relation.TargetField,
-						Kind:        kind,
+						Type:        kind,
 					}
 
 					// 创建反向关系(非递归关系)
@@ -228,7 +228,7 @@ func (my *Metadata) loadFromConfig() error {
 								SourceField: column.Relation.TargetField,
 								TargetClass: class.Name,
 								TargetField: field.Name,
-								Kind:        kind.Reverse(),
+								Type:        kind.Reverse(),
 							},
 						}
 						targetClass.Fields[reverseField.Name] = reverseField

@@ -6,11 +6,11 @@ import (
 )
 
 const (
-	NONE         internal.ChainKind = ""
-	RECURSIVE    internal.ChainKind = "Recursive"
-	ONE_TO_MANY  internal.ChainKind = "OneToMany"
-	MANY_TO_ONE  internal.ChainKind = "ManyToOne"
-	MANY_TO_MANY internal.ChainKind = "ManyToMany"
+	NONE         internal.RelationType = ""
+	RECURSIVE    internal.RelationType = "Recursive"
+	ONE_TO_MANY  internal.RelationType = "OneToMany"
+	MANY_TO_ONE  internal.RelationType = "ManyToOne"
+	MANY_TO_MANY internal.RelationType = "ManyToMany"
 )
 
 // 参数名称

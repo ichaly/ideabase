@@ -4,15 +4,15 @@ import (
 	"encoding/json"
 )
 
-// ChainKind 表示关系类型
-type ChainKind string
+// RelationType 表示关系类型
+type RelationType string
 
 // 关系类型常量
 const (
-	MANY_TO_ONE  ChainKind = "many_to_one"  // 多对一关系
-	ONE_TO_MANY  ChainKind = "one_to_many"  // 一对多关系
-	MANY_TO_MANY ChainKind = "many_to_many" // 多对多关系
-	RECURSIVE    ChainKind = "recursive"    // 递归关系
+	MANY_TO_ONE  RelationType = "many_to_one"  // 多对一关系
+	ONE_TO_MANY  RelationType = "one_to_many"  // 一对多关系
+	MANY_TO_MANY RelationType = "many_to_many" // 多对多关系
+	RECURSIVE    RelationType = "recursive"    // 递归关系
 )
 
 // Symbol 表示操作符号
@@ -32,7 +32,7 @@ type Class struct {
 	Fields      map[string]*Field // 字段映射表(包含字段名和列名的索引)
 }
 
-// Field 表示类的一个字段
+// Field 表示类的一个字段/列的完整定义
 type Field struct {
 	Type        string    `json:"type"`        // 类型
 	Name        string    `json:"name"`        // 字段名
@@ -47,12 +47,20 @@ type Field struct {
 
 // Relation 表示类之间的关系
 type Relation struct {
-	SourceClass string    `json:"sourceClass"` // 源类名
-	SourceField string    `json:"sourceField"` // 源字段名
-	TargetClass string    `json:"targetClass"` // 目标类名
-	TargetField string    `json:"targetField"` // 目标字段名
-	Kind        ChainKind `json:"kind"`        // 关系类型
-	Reverse     *Relation `json:"-"`           // 反向关系引用
+	SourceClass string       `json:"sourceClass"`       // 源类名
+	SourceField string       `json:"sourceField"`       // 源字段名
+	TargetClass string       `json:"targetClass"`       // 目标类名
+	TargetField string       `json:"targetField"`       // 目标字段名
+	Type        RelationType `json:"type"`              // 关系类型
+	Reverse     *Relation    `json:"-"`                 // 反向关系引用
+	Through     *Through     `json:"through,omitempty"` // 多对多关系配置
+}
+
+// Through 表示多对多关系中的中间表配置
+type Through struct {
+	Table     string `json:"table"`     // 中间表名称
+	SourceKey string `json:"sourceKey"` // 中间表中指向源表的外键
+	TargetKey string `json:"targetKey"` // 中间表中指向目标表的外键
 }
 
 // AddField 添加字段到类中
@@ -122,7 +130,7 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 type LoadOption func() error
 
 // FromString 从字符串转换为关系类型
-func (my ChainKind) FromString(kind string) ChainKind {
+func (my RelationType) FromString(kind string) RelationType {
 	switch kind {
 	case string(ONE_TO_MANY):
 		return ONE_TO_MANY
@@ -138,7 +146,7 @@ func (my ChainKind) FromString(kind string) ChainKind {
 }
 
 // Reverse 获取反向关系类型
-func (my ChainKind) Reverse() ChainKind {
+func (my RelationType) Reverse() RelationType {
 	switch my {
 	case ONE_TO_MANY:
 		return MANY_TO_ONE

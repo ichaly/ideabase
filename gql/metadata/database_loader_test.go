@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -299,13 +300,13 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.NotNil(t, userIdField.Relation)
 		require.Equal(t, "users", userIdField.Relation.TargetClass)
 		require.Equal(t, "id", userIdField.Relation.TargetField)
-		require.Equal(t, internal.MANY_TO_ONE, userIdField.Relation.Kind)
+		require.Equal(t, internal.MANY_TO_ONE, userIdField.Relation.Type)
 
 		postIdField := comments.Fields["post_id"]
 		require.NotNil(t, postIdField.Relation)
 		require.Equal(t, "posts", postIdField.Relation.TargetClass)
 		require.Equal(t, "id", postIdField.Relation.TargetField)
-		require.Equal(t, internal.MANY_TO_ONE, postIdField.Relation.Kind)
+		require.Equal(t, internal.MANY_TO_ONE, postIdField.Relation.Type)
 
 		// 验证tags表
 		tags, ok := classes["tags"]
@@ -328,4 +329,180 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.Contains(t, postTags.Fields, "tag_id")
 		require.Contains(t, postTags.Fields, "created_at")
 	})
+}
+
+// 测试多对多关系检测
+func TestDetectManyToManyRelations(t *testing.T) {
+	// 创建测试数据
+	classes := map[string]*internal.Class{
+		"users": {
+			Name:        "users",
+			Table:       "users",
+			Fields:      make(map[string]*internal.Field),
+			PrimaryKeys: []string{"id"},
+		},
+		"roles": {
+			Name:        "roles",
+			Table:       "roles",
+			Fields:      make(map[string]*internal.Field),
+			PrimaryKeys: []string{"id"},
+		},
+		"user_roles": {
+			Name:        "user_roles",
+			Table:       "user_roles",
+			Fields:      make(map[string]*internal.Field),
+			PrimaryKeys: []string{"user_id", "role_id"},
+		},
+	}
+
+	// 添加字段
+	classes["users"].Fields["id"] = &internal.Field{
+		Name:      "id",
+		Column:    "id",
+		Type:      "integer",
+		IsPrimary: true,
+	}
+	classes["roles"].Fields["id"] = &internal.Field{
+		Name:      "id",
+		Column:    "id",
+		Type:      "integer",
+		IsPrimary: true,
+	}
+	classes["user_roles"].Fields["user_id"] = &internal.Field{
+		Name:   "user_id",
+		Column: "user_id",
+		Type:   "integer",
+	}
+	classes["user_roles"].Fields["role_id"] = &internal.Field{
+		Name:   "role_id",
+		Column: "role_id",
+		Type:   "integer",
+	}
+
+	// 创建外键关系
+	foreignKeys := []foreignKeyInfo{
+		{
+			SourceTable:  "user_roles",
+			SourceColumn: "user_id",
+			TargetTable:  "users",
+			TargetColumn: "id",
+		},
+		{
+			SourceTable:  "user_roles",
+			SourceColumn: "role_id",
+			TargetTable:  "roles",
+			TargetColumn: "id",
+		},
+	}
+
+	// 创建主键
+	primaryKeys := []primaryKeyInfo{
+		{
+			TableName:  "user_roles",
+			ColumnName: "user_id",
+		},
+		{
+			TableName:  "user_roles",
+			ColumnName: "role_id",
+		},
+		{
+			TableName:  "users",
+			ColumnName: "id",
+		},
+		{
+			TableName:  "roles",
+			ColumnName: "id",
+		},
+	}
+
+	// 创建加载器并检测多对多关系
+	loader := &DatabaseLoader{}
+	loader.detectManyToManyRelations(classes, foreignKeys, primaryKeys)
+
+	// 验证结果
+	// 1. users 类中应该有一个指向 roles 的多对多关系字段
+	rolesField, exists := classes["users"].Fields["rolesList"]
+	assert.True(t, exists, "users 类中应该有 rolesList 字段")
+	if exists {
+		assert.True(t, rolesField.Virtual, "rolesList 应该是虚拟字段")
+		assert.NotNil(t, rolesField.Relation, "rolesList 应该有关系定义")
+		assert.Equal(t, internal.MANY_TO_MANY, rolesField.Relation.Type, "rolesList 关系类型应该是多对多")
+		assert.NotNil(t, rolesField.Relation.Through, "关系应该有Through配置")
+		if rolesField.Relation.Through != nil {
+			assert.Equal(t, "user_roles", rolesField.Relation.Through.Table, "中间表应该是 user_roles")
+			assert.Equal(t, "user_id", rolesField.Relation.Through.SourceKey, "源键应该是 user_id")
+			assert.Equal(t, "role_id", rolesField.Relation.Through.TargetKey, "目标键应该是 role_id")
+		}
+	}
+
+	// 2. roles 类中应该有一个指向 users 的多对多关系字段
+	usersField, exists := classes["roles"].Fields["usersList"]
+	assert.True(t, exists, "roles 类中应该有 usersList 字段")
+	if exists {
+		assert.True(t, usersField.Virtual, "usersList 应该是虚拟字段")
+		assert.NotNil(t, usersField.Relation, "usersList 应该有关系定义")
+		assert.Equal(t, internal.MANY_TO_MANY, usersField.Relation.Type, "usersList 关系类型应该是多对多")
+		assert.NotNil(t, usersField.Relation.Through, "关系应该有Through配置")
+		if usersField.Relation.Through != nil {
+			assert.Equal(t, "user_roles", usersField.Relation.Through.Table, "中间表应该是 user_roles")
+			assert.Equal(t, "role_id", usersField.Relation.Through.SourceKey, "源键应该是 role_id")
+			assert.Equal(t, "user_id", usersField.Relation.Through.TargetKey, "目标键应该是 user_id")
+		}
+	}
+
+	// 3. 验证反向引用
+	if exists && rolesField.Relation != nil && usersField.Relation != nil {
+		assert.Equal(t, rolesField.Relation, usersField.Relation.Reverse, "反向引用应正确设置")
+		assert.Equal(t, usersField.Relation, rolesField.Relation.Reverse, "反向引用应正确设置")
+	}
+}
+
+// 测试表名匹配函数
+func TestIsThroughTableByName(t *testing.T) {
+	tests := []struct {
+		tableName string
+		table1    string
+		table2    string
+		expected  bool
+	}{
+		{"users_roles", "users", "roles", true},
+		{"roles_users", "users", "roles", true},
+		{"users_roles", "roles", "users", true},
+		{"roles_users", "roles", "users", true},
+		{"users_permissions", "users", "roles", false},
+		{"user_role", "users", "roles", false},
+		{"users", "users", "roles", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tableName, func(t *testing.T) {
+			result := isThroughTableByName(tt.tableName, tt.table1, tt.table2)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// 测试元素比较函数
+func TestContainsSameElements(t *testing.T) {
+	tests := []struct {
+		a        []string
+		b        []string
+		expected bool
+	}{
+		{[]string{"a", "b"}, []string{"a", "b"}, true},
+		{[]string{"a", "b"}, []string{"b", "a"}, true},
+		{[]string{"a", "b", "c"}, []string{"a", "b"}, false},
+		{[]string{"a", "b"}, []string{"a", "c"}, false},
+		{[]string{}, []string{}, true},
+		{nil, nil, true},
+		{[]string{"a", "a"}, []string{"a", "a"}, true},
+		{[]string{"a", "a"}, []string{"a", "b"}, false},
+	}
+
+	for i, tt := range tests {
+		t.Run(fmt.Sprintf("test-%d", i), func(t *testing.T) {
+			result := containsSameElements(tt.a, tt.b)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
