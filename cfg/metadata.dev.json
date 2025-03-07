@@ -45,6 +45,73 @@
         }
       }
     },
+    "Organizations": {
+      "name": "Organizations",
+      "table": "organizations",
+      "virtual": false,
+      "primaryKeys": [
+        "id"
+      ],
+      "description": "组织架构表",
+      "fields": {
+        "createdAt": {
+          "type": "timestamp without time zone",
+          "name": "createdAt",
+          "column": "created_at",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
+          "relation": null
+        },
+        "id": {
+          "type": "integer",
+          "name": "id",
+          "column": "id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": true,
+          "isUnique": false,
+          "description": "",
+          "relation": {
+            "sourceClass": "organizations",
+            "sourceField": "id",
+            "targetClass": "organizations",
+            "targetField": "parent_id",
+            "type": "recursive"
+          }
+        },
+        "name": {
+          "type": "text",
+          "name": "name",
+          "column": "name",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
+          "relation": null
+        },
+        "parentId": {
+          "type": "integer",
+          "name": "parentId",
+          "column": "parent_id",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "父组织ID",
+          "relation": {
+            "sourceClass": "organizations",
+            "sourceField": "parent_id",
+            "targetClass": "organizations",
+            "targetField": "id",
+            "type": "recursive"
+          }
+        }
+      }
+    },
     "PostTags": {
       "name": "PostTags",
       "table": "post_tags",
@@ -80,7 +147,7 @@
             "sourceField": "post_id",
             "targetClass": "posts",
             "targetField": "id",
-            "kind": "many_to_one"
+            "type": "many_to_one"
           }
         },
         "tagId": {
@@ -97,7 +164,7 @@
             "sourceField": "tag_id",
             "targetClass": "tags",
             "targetField": "id",
-            "kind": "many_to_one"
+            "type": "many_to_one"
           }
         }
       }
@@ -147,7 +214,29 @@
             "sourceField": "id",
             "targetClass": "post_tags",
             "targetField": "post_id",
-            "kind": "one_to_many"
+            "type": "one_to_many"
+          }
+        },
+        "tagsList": {
+          "type": "",
+          "name": "tagsList",
+          "column": "",
+          "virtual": true,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
+          "relation": {
+            "sourceClass": "posts",
+            "sourceField": "id",
+            "targetClass": "tags",
+            "targetField": "id",
+            "type": "many_to_many",
+            "through": {
+              "table": "post_tags",
+              "sourceKey": "post_id",
+              "targetKey": "tag_id"
+            }
           }
         },
         "title": {
@@ -175,7 +264,7 @@
             "sourceField": "user_id",
             "targetClass": "users",
             "targetField": "id",
-            "kind": "many_to_one"
+            "type": "many_to_one"
           }
         }
       }
@@ -247,7 +336,7 @@
             "sourceField": "id",
             "targetClass": "post_tags",
             "targetField": "tag_id",
-            "kind": "one_to_many"
+            "type": "one_to_many"
           }
         },
         "name": {
@@ -260,6 +349,28 @@
           "isUnique": false,
           "description": "",
           "relation": null
+        },
+        "postsList": {
+          "type": "",
+          "name": "postsList",
+          "column": "",
+          "virtual": true,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
+          "relation": {
+            "sourceClass": "tags",
+            "sourceField": "id",
+            "targetClass": "posts",
+            "targetField": "id",
+            "type": "many_to_many",
+            "through": {
+              "table": "post_tags",
+              "sourceKey": "tag_id",
+              "targetKey": "post_id"
+            }
+          }
         }
       }
     },
@@ -308,7 +419,7 @@
             "sourceField": "id",
             "targetClass": "posts",
             "targetField": "user_id",
-            "kind": "one_to_many"
+            "type": "one_to_many"
           }
         },
         "name": {
@@ -336,5 +447,5 @@
       }
     }
   },
-  "version": "20250306205149"
+  "version": "20250307133511"
 }

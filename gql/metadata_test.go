@@ -195,7 +195,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			assert.NotNil(t, userId, "应该有userId字段")
 			if userId != nil {
 				assert.NotNil(t, userId.Relation, "userId应该有关系定义")
-				assert.Equal(t, internal.MANY_TO_ONE, userId.Relation.Kind, "应该是many-to-one关系")
+				assert.Equal(t, internal.MANY_TO_ONE, userId.Relation.Type, "应该是many-to-one关系")
 				assert.Equal(t, "users", userId.Relation.TargetClass, "关系目标类应该是users")
 			}
 		}
@@ -209,7 +209,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			assert.NotNil(t, postId, "应该有postId字段")
 			if postId != nil {
 				assert.NotNil(t, postId.Relation, "postId应该有关系定义")
-				assert.Equal(t, internal.MANY_TO_ONE, postId.Relation.Kind, "应该是many-to-one关系")
+				assert.Equal(t, internal.MANY_TO_ONE, postId.Relation.Type, "应该是many-to-one关系")
 				assert.Equal(t, "posts", postId.Relation.TargetClass, "关系目标类应该是posts")
 			}
 
@@ -218,7 +218,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			assert.NotNil(t, tagId, "应该有tagId字段")
 			if tagId != nil {
 				assert.NotNil(t, tagId.Relation, "tagId应该有关系定义")
-				assert.Equal(t, internal.MANY_TO_ONE, tagId.Relation.Kind, "应该是many-to-one关系")
+				assert.Equal(t, internal.MANY_TO_ONE, tagId.Relation.Type, "应该是many-to-one关系")
 				assert.Equal(t, "tags", tagId.Relation.TargetClass, "关系目标类应该是tags")
 			}
 		}
@@ -232,14 +232,14 @@ func TestMetadataLoadingModes(t *testing.T) {
 			assert.NotNil(t, parentId, "应该有parentId字段")
 			if parentId != nil {
 				assert.NotNil(t, parentId.Relation, "parentId应该有关系定义")
-				assert.Equal(t, internal.RECURSIVE, parentId.Relation.Kind, "应该是recursive关系")
+				assert.Equal(t, internal.RECURSIVE, parentId.Relation.Type, "应该是recursive关系")
 				assert.Equal(t, "organizations", parentId.Relation.TargetClass, "关系目标类应该是organizations")
 				assert.Equal(t, "id", parentId.Relation.TargetField, "关系目标字段应该是id")
 
 				// 验证反向关系
 				assert.NotNil(t, parentId.Relation.Reverse, "应该有反向关系")
 				if parentId.Relation.Reverse != nil {
-					assert.Equal(t, internal.RECURSIVE, parentId.Relation.Reverse.Kind, "反向关系也应该是recursive")
+					assert.Equal(t, internal.RECURSIVE, parentId.Relation.Reverse.Type, "反向关系也应该是recursive")
 					assert.Equal(t, "organizations", parentId.Relation.Reverse.TargetClass, "反向关系目标类应该是organizations")
 				}
 			}
@@ -300,7 +300,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 						if field1.Relation != nil {
 							assert.NotNil(t, field2.Relation, "关系定义应该同时存在或不存在")
 							if field2.Relation != nil {
-								assert.Equal(t, field1.Relation.Kind, field2.Relation.Kind, "关系类型应该相同")
+								assert.Equal(t, field1.Relation.Type, field2.Relation.Type, "关系类型应该相同")
 								assert.Equal(t, field1.Relation.TargetClass, field2.Relation.TargetClass, "目标类应该相同")
 								assert.Equal(t, field1.Relation.TargetField, field2.Relation.TargetField, "目标字段应该相同")
 							}
@@ -625,7 +625,7 @@ func TestLoadMetadataFromFile(t *testing.T) {
 	assert.NotNil(t, userIdByColumn, "应该能通过列名找到user_id字段")
 	assert.Same(t, userId, userIdByColumn, "通过字段名和列名获取的应该是同一个字段")
 	assert.NotNil(t, userId.Relation, "userId应该有关系定义")
-	assert.Equal(t, "many_to_one", string(userId.Relation.Kind), "应该是many_to_one关系")
+	assert.Equal(t, "many_to_one", string(userId.Relation.Type), "应该是many_to_one关系")
 	assert.Equal(t, "users", userId.Relation.TargetClass, "关系目标类应该是users")
 	assert.Equal(t, "id", userId.Relation.TargetField, "关系目标字段应该是id")
 
@@ -641,6 +641,6 @@ func TestLoadMetadataFromFile(t *testing.T) {
 	assert.NotNil(t, tagIdByColumn, "应该能通过列名找到tag_id字段")
 	assert.Same(t, tagId, tagIdByColumn, "通过字段名和列名获取的应该是同一个字段")
 	assert.NotNil(t, tagId.Relation, "tagId应该有关系定义")
-	assert.Equal(t, "many_to_one", string(tagId.Relation.Kind), "应该是many_to_one关系")
+	assert.Equal(t, "many_to_one", string(tagId.Relation.Type), "应该是many_to_one关系")
 	assert.Equal(t, "tags", tagId.Relation.TargetClass, "关系目标类应该是tags")
 }
