@@ -115,4 +115,19 @@ type RelationConfig struct {
 
 	// 关系类型: many_to_one, one_to_many, many_to_many, recursive
 	Type string `mapstructure:"type"`
+
+	// 多对多关系配置
+	Through *ThroughConfig `mapstructure:"through,omitempty"`
+}
+
+// ThroughConfig 表示多对多关系中的中间表配置
+type ThroughConfig struct {
+	// 中间表名称
+	Table string `mapstructure:"table"`
+
+	// 中间表中指向源表的外键
+	SourceKey string `mapstructure:"source_key"`
+
+	// 中间表中指向目标表的外键
+	TargetKey string `mapstructure:"target_key"`
 }

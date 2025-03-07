@@ -218,6 +218,15 @@ func (my *Metadata) loadFromConfig() error {
 						Type:        kind,
 					}
 
+					// 如果是多对多关系，设置中间表配置
+					if kind == internal.MANY_TO_MANY && column.Relation.Through != nil {
+						field.Relation.Through = &internal.Through{
+							Table:     column.Relation.Through.Table,
+							SourceKey: column.Relation.Through.SourceKey,
+							TargetKey: column.Relation.Through.TargetKey,
+						}
+					}
+
 					// 创建反向关系(非递归关系)
 					if kind != internal.RECURSIVE {
 						reverseField := &internal.Field{
@@ -228,9 +237,19 @@ func (my *Metadata) loadFromConfig() error {
 								SourceField: column.Relation.TargetField,
 								TargetClass: class.Name,
 								TargetField: field.Name,
-								Type:        kind.Reverse(),
+								Type:        kind,
 							},
 						}
+
+						// 如果是多对多关系，设置反向关系的中间表配置
+						if kind == internal.MANY_TO_MANY && column.Relation.Through != nil {
+							reverseField.Relation.Through = &internal.Through{
+								Table:     column.Relation.Through.Table,
+								SourceKey: column.Relation.Through.TargetKey,
+								TargetKey: column.Relation.Through.SourceKey,
+							}
+						}
+
 						targetClass.Fields[reverseField.Name] = reverseField
 
 						// 建立双向引用
