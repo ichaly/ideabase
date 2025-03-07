@@ -29,12 +29,27 @@ func TestManyToManyRelationLoading(t *testing.T) {
 		"name": "tags",
 		"relation": map[string]interface{}{
 			"type":        "many_to_many",
-			"targetClass": "Tags",
+			"targetClass": "tags",
 			"targetField": "posts",
 			"through": map[string]interface{}{
 				"table":     "post_tags",
 				"sourceKey": "post_id",
 				"targetKey": "tag_id",
+			},
+		},
+	})
+
+	// 设置反向关系配置
+	v.Set("metadata.tables.tags.columns.posts", map[string]interface{}{
+		"name": "posts",
+		"relation": map[string]interface{}{
+			"type":        "many_to_many",
+			"targetClass": "posts",
+			"targetField": "tags",
+			"through": map[string]interface{}{
+				"table":     "post_tags",
+				"sourceKey": "tag_id",
+				"targetKey": "post_id",
 			},
 		},
 	})
@@ -56,7 +71,7 @@ func TestManyToManyRelationLoading(t *testing.T) {
 		assert.Equal(t, internal.MANY_TO_MANY, tagsField.Relation.Type, "应该是多对多关系")
 
 		// 验证目标类信息
-		assert.Equal(t, "Tags", tagsField.Relation.TargetClass, "目标类应该是Tags")
+		assert.Equal(t, "tags", tagsField.Relation.TargetClass, "目标类应该是tags")
 		assert.Equal(t, "posts", tagsField.Relation.TargetField, "目标字段应该是posts")
 
 		// 验证中间表配置
@@ -79,7 +94,7 @@ func TestManyToManyRelationLoading(t *testing.T) {
 		assert.Equal(t, internal.MANY_TO_MANY, postsField.Relation.Type, "应该是多对多关系")
 
 		// 验证目标类信息
-		assert.Equal(t, "Posts", postsField.Relation.TargetClass, "目标类应该是Posts")
+		assert.Equal(t, "posts", postsField.Relation.TargetClass, "目标类应该是posts")
 		assert.Equal(t, "tags", postsField.Relation.TargetField, "目标字段应该是tags")
 
 		// 验证中间表配置

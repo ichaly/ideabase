@@ -129,22 +129,15 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 	if db.Dialector.Name() == "mysql" {
 		// MySQL需要按照依赖顺序执行语句
 		sqlStatements := strings.Split(string(sqlBytes), ";")
-		// 定义表创建顺序
-		tableOrder := []string{"users", "posts", "tags", "comments", "post_tags"}
-		
-		// 按顺序执行建表语句
-		for _, tableName := range tableOrder {
-			for _, stmt := range sqlStatements {
-				stmt = strings.TrimSpace(stmt)
-				if stmt == "" || strings.HasPrefix(stmt, "--") {
-					continue
-				}
-				if strings.Contains(stmt, fmt.Sprintf("CREATE TABLE %s", tableName)) {
-					if err := db.Exec(stmt).Error; err != nil {
-						require.NoError(t, err)
-					}
-					break
-				}
+		// 查找并执行创建表语句
+		for _, stmt := range sqlStatements {
+			if strings.TrimSpace(stmt) == "" {
+				continue
+			}
+			// 执行创建表语句
+			if err := db.Exec(stmt).Error; err != nil {
+				t.Logf("执行SQL失败: %v\nSQL: %s", err, stmt)
+				require.NoError(t, err)
 			}
 		}
 	} else {
