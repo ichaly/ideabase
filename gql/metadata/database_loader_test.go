@@ -275,12 +275,13 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.True(t, ok)
 		require.Equal(t, "posts", posts.Table)
 		require.Equal(t, "文章表", posts.Description)
-		require.Len(t, posts.Fields, 5)
+		require.Len(t, posts.Fields, 6)
 		require.Contains(t, posts.Fields, "id")
 		require.Contains(t, posts.Fields, "title")
 		require.Contains(t, posts.Fields, "content")
 		require.Contains(t, posts.Fields, "user_id")
 		require.Contains(t, posts.Fields, "created_at")
+		require.Contains(t, posts.Fields, "tagsList")
 
 		// 验证comments表
 		comments, ok := classes["comments"]
@@ -313,11 +314,12 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.True(t, ok)
 		require.Equal(t, "tags", tags.Table)
 		require.Equal(t, "标签表", tags.Description)
-		require.Len(t, tags.Fields, 4)
+		require.Len(t, tags.Fields, 5)
 		require.Contains(t, tags.Fields, "id")
 		require.Contains(t, tags.Fields, "name")
 		require.Contains(t, tags.Fields, "description")
 		require.Contains(t, tags.Fields, "created_at")
+		require.Contains(t, tags.Fields, "postsList")
 
 		// 验证post_tags表
 		postTags, ok := classes["post_tags"]
