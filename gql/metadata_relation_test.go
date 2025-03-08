@@ -94,7 +94,7 @@ func TestManyToManyRelationLoading(t *testing.T) {
 		assert.Equal(t, internal.MANY_TO_MANY, postsField.Relation.Type, "应该是多对多关系")
 
 		// 验证目标类信息
-		assert.Equal(t, "posts", postsField.Relation.TargetClass, "目标类应该是posts")
+		assert.Equal(t, "Posts", postsField.Relation.TargetClass, "目标类应该是Posts")
 		assert.Equal(t, "tags", postsField.Relation.TargetField, "目标字段应该是tags")
 
 		// 验证中间表配置

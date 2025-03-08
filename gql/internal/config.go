@@ -108,10 +108,10 @@ type RelationConfig struct {
 	SourceField string `mapstructure:"source_field"`
 
 	// 目标类名
-	TargetClass string `mapstructure:"target_class"`
+	TargetClass string `mapstructure:"targetClass,target_class"`
 
 	// 目标字段名
-	TargetField string `mapstructure:"target_field"`
+	TargetField string `mapstructure:"targetField,target_field"`
 
 	// 关系类型: many_to_one, one_to_many, many_to_many, recursive
 	Type string `mapstructure:"type"`
@@ -126,8 +126,8 @@ type ThroughConfig struct {
 	Table string `mapstructure:"table"`
 
 	// 中间表中指向源表的外键
-	SourceKey string `mapstructure:"source_key"`
+	SourceKey string `mapstructure:"sourceKey,source_key"`
 
 	// 中间表中指向目标表的外键
-	TargetKey string `mapstructure:"target_key"`
+	TargetKey string `mapstructure:"targetKey,target_key"`
 }

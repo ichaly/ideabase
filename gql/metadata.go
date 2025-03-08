@@ -203,30 +203,30 @@ func (my *Metadata) loadFromConfig() error {
 
 			// 处理字段关系
 			if column.Relation != nil {
+				// 设置关系类型
+				kind := internal.RelationType("").FromString(column.Relation.Type)
+
+				// 设置关系
+				field.Relation = &internal.Relation{
+					SourceClass: class.Name,
+					SourceField: field.Name,
+					TargetClass: column.Relation.TargetClass,
+					TargetField: column.Relation.TargetField,
+					Type:        kind,
+				}
+
+				// 如果是多对多关系，设置中间表配置
+				if kind == internal.MANY_TO_MANY && column.Relation.Through != nil {
+					field.Relation.Through = &internal.Through{
+						Table:     column.Relation.Through.Table,
+						SourceKey: column.Relation.Through.SourceKey,
+						TargetKey: column.Relation.Through.TargetKey,
+					}
+				}
+
 				// 获取目标类
 				targetClass := my.Nodes[column.Relation.TargetClass]
 				if targetClass != nil {
-					// 设置关系类型
-					kind := internal.RelationType("").FromString(column.Relation.Type)
-
-					// 设置关系
-					field.Relation = &internal.Relation{
-						SourceClass: class.Name,
-						SourceField: field.Name,
-						TargetClass: column.Relation.TargetClass,
-						TargetField: column.Relation.TargetField,
-						Type:        kind,
-					}
-
-					// 如果是多对多关系，设置中间表配置
-					if kind == internal.MANY_TO_MANY && column.Relation.Through != nil {
-						field.Relation.Through = &internal.Through{
-							Table:     column.Relation.Through.Table,
-							SourceKey: column.Relation.Through.SourceKey,
-							TargetKey: column.Relation.Through.TargetKey,
-						}
-					}
-
 					// 创建反向关系(非递归关系)
 					if kind != internal.RECURSIVE {
 						reverseField := &internal.Field{

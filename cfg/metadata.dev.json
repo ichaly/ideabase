@@ -101,6 +101,73 @@
         }
       }
     },
+    "Organizations": {
+      "name": "Organizations",
+      "table": "organizations",
+      "virtual": false,
+      "primaryKeys": [
+        "id"
+      ],
+      "description": "组织表",
+      "fields": {
+        "createdAt": {
+          "type": "timestamp without time zone",
+          "name": "createdAt",
+          "column": "created_at",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "",
+          "relation": null
+        },
+        "id": {
+          "type": "integer",
+          "name": "id",
+          "column": "id",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": true,
+          "isUnique": false,
+          "description": "",
+          "relation": {
+            "sourceClass": "organizations",
+            "sourceField": "id",
+            "targetClass": "organizations",
+            "targetField": "parent_id",
+            "type": "recursive"
+          }
+        },
+        "name": {
+          "type": "text",
+          "name": "name",
+          "column": "name",
+          "virtual": false,
+          "nullable": false,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "组织名称",
+          "relation": null
+        },
+        "parentId": {
+          "type": "integer",
+          "name": "parentId",
+          "column": "parent_id",
+          "virtual": false,
+          "nullable": true,
+          "isPrimary": false,
+          "isUnique": false,
+          "description": "父组织ID",
+          "relation": {
+            "sourceClass": "organizations",
+            "sourceField": "parent_id",
+            "targetClass": "organizations",
+            "targetField": "id",
+            "type": "recursive"
+          }
+        }
+      }
+    },
     "PostTags": {
       "name": "PostTags",
       "table": "post_tags",
@@ -403,5 +470,5 @@
       }
     }
   },
-  "version": "20250307235452"
+  "version": "20250308141614"
 }
