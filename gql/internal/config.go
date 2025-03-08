@@ -17,6 +17,9 @@ type SchemaConfig struct {
 	// 是否启用驼峰命名
 	EnableCamelCase bool `mapstructure:"enable-camel-case"`
 
+	// 是否启用表名单数转换（将复数表名转为单数）
+	EnableSingular bool `mapstructure:"enable-singular"`
+
 	// 表名前缀（用于去除）
 	TablePrefix []string `mapstructure:"table-prefix"`
 

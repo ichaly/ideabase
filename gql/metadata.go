@@ -491,6 +491,20 @@ func (my *Metadata) convertTableName(rawName string) string {
 		return mappedName
 	}
 
+	// 根据配置决定是否将表名转换为单数形式
+	if my.cfg.Schema.EnableSingular {
+		//为了支持users_roles类似的表名，按照下划线分割后在转换
+		if strings.Contains(name, "_") {
+			parts := strings.Split(name, "_")
+			for i, part := range parts {
+				parts[i] = inflection.Singular(part)
+			}
+			name = strings.Join(parts, "_")
+		} else {
+			name = inflection.Singular(name)
+		}
+	}
+
 	// 转换为驼峰命名
 	if my.cfg.Schema.EnableCamelCase {
 		name = strcase.ToCamel(name)

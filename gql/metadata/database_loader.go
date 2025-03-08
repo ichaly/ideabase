@@ -7,6 +7,7 @@ import (
 
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/log"
+	"github.com/jinzhu/inflection"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
 )
@@ -436,7 +437,6 @@ func createManyToManyRelation(classes map[string]*internal.Class, throughTable s
 
 // getVirtualFieldName 获取多对多关系的虚拟字段名
 func getVirtualFieldName(tableName string) string {
-	// 默认使用目标表名作为关系字段名
-	// 可以进行复数化或其他转换
-	return tableName + "List"
+	// 默认使用目标表名单数作为关系字段名
+	return inflection.Singular(tableName) + "List"
 }
