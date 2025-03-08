@@ -2,7 +2,6 @@ package gql
 
 import (
 	"embed"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -440,21 +439,7 @@ func (my *Metadata) loadFromFile(path string) error {
 		}
 	}
 
-	// 重建关系的反向引用
-	for _, class := range my.Nodes {
-		for _, field := range class.Fields {
-			if field.Relation != nil {
-				targetClass := my.Nodes[field.Relation.TargetClass]
-				if targetClass != nil {
-					targetField := targetClass.GetField(field.Relation.TargetField)
-					if targetField != nil && targetField.Relation != nil {
-						field.Relation.Reverse = targetField.Relation
-						targetField.Relation.Reverse = field.Relation
-					}
-				}
-			}
-		}
-	}
+	// 不再需要专门的反向引用重建循环，因为这些引用已经在JSON中被正确序列化和反序列化
 
 	log.Info().Int("classes", len(my.Nodes)).Msg("从文件加载元数据完成")
 	return nil
@@ -576,7 +561,7 @@ func (my *Metadata) Marshal() (string, error) {
 	return w.String(), nil
 }
 
-// MarshalJSON 简化版的自定义JSON序列化
+// MarshalJSON 自定义JSON序列化
 func (my *Metadata) MarshalJSON() ([]byte, error) {
 	// 仅导出key和类名相同的节点
 	nodes := make(map[string]*internal.Class)

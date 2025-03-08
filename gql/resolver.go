@@ -2,7 +2,6 @@ package gql
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/vektah/gqlparser/v2/ast"
 )

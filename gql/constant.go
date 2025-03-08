@@ -3,7 +3,15 @@ package gql
 import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/samber/lo"
+
+	jsoniter "github.com/json-iterator/go"
 )
+
+// 全局JSON处理实例，使用jsoniter替代标准库
+var json = jsoniter.ConfigCompatibleWithStandardLibrary
+
+// RawMessage 是一个原始的JSON消息，用于替代json.RawMessage
+type RawMessage = jsoniter.RawMessage
 
 const (
 	NONE         internal.RelationType = ""

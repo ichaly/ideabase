@@ -2,7 +2,6 @@ package gql
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/vektah/gqlparser/v2"
@@ -50,11 +49,11 @@ func NewExecutor(d *gorm.DB, s *ast.Schema, c *Compiler) (*Executor, error) {
 }
 
 // Execute 执行GraphQL查询
-func (my *Executor) Execute(ctx context.Context, query string, variables json.RawMessage) (r gqlResult) {
+func (my *Executor) Execute(ctx context.Context, query string, variables RawMessage) (r gqlResult) {
 	// 解析GraphQL查询
 	doc, err := gqlparser.LoadQuery(my.schema, query)
 	if err != nil {
-		r.Errors = err
+		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return
 	}
 

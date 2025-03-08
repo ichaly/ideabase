@@ -215,12 +215,26 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, error) {
 		class.PrimaryKeys = append(class.PrimaryKeys, columnName)
 	}
 
-	// 设置外键关系
+	// 设置外键关系 - 优化处理逻辑，避免重复遍历
+	relations := make(map[string]bool)
 	for _, fk := range foreignKeys {
 		sourceTable := fk.SourceTable
 		sourceColumn := fk.SourceColumn
 		targetTable := fk.TargetTable
 		targetColumn := fk.TargetColumn
+
+		// 生成唯一关系标识符
+		relationKey := fmt.Sprintf("%s.%s->%s.%s", sourceTable, sourceColumn, targetTable, targetColumn)
+		reverseKey := fmt.Sprintf("%s.%s->%s.%s", targetTable, targetColumn, sourceTable, sourceColumn)
+
+		// 如果已经处理过这个关系（正向或反向），跳过
+		if relations[relationKey] || relations[reverseKey] {
+			continue
+		}
+
+		// 标记为已处理
+		relations[relationKey] = true
+		relations[reverseKey] = true
 
 		// 获取源类和字段
 		sourceClass, ok := classes[sourceTable]

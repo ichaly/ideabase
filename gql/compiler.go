@@ -2,7 +2,6 @@ package gql
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -20,7 +19,7 @@ func NewCompiler(m *Metadata) *Compiler {
 }
 
 // Compile 编译GraphQL操作为SQL
-func (my *Compiler) Compile(operation *ast.OperationDefinition, variables json.RawMessage) (string, []any) {
+func (my *Compiler) Compile(operation *ast.OperationDefinition, variables RawMessage) (string, []any) {
 	c := newContext(my.meta)
 	c.Render(operation, variables)
 	return c.String(), c.params
@@ -79,7 +78,7 @@ func (my *compilerContext) String() string {
 }
 
 // Render 渲染操作
-func (my *compilerContext) Render(operation *ast.OperationDefinition, variables json.RawMessage) {
+func (my *compilerContext) Render(operation *ast.OperationDefinition, variables RawMessage) {
 	_ = json.Unmarshal(variables, &my.variables)
 	switch operation.Operation {
 	case ast.Query, ast.Subscription:
