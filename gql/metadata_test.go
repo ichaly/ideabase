@@ -320,7 +320,6 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 	v.Set("app.root", utl.Root())
 	v.Set("schema.schema", "public")
 	v.Set("schema.enable-camel-case", true)
-	v.Set("database.driver", "postgres") // 设置数据库驱动类型
 
 	// 创建元数据加载器
 	meta, err := NewMetadata(v, db)
@@ -371,7 +370,6 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 	v := viper.New()
 	v.Set("mode", "config")
 	v.Set("app.root", utl.Root())
-	v.Set("database.driver", "postgres")           // 设置数据库驱动类型
 	v.Set("metadata.file", "metadata.config.json") // 设置元数据配置文件路径
 
 	// 创建元数据加载器
@@ -405,7 +403,6 @@ func TestNameConversion(t *testing.T) {
 	v.Set("app.root", utl.Root())
 	v.Set("schema.enable-camel-case", true)
 	v.Set("schema.table-prefix", []string{"tbl_"})
-	v.Set("database.driver", "postgres") // 设置数据库驱动类型
 
 	// 设置测试元数据配置
 	v.Set("metadata.tables", map[string]interface{}{
@@ -449,7 +446,6 @@ func TestTableAndFieldFiltering(t *testing.T) {
 	v.Set("app.root", utl.Root())
 	v.Set("schema.include-tables", []string{"users"})
 	v.Set("schema.exclude-fields", []string{"password"})
-	v.Set("database.driver", "postgres") // 设置数据库驱动类型
 
 	// 设置测试元数据配置
 	v.Set("metadata.tables", map[string]interface{}{
@@ -501,8 +497,6 @@ func TestLoadMetadataFromFile(t *testing.T) {
 	v := viper.New()
 	v.Set("mode", "dev")
 	v.Set("app.root", utl.Root())
-	v.Set("database.driver", "postgres") // 设置数据库驱动类型
-	v.Set("metadata.mode", "file")       // 设置从文件加载元数据
 
 	// 创建元数据加载器
 	meta, err := NewMetadata(v, db)

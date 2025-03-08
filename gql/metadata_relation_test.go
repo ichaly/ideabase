@@ -29,7 +29,7 @@ func TestManyToManyRelationLoading(t *testing.T) {
 		"name": "tags",
 		"relation": map[string]interface{}{
 			"type":        "many_to_many",
-			"targetClass": "tags",
+			"targetClass": "Tags",
 			"targetField": "posts",
 			"through": map[string]interface{}{
 				"table":     "post_tags",
@@ -44,7 +44,7 @@ func TestManyToManyRelationLoading(t *testing.T) {
 		"name": "posts",
 		"relation": map[string]interface{}{
 			"type":        "many_to_many",
-			"targetClass": "posts",
+			"targetClass": "Posts",
 			"targetField": "tags",
 			"through": map[string]interface{}{
 				"table":     "post_tags",
@@ -71,7 +71,7 @@ func TestManyToManyRelationLoading(t *testing.T) {
 		assert.Equal(t, internal.MANY_TO_MANY, tagsField.Relation.Type, "应该是多对多关系")
 
 		// 验证目标类信息
-		assert.Equal(t, "tags", tagsField.Relation.TargetClass, "目标类应该是tags")
+		assert.Equal(t, "Tags", tagsField.Relation.TargetClass, "目标类应该是Tags")
 		assert.Equal(t, "posts", tagsField.Relation.TargetField, "目标字段应该是posts")
 
 		// 验证中间表配置
