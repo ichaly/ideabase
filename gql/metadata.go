@@ -203,6 +203,14 @@ func (my *Metadata) loadFromConfig() error {
 
 			// 处理字段关系
 			if column.Relation != nil {
+				// 转换关系中的类名和字段名
+				targetClassName := column.Relation.TargetClass
+				targetFieldName := column.Relation.TargetField
+
+				// 确保使用转换后的类名和字段名
+				convertedTargetClassName := my.convertTableName(targetClassName)
+				convertedTargetFieldName := my.convertFieldName(targetClassName, targetFieldName)
+
 				// 设置关系类型
 				kind := internal.RelationType("").FromString(column.Relation.Type)
 
@@ -210,8 +218,8 @@ func (my *Metadata) loadFromConfig() error {
 				field.Relation = &internal.Relation{
 					SourceClass: class.Name,
 					SourceField: field.Name,
-					TargetClass: column.Relation.TargetClass,
-					TargetField: column.Relation.TargetField,
+					TargetClass: convertedTargetClassName,
+					TargetField: convertedTargetFieldName,
 					Type:        kind,
 				}
 
@@ -225,16 +233,16 @@ func (my *Metadata) loadFromConfig() error {
 				}
 
 				// 获取目标类
-				targetClass := my.Nodes[column.Relation.TargetClass]
+				targetClass := my.Nodes[convertedTargetClassName]
 				if targetClass != nil {
 					// 创建反向关系(非递归关系)
 					if kind != internal.RECURSIVE {
 						reverseField := &internal.Field{
-							Name:    column.Relation.TargetField,
+							Name:    convertedTargetFieldName,
 							Virtual: true,
 							Relation: &internal.Relation{
-								SourceClass: column.Relation.TargetClass,
-								SourceField: column.Relation.TargetField,
+								SourceClass: convertedTargetClassName,
+								SourceField: convertedTargetFieldName,
 								TargetClass: class.Name,
 								TargetField: field.Name,
 								Type:        kind,
@@ -352,6 +360,26 @@ func (my *Metadata) loadDatabase() error {
 		my.Nodes[className] = class
 		if className != tableName {
 			my.Nodes[tableName] = class
+		}
+	}
+
+	// 处理关系的类名和字段名转换
+	log.Debug().Msg("开始处理关系的名称转换")
+	for _, class := range my.Nodes {
+		for _, field := range class.Fields {
+			if field.Relation != nil {
+				// 转换原始表名和字段名为转换后的名称
+				sourceClassName := my.convertTableName(field.Relation.SourceClass)
+				sourceFieldName := my.convertFieldName(field.Relation.SourceClass, field.Relation.SourceField)
+				targetClassName := my.convertTableName(field.Relation.TargetClass)
+				targetFieldName := my.convertFieldName(field.Relation.TargetClass, field.Relation.TargetField)
+
+				// 更新关系字段
+				field.Relation.SourceClass = sourceClassName
+				field.Relation.SourceField = sourceFieldName
+				field.Relation.TargetClass = targetClassName
+				field.Relation.TargetField = targetFieldName
+			}
 		}
 	}
 

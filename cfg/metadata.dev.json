@@ -41,10 +41,10 @@
           "isUnique": false,
           "description": "",
           "relation": {
-            "sourceClass": "comments",
+            "sourceClass": "Comments",
             "sourceField": "id",
-            "targetClass": "comments",
-            "targetField": "parent_id",
+            "targetClass": "Comments",
+            "targetField": "parentId",
             "type": "recursive"
           }
         },
@@ -58,9 +58,9 @@
           "isUnique": false,
           "description": "父评论ID",
           "relation": {
-            "sourceClass": "comments",
-            "sourceField": "parent_id",
-            "targetClass": "comments",
+            "sourceClass": "Comments",
+            "sourceField": "parentId",
+            "targetClass": "Comments",
             "targetField": "id",
             "type": "recursive"
           }
@@ -75,9 +75,9 @@
           "isUnique": false,
           "description": "评论文章",
           "relation": {
-            "sourceClass": "comments",
-            "sourceField": "post_id",
-            "targetClass": "posts",
+            "sourceClass": "Comments",
+            "sourceField": "postId",
+            "targetClass": "Posts",
             "targetField": "id",
             "type": "many_to_one"
           }
@@ -92,9 +92,9 @@
           "isUnique": false,
           "description": "评论者",
           "relation": {
-            "sourceClass": "comments",
-            "sourceField": "user_id",
-            "targetClass": "users",
+            "sourceClass": "Comments",
+            "sourceField": "userId",
+            "targetClass": "Users",
             "targetField": "id",
             "type": "many_to_one"
           }
@@ -131,10 +131,10 @@
           "isUnique": false,
           "description": "",
           "relation": {
-            "sourceClass": "organizations",
+            "sourceClass": "Organizations",
             "sourceField": "id",
-            "targetClass": "organizations",
-            "targetField": "parent_id",
+            "targetClass": "Organizations",
+            "targetField": "parentId",
             "type": "recursive"
           }
         },
@@ -159,9 +159,9 @@
           "isUnique": false,
           "description": "父组织ID",
           "relation": {
-            "sourceClass": "organizations",
-            "sourceField": "parent_id",
-            "targetClass": "organizations",
+            "sourceClass": "Organizations",
+            "sourceField": "parentId",
+            "targetClass": "Organizations",
             "targetField": "id",
             "type": "recursive"
           }
@@ -199,9 +199,9 @@
           "isUnique": false,
           "description": "文章ID",
           "relation": {
-            "sourceClass": "post_tags",
-            "sourceField": "post_id",
-            "targetClass": "posts",
+            "sourceClass": "PostTags",
+            "sourceField": "postId",
+            "targetClass": "Posts",
             "targetField": "id",
             "type": "many_to_one"
           }
@@ -216,9 +216,9 @@
           "isUnique": false,
           "description": "标签ID",
           "relation": {
-            "sourceClass": "post_tags",
-            "sourceField": "tag_id",
-            "targetClass": "tags",
+            "sourceClass": "PostTags",
+            "sourceField": "tagId",
+            "targetClass": "Tags",
             "targetField": "id",
             "type": "many_to_one"
           }
@@ -266,10 +266,10 @@
           "isUnique": false,
           "description": "",
           "relation": {
-            "sourceClass": "posts",
+            "sourceClass": "Posts",
             "sourceField": "id",
-            "targetClass": "post_tags",
-            "targetField": "post_id",
+            "targetClass": "PostTags",
+            "targetField": "postId",
             "type": "one_to_many"
           }
         },
@@ -283,9 +283,9 @@
           "isUnique": false,
           "description": "",
           "relation": {
-            "sourceClass": "posts",
+            "sourceClass": "Posts",
             "sourceField": "id",
-            "targetClass": "tags",
+            "targetClass": "Tags",
             "targetField": "id",
             "type": "many_to_many",
             "through": {
@@ -316,9 +316,9 @@
           "isUnique": false,
           "description": "作者ID",
           "relation": {
-            "sourceClass": "posts",
-            "sourceField": "user_id",
-            "targetClass": "users",
+            "sourceClass": "Posts",
+            "sourceField": "userId",
+            "targetClass": "Users",
             "targetField": "id",
             "type": "many_to_one"
           }
@@ -355,10 +355,10 @@
           "isUnique": false,
           "description": "",
           "relation": {
-            "sourceClass": "tags",
+            "sourceClass": "Tags",
             "sourceField": "id",
-            "targetClass": "post_tags",
-            "targetField": "tag_id",
+            "targetClass": "PostTags",
+            "targetField": "tagId",
             "type": "one_to_many"
           }
         },
@@ -383,9 +383,9 @@
           "isUnique": false,
           "description": "",
           "relation": {
-            "sourceClass": "tags",
+            "sourceClass": "Tags",
             "sourceField": "id",
-            "targetClass": "posts",
+            "targetClass": "Posts",
             "targetField": "id",
             "type": "many_to_many",
             "through": {
@@ -438,10 +438,10 @@
           "isUnique": false,
           "description": "",
           "relation": {
-            "sourceClass": "users",
+            "sourceClass": "Users",
             "sourceField": "id",
-            "targetClass": "comments",
-            "targetField": "user_id",
+            "targetClass": "Comments",
+            "targetField": "userId",
             "type": "one_to_many"
           }
         },
@@ -470,5 +470,5 @@
       }
     }
   },
-  "version": "20250308150520"
+  "version": "20250308194426"
 }

@@ -128,7 +128,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			if userId != nil {
 				assert.NotNil(t, userId.Relation, "userId应该有关系定义")
 				assert.Equal(t, internal.MANY_TO_ONE, userId.Relation.Type, "应该是many-to-one关系")
-				assert.Equal(t, "users", userId.Relation.TargetClass, "关系目标类应该是users")
+				assert.Equal(t, "Users", userId.Relation.TargetClass, "关系目标类应该是Users")
 			}
 		}
 
@@ -142,7 +142,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			if postId != nil {
 				assert.NotNil(t, postId.Relation, "postId应该有关系定义")
 				assert.Equal(t, internal.MANY_TO_ONE, postId.Relation.Type, "应该是many-to-one关系")
-				assert.Equal(t, "posts", postId.Relation.TargetClass, "关系目标类应该是posts")
+				assert.Equal(t, "Posts", postId.Relation.TargetClass, "关系目标类应该是Posts")
 			}
 
 			// 验证与Tags的关系
@@ -151,7 +151,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			if tagId != nil {
 				assert.NotNil(t, tagId.Relation, "tagId应该有关系定义")
 				assert.Equal(t, internal.MANY_TO_ONE, tagId.Relation.Type, "应该是many-to-one关系")
-				assert.Equal(t, "tags", tagId.Relation.TargetClass, "关系目标类应该是tags")
+				assert.Equal(t, "Tags", tagId.Relation.TargetClass, "关系目标类应该是Tags")
 			}
 		}
 
@@ -165,14 +165,14 @@ func TestMetadataLoadingModes(t *testing.T) {
 			if parentId != nil {
 				assert.NotNil(t, parentId.Relation, "parentId应该有关系定义")
 				assert.Equal(t, internal.RECURSIVE, parentId.Relation.Type, "应该是recursive关系")
-				assert.Equal(t, "organizations", parentId.Relation.TargetClass, "关系目标类应该是organizations")
+				assert.Equal(t, "Organizations", parentId.Relation.TargetClass, "关系目标类应该是Organizations")
 				assert.Equal(t, "id", parentId.Relation.TargetField, "关系目标字段应该是id")
 
 				// 验证反向关系
 				assert.NotNil(t, parentId.Relation.Reverse, "应该有反向关系")
 				if parentId.Relation.Reverse != nil {
 					assert.Equal(t, internal.RECURSIVE, parentId.Relation.Reverse.Type, "反向关系也应该是recursive")
-					assert.Equal(t, "organizations", parentId.Relation.Reverse.TargetClass, "反向关系目标类应该是organizations")
+					assert.Equal(t, "Organizations", parentId.Relation.Reverse.TargetClass, "反向关系目标类应该是Organizations")
 				}
 			}
 		}
@@ -520,4 +520,85 @@ func TestLoadMetadataFromFile(t *testing.T) {
 		assert.True(t, ok, "应该能找到users表")
 		assert.NotEmpty(t, users.Fields, "应该有字段")
 	}
+}
+
+// 测试关系名称转换
+func TestRelationNameConversion(t *testing.T) {
+	// 创建测试数据库
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+
+	// 创建配置
+	v := viper.New()
+	v.Set("mode", "dev")
+	v.Set("app.root", utl.Root())
+	v.Set("schema.schema", "public")
+	v.Set("schema.enable-camel-case", true)
+
+	// 设置外键关系配置
+	v.Set("metadata.tables.user_profiles", map[string]interface{}{
+		"columns": map[string]interface{}{
+			"user_id": map[string]interface{}{
+				"type": "integer",
+				"relation": map[string]interface{}{
+					"type":        "many_to_one",
+					"targetClass": "users",
+					"targetField": "id",
+				},
+			},
+		},
+	})
+
+	// 创建元数据加载器
+	meta, err := NewMetadata(v, db)
+	require.NoError(t, err, "创建元数据加载器失败")
+
+	// 验证关系名称转换
+	t.Run("验证关系名称转换", func(t *testing.T) {
+		// 获取转换后的类和字段
+		userProfiles, ok := meta.Nodes["UserProfiles"]
+		require.True(t, ok, "应该能找到UserProfiles")
+
+		// 验证字段名转换
+		userId, ok := userProfiles.Fields["userId"]
+		require.True(t, ok, "应该有userId字段")
+		require.NotNil(t, userId.Relation, "应该有关系定义")
+
+		// 验证关系中的名称是否转换正确
+		assert.Equal(t, "UserProfiles", userId.Relation.SourceClass, "源类名应该是转换后的UserProfiles")
+		assert.Equal(t, "userId", userId.Relation.SourceField, "源字段名应该是转换后的userId")
+		assert.Equal(t, "Users", userId.Relation.TargetClass, "目标类名应该是转换后的Users")
+		assert.Equal(t, "id", userId.Relation.TargetField, "目标字段名应该是id")
+	})
+
+	// 验证多对多关系名称转换
+	t.Run("验证多对多关系名称转换", func(t *testing.T) {
+		// 检查post_tags中间表中的关系
+		postTags, ok := meta.Nodes["PostTags"]
+		require.True(t, ok, "应该能找到PostTags")
+
+		// 验证post_id字段关系
+		postId, ok := postTags.Fields["postId"]
+		require.True(t, ok, "应该有postId字段")
+		require.NotNil(t, postId.Relation, "应该有关系定义")
+
+		// 验证关系中的名称是否转换正确
+		assert.Equal(t, "PostTags", postId.Relation.SourceClass, "源类名应该是转换后的PostTags")
+		assert.Equal(t, "postId", postId.Relation.SourceField, "源字段名应该是转换后的postId")
+		assert.Equal(t, "Posts", postId.Relation.TargetClass, "目标类名应该是转换后的Posts")
+		assert.Equal(t, "id", postId.Relation.TargetField, "目标字段名应该是id")
+
+		// 验证自动创建的多对多关系
+		posts, ok := meta.Nodes["Posts"]
+		require.True(t, ok, "应该能找到Posts")
+
+		// 检查从Posts到Tags的多对多关系字段
+		tagsList, ok := posts.Fields["tagsList"]
+		if assert.True(t, ok, "应该有tagsList字段") {
+			assert.Equal(t, "Posts", tagsList.Relation.SourceClass, "源类名应该是转换后的Posts")
+			assert.Equal(t, "id", tagsList.Relation.SourceField, "源字段名应该保持为id")
+			assert.Equal(t, "Tags", tagsList.Relation.TargetClass, "目标类名应该是转换后的Tags")
+			assert.Equal(t, "id", tagsList.Relation.TargetField, "目标字段名应该保持为id")
+		}
+	})
 }
