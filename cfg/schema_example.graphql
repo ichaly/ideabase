@@ -1,0 +1,657 @@
+# 自定义标量类型
+scalar JSON
+scalar Cursor
+scalar DateTime
+
+# ------------------ 缓存相关指令 ------------------
+
+# 缓存指令
+directive @cache(
+  ttl: Int = 300           # 缓存有效期(秒)
+  scope: CacheScope = API  # 缓存范围
+  key: [String!]           # 用于生成键的字段
+  tpl: String              # 自定义键模板
+  gen: String              # 自定义键生成器名称
+  vary: [String!]          # 变化因素（如HTTP头、用户属性）
+  if: String               # 条件表达式，决定是否缓存
+) on FIELD_DEFINITION | OBJECT
+
+# 缓存失效指令
+directive @purge(
+  keys: [String!]          # 要失效的缓存键
+) on FIELD_DEFINITION | MUTATION
+
+# 缓存范围枚举
+enum CacheScope {
+  API     # API级缓存(所有客户端共享)
+  USER    # 用户级缓存(基于用户隔离)
+  NONE    # 不缓存
+}
+
+# 排序方向枚举，包含NULL值处理
+enum SortDirection {
+  ASC
+  DESC
+  ASC_NULLS_FIRST
+  DESC_NULLS_FIRST
+  ASC_NULLS_LAST
+  DESC_NULLS_LAST
+}
+
+# 空值条件枚举
+enum IsInput {
+  NULL
+  NOT_NULL
+}
+
+# ------------------ 分页相关类型 ------------------
+
+# 页面信息（用于游标分页）
+type PageInfo {
+  hasNext: Boolean!       # 是否有下一页
+  hasPrev: Boolean!       # 是否有上一页
+  start: Cursor           # 当前页第一条记录的游标
+  end: Cursor             # 当前页最后一条记录的游标
+}
+
+# ------------------ 聚合函数相关类型 ------------------
+
+# 数值聚合结果
+type NumStats {
+  sum: Float              # 总和
+  avg: Float              # 平均值
+  min: Float              # 最小值
+  max: Float              # 最大值
+  count: Int!             # 计数
+  countDistinct: Int!     # 去重计数
+}
+
+# 日期聚合结果
+type DateStats {
+  min: DateTime           # 最早时间
+  max: DateTime           # 最晚时间
+  count: Int!             # 计数
+  countDistinct: Int!     # 去重计数
+}
+
+# 字符串聚合结果
+type StrStats {
+  min: String             # 最小值(按字典序)
+  max: String             # 最大值(按字典序)
+  count: Int!             # 计数
+  countDistinct: Int!     # 去重计数
+}
+
+# 用户聚合
+type UserStats {
+  count: Int!
+  # 数值字段聚合
+  id: NumStats
+  # 字符串字段聚合
+  name: StrStats
+  email: StrStats
+  role: StrStats
+  # 日期字段聚合
+  createdAt: DateStats
+  updatedAt: DateStats
+  # 分组聚合
+  groupBy: [UserGroup!]
+}
+
+# 用户分组结果
+type UserGroup {
+  key: JSON!          # 分组键
+  count: Int!         # 计数
+  # 可以包含其他聚合字段
+}
+
+# 文章聚合
+type PostStats {
+  count: Int!
+  # 数值字段聚合
+  id: NumStats
+  viewCount: NumStats
+  # 字符串字段聚合
+  title: StrStats
+  content: StrStats
+  # 日期字段聚合
+  createdAt: DateStats
+  updatedAt: DateStats
+  # 布尔字段统计
+  publishedTrue: Int
+  publishedFalse: Int
+  # 分组聚合
+  groupBy: [PostGroup!]
+}
+
+# 文章分组结果
+type PostGroup {
+  key: JSON!          # 分组键
+  count: Int!         # 计数
+  # 可以包含其他聚合字段
+}
+
+# 评论聚合
+type CommentStats {
+  count: Int!
+  # 数值字段聚合
+  id: NumStats
+  # 字符串字段聚合
+  content: StrStats
+  # 日期字段聚合
+  createdAt: DateStats
+  updatedAt: DateStats
+  # 分组聚合
+  groupBy: [CommentGroup!]
+}
+
+# 评论分组结果
+type CommentGroup {
+  key: JSON!          # 分组键
+  count: Int!         # 计数
+  # 可以包含其他聚合字段
+}
+
+# 标签聚合
+type TagStats {
+  count: Int!
+  # 数值字段聚合
+  id: NumStats
+  # 字符串字段聚合
+  name: StrStats
+  # 日期字段聚合(如果有)
+  # 分组聚合
+  groupBy: [TagGroup!]
+}
+
+# 标签分组结果
+type TagGroup {
+  key: JSON!          # 分组键
+  count: Int!         # 计数
+  # 可以包含其他聚合字段
+}
+
+# 聚合分组选项
+input GroupBy {
+  fields: [String!]!  # 分组字段
+  having: JSON        # 分组过滤条件
+  limit: Int          # 分组结果限制
+  sort: JSON          # 分组结果排序
+}
+
+# ------------------ 过滤器类型定义 ------------------
+
+# 字符串过滤器
+input StringFilter {
+  eq: String        # 等于
+  ne: String        # 不等于
+  gt: String        # 大于
+  ge: String        # 大于等于
+  lt: String        # 小于
+  le: String        # 小于等于
+  in: [String!]     # 在列表中
+  ni: [String!]     # 不在列表中
+  like: String      # 模糊匹配(区分大小写)
+  ilike: String     # 模糊匹配(不区分大小写)
+  regex: String     # 正则表达式匹配
+  iregex: String    # 正则表达式匹配(不区分大小写)
+  is: IsInput       # 是否为NULL
+}
+
+# 整数过滤器
+input IntFilter {
+  eq: Int
+  ne: Int
+  gt: Int
+  ge: Int
+  lt: Int
+  le: Int
+  in: [Int!]
+  ni: [Int!]
+  is: IsInput
+}
+
+# 浮点数过滤器
+input FloatFilter {
+  eq: Float
+  ne: Float
+  gt: Float
+  ge: Float
+  lt: Float
+  le: Float
+  in: [Float!]
+  ni: [Float!]
+  is: IsInput
+}
+
+# 布尔过滤器
+input BoolFilter {
+  eq: Boolean
+  is: IsInput
+}
+
+# 日期时间过滤器
+input DateTimeFilter {
+  eq: DateTime
+  ne: DateTime
+  gt: DateTime
+  ge: DateTime
+  lt: DateTime
+  le: DateTime
+  in: [DateTime!]
+  ni: [DateTime!]
+  is: IsInput
+}
+
+# ID过滤器
+input IDFilter {
+  eq: ID
+  ne: ID
+  in: [ID!]
+  ni: [ID!]
+  is: IsInput
+}
+
+# JSON过滤器
+input JSONFilter {
+  eq: JSON
+  ne: JSON
+  is: IsInput
+  hasKey: String      # 判断JSON是否包含特定键
+  hasKeyAny: [String!] # 判断JSON是否包含任意一个键
+  hasKeyAll: [String!] # 判断JSON是否包含所有键
+}
+
+# ------------------ 实体类型定义 ------------------
+
+# 用户
+type User {
+  id: ID!
+  name: String!
+  email: String!
+  role: String
+  profile: JSON @cache(ttl: 300, scope: USER)  # 用户资料缓存5分钟，按用户隔离
+  createdAt: DateTime!
+  updatedAt: DateTime
+  posts(
+    filter: PostFilter
+    sort: [PostSort!]
+    limit: Int
+    offset: Int
+  ): [Post!] @cache(ttl: 60, key: ["filter", "sort", "limit", "offset"])
+  comments(
+    filter: CommentFilter
+    sort: [CommentSort!]
+    limit: Int
+    offset: Int
+  ): [Comment!]
+}
+
+# 文章
+type Post {
+  id: ID!
+  title: String!
+  content: String
+  published: Boolean!
+  viewCount: Int!
+  author: User! @cache(ttl: 600)  # 作者信息缓存10分钟
+  authorId: ID!
+  tags(
+    filter: TagFilter
+    sort: [TagSort!]
+    limit: Int
+    offset: Int
+  ): [Tag!] @cache(ttl: 300)  # 标签列表缓存5分钟
+  comments(
+    filter: CommentFilter
+    sort: [CommentSort!]
+    limit: Int
+    offset: Int
+  ): [Comment!] @cache(ttl: 30, key: ["postId", "filter", "sort"])  # 评论缓存30秒
+  createdAt: DateTime!
+  updatedAt: DateTime
+}
+
+# 评论
+type Comment {
+  id: ID!
+  content: String!
+  author: User! @cache(ttl: 600)  # 评论作者缓存10分钟
+  authorId: ID!
+  post: Post!
+  postId: ID!
+  parentId: ID
+  parent: Comment
+  replies(
+    filter: CommentFilter
+    sort: [CommentSort!]
+    limit: Int
+    offset: Int
+  ): [Comment!]
+  createdAt: DateTime!
+  updatedAt: DateTime
+}
+
+# 标签
+type Tag {
+  id: ID!
+  name: String!
+  posts(
+    filter: PostFilter
+    sort: [PostSort!]
+    limit: Int
+    offset: Int
+  ): [Post!] @cache(ttl: 180, key: ["id", "filter", "sort"])  # 标签下的文章缓存3分钟
+}
+
+# ------------------ 连接和边类型（游标分页） ------------------
+
+# 用户分页结果
+type UserPage {
+  items: [User!]!         # 直接返回User对象数组
+  pageInfo: PageInfo!     # 包含边界游标信息
+  total: Int!
+}
+
+# 文章分页结果
+type PostPage {
+  items: [Post!]!         # 直接返回Post对象数组
+  pageInfo: PageInfo!
+  total: Int!
+}
+
+# 评论分页结果
+type CommentPage {
+  items: [Comment!]!      # 直接返回Comment对象数组
+  pageInfo: PageInfo!
+  total: Int!
+}
+
+# 标签分页结果
+type TagPage {
+  items: [Tag!]!          # 直接返回Tag对象数组
+  pageInfo: PageInfo!
+  total: Int!
+}
+
+# ------------------ 查询输入类型 ------------------
+
+# 用户查询条件
+input UserFilter {
+  id: IDFilter
+  name: StringFilter
+  email: StringFilter
+  role: StringFilter
+  createdAt: DateTimeFilter
+  updatedAt: DateTimeFilter
+  posts: PostFilter # 嵌套条件，用于关联过滤
+  AND: [UserFilter!]
+  OR: [UserFilter!]
+  NOT: UserFilter
+}
+
+# 用户排序
+input UserSort {
+  id: SortDirection
+  name: SortDirection
+  email: SortDirection
+  role: SortDirection
+  createdAt: SortDirection
+  updatedAt: SortDirection
+}
+
+# 文章查询条件
+input PostFilter {
+  id: IDFilter
+  title: StringFilter
+  content: StringFilter
+  published: BoolFilter
+  viewCount: IntFilter
+  authorId: IDFilter
+  createdAt: DateTimeFilter
+  updatedAt: DateTimeFilter
+  author: UserFilter # 嵌套条件
+  tags: TagFilter # 嵌套条件
+  AND: [PostFilter!]
+  OR: [PostFilter!]
+  NOT: PostFilter
+}
+
+# 文章排序
+input PostSort {
+  id: SortDirection
+  title: SortDirection
+  published: SortDirection
+  viewCount: SortDirection
+  authorId: SortDirection
+  createdAt: SortDirection
+  updatedAt: SortDirection
+}
+
+# 评论查询条件
+input CommentFilter {
+  id: IDFilter
+  content: StringFilter
+  authorId: IDFilter
+  postId: IDFilter
+  parentId: IDFilter
+  createdAt: DateTimeFilter
+  updatedAt: DateTimeFilter
+  author: UserFilter
+  post: PostFilter
+  parent: CommentFilter
+  AND: [CommentFilter!]
+  OR: [CommentFilter!]
+  NOT: CommentFilter
+}
+
+# 评论排序
+input CommentSort {
+  id: SortDirection
+  content: SortDirection
+  authorId: SortDirection
+  postId: SortDirection
+  parentId: SortDirection
+  createdAt: SortDirection
+  updatedAt: SortDirection
+}
+
+# 标签查询条件
+input TagFilter {
+  id: IDFilter
+  name: StringFilter
+  posts: PostFilter
+  AND: [TagFilter!]
+  OR: [TagFilter!]
+  NOT: TagFilter
+}
+
+# 标签排序
+input TagSort {
+  id: SortDirection
+  name: SortDirection
+}
+
+# ------------------ 变更输入类型 ------------------
+
+input UserCreateInput {
+  name: String!
+  email: String!
+  role: String
+  profile: JSON
+}
+
+input UserUpdateInput {
+  name: String
+  email: String
+  role: String
+  profile: JSON
+}
+
+input PostCreateInput {
+  title: String!
+  content: String
+  published: Boolean
+  authorId: ID!
+  tags: [TagConnect!]
+}
+
+input PostUpdateInput {
+  title: String
+  content: String
+  published: Boolean
+  viewCount: Int
+  tags: [TagRelation!]
+}
+
+input CommentCreateInput {
+  content: String!
+  authorId: ID!
+  postId: ID!
+  parentId: ID
+}
+
+input CommentUpdateInput {
+  content: String
+}
+
+input TagCreateInput {
+  name: String!
+}
+
+input TagUpdateInput {
+  name: String
+}
+
+# 标签关联操作
+input TagConnect {
+  id: ID!
+}
+
+# 标签关系操作
+input TagRelation {
+  connect: [ID!]
+  disconnect: [ID!]
+}
+
+# ------------------ 查询和变更 ------------------
+
+# 查询根类型
+type Query {
+  # 单个实体查询
+  user(id: ID!): User @cache(ttl: 300, key: ["id"])
+  post(id: ID!): Post @cache(ttl: 60, key: ["id"])
+  comment(id: ID!): Comment
+  tag(id: ID!): Tag @cache(ttl: 600, key: ["id"])
+
+  # 统一列表查询（支持两种分页方式）
+  users(
+    filter: UserFilter
+    sort: [UserSort!]
+    # 传统分页参数
+    limit: Int
+    offset: Int
+    # 游标分页参数
+    first: Int
+    after: Cursor
+    last: Int
+    before: Cursor
+  ): UserPage! @cache(
+    ttl: 60, 
+    key: ["filter", "sort", "limit", "offset", "first", "after", "last", "before"],
+    if: "!args.filter || !args.filter.email" # 当不按email过滤时才缓存
+  )
+
+  posts(
+    filter: PostFilter
+    sort: [PostSort!]
+    # 传统分页参数
+    limit: Int
+    offset: Int
+    # 游标分页参数
+    first: Int
+    after: Cursor
+    last: Int
+    before: Cursor
+  ): PostPage! @cache(
+    ttl: 30, 
+    key: ["filter", "sort", "limit", "offset", "first", "after", "last", "before"]
+  )
+
+  comments(
+    filter: CommentFilter
+    sort: [CommentSort!]
+    # 传统分页参数
+    limit: Int
+    offset: Int
+    # 游标分页参数
+    first: Int
+    after: Cursor
+    last: Int
+    before: Cursor
+  ): CommentPage!
+
+  tags(
+    filter: TagFilter
+    sort: [TagSort!]
+    # 传统分页参数
+    limit: Int
+    offset: Int
+    # 游标分页参数
+    first: Int
+    after: Cursor
+    last: Int
+    before: Cursor
+  ): TagPage! @cache(
+    ttl: 600, 
+    key: ["filter", "sort", "limit", "offset", "first", "after", "last", "before"]
+  )
+
+  # 高级聚合查询
+  usersStats(
+    filter: UserFilter
+    groupBy: GroupBy
+  ): UserStats! @cache(ttl: 300, key: ["filter", "groupBy"])
+  
+  postsStats(
+    filter: PostFilter
+    groupBy: GroupBy
+  ): PostStats! @cache(ttl: 60, key: ["filter", "groupBy"])
+  
+  commentsStats(
+    filter: CommentFilter
+    groupBy: GroupBy
+  ): CommentStats!
+  
+  tagsStats(
+    filter: TagFilter
+    groupBy: GroupBy
+  ): TagStats! @cache(ttl: 300, key: ["filter", "groupBy"])
+}
+
+# 变更根类型
+type Mutation {
+  # 创建操作
+  createUser(data: UserCreateInput!): User!
+  createPost(data: PostCreateInput!): Post!
+  createComment(data: CommentCreateInput!): Comment!
+  createTag(data: TagCreateInput!): Tag!
+
+  # 更新操作
+  updateUser(id: ID!, data: UserUpdateInput!): User! @purge(keys: ["User:$id", "users"])
+  updatePost(id: ID!, data: PostUpdateInput!): Post! @purge(keys: ["Post:$id", "posts"])
+  updateComment(id: ID!, data: CommentUpdateInput!): Comment! @purge(keys: ["Comment:$id", "Post:$postId:comments"])
+  updateTag(id: ID!, data: TagUpdateInput!): Tag! @purge(keys: ["Tag:$id", "tags"])
+
+  # 删除操作
+  deleteUser(id: ID!): Boolean! @purge(keys: ["User:$id", "users"])
+  deletePost(id: ID!): Boolean! @purge(keys: ["Post:$id", "posts"])
+  deleteComment(id: ID!): Boolean! @purge(keys: ["Comment:$id", "Post:$postId:comments"])
+  deleteTag(id: ID!): Boolean! @purge(keys: ["Tag:$id", "tags"])
+
+  # 批量操作
+  deleteUsers(filter: UserFilter!): Int! @purge(keys: ["users"])
+  deletePosts(filter: PostFilter!): Int! @purge(keys: ["posts"])
+  deleteComments(filter: CommentFilter!): Int! @purge(keys: ["comments"])
+  deleteTags(filter: TagFilter!): Int! @purge(keys: ["tags"])
+}

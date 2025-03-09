@@ -108,6 +108,7 @@ const (
 	IS      = "is"
 	EQ      = "eq"
 	IN      = "in"
+	NOT_IN  = "notIn"
 	GT      = "gt"
 	GE      = "ge"
 	LT      = "lt"
@@ -121,21 +122,61 @@ const (
 
 // 内置的数据库到GraphQL的类型映射
 var dataTypes = map[string]string{
-	"timestamp with time zone": SCALAR_DATE_TIME,
-	"character varying":        SCALAR_STRING,
-	"text":                     SCALAR_STRING,
-	"smallint":                 SCALAR_INT,
-	"integer":                  SCALAR_INT,
-	"bigint":                   SCALAR_INT,
-	"smallserial":              SCALAR_INT,
-	"serial":                   SCALAR_INT,
-	"bigserial":                SCALAR_INT,
-	"decimal":                  SCALAR_FLOAT,
-	"numeric":                  SCALAR_FLOAT,
-	"real":                     SCALAR_FLOAT,
-	"double precision":         SCALAR_FLOAT,
-	"money":                    SCALAR_FLOAT,
-	"boolean":                  SCALAR_BOOLEAN,
+	// PostgreSQL 类型
+	"timestamp with time zone":    SCALAR_DATE_TIME,
+	"timestamp without time zone": SCALAR_DATE_TIME,
+	"character varying":           SCALAR_STRING,
+	"character":                   SCALAR_STRING,
+	"char":                        SCALAR_STRING,
+	"text":                        SCALAR_STRING,
+	"varchar":                     SCALAR_STRING,
+	"smallint":                    SCALAR_INT,
+	"integer":                     SCALAR_INT,
+	"int":                         SCALAR_INT,
+	"int2":                        SCALAR_INT,
+	"int4":                        SCALAR_INT,
+	"int8":                        SCALAR_INT,
+	"bigint":                      SCALAR_INT,
+	"smallserial":                 SCALAR_INT,
+	"serial":                      SCALAR_INT,
+	"bigserial":                   SCALAR_INT,
+	"decimal":                     SCALAR_FLOAT,
+	"numeric":                     SCALAR_FLOAT,
+	"real":                        SCALAR_FLOAT,
+	"float":                       SCALAR_FLOAT,
+	"float4":                      SCALAR_FLOAT,
+	"float8":                      SCALAR_FLOAT,
+	"double precision":            SCALAR_FLOAT,
+	"money":                       SCALAR_FLOAT,
+	"boolean":                     SCALAR_BOOLEAN,
+	"bool":                        SCALAR_BOOLEAN,
+	"uuid":                        SCALAR_ID,
+	"date":                        SCALAR_DATE_TIME,
+	"timestamp":                   SCALAR_DATE_TIME,
+	"timestamptz":                 SCALAR_DATE_TIME,
+	"json":                        SCALAR_JSON,
+	"jsonb":                       SCALAR_JSON,
+	"serialid":                    SCALAR_ID,
+	"bigserialid":                 SCALAR_ID,
+
+	// MySQL 类型
+	"tinyint":    SCALAR_INT,
+	"tinyint(1)": SCALAR_BOOLEAN,
+	"mediumint":  SCALAR_INT,
+	"tinytext":   SCALAR_STRING,
+	"mediumtext": SCALAR_STRING,
+	"longtext":   SCALAR_STRING,
+	"enum":       SCALAR_STRING,
+	"set":        SCALAR_STRING,
+	"datetime":   SCALAR_DATE_TIME,
+	"time":       SCALAR_STRING,
+	"year":       SCALAR_INT,
+	"binary":     SCALAR_STRING,
+	"varbinary":  SCALAR_STRING,
+	"blob":       SCALAR_STRING,
+	"tinyblob":   SCALAR_STRING,
+	"mediumblob": SCALAR_STRING,
+	"longblob":   SCALAR_STRING,
 }
 
 // 顺序不要调整这个会影响内置标量的可用操作符
