@@ -3,31 +3,6 @@ scalar JSON
 scalar Cursor
 scalar DateTime
 
-# ------------------ 缓存相关指令 ------------------
-
-# 缓存指令
-directive @cache(
-  ttl: Int = 300           # 缓存有效期(秒)
-  scope: CacheScope = API  # 缓存范围
-  key: [String!]           # 用于生成键的字段
-  tpl: String              # 自定义键模板
-  gen: String              # 自定义键生成器名称
-  vary: [String!]          # 变化因素（如HTTP头、用户属性）
-  if: String               # 条件表达式，决定是否缓存
-) on FIELD_DEFINITION | OBJECT
-
-# 缓存失效指令
-directive @purge(
-  keys: [String!]          # 要失效的缓存键
-) on FIELD_DEFINITION | MUTATION
-
-# 缓存范围枚举
-enum CacheScope {
-  API     # API级缓存(所有客户端共享)
-  USER    # 用户级缓存(基于用户隔离)
-  NONE    # 不缓存
-}
-
 # 排序方向枚举，包含NULL值处理
 enum SortDirection {
   ASC
@@ -270,7 +245,7 @@ type User {
   name: String!
   email: String!
   role: String
-  profile: JSON @cache(ttl: 300, scope: USER)  # 用户资料缓存5分钟，按用户隔离
+  profile: JSON
   createdAt: DateTime!
   updatedAt: DateTime
   posts(
@@ -278,7 +253,7 @@ type User {
     sort: [PostSort!]
     limit: Int
     offset: Int
-  ): [Post!] @cache(ttl: 60, key: ["filter", "sort", "limit", "offset"])
+  ): [Post!]
   comments(
     filter: CommentFilter
     sort: [CommentSort!]
@@ -294,20 +269,20 @@ type Post {
   content: String
   published: Boolean!
   viewCount: Int!
-  author: User! @cache(ttl: 600)  # 作者信息缓存10分钟
+  author: User!
   authorId: ID!
   tags(
     filter: TagFilter
     sort: [TagSort!]
     limit: Int
     offset: Int
-  ): [Tag!] @cache(ttl: 300)  # 标签列表缓存5分钟
+  ): [Tag!]
   comments(
     filter: CommentFilter
     sort: [CommentSort!]
     limit: Int
     offset: Int
-  ): [Comment!] @cache(ttl: 30, key: ["postId", "filter", "sort"])  # 评论缓存30秒
+  ): [Comment!]
   createdAt: DateTime!
   updatedAt: DateTime
 }
@@ -316,7 +291,7 @@ type Post {
 type Comment {
   id: ID!
   content: String!
-  author: User! @cache(ttl: 600)  # 评论作者缓存10分钟
+  author: User!
   authorId: ID!
   post: Post!
   postId: ID!
@@ -341,7 +316,7 @@ type Tag {
     sort: [PostSort!]
     limit: Int
     offset: Int
-  ): [Post!] @cache(ttl: 180, key: ["id", "filter", "sort"])  # 标签下的文章缓存3分钟
+  ): [Post!]
 }
 
 # ------------------ 连接和边类型（游标分页） ------------------
@@ -539,10 +514,10 @@ input TagRelation {
 # 查询根类型
 type Query {
   # 单个实体查询
-  user(id: ID!): User @cache(ttl: 300, key: ["id"])
-  post(id: ID!): Post @cache(ttl: 60, key: ["id"])
+  user(id: ID!): User
+  post(id: ID!): Post
   comment(id: ID!): Comment
-  tag(id: ID!): Tag @cache(ttl: 600, key: ["id"])
+  tag(id: ID!): Tag
 
   # 统一列表查询（支持两种分页方式）
   users(
@@ -556,11 +531,7 @@ type Query {
     after: Cursor
     last: Int
     before: Cursor
-  ): UserPage! @cache(
-    ttl: 60, 
-    key: ["filter", "sort", "limit", "offset", "first", "after", "last", "before"],
-    if: "!args.filter || !args.filter.email" # 当不按email过滤时才缓存
-  )
+  ): UserPage!
 
   posts(
     filter: PostFilter
@@ -573,10 +544,7 @@ type Query {
     after: Cursor
     last: Int
     before: Cursor
-  ): PostPage! @cache(
-    ttl: 30, 
-    key: ["filter", "sort", "limit", "offset", "first", "after", "last", "before"]
-  )
+  ): PostPage!
 
   comments(
     filter: CommentFilter
@@ -602,21 +570,18 @@ type Query {
     after: Cursor
     last: Int
     before: Cursor
-  ): TagPage! @cache(
-    ttl: 600, 
-    key: ["filter", "sort", "limit", "offset", "first", "after", "last", "before"]
-  )
+  ): TagPage!
 
   # 高级聚合查询
   usersStats(
     filter: UserFilter
     groupBy: GroupBy
-  ): UserStats! @cache(ttl: 300, key: ["filter", "groupBy"])
+  ): UserStats!
   
   postsStats(
     filter: PostFilter
     groupBy: GroupBy
-  ): PostStats! @cache(ttl: 60, key: ["filter", "groupBy"])
+  ): PostStats!
   
   commentsStats(
     filter: CommentFilter
@@ -626,7 +591,7 @@ type Query {
   tagsStats(
     filter: TagFilter
     groupBy: GroupBy
-  ): TagStats! @cache(ttl: 300, key: ["filter", "groupBy"])
+  ): TagStats!
 }
 
 # 变更根类型
@@ -638,20 +603,20 @@ type Mutation {
   createTag(data: TagCreateInput!): Tag!
 
   # 更新操作
-  updateUser(id: ID!, data: UserUpdateInput!): User! @purge(keys: ["User:$id", "users"])
-  updatePost(id: ID!, data: PostUpdateInput!): Post! @purge(keys: ["Post:$id", "posts"])
-  updateComment(id: ID!, data: CommentUpdateInput!): Comment! @purge(keys: ["Comment:$id", "Post:$postId:comments"])
-  updateTag(id: ID!, data: TagUpdateInput!): Tag! @purge(keys: ["Tag:$id", "tags"])
+  updateUser(id: ID!, data: UserUpdateInput!): User!
+  updatePost(id: ID!, data: PostUpdateInput!): Post!
+  updateComment(id: ID!, data: CommentUpdateInput!): Comment!
+  updateTag(id: ID!, data: TagUpdateInput!): Tag!
 
   # 删除操作
-  deleteUser(id: ID!): Boolean! @purge(keys: ["User:$id", "users"])
-  deletePost(id: ID!): Boolean! @purge(keys: ["Post:$id", "posts"])
-  deleteComment(id: ID!): Boolean! @purge(keys: ["Comment:$id", "Post:$postId:comments"])
-  deleteTag(id: ID!): Boolean! @purge(keys: ["Tag:$id", "tags"])
+  deleteUser(id: ID!): Boolean!
+  deletePost(id: ID!): Boolean!
+  deleteComment(id: ID!): Boolean!
+  deleteTag(id: ID!): Boolean!
 
   # 批量操作
-  deleteUsers(filter: UserFilter!): Int! @purge(keys: ["users"])
-  deletePosts(filter: PostFilter!): Int! @purge(keys: ["posts"])
-  deleteComments(filter: CommentFilter!): Int! @purge(keys: ["comments"])
-  deleteTags(filter: TagFilter!): Int! @purge(keys: ["tags"])
+  deleteUsers(filter: UserFilter!): Int!
+  deletePosts(filter: PostFilter!): Int!
+  deleteComments(filter: CommentFilter!): Int!
+  deleteTags(filter: TagFilter!): Int!
 }

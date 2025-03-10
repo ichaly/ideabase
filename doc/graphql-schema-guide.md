@@ -5,10 +5,10 @@
 IdeaBase GraphQL Schema 设计遵循以下核心原则：
 - **简洁性**：使用简短而有意义的命名，减少冗余
 - **灵活性**：提供丰富的查询、过滤和操作能力
-- **高性能**：内置缓存和优化机制
+- **高性能**：优化的查询结构和执行机制
 - **可扩展性**：模块化结构，易于扩展
 
-该Schema提供了完整的CRUD操作支持，包括复杂的过滤、排序、分页、聚合和缓存机制，特别适合构建高性能的数据密集型应用。
+该Schema提供了完整的CRUD操作支持，包括复杂的过滤、排序、分页和聚合机制，特别适合构建高性能的数据密集型应用。
 
 ## 🔍 核心功能
 
@@ -42,14 +42,6 @@ IdeaBase GraphQL Schema 设计遵循以下核心原则：
 - 时间序列数据聚合
 - 条件聚合
 
-### 5. 缓存系统
-
-声明式缓存设计，支持：
-- 细粒度的TTL控制
-- 多级缓存作用域
-- 自定义缓存键生成
-- 智能缓存失效
-
 ## 📋 详细功能说明
 
 ### 标量类型
@@ -58,24 +50,6 @@ IdeaBase GraphQL Schema 设计遵循以下核心原则：
 scalar JSON       # JSON数据
 scalar Cursor     # 游标
 scalar DateTime   # 日期时间
-```
-
-### 缓存指令
-
-```graphql
-directive @cache(
-  ttl: Int = 300           # 缓存有效期(秒)
-  scope: CacheScope = API  # 缓存范围
-  key: [String!]           # 用于生成键的字段
-  tpl: String              # 自定义键模板
-  gen: String              # 自定义键生成器名称
-  vary: [String!]          # 变化因素（如HTTP头、用户属性）
-  if: String               # 条件表达式，决定是否缓存
-) on FIELD_DEFINITION | OBJECT
-
-directive @purge(
-  keys: [String!]          # 要失效的缓存键
-) on FIELD_DEFINITION | MUTATION
 ```
 
 ### 过滤器类型
@@ -291,72 +265,15 @@ query {
 }
 ```
 
-### 缓存控制
-
-在Schema中声明缓存策略：
-
-```graphql
-type Query {
-  popularPosts: [Post!]! @cache(ttl: 300, key: ["limit"])
-  userProfile(id: ID!): User @cache(ttl: 600, scope: USER, key: ["id"])
-}
-
-type Mutation {
-  updatePost(id: ID!, data: PostUpdateInput!): Post! 
-    @purge(keys: ["Post:$id", "popularPosts"])
-}
-```
-
-## 🔧 实现注意事项
-
-### 缓存键生成
-
-缓存键通常按以下格式生成：
-```
-类型:字段:参数1=值1:参数2=值2
-```
-
-例如：
-```
-User:profile:id=123
-Query:posts:filter={"published":true}:limit=10:offset=0
-```
-
-自定义键模板使用示例：
-```graphql
-@cache(tpl: "user:${id}:posts", ttl: 300)
-```
-
-### 类型安全的键生成器
-
-Golang实现示例：
-
-```go
-// 注册自定义键生成器
-RegisterKeyGenerator("postsByAuthor", func(info *ResolveInfo, args map[string]interface{}, ctx *Context) string {
-    authorID := args["authorId"].(string)
-    return fmt.Sprintf("author:%s:posts", authorID)
-})
-
-// 使用自定义键生成器
-// @cache(gen: "postsByAuthor", ttl: 300)
-```
-
 ## 🚀 最佳实践
 
-1. **缓存策略**
-   - 频繁访问但较少变更的数据使用较长TTL
-   - 用户特定数据使用`scope: USER`
-   - 敏感数据避免进行缓存
-   - 更新操作注意清除相关缓存
-
-2. **查询优化**
+1. **查询优化**
    - 使用精确的过滤条件减少数据传输
    - 合理使用分页参数
    - 限制嵌套查询的深度
    - 使用包含必要字段的片段
 
-3. **数据安全**
+2. **数据安全**
    - 实现字段级权限控制
    - 敏感过滤条件使用服务端验证
    - 防止过度复杂的查询导致性能问题
