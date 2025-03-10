@@ -108,7 +108,7 @@ const (
 	IS      = "is"
 	EQ      = "eq"
 	IN      = "in"
-	NOT_IN  = "notIn"
+	NI      = "ni"
 	GT      = "gt"
 	GE      = "ge"
 	LT      = "lt"
