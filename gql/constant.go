@@ -94,6 +94,9 @@ const (
 	descILike              = "Value matching (case-insensitive) pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values not having 'r' in second position"
 	descRegex              = "Value matching regular pattern"
 	descIRegex             = "Value matching (case-insensitive) regex pattern"
+	descHasKey             = "Value is a JSON object with the specified key"
+	descHasKeyAny          = "Value is a JSON object with any of the specified keys"
+	descHasKeyAll          = "Value is a JSON object with all of the specified keys"
 	descLevel              = "Recursive query depth default level 1 , 0 is all."
 )
 
@@ -105,19 +108,22 @@ const (
 )
 
 const (
-	IS      = "is"
-	EQ      = "eq"
-	IN      = "in"
-	NI      = "ni"
-	GT      = "gt"
-	GE      = "ge"
-	LT      = "lt"
-	LE      = "le"
-	NE      = "ne"
-	LIKE    = "like"
-	I_LIKE  = "iLike"
-	REGEX   = "regex"
-	I_REGEX = "iRegex"
+	IS          = "is"
+	EQ          = "eq"
+	IN          = "in"
+	NI          = "ni"
+	GT          = "gt"
+	GE          = "ge"
+	LT          = "lt"
+	LE          = "le"
+	NE          = "ne"
+	LIKE        = "like"
+	I_LIKE      = "iLike"
+	REGEX       = "regex"
+	I_REGEX     = "iRegex"
+	HAS_KEY     = "hasKey"
+	HAS_KEY_ANY = "hasKeyAny"
+	HAS_KEY_ALL = "hasKeyAll"
 )
 
 // 内置的数据库到GraphQL的类型映射
@@ -193,15 +199,20 @@ var operators = []*internal.Symbol{
 	{I_LIKE, "ilike", descILike},
 	{REGEX, "~", descRegex},
 	{I_REGEX, "~*", descIRegex},
+	{HAS_KEY, "hasKey", descHasKey},
+	{HAS_KEY_ANY, "hasKeyAny", descHasKeyAny},
+	{HAS_KEY_ALL, "hasKeyAll", descHasKeyAll},
 }
 
 // 构建操作符和内置标量的关系
 var symbols = map[string][]*internal.Symbol{
-	SCALAR_ID:      operators[1:7], //[eq,in,gt,ge,lt,le]
-	SCALAR_INT:     operators[:8],  //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_FLOAT:   operators[:8],  //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_STRING:  operators,      //[is,eq,in,gt,ge,lt,le,ne,like,iLike,regex,iRegex]
-	SCALAR_BOOLEAN: operators[1:3], //[is,eq]
+	SCALAR_ID:        operators[1:7],                                                  //[eq,in,gt,ge,lt,le]
+	SCALAR_INT:       operators[:8],                                                   //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_FLOAT:     operators[:8],                                                   //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_DATE_TIME: operators[:8],                                                   //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_STRING:    operators,                                                       //[is,eq,in,gt,ge,lt,le,ne,like,iLike,regex,iRegex]
+	SCALAR_BOOLEAN:   operators[1:3],                                                  //[is,eq]
+	SCALAR_JSON:      append(append(operators[1:3], operators[0]), operators[12:]...), //[is,eq,in,hasKey,hasKeyAny,hasKeyAll]
 }
 
 // 运算符按照名字索引字典

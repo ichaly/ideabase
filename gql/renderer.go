@@ -330,91 +330,27 @@ func (my *Renderer) renderFilter() error {
 	my.writeLine("# ------------------ 过滤器类型定义 ------------------\n")
 
 	// 定义过滤器映射表，每种类型支持的操作
-	filterTypes := map[string]map[string]string{
-		SCALAR_STRING: {
-			EQ:      "String",
-			NE:      "String",
-			GT:      "String",
-			GE:      "String",
-			LT:      "String",
-			LE:      "String",
-			IN:      "[String!]",
-			NI:      "[String!]",
-			LIKE:    "String",
-			I_LIKE:  "String",
-			REGEX:   "String",
-			I_REGEX: "String",
-			IS:      "IsInput",
-		},
-		SCALAR_INT: {
-			EQ: "Int",
-			NE: "Int",
-			GT: "Int",
-			GE: "Int",
-			LT: "Int",
-			LE: "Int",
-			IN: "[Int!]",
-			NI: "[Int!]",
-			IS: "IsInput",
-		},
-		SCALAR_FLOAT: {
-			EQ: "Float",
-			NE: "Float",
-			GT: "Float",
-			GE: "Float",
-			LT: "Float",
-			LE: "Float",
-			IN: "[Float!]",
-			NI: "[Float!]",
-			IS: "IsInput",
-		},
-		SCALAR_BOOLEAN: {
-			EQ: "Boolean",
-			IS: "IsInput",
-		},
-		SCALAR_DATE_TIME: {
-			EQ: "DateTime",
-			NE: "DateTime",
-			GT: "DateTime",
-			GE: "DateTime",
-			LT: "DateTime",
-			LE: "DateTime",
-			IN: "[DateTime!]",
-			NI: "[DateTime!]",
-			IS: "IsInput",
-		},
-		SCALAR_ID: {
-			EQ: "ID",
-			NE: "ID",
-			IN: "[ID!]",
-			NI: "[ID!]",
-			IS: "IsInput",
-		},
-		SCALAR_JSON: {
-			EQ:          "Json",
-			NE:          "Json",
-			IS:          "IsInput",
-			"hasKey":    "String      # 判断JSON是否包含特定键",
-			"hasKeyAny": "[String!] # 判断JSON是否包含任意一个键",
-			"hasKeyAll": "[String!] # 判断JSON是否包含所有键",
-		},
-	}
-
-	// 渲染每种类型的过滤器
-	for scalarType, operators := range filterTypes {
+	for scalarType, operators := range symbols {
 		filterName := scalarType + "Filter"
 		my.writeLine("# " + scalarType + "过滤器")
 		my.writeLine("input " + filterName + " {")
 
 		// 渲染该类型支持的所有操作符
-		for op, typeDef := range operators {
-			my.writeLine("  " + op + ": " + typeDef)
+		for _, op := range operators {
+			if op.Name == HAS_KEY || op.Name == HAS_KEY_ANY || op.Name == HAS_KEY_ALL {
+				my.writeLine(fmt.Sprintf("  %s: %s # %s", op.Name, "String", op.Desc))
+			} else if op.Name == IN || op.Name == NI {
+				my.writeLine(fmt.Sprintf("  %s: [%s!] # %s", op.Name, scalarType, op.Desc))
+			} else if op.Name == IS {
+				my.writeLine(fmt.Sprintf("  %s: %s # %s", op.Name, "IsInput", op.Desc))
+			} else {
+				my.writeLine(fmt.Sprintf("  %s: %s # %s", op.Name, scalarType, op.Desc))
+			}
 		}
 
 		my.writeLine("}")
 		my.writeLine("")
 	}
-
 	return nil
 }
 
@@ -575,7 +511,7 @@ func (my *Renderer) renderStats() error {
 
 	// 数值聚合结果
 	my.writeLine("# 数值聚合结果")
-	my.writeLine("type NumStats {")
+	my.writeLine("type NumberStats {")
 	my.writeLine("  sum: Float              # 总和")
 	my.writeLine("  avg: Float              # 平均值")
 	my.writeLine("  min: Float              # 最小值")
@@ -587,7 +523,7 @@ func (my *Renderer) renderStats() error {
 
 	// 日期聚合结果
 	my.writeLine("# 日期聚合结果")
-	my.writeLine("type DateStats {")
+	my.writeLine("type DateTimeStats {")
 	my.writeLine("  min: DateTime           # 最早时间")
 	my.writeLine("  max: DateTime           # 最晚时间")
 	my.writeLine("  count: Int!             # 计数")
@@ -597,7 +533,7 @@ func (my *Renderer) renderStats() error {
 
 	// 字符串聚合结果
 	my.writeLine("# 字符串聚合结果")
-	my.writeLine("type StrStats {")
+	my.writeLine("type StringStats {")
 	my.writeLine("  min: String             # 最小值(按字典序)")
 	my.writeLine("  max: String             # 最大值(按字典序)")
 	my.writeLine("  count: Int!             # 计数")
@@ -627,13 +563,13 @@ func (my *Renderer) renderStats() error {
 			// 根据字段类型添加对应的统计函数
 			typeName := my.mapDBTypeToGraphQL(field.Type)
 			switch typeName {
-			case "Int", "Float", "ID":
-				my.writeLine("  " + fieldName + ": NumStats")
-			case "String":
-				my.writeLine("  " + fieldName + ": StrStats")
-			case "DateTime":
-				my.writeLine("  " + fieldName + ": DateStats")
-			case "Boolean":
+			case SCALAR_INT, SCALAR_FLOAT, SCALAR_ID:
+				my.writeLine("  " + fieldName + ": NumberStats")
+			case SCALAR_STRING:
+				my.writeLine("  " + fieldName + ": StringStats")
+			case SCALAR_DATE_TIME:
+				my.writeLine("  " + fieldName + ": DateTimeStats")
+			case SCALAR_BOOLEAN:
 				my.writeLine("  " + fieldName + "True: Int")
 				my.writeLine("  " + fieldName + "False: Int")
 			}
