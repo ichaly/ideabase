@@ -6,7 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/renderer/field"
+	"github.com/jinzhu/inflection"
 	"github.com/rs/zerolog/log"
 )
 
@@ -127,9 +130,9 @@ func (my *Renderer) SaveToFile(content string) error {
 // renderScalars 渲染标量类型
 func (my *Renderer) renderScalars() error {
 	my.writeLine("# 自定义标量类型")
-	my.writeLine("scalar Json")
-	my.writeLine("scalar Cursor")
-	my.writeLine("scalar DateTime")
+	my.writeLine("scalar " + SCALAR_JSON)
+	my.writeLine("scalar " + SCALAR_CURSOR)
+	my.writeLine("scalar " + SCALAR_DATE_TIME)
 	my.writeLine("")
 	return nil
 }
@@ -137,7 +140,7 @@ func (my *Renderer) renderScalars() error {
 // renderEnums 渲染枚举类型
 func (my *Renderer) renderEnums() error {
 	// 渲染排序方向枚举
-	my.writeLine("# 排序方向枚举")
+	my.writeLine("# 排序方向枚举，包含NULL值处理")
 	my.writeLine("enum SortDirection {")
 	my.writeLine("  ASC")
 	my.writeLine("  DESC")
@@ -165,20 +168,20 @@ func (my *Renderer) renderCommon() error {
 	my.writeLine("# ------------------ 分页相关类型 ------------------\n")
 	my.writeLine("# 页面信息（用于游标分页）")
 	my.writeLine("type PageInfo {")
-	my.writeLine("  hasNext: Boolean!       # 是否有下一页")
-	my.writeLine("  hasPrev: Boolean!       # 是否有上一页")
-	my.writeLine("  start: Cursor           # 当前页第一条记录的游标")
-	my.writeLine("  end: Cursor             # 当前页最后一条记录的游标")
+	my.writeField("hasNext", SCALAR_BOOLEAN, field.NonNull(), field.WithComment("是否有下一页"))
+	my.writeField("hasPrev", SCALAR_BOOLEAN, field.NonNull(), field.WithComment("是否有上一页"))
+	my.writeField("start", SCALAR_CURSOR, field.WithComment("当前页第一条记录的游标"))
+	my.writeField("end", SCALAR_CURSOR, field.WithComment("当前页最后一条记录的游标"))
 	my.writeLine("}")
 	my.writeLine("")
 
 	// 渲染分组选项类型
 	my.writeLine("# 聚合分组选项")
 	my.writeLine("input GroupBy {")
-	my.writeLine("  fields: [String!]!  # 分组字段")
-	my.writeLine("  having: Json        # 分组过滤条件")
-	my.writeLine("  limit: Int          # 分组结果限制")
-	my.writeLine("  sort: Json          # 分组结果排序")
+	my.writeField("fields", SCALAR_STRING, field.ListNonNull(), field.WithComment("分组字段"))
+	my.writeField("having", SCALAR_JSON, field.WithComment("分组过滤条件"))
+	my.writeField("limit", SCALAR_INT, field.WithComment("分组结果限制"))
+	my.writeField("sort", SCALAR_JSON, field.WithComment("分组结果排序"))
 	my.writeLine("}")
 	my.writeLine("")
 
@@ -249,7 +252,7 @@ func (my *Renderer) renderRelation(className string, class *internal.Class) erro
 	// 假设我们的关系数据是从其他地方获取的
 	// 这里可以添加具体实现
 
-	log.Debug().Str("class", className).Msg("处理实体关系")
+	log.Debug().Str("class", className).Str("table", class.Table).Msg("处理实体关系")
 	return nil
 }
 
@@ -302,7 +305,7 @@ func (my *Renderer) renderInput() error {
 
 			typeName := my.mapDBTypeToGraphQL(field.Type)
 			// 更新时所有字段都是可选的
-			my.writeLine("  " + fieldName + ": " + typeName)
+			my.writeField(fieldName, typeName)
 		}
 		my.writeLine("}")
 		my.writeLine("")
@@ -311,14 +314,14 @@ func (my *Renderer) renderInput() error {
 	// 添加关系输入类型
 	my.writeLine("# 关联操作")
 	my.writeLine("input ConnectInput {")
-	my.writeLine("  id: ID!")
+	my.writeField("id", SCALAR_ID, field.NonNull())
 	my.writeLine("}")
 	my.writeLine("")
 
 	my.writeLine("# 关系操作")
 	my.writeLine("input RelationInput {")
-	my.writeLine("  connect: [ID!]")
-	my.writeLine("  disconnect: [ID!]")
+	my.writeField("connect", SCALAR_ID, field.ListNonNull())
+	my.writeField("disconnect", SCALAR_ID, field.ListNonNull())
 	my.writeLine("}")
 	my.writeLine("")
 
@@ -337,14 +340,15 @@ func (my *Renderer) renderFilter() error {
 
 		// 渲染该类型支持的所有操作符
 		for _, op := range operators {
+			// 使用writeField方法替代原来的字符串拼接
 			if op.Name == HAS_KEY || op.Name == HAS_KEY_ANY || op.Name == HAS_KEY_ALL {
-				my.writeLine(fmt.Sprintf("  %s: %s # %s", op.Name, "String", op.Desc))
+				my.writeField(op.Name, SCALAR_STRING, field.WithComment(op.Desc))
 			} else if op.Name == IN || op.Name == NI {
-				my.writeLine(fmt.Sprintf("  %s: [%s!] # %s", op.Name, scalarType, op.Desc))
+				my.writeField(op.Name, scalarType, field.ListNonNull(), field.WithComment(op.Desc))
 			} else if op.Name == IS {
-				my.writeLine(fmt.Sprintf("  %s: %s # %s", op.Name, "IsInput", op.Desc))
+				my.writeField(op.Name, "IsInput", field.WithComment(op.Desc))
 			} else {
-				my.writeLine(fmt.Sprintf("  %s: %s # %s", op.Name, scalarType, op.Desc))
+				my.writeField(op.Name, scalarType, field.WithComment(op.Desc))
 			}
 		}
 
@@ -376,13 +380,13 @@ func (my *Renderer) renderEntity() error {
 
 			// 根据字段类型添加对应的过滤器
 			typeName := my.mapDBTypeToGraphQL(field.Type)
-			my.writeLine("  " + fieldName + ": " + typeName + "Filter")
+			my.writeField(fieldName, typeName+"Filter")
 		}
 
 		// 添加布尔逻辑操作符
-		my.writeLine("  " + NOT + ": " + className + "Filter")
-		my.writeLine("  " + AND + ": [" + className + "Filter!]")
-		my.writeLine("  " + OR + ": [" + className + "Filter!]")
+		my.writeField(AND, className+"Filter", field.ListNonNull())
+		my.writeField(OR, className+"Filter", field.ListNonNull())
+		my.writeField(NOT, className+"Filter")
 
 		my.writeLine("}")
 		my.writeLine("")
@@ -412,7 +416,7 @@ func (my *Renderer) renderSort() error {
 			}
 
 			// 判断字段是否可排序
-			my.writeLine("  " + fieldName + ": SortDirection")
+			my.writeField(fieldName, "SortDirection")
 		}
 
 		my.writeLine("}")
@@ -437,31 +441,40 @@ func (my *Renderer) renderQuery() error {
 
 		// 单个实体查询
 		my.writeLine("  # 单个" + className + "查询")
-		my.writeLine("  " + className + "(id: ID!): " + className)
+		my.writeField(strcase.ToLowerCamel(className), className, field.WithArgs([]field.Argument{
+			{Name: "id", Type: SCALAR_ID + "!"},
+		}...))
 
 		// 统一列表查询（支持两种分页方式）
-		my.writeLine("")
-		my.writeLine("  # " + className + "列表查询")
-		my.writeLine("  " + className + "(")
-		my.writeLine("    filter: " + className + "Filter")
-		my.writeLine("    sort: [" + className + "Sort!]")
-		my.writeLine("    # 传统分页参数")
-		my.writeLine("    limit: Int")
-		my.writeLine("    offset: Int")
-		my.writeLine("    # 游标分页参数")
-		my.writeLine("    first: Int")
-		my.writeLine("    after: Cursor")
-		my.writeLine("    last: Int")
-		my.writeLine("    before: Cursor")
-		my.writeLine("  ): " + className + "Page!")
+		my.writeLine("\n  # " + className + "列表查询")
+		my.writeField(
+			strcase.ToLowerCamel(inflection.Plural(className)),
+			className+"Page",
+			field.WithMultilineArgs(),
+			field.NonNull(),
+			field.WithArgs([]field.Argument{
+				{Name: "filter", Type: className + "Filter"},
+				{Name: "sort", Type: "[" + className + "Sort!]"},
+				{Name: "limit", Type: SCALAR_INT},
+				{Name: "offset", Type: SCALAR_INT},
+				{Name: "first", Type: SCALAR_INT},
+				{Name: "after", Type: SCALAR_CURSOR},
+				{Name: "last", Type: SCALAR_INT},
+				{Name: "before", Type: SCALAR_CURSOR},
+			}...),
+		)
 
-		// 高级聚合查询
-		my.writeLine("")
-		my.writeLine("  # " + className + "聚合查询")
-		my.writeLine("  " + className + "Stats(")
-		my.writeLine("    filter: " + className + "Filter")
-		my.writeLine("    groupBy: GroupBy")
-		my.writeLine("  ): " + className + "Stats!")
+		// 统计查询
+		my.writeLine("\n  # " + className + "统计查询")
+		my.writeField(
+			strcase.ToLowerCamel(className)+"Stats",
+			className+"Stats",
+			field.NonNull(),
+			field.WithArgs([]field.Argument{
+				{Name: "filter", Type: className + "Filter"},
+				{Name: "groupBy", Type: "GroupBy"},
+			}...),
+		)
 	}
 
 	my.writeLine("}")
@@ -483,22 +496,31 @@ func (my *Renderer) renderMutation() error {
 
 		// 创建操作
 		my.writeLine("  # 创建" + className)
-		my.writeLine("  create" + className + "(data: " + className + "CreateInput!): " + className + "!")
+		my.writeField("create"+className, className, field.NonNull(), field.WithArgs([]field.Argument{
+			{Name: "data", Type: className + "CreateInput!"},
+		}...))
 
 		// 更新操作
 		my.writeLine("")
 		my.writeLine("  # 更新" + className)
-		my.writeLine("  update" + className + "(id: ID!, data: " + className + "UpdateInput!): " + className + "!")
+		my.writeField("update"+className, className, field.NonNull(), field.WithArgs([]field.Argument{
+			{Name: "id", Type: SCALAR_ID + "!"},
+			{Name: "data", Type: className + "UpdateInput!"},
+		}...))
 
 		// 删除操作
 		my.writeLine("")
 		my.writeLine("  # 删除" + className)
-		my.writeLine("  delete" + className + "(id: ID!): Boolean!")
+		my.writeField("delete"+className, SCALAR_BOOLEAN, field.NonNull(), field.WithArgs([]field.Argument{
+			{Name: "id", Type: SCALAR_ID + "!"},
+		}...))
 
 		// 批量删除操作
 		my.writeLine("")
 		my.writeLine("  # 批量删除" + className)
-		my.writeLine("  delete" + className + "(filter: " + className + "Filter!): Int!")
+		my.writeField("delete"+className, SCALAR_INT, field.NonNull(), field.WithArgs([]field.Argument{
+			{Name: "filter", Type: className + "Filter!"},
+		}...))
 	}
 
 	my.writeLine("}")
@@ -512,32 +534,32 @@ func (my *Renderer) renderStats() error {
 	// 数值聚合结果
 	my.writeLine("# 数值聚合结果")
 	my.writeLine("type NumberStats {")
-	my.writeLine("  sum: Float              # 总和")
-	my.writeLine("  avg: Float              # 平均值")
-	my.writeLine("  min: Float              # 最小值")
-	my.writeLine("  max: Float              # 最大值")
-	my.writeLine("  count: Int!             # 计数")
-	my.writeLine("  countDistinct: Int!     # 去重计数")
+	my.writeField("sum", SCALAR_FLOAT, field.WithComment("总和"))
+	my.writeField("avg", SCALAR_FLOAT, field.WithComment("平均值"))
+	my.writeField("min", SCALAR_FLOAT, field.WithComment("最小值"))
+	my.writeField("max", SCALAR_FLOAT, field.WithComment("最大值"))
+	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment("计数"))
+	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment("去重计数"))
 	my.writeLine("}")
 	my.writeLine("")
 
 	// 日期聚合结果
 	my.writeLine("# 日期聚合结果")
 	my.writeLine("type DateTimeStats {")
-	my.writeLine("  min: DateTime           # 最早时间")
-	my.writeLine("  max: DateTime           # 最晚时间")
-	my.writeLine("  count: Int!             # 计数")
-	my.writeLine("  countDistinct: Int!     # 去重计数")
+	my.writeField("min", SCALAR_DATE_TIME, field.WithComment("最早时间"))
+	my.writeField("max", SCALAR_DATE_TIME, field.WithComment("最晚时间"))
+	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment("计数"))
+	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment("去重计数"))
 	my.writeLine("}")
 	my.writeLine("")
 
 	// 字符串聚合结果
 	my.writeLine("# 字符串聚合结果")
 	my.writeLine("type StringStats {")
-	my.writeLine("  min: String             # 最小值(按字典序)")
-	my.writeLine("  max: String             # 最大值(按字典序)")
-	my.writeLine("  count: Int!             # 计数")
-	my.writeLine("  countDistinct: Int!     # 去重计数")
+	my.writeField("min", SCALAR_STRING, field.WithComment("最小值(按字典序)"))
+	my.writeField("max", SCALAR_STRING, field.WithComment("最大值(按字典序)"))
+	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment("计数"))
+	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment("去重计数"))
 	my.writeLine("}")
 	my.writeLine("")
 
@@ -551,7 +573,7 @@ func (my *Renderer) renderStats() error {
 		// 生成统计类型
 		my.writeLine("# " + className + "聚合")
 		my.writeLine("type " + className + "Stats {")
-		my.writeLine("  count: Int!")
+		my.writeField("count", SCALAR_INT, field.NonNull())
 
 		// 添加统计字段
 		for fieldName, field := range class.Fields {
@@ -560,37 +582,33 @@ func (my *Renderer) renderStats() error {
 				continue
 			}
 
-			// 根据字段类型添加对应的统计函数
+			// 根据字段类型添加对应的统计类型
 			typeName := my.mapDBTypeToGraphQL(field.Type)
 			switch typeName {
 			case SCALAR_INT, SCALAR_FLOAT, SCALAR_ID:
-				my.writeLine("  " + fieldName + ": NumberStats")
+				my.writeField(fieldName, "NumberStats")
 			case SCALAR_STRING:
-				my.writeLine("  " + fieldName + ": StringStats")
+				my.writeField(fieldName, "StringStats")
 			case SCALAR_DATE_TIME:
-				my.writeLine("  " + fieldName + ": DateTimeStats")
+				my.writeField(fieldName, "DateTimeStats")
 			case SCALAR_BOOLEAN:
-				my.writeLine("  " + fieldName + "True: Int")
-				my.writeLine("  " + fieldName + "False: Int")
+				my.writeField(fieldName+"True", SCALAR_INT)
+				my.writeField(fieldName+"False", SCALAR_INT)
 			}
 		}
 
 		// 添加分组聚合
 		my.writeLine("  # 分组聚合")
-		my.writeLine("  groupBy: [" + className + "Group!]")
+		my.writeField("groupBy", "["+className+"Group!]")
 		my.writeLine("}")
 		my.writeLine("")
 
 		// 生成对应的分组类型
 		my.writeLine("# " + className + "分组结果")
 		my.writeLine("type " + className + "Group {")
-		my.writeLine("  key: Json!          # 分组键")
-		my.writeLine("  count: Int!")
-		my.writeLine("  aggregate: [String!]   # 聚合函数列表")
-		my.writeLine("  distinct: [String!]    # 去重字段列表")
-		my.writeLine("  having: Json        # 分组过滤条件")
-		my.writeLine("  limit: Int            # 分组结果限制数量")
-		my.writeLine("  sort: Json          # 分组结果排序")
+		my.writeField("key", SCALAR_JSON, field.NonNull(), field.WithComment("分组键"))
+		my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment("计数"))
+		my.writeLine("  # 可以包含其他聚合字段")
 		my.writeLine("}")
 		my.writeLine("")
 	}
@@ -612,9 +630,9 @@ func (my *Renderer) renderPaging() error {
 		// 生成分页类型
 		my.writeLine("# " + className + "分页结果")
 		my.writeLine("type " + className + "Page {")
-		my.writeLine("  items: [" + className + "!]!         # 直接返回" + className + "对象数组")
-		my.writeLine("  pageInfo: PageInfo!")
-		my.writeLine("  total: Int!")
+		my.writeField("items", className, field.NonNull(), field.ListNonNull(), field.WithComment("直接返回"+className+"对象数组"))
+		my.writeField("pageInfo", "PageInfo", field.NonNull())
+		my.writeField("total", SCALAR_INT, field.NonNull())
 		my.writeLine("}")
 		my.writeLine("")
 	}
@@ -635,4 +653,11 @@ func (my *Renderer) mapDBTypeToGraphQL(dbType string) string {
 	}
 
 	return SCALAR_STRING
+}
+
+// writeField 使用优化的子包渲染字段
+func (my *Renderer) writeField(name string, typeName string, options ...field.Option) {
+	// 使用子包中的便捷方法生成字段字符串
+	fieldStr := field.MakeField(name, typeName, options...)
+	my.writeLine(fieldStr)
 }
