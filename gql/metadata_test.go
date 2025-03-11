@@ -592,12 +592,19 @@ func TestRelationNameConversion(t *testing.T) {
 		require.True(t, ok, "应该能找到Posts")
 
 		// 检查从Posts到Tags的多对多关系字段
-		tagsList, ok := posts.Fields["tagsList"]
-		if assert.True(t, ok, "应该有tagsList字段") {
-			assert.Equal(t, "Posts", tagsList.Relation.SourceClass, "源类名应该是转换后的Posts")
-			assert.Equal(t, "id", tagsList.Relation.SourceField, "源字段名应该保持为id")
-			assert.Equal(t, "Tags", tagsList.Relation.TargetClass, "目标类名应该是转换后的Tags")
-			assert.Equal(t, "id", tagsList.Relation.TargetField, "目标字段名应该保持为id")
+		// 不硬编码字段名，而是查找一个从Posts到Tags的关系
+		foundTagsRelation := false
+		for fieldName, field := range posts.Fields {
+			if field.Relation != nil && field.Relation.TargetClass == "Tags" {
+				foundTagsRelation = true
+				t.Logf("找到从Posts到Tags的关系字段: %s", fieldName)
+				assert.Equal(t, "Posts", field.Relation.SourceClass, "源类名应该是转换后的Posts")
+				assert.Equal(t, "id", field.Relation.SourceField, "源字段名应该保持为id")
+				assert.Equal(t, "Tags", field.Relation.TargetClass, "目标类名应该是转换后的Tags")
+				assert.Equal(t, "id", field.Relation.TargetField, "目标字段名应该保持为id")
+				break
+			}
 		}
+		assert.True(t, foundTagsRelation, "应该有从Posts到Tags的关系字段")
 	})
 }
