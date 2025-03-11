@@ -20,7 +20,7 @@ type SchemaConfig struct {
 	// 是否启用表名单数转换（将复数表名转为单数）
 	EnableSingular bool `mapstructure:"enable-singular"`
 
-	// 表名前缀（用于去除）
+	// 表名前缀（将被去除）
 	TablePrefix []string `mapstructure:"table-prefix"`
 
 	// 要包含的表（空表示包含所有）
@@ -43,6 +43,9 @@ type SchemaConfig struct {
 
 	// 数据类型映射
 	TypeMapping map[string]string `mapstructure:"type-mapping"`
+
+	// 是否显示中间表关系
+	ShowThrough bool `mapstructure:"show-through"`
 }
 
 // MetadataConfig 表示元数据配置

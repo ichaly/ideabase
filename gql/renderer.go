@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/iancoleman/strcase"
@@ -282,16 +283,238 @@ func (my *Renderer) renderTypes() error {
 
 // renderRelation 渲染关系字段
 func (my *Renderer) renderRelation(className string, class *internal.Class) error {
-	// 目前暂无关系信息，需要实际项目中实现
-	// 以下是示例代码，实际使用时需要调整为正确的关系数据结构
-
-	// 如果meta.Relations还未定义，这里简单返回，不输出关系信息
-	// TODO: 实现从元数据中获取关系信息的逻辑
-
-	// 假设我们的关系数据是从其他地方获取的
-	// 这里可以添加具体实现
-
+	// 记录处理开始
 	log.Debug().Str("class", className).Str("table", class.Table).Msg("处理实体关系")
+
+	// 用于跟踪已经添加的字段名，防止重复
+	addedFields := make(map[string]bool)
+	for fieldName, _ := range class.Fields {
+		// 记录类中已有的字段名，避免冲突
+		addedFields[fieldName] = true
+	}
+
+	// 跟踪中间表上下文
+	throughTablesAdded := make(map[string]bool)
+
+	// 处理多对多关系
+	// 多对多关系需要先处理，因为它们可能需要添加中间表关系
+	for fieldName, field := range class.Fields {
+		// 确保只处理真正的字段名，跳过列名索引
+		if fieldName != field.Name {
+			continue
+		}
+
+		// 检查字段是否定义了关系并且是多对多关系
+		if field.Relation == nil || field.Relation.Type != internal.MANY_TO_MANY {
+			continue
+		}
+
+		// 获取目标类名
+		targetClassName := field.Relation.TargetClass
+
+		// 检查目标类是否存在
+		if _, exists := my.meta.Nodes[targetClassName]; !exists {
+			log.Warn().
+				Str("class", className).
+				Str("field", fieldName).
+				Str("targetClass", targetClassName).
+				Msg("关系目标类不存在，跳过关系字段渲染")
+			continue
+		}
+
+		// 设置多对多关系字段名
+		relationFieldName := strcase.ToLowerCamel(targetClassName) + "List"
+
+		// 检查字段名是否已存在，如果存在则添加后缀
+		if addedFields[relationFieldName] {
+			counter := 1
+			newFieldName := relationFieldName
+			for addedFields[newFieldName] {
+				newFieldName = relationFieldName + strconv.Itoa(counter)
+				counter++
+			}
+			relationFieldName = newFieldName
+		}
+		addedFields[relationFieldName] = true
+
+		// 记录当前处理的关系
+		log.Debug().
+			Str("class", className).
+			Str("originalField", fieldName).
+			Str("newField", relationFieldName).
+			Str("relation", string(field.Relation.Type)).
+			Str("targetClass", targetClassName).
+			Msg("渲染关系字段")
+
+		// 添加描述
+		description := "多对多关联的" + targetClassName + "列表"
+		my.writeLine("  # ", description)
+
+		// 渲染多对多关系字段
+		typeName := "[" + targetClassName + "]"
+		my.writeLine("  ", relationFieldName, ": ", typeName, "!")
+
+		// 如果配置为显示中间表关系，添加中间表关系字段
+		if my.meta.cfg.Schema.ShowThrough && field.Relation.Through != nil {
+			// 获取中间表信息
+			through := field.Relation.Through
+
+			// 查找中间表对应的实体类
+			var throughClass *internal.Class
+			var throughClassName string
+
+			for name, c := range my.meta.Nodes {
+				if c.Table == through.Table {
+					throughClass = c
+					throughClassName = name
+					break
+				}
+			}
+
+			// 如果找到中间表对应的实体类，添加中间表关系字段
+			if throughClass != nil && !throughTablesAdded[throughClassName] {
+				throughFieldName := strcase.ToLowerCamel(inflection.Singular(throughClassName)) + "List"
+
+				// 检查字段名是否已存在，如果存在则添加后缀
+				if addedFields[throughFieldName] {
+					counter := 1
+					newFieldName := throughFieldName
+					for addedFields[newFieldName] {
+						newFieldName = throughFieldName + strconv.Itoa(counter)
+						counter++
+					}
+					throughFieldName = newFieldName
+				}
+				addedFields[throughFieldName] = true
+				throughTablesAdded[throughClassName] = true
+
+				// 添加中间表关系字段描述
+				throughDescription := "关联的" + throughClassName + "记录列表"
+				my.writeLine("  # ", throughDescription)
+
+				// 渲染中间表关系字段
+				throughTypeName := "[" + throughClassName + "]"
+				my.writeLine("  ", throughFieldName, ": ", throughTypeName, "!")
+			}
+		}
+	}
+
+	// 遍历所有字段，处理非多对多关系
+	for fieldName, field := range class.Fields {
+		// 确保只处理真正的字段名，跳过列名索引
+		if fieldName != field.Name {
+			continue
+		}
+
+		// 检查字段是否定义了关系
+		if field.Relation == nil {
+			continue
+		}
+
+		// 跳过多对多关系，它们已经在前面处理过了
+		if field.Relation.Type == internal.MANY_TO_MANY {
+			continue
+		}
+
+		// 获取目标类名
+		targetClassName := field.Relation.TargetClass
+
+		// 检查目标类是否存在
+		if _, exists := my.meta.Nodes[targetClassName]; !exists {
+			log.Warn().
+				Str("class", className).
+				Str("field", fieldName).
+				Str("targetClass", targetClassName).
+				Msg("关系目标类不存在，跳过关系字段渲染")
+			continue
+		}
+
+		// 根据关系类型生成合适的字段名
+		var relationFieldName string
+		var isCollection bool = false
+		switch field.Relation.Type {
+		case internal.MANY_TO_ONE:
+			// 多对一关系使用目标实体名称的单数形式
+			relationFieldName = strcase.ToLowerCamel(targetClassName)
+			isCollection = false
+		case internal.ONE_TO_MANY:
+			// 一对多和多对多关系使用目标实体名称+List
+			relationFieldName = strcase.ToLowerCamel(targetClassName) + "List"
+			isCollection = true
+		case internal.RECURSIVE:
+			// 递归关系
+			if strings.HasSuffix(fieldName, "s") || fieldName == "children" {
+				relationFieldName = "children"
+				isCollection = true
+			} else {
+				relationFieldName = "parent"
+				isCollection = false
+			}
+		}
+
+		// 检查字段名是否已存在，如果存在则添加后缀
+		if addedFields[relationFieldName] {
+			counter := 1
+			newFieldName := relationFieldName
+			for addedFields[newFieldName] {
+				newFieldName = relationFieldName + strconv.Itoa(counter)
+				counter++
+			}
+			relationFieldName = newFieldName
+		}
+		addedFields[relationFieldName] = true
+
+		// 记录当前处理的关系
+		log.Debug().
+			Str("class", className).
+			Str("originalField", fieldName).
+			Str("newField", relationFieldName).
+			Str("relation", string(field.Relation.Type)).
+			Str("targetClass", targetClassName).
+			Msg("渲染关系字段")
+
+		// 添加字段描述
+		var description string
+		if field.Description != "" {
+			description = field.Description
+		} else {
+			// 根据关系类型生成默认描述
+			switch field.Relation.Type {
+			case internal.MANY_TO_ONE:
+				description = "关联的" + targetClassName + "对象"
+			case internal.ONE_TO_MANY:
+				description = "关联的" + targetClassName + "列表"
+			case internal.RECURSIVE:
+				if isCollection {
+					description = "子" + className + "列表"
+				} else {
+					description = "父" + className + "对象"
+				}
+			}
+		}
+
+		// 如果有描述，添加为注释
+		if description != "" {
+			my.writeLine("  # ", description)
+		}
+
+		// 根据关系类型和集合标志渲染字段
+		if isCollection {
+			// 集合类型渲染为对象列表
+			typeName := "[" + targetClassName + "]"
+			// 列表本身通常不为null，但列表中的元素可能为null
+			my.writeLine("  ", relationFieldName, ": ", typeName, "!")
+		} else {
+			// 单个对象引用
+			typeName := targetClassName
+			if field.Nullable {
+				my.writeLine("  ", relationFieldName, ": ", typeName)
+			} else {
+				my.writeLine("  ", relationFieldName, ": ", typeName, "!")
+			}
+		}
+	}
+
 	return nil
 }
 

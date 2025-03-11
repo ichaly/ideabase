@@ -192,7 +192,7 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.Contains(t, posts.Fields, "content")
 		require.Contains(t, posts.Fields, "user_id")
 		require.Contains(t, posts.Fields, "created_at")
-		require.Contains(t, posts.Fields, "tagsList")
+		require.Contains(t, posts.Fields, "tagList")
 
 		// 验证comments表
 		comments, ok := classes["comments"]
@@ -229,7 +229,7 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.Contains(t, tags.Fields, "id")
 		require.Contains(t, tags.Fields, "name")
 		require.Contains(t, tags.Fields, "created_at")
-		require.Contains(t, tags.Fields, "postsList")
+		require.Contains(t, tags.Fields, "postList")
 
 		// 验证post_tags表
 		postTags, ok := classes["post_tags"]
@@ -333,12 +333,12 @@ func TestDetectManyToManyRelations(t *testing.T) {
 
 	// 验证结果
 	// 1. users 类中应该有一个指向 roles 的多对多关系字段
-	rolesField, exists := classes["users"].Fields["rolesList"]
-	assert.True(t, exists, "users 类中应该有 rolesList 字段")
+	rolesField, exists := classes["users"].Fields["roleList"]
+	assert.True(t, exists, "users 类中应该有 roleList 字段")
 	if exists {
-		assert.True(t, rolesField.Virtual, "rolesList 应该是虚拟字段")
-		assert.NotNil(t, rolesField.Relation, "rolesList 应该有关系定义")
-		assert.Equal(t, internal.MANY_TO_MANY, rolesField.Relation.Type, "rolesList 关系类型应该是多对多")
+		assert.True(t, rolesField.Virtual, "roleList 应该是虚拟字段")
+		assert.NotNil(t, rolesField.Relation, "roleList 应该有关系定义")
+		assert.Equal(t, internal.MANY_TO_MANY, rolesField.Relation.Type, "roleList 关系类型应该是多对多")
 		assert.NotNil(t, rolesField.Relation.Through, "关系应该有Through配置")
 		if rolesField.Relation.Through != nil {
 			assert.Equal(t, "user_roles", rolesField.Relation.Through.Table, "中间表应该是 user_roles")
@@ -348,12 +348,12 @@ func TestDetectManyToManyRelations(t *testing.T) {
 	}
 
 	// 2. roles 类中应该有一个指向 users 的多对多关系字段
-	usersField, exists := classes["roles"].Fields["usersList"]
-	assert.True(t, exists, "roles 类中应该有 usersList 字段")
+	usersField, exists := classes["roles"].Fields["userList"]
+	assert.True(t, exists, "roles 类中应该有 userList 字段")
 	if exists {
-		assert.True(t, usersField.Virtual, "usersList 应该是虚拟字段")
-		assert.NotNil(t, usersField.Relation, "usersList 应该有关系定义")
-		assert.Equal(t, internal.MANY_TO_MANY, usersField.Relation.Type, "usersList 关系类型应该是多对多")
+		assert.True(t, usersField.Virtual, "userList 应该是虚拟字段")
+		assert.NotNil(t, usersField.Relation, "userList 应该有关系定义")
+		assert.Equal(t, internal.MANY_TO_MANY, usersField.Relation.Type, "userList 关系类型应该是多对多")
 		assert.NotNil(t, usersField.Relation.Through, "关系应该有Through配置")
 		if usersField.Relation.Through != nil {
 			assert.Equal(t, "user_roles", usersField.Relation.Through.Table, "中间表应该是 user_roles")
