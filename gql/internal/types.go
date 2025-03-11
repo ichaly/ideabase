@@ -126,9 +126,6 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// LoadOption 元数据加载选项
-type LoadOption func() error
-
 // FromString 从字符串转换为关系类型
 func (my RelationType) FromString(kind string) RelationType {
 	switch kind {

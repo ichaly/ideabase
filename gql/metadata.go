@@ -72,20 +72,6 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 		return nil, err
 	}
 
-	// 加载加载其他选项
-	for _, o := range []internal.LoadOption{
-		my.expressions,
-		my.tableOption,
-		my.orderOption,
-		my.whereOption,
-		my.inputOption,
-		my.entryOption,
-	} {
-		if err := o(); err != nil {
-			return nil, err
-		}
-	}
-
 	return my, nil
 }
 
@@ -642,42 +628,4 @@ func (my *Metadata) ColumnName(className, fieldName string, virtual bool) (strin
 		}
 	}
 	return "", false
-}
-
-// 以下是加载选项的实现
-
-// expressions 加载表达式
-func (my *Metadata) expressions() error {
-	// TODO: 实现表达式加载
-	return nil
-}
-
-// tableOption 加载表选项
-func (my *Metadata) tableOption() error {
-	// TODO: 实现表选项加载
-	return nil
-}
-
-// orderOption 加载排序选项
-func (my *Metadata) orderOption() error {
-	// TODO: 实现排序选项加载
-	return nil
-}
-
-// whereOption 加载过滤选项
-func (my *Metadata) whereOption() error {
-	// TODO: 实现过滤选项加载
-	return nil
-}
-
-// inputOption 加载输入选项
-func (my *Metadata) inputOption() error {
-	// TODO: 实现输入选项加载
-	return nil
-}
-
-// entryOption 加载入口选项
-func (my *Metadata) entryOption() error {
-	// TODO: 实现入口选项加载
-	return nil
 }

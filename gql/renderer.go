@@ -13,6 +13,74 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// 类型常量
+const (
+	// GraphQL类型名称
+	TYPE_SORT_DIRECTION  = "SortDirection"
+	TYPE_PAGE_INFO       = "PageInfo"
+	TYPE_GROUP_BY        = "GroupBy"
+	TYPE_NUMBER_STATS    = "NumberStats"
+	TYPE_STRING_STATS    = "StringStats"
+	TYPE_DATE_TIME_STATS = "DateTimeStats"
+
+	// 类型名称后缀
+	SUFFIX_FILTER       = "Filter"
+	SUFFIX_SORT         = "Sort"
+	SUFFIX_STATS        = "Stats"
+	SUFFIX_GROUP        = "Group"
+	SUFFIX_PAGE         = "Page"
+	SUFFIX_CREATE_INPUT = "CreateInput"
+)
+
+// 分隔线和描述常量
+const (
+	// 分隔线
+	SEPARATOR_LINE = "------------------"
+
+	// 描述性文本
+	DESC_SCHEMA_TITLE    = "IdeaBase GraphQL Schema"
+	DESC_SCALAR_TYPES    = "自定义标量类型"
+	DESC_SORT_ENUM       = "排序方向枚举，包含NULL值处理"
+	DESC_IS_ENUM         = "空值条件枚举"
+	DESC_PAGE_INFO       = "页面信息（用于游标分页）"
+	DESC_GROUP_BY        = "聚合分组选项"
+	DESC_RELATION        = "关联操作"
+	DESC_RELATION_OP     = "关系操作"
+	DESC_NUMBER_STATS    = "数值聚合结果"
+	DESC_STRING_STATS    = "字符串聚合结果"
+	DESC_DATE_TIME_STATS = "日期聚合结果"
+
+	// 分类标题
+	SECTION_PAGING      = "分页相关类型"
+	SECTION_FILTER      = "过滤器类型定义"
+	SECTION_QUERY       = "查询和变更"
+	SECTION_AGGREGATION = "聚合函数相关类型"
+	SECTION_CONNECTION  = "连接和边类型（游标分页）"
+)
+
+// 字段描述常量
+const (
+	COMMENT_GROUP_KEY    = "分组键"
+	COMMENT_COUNT        = "计数"
+	COMMENT_HAS_NEXT     = "是否有下一页"
+	COMMENT_HAS_PREV     = "是否有上一页"
+	COMMENT_START_CURSOR = "当前页第一条记录的游标"
+	COMMENT_END_CURSOR   = "当前页最后一条记录的游标"
+	COMMENT_GROUP_FIELDS = "分组字段"
+	COMMENT_HAVING       = "分组过滤条件"
+	COMMENT_LIMIT        = "分组结果限制"
+	COMMENT_SORT         = "分组结果排序"
+	COMMENT_SUM          = "总和"
+	COMMENT_AVG          = "平均值"
+	COMMENT_MIN          = "最小值"
+	COMMENT_MAX          = "最大值"
+	COMMENT_DISTINCT     = "去重计数"
+	COMMENT_MIN_STRING   = "最小值(按字典序)"
+	COMMENT_MAX_STRING   = "最大值(按字典序)"
+	COMMENT_MIN_DATE     = "最早时间"
+	COMMENT_MAX_DATE     = "最晚时间"
+)
+
 // Renderer 负责将元数据渲染为GraphQL schema
 type Renderer struct {
 	meta *Metadata
@@ -29,75 +97,42 @@ func NewRenderer(meta *Metadata) *Renderer {
 
 // Generate 生成完整的GraphQL schema
 func (my *Renderer) Generate() (string, error) {
-	my.sb.Reset()
+	// 初始化字符串构建器
+	my.sb = &strings.Builder{}
 
 	// 添加schema版本和说明
-	my.writeLine("# IdeaBase GraphQL Schema")
+	my.writeLine("# " + DESC_SCHEMA_TITLE)
 	fmt.Fprintf(my.sb, "# 版本: %s\n\n", my.meta.Version)
 
-	// 渲染标量类型
-	if err := my.renderScalars(); err != nil {
-		return "", fmt.Errorf("渲染标量类型失败: %w", err)
+	// 定义渲染函数及对应的错误消息
+	renderFuncs := []struct {
+		name string
+		fn   func() error
+	}{
+		{"标量类型", my.renderScalars},
+		{"枚举类型", my.renderEnums},
+		{"通用类型", my.renderCommon},
+		{"实体类型", my.renderTypes},
+		{"分页类型", my.renderPaging},
+		{"统计类型", my.renderStats},
+		{"过滤器类型", my.renderFilter},
+		{"实体过滤器", my.renderEntity},
+		{"排序类型", my.renderSort},
+		{"输入类型", my.renderInput},
+		{"查询根类型", my.renderQuery},
+		{"变更根类型", my.renderMutation},
 	}
 
-	// 渲染枚举类型
-	if err := my.renderEnums(); err != nil {
-		return "", fmt.Errorf("渲染枚举类型失败: %w", err)
-	}
-
-	// 渲染通用类型（如PageInfo, Stats类型等）
-	if err := my.renderCommon(); err != nil {
-		return "", fmt.Errorf("渲染通用类型失败: %w", err)
-	}
-
-	// 渲染实体类型
-	if err := my.renderTypes(); err != nil {
-		return "", fmt.Errorf("渲染实体类型失败: %w", err)
-	}
-
-	// 渲染分页类型
-	if err := my.renderPaging(); err != nil {
-		return "", fmt.Errorf("渲染分页类型失败: %w", err)
-	}
-
-	// 渲染统计类型
-	if err := my.renderStats(); err != nil {
-		return "", fmt.Errorf("渲染统计类型失败: %w", err)
-	}
-
-	// 渲染过滤器类型
-	if err := my.renderFilter(); err != nil {
-		return "", fmt.Errorf("渲染过滤器类型失败: %w", err)
-	}
-
-	// 渲染实体过滤器
-	if err := my.renderEntity(); err != nil {
-		return "", fmt.Errorf("渲染实体过滤器失败: %w", err)
-	}
-
-	// 渲染排序类型
-	if err := my.renderSort(); err != nil {
-		return "", fmt.Errorf("渲染排序类型失败: %w", err)
-	}
-
-	// 渲染输入类型
-	if err := my.renderInput(); err != nil {
-		return "", fmt.Errorf("渲染输入类型失败: %w", err)
-	}
-
-	// 渲染查询根类型
-	if err := my.renderQuery(); err != nil {
-		return "", fmt.Errorf("渲染查询类型失败: %w", err)
-	}
-
-	// 渲染变更根类型
-	if err := my.renderMutation(); err != nil {
-		return "", fmt.Errorf("渲染变更类型失败: %w", err)
+	// 遍历执行所有渲染函数
+	for _, rf := range renderFuncs {
+		if err := rf.fn(); err != nil {
+			return "", fmt.Errorf("渲染%s失败: %w", rf.name, err)
+		}
 	}
 
 	// 保存到文件
 	content := my.sb.String()
-	if err := my.SaveToFile(content); err != nil {
+	if err := my.saveToFile(content); err != nil {
 		return "", fmt.Errorf("保存schema文件失败: %w", err)
 	}
 
@@ -115,8 +150,8 @@ func (my *Renderer) write(text string) {
 	my.sb.WriteString(text)
 }
 
-// SaveToFile 将生成的Schema保存到文件
-func (my *Renderer) SaveToFile(content string) error {
+// saveToFile 将生成的Schema保存到文件
+func (my *Renderer) saveToFile(content string) error {
 	// 写入文件
 	filename := filepath.Join(my.meta.cfg.Root, "cfg/schema.graphql")
 	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
@@ -129,7 +164,7 @@ func (my *Renderer) SaveToFile(content string) error {
 
 // renderScalars 渲染标量类型
 func (my *Renderer) renderScalars() error {
-	my.writeLine("# 自定义标量类型")
+	my.writeLine("# " + DESC_SCALAR_TYPES)
 	my.writeLine("scalar " + SCALAR_JSON)
 	my.writeLine("scalar " + SCALAR_CURSOR)
 	my.writeLine("scalar " + SCALAR_DATE_TIME)
@@ -140,8 +175,8 @@ func (my *Renderer) renderScalars() error {
 // renderEnums 渲染枚举类型
 func (my *Renderer) renderEnums() error {
 	// 渲染排序方向枚举
-	my.writeLine("# 排序方向枚举，包含NULL值处理")
-	my.writeLine("enum SortDirection {")
+	my.writeLine("# " + DESC_SORT_ENUM)
+	my.writeLine("enum " + TYPE_SORT_DIRECTION + " {")
 	my.writeLine("  ASC")
 	my.writeLine("  DESC")
 	my.writeLine("  ASC_NULLS_FIRST")
@@ -152,7 +187,7 @@ func (my *Renderer) renderEnums() error {
 	my.writeLine("")
 
 	// 渲染空值条件枚举
-	my.writeLine("# 空值条件枚举")
+	my.writeLine("# " + DESC_IS_ENUM)
 	my.writeLine("enum IsInput {")
 	my.writeLine("  NULL")
 	my.writeLine("  NOT_NULL")
@@ -165,23 +200,23 @@ func (my *Renderer) renderEnums() error {
 // renderCommon 渲染通用类型
 func (my *Renderer) renderCommon() error {
 	// 渲染分页信息类型
-	my.writeLine("# ------------------ 分页相关类型 ------------------\n")
-	my.writeLine("# 页面信息（用于游标分页）")
-	my.writeLine("type PageInfo {")
-	my.writeField("hasNext", SCALAR_BOOLEAN, field.NonNull(), field.WithComment("是否有下一页"))
-	my.writeField("hasPrev", SCALAR_BOOLEAN, field.NonNull(), field.WithComment("是否有上一页"))
-	my.writeField("start", SCALAR_CURSOR, field.WithComment("当前页第一条记录的游标"))
-	my.writeField("end", SCALAR_CURSOR, field.WithComment("当前页最后一条记录的游标"))
+	my.writeLine("# " + SEPARATOR_LINE + " " + SECTION_PAGING + " " + SEPARATOR_LINE + "\n")
+	my.writeLine("# " + DESC_PAGE_INFO)
+	my.writeLine("type " + TYPE_PAGE_INFO + " {")
+	my.writeField("hasNext", SCALAR_BOOLEAN, field.NonNull(), field.WithComment(COMMENT_HAS_NEXT))
+	my.writeField("hasPrev", SCALAR_BOOLEAN, field.NonNull(), field.WithComment(COMMENT_HAS_PREV))
+	my.writeField("start", SCALAR_CURSOR, field.WithComment(COMMENT_START_CURSOR))
+	my.writeField("end", SCALAR_CURSOR, field.WithComment(COMMENT_END_CURSOR))
 	my.writeLine("}")
 	my.writeLine("")
 
 	// 渲染分组选项类型
-	my.writeLine("# 聚合分组选项")
-	my.writeLine("input GroupBy {")
-	my.writeField("fields", SCALAR_STRING, field.ListNonNull(), field.WithComment("分组字段"))
-	my.writeField("having", SCALAR_JSON, field.WithComment("分组过滤条件"))
-	my.writeField("limit", SCALAR_INT, field.WithComment("分组结果限制"))
-	my.writeField("sort", SCALAR_JSON, field.WithComment("分组结果排序"))
+	my.writeLine("# " + DESC_GROUP_BY)
+	my.writeLine("input " + TYPE_GROUP_BY + " {")
+	my.writeField("fields", SCALAR_STRING, field.ListNonNull(), field.WithComment(COMMENT_GROUP_FIELDS))
+	my.writeField("having", SCALAR_JSON, field.WithComment(COMMENT_HAVING))
+	my.writeField("limit", SCALAR_INT, field.WithComment(COMMENT_LIMIT))
+	my.writeField("sort", SCALAR_JSON, field.WithComment(COMMENT_SORT))
 	my.writeLine("}")
 	my.writeLine("")
 
@@ -267,7 +302,7 @@ func (my *Renderer) renderInput() error {
 
 		// 生成创建输入类型
 		my.writeLine("# " + className + "创建输入")
-		my.writeLine("input " + className + "CreateInput {")
+		my.writeLine("input " + className + SUFFIX_CREATE_INPUT + " {")
 		// 添加创建时的必要字段
 		for fieldName, field := range class.Fields {
 			// 确保只处理真正的字段名，跳过列名索引
@@ -281,14 +316,14 @@ func (my *Renderer) renderInput() error {
 				typeName += "!"
 			}
 
-			my.writeLine("  " + fieldName + ": " + typeName)
+			my.writeField(fieldName, typeName)
 		}
 		my.writeLine("}")
 		my.writeLine("")
 
 		// 生成更新输入类型
 		my.writeLine("# " + className + "更新输入")
-		my.writeLine("input " + className + "UpdateInput {")
+		my.writeLine("input " + className + SUFFIX_UPDATE_INPUT + " {")
 		// 添加可更新字段，全部为可选
 		for fieldName, field := range class.Fields {
 			// 确保只处理真正的字段名，跳过列名索引
@@ -312,13 +347,13 @@ func (my *Renderer) renderInput() error {
 	}
 
 	// 添加关系输入类型
-	my.writeLine("# 关联操作")
+	my.writeLine("# " + DESC_RELATION)
 	my.writeLine("input ConnectInput {")
 	my.writeField("id", SCALAR_ID, field.NonNull())
 	my.writeLine("}")
 	my.writeLine("")
 
-	my.writeLine("# 关系操作")
+	my.writeLine("# " + DESC_RELATION_OP)
 	my.writeLine("input RelationInput {")
 	my.writeField("connect", SCALAR_ID, field.ListNonNull())
 	my.writeField("disconnect", SCALAR_ID, field.ListNonNull())
@@ -330,17 +365,16 @@ func (my *Renderer) renderInput() error {
 
 // renderFilter 渲染基础过滤器类型
 func (my *Renderer) renderFilter() error {
-	my.writeLine("# ------------------ 过滤器类型定义 ------------------\n")
+	my.writeLine("# " + SEPARATOR_LINE + " " + SECTION_FILTER + " " + SEPARATOR_LINE + "\n")
 
 	// 定义过滤器映射表，每种类型支持的操作
 	for scalarType, operators := range symbols {
-		filterName := scalarType + "Filter"
+		filterName := scalarType + SUFFIX_FILTER
 		my.writeLine("# " + scalarType + "过滤器")
 		my.writeLine("input " + filterName + " {")
 
 		// 渲染该类型支持的所有操作符
 		for _, op := range operators {
-			// 使用writeField方法替代原来的字符串拼接
 			if op.Name == HAS_KEY || op.Name == HAS_KEY_ANY || op.Name == HAS_KEY_ALL {
 				my.writeField(op.Name, SCALAR_STRING, field.WithComment(op.Desc))
 			} else if op.Name == IN || op.Name == NI {
@@ -369,7 +403,7 @@ func (my *Renderer) renderEntity() error {
 
 		// 生成过滤器类型
 		my.writeLine("# " + className + "查询条件")
-		my.writeLine("input " + className + "Filter {")
+		my.writeLine("input " + className + SUFFIX_FILTER + " {")
 
 		// 添加字段过滤条件
 		for fieldName, field := range class.Fields {
@@ -384,9 +418,9 @@ func (my *Renderer) renderEntity() error {
 		}
 
 		// 添加布尔逻辑操作符
-		my.writeField(AND, className+"Filter", field.ListNonNull())
-		my.writeField(OR, className+"Filter", field.ListNonNull())
-		my.writeField(NOT, className+"Filter")
+		my.writeField(AND, className+SUFFIX_FILTER, field.ListNonNull())
+		my.writeField(OR, className+SUFFIX_FILTER, field.ListNonNull())
+		my.writeField(NOT, className+SUFFIX_FILTER)
 
 		my.writeLine("}")
 		my.writeLine("")
@@ -406,7 +440,7 @@ func (my *Renderer) renderSort() error {
 
 		// 生成排序类型
 		my.writeLine("# " + className + "排序")
-		my.writeLine("input " + className + "Sort {")
+		my.writeLine("input " + className + SUFFIX_SORT + " {")
 
 		// 添加可排序字段
 		for fieldName, field := range class.Fields {
@@ -416,7 +450,7 @@ func (my *Renderer) renderSort() error {
 			}
 
 			// 判断字段是否可排序
-			my.writeField(fieldName, "SortDirection")
+			my.writeField(fieldName, TYPE_SORT_DIRECTION)
 		}
 
 		my.writeLine("}")
@@ -428,7 +462,7 @@ func (my *Renderer) renderSort() error {
 
 // renderQuery 渲染查询根类型
 func (my *Renderer) renderQuery() error {
-	my.writeLine("# ------------------ 查询和变更 ------------------\n")
+	my.writeLine("# " + SEPARATOR_LINE + " " + SECTION_QUERY + " " + SEPARATOR_LINE + "\n")
 	my.writeLine("# 查询根类型")
 	my.writeLine("type Query {")
 
@@ -449,17 +483,17 @@ func (my *Renderer) renderQuery() error {
 		my.writeLine("\n  # " + className + "列表查询")
 		my.writeField(
 			strcase.ToLowerCamel(inflection.Plural(className)),
-			className+"Page",
-			field.WithMultilineArgs(),
+			className+SUFFIX_PAGE,
 			field.NonNull(),
+			field.WithMultilineArgs(),
 			field.WithArgs([]field.Argument{
-				{Name: "filter", Type: className + "Filter"},
-				{Name: "sort", Type: "[" + className + "Sort!]"},
+				{Name: "filter", Type: className + SUFFIX_FILTER},
+				{Name: "sort", Type: "[" + className + SUFFIX_SORT + "!]"},
 				{Name: "limit", Type: SCALAR_INT},
 				{Name: "offset", Type: SCALAR_INT},
 				{Name: "first", Type: SCALAR_INT},
-				{Name: "after", Type: SCALAR_CURSOR},
 				{Name: "last", Type: SCALAR_INT},
+				{Name: "after", Type: SCALAR_CURSOR},
 				{Name: "before", Type: SCALAR_CURSOR},
 			}...),
 		)
@@ -467,12 +501,12 @@ func (my *Renderer) renderQuery() error {
 		// 统计查询
 		my.writeLine("\n  # " + className + "统计查询")
 		my.writeField(
-			strcase.ToLowerCamel(className)+"Stats",
-			className+"Stats",
+			strcase.ToLowerCamel(className)+SUFFIX_STATS,
+			className+SUFFIX_STATS,
 			field.NonNull(),
 			field.WithArgs([]field.Argument{
-				{Name: "filter", Type: className + "Filter"},
-				{Name: "groupBy", Type: "GroupBy"},
+				{Name: "filter", Type: className + SUFFIX_FILTER},
+				{Name: "groupBy", Type: TYPE_GROUP_BY},
 			}...),
 		)
 	}
@@ -497,7 +531,7 @@ func (my *Renderer) renderMutation() error {
 		// 创建操作
 		my.writeLine("  # 创建" + className)
 		my.writeField("create"+className, className, field.NonNull(), field.WithArgs([]field.Argument{
-			{Name: "data", Type: className + "CreateInput!"},
+			{Name: "data", Type: className + SUFFIX_CREATE_INPUT + "!"},
 		}...))
 
 		// 更新操作
@@ -505,7 +539,7 @@ func (my *Renderer) renderMutation() error {
 		my.writeLine("  # 更新" + className)
 		my.writeField("update"+className, className, field.NonNull(), field.WithArgs([]field.Argument{
 			{Name: "id", Type: SCALAR_ID + "!"},
-			{Name: "data", Type: className + "UpdateInput!"},
+			{Name: "data", Type: className + SUFFIX_UPDATE_INPUT + "!"},
 		}...))
 
 		// 删除操作
@@ -519,7 +553,7 @@ func (my *Renderer) renderMutation() error {
 		my.writeLine("")
 		my.writeLine("  # 批量删除" + className)
 		my.writeField("delete"+className, SCALAR_INT, field.NonNull(), field.WithArgs([]field.Argument{
-			{Name: "filter", Type: className + "Filter!"},
+			{Name: "filter", Type: className + SUFFIX_FILTER + "!"},
 		}...))
 	}
 
@@ -529,37 +563,37 @@ func (my *Renderer) renderMutation() error {
 
 // renderStats 渲染统计类型
 func (my *Renderer) renderStats() error {
-	my.writeLine("# ------------------ 聚合函数相关类型 ------------------\n")
+	my.writeLine("# " + SEPARATOR_LINE + " " + SECTION_AGGREGATION + " " + SEPARATOR_LINE + "\n")
 
 	// 数值聚合结果
-	my.writeLine("# 数值聚合结果")
-	my.writeLine("type NumberStats {")
-	my.writeField("sum", SCALAR_FLOAT, field.WithComment("总和"))
-	my.writeField("avg", SCALAR_FLOAT, field.WithComment("平均值"))
-	my.writeField("min", SCALAR_FLOAT, field.WithComment("最小值"))
-	my.writeField("max", SCALAR_FLOAT, field.WithComment("最大值"))
-	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment("计数"))
-	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment("去重计数"))
+	my.writeLine("# " + DESC_NUMBER_STATS)
+	my.writeLine("type " + TYPE_NUMBER_STATS + " {")
+	my.writeField("sum", SCALAR_FLOAT, field.WithComment(COMMENT_SUM))
+	my.writeField("avg", SCALAR_FLOAT, field.WithComment(COMMENT_AVG))
+	my.writeField("min", SCALAR_FLOAT, field.WithComment(COMMENT_MIN))
+	my.writeField("max", SCALAR_FLOAT, field.WithComment(COMMENT_MAX))
+	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
+	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
 	my.writeLine("")
 
 	// 日期聚合结果
-	my.writeLine("# 日期聚合结果")
-	my.writeLine("type DateTimeStats {")
-	my.writeField("min", SCALAR_DATE_TIME, field.WithComment("最早时间"))
-	my.writeField("max", SCALAR_DATE_TIME, field.WithComment("最晚时间"))
-	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment("计数"))
-	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment("去重计数"))
+	my.writeLine("# " + DESC_DATE_TIME_STATS)
+	my.writeLine("type " + TYPE_DATE_TIME_STATS + " {")
+	my.writeField("min", SCALAR_DATE_TIME, field.WithComment(COMMENT_MIN_DATE))
+	my.writeField("max", SCALAR_DATE_TIME, field.WithComment(COMMENT_MAX_DATE))
+	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
+	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
 	my.writeLine("")
 
 	// 字符串聚合结果
-	my.writeLine("# 字符串聚合结果")
-	my.writeLine("type StringStats {")
-	my.writeField("min", SCALAR_STRING, field.WithComment("最小值(按字典序)"))
-	my.writeField("max", SCALAR_STRING, field.WithComment("最大值(按字典序)"))
-	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment("计数"))
-	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment("去重计数"))
+	my.writeLine("# " + DESC_STRING_STATS)
+	my.writeLine("type " + TYPE_STRING_STATS + " {")
+	my.writeField("min", SCALAR_STRING, field.WithComment(COMMENT_MIN_STRING))
+	my.writeField("max", SCALAR_STRING, field.WithComment(COMMENT_MAX_STRING))
+	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
+	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
 	my.writeLine("")
 
@@ -572,7 +606,7 @@ func (my *Renderer) renderStats() error {
 
 		// 生成统计类型
 		my.writeLine("# " + className + "聚合")
-		my.writeLine("type " + className + "Stats {")
+		my.writeLine("type " + className + SUFFIX_STATS + " {")
 		my.writeField("count", SCALAR_INT, field.NonNull())
 
 		// 添加统计字段
@@ -586,11 +620,11 @@ func (my *Renderer) renderStats() error {
 			typeName := my.mapDBTypeToGraphQL(field.Type)
 			switch typeName {
 			case SCALAR_INT, SCALAR_FLOAT, SCALAR_ID:
-				my.writeField(fieldName, "NumberStats")
+				my.writeField(fieldName, TYPE_NUMBER_STATS)
 			case SCALAR_STRING:
-				my.writeField(fieldName, "StringStats")
+				my.writeField(fieldName, TYPE_STRING_STATS)
 			case SCALAR_DATE_TIME:
-				my.writeField(fieldName, "DateTimeStats")
+				my.writeField(fieldName, TYPE_DATE_TIME_STATS)
 			case SCALAR_BOOLEAN:
 				my.writeField(fieldName+"True", SCALAR_INT)
 				my.writeField(fieldName+"False", SCALAR_INT)
@@ -599,15 +633,15 @@ func (my *Renderer) renderStats() error {
 
 		// 添加分组聚合
 		my.writeLine("  # 分组聚合")
-		my.writeField("groupBy", "["+className+"Group!]")
+		my.writeField("groupBy", "["+className+SUFFIX_GROUP+"!]")
 		my.writeLine("}")
 		my.writeLine("")
 
 		// 生成对应的分组类型
 		my.writeLine("# " + className + "分组结果")
-		my.writeLine("type " + className + "Group {")
-		my.writeField("key", SCALAR_JSON, field.NonNull(), field.WithComment("分组键"))
-		my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment("计数"))
+		my.writeLine("type " + className + SUFFIX_GROUP + " {")
+		my.writeField("key", SCALAR_JSON, field.NonNull(), field.WithComment(COMMENT_GROUP_KEY))
+		my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
 		my.writeLine("  # 可以包含其他聚合字段")
 		my.writeLine("}")
 		my.writeLine("")
@@ -618,7 +652,7 @@ func (my *Renderer) renderStats() error {
 
 // renderPaging 渲染分页类型
 func (my *Renderer) renderPaging() error {
-	my.writeLine("# ------------------ 连接和边类型（游标分页） ------------------\n")
+	my.writeLine("# " + SEPARATOR_LINE + " " + SECTION_CONNECTION + " " + SEPARATOR_LINE + "\n")
 
 	// 为每个实体类生成分页类型
 	for className, class := range my.meta.Nodes {
@@ -629,9 +663,9 @@ func (my *Renderer) renderPaging() error {
 
 		// 生成分页类型
 		my.writeLine("# " + className + "分页结果")
-		my.writeLine("type " + className + "Page {")
+		my.writeLine("type " + className + SUFFIX_PAGE + " {")
 		my.writeField("items", className, field.NonNull(), field.ListNonNull(), field.WithComment("直接返回"+className+"对象数组"))
-		my.writeField("pageInfo", "PageInfo", field.NonNull())
+		my.writeField("pageInfo", TYPE_PAGE_INFO, field.NonNull())
 		my.writeField("total", SCALAR_INT, field.NonNull())
 		my.writeLine("}")
 		my.writeLine("")
