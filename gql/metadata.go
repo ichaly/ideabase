@@ -48,9 +48,10 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 
 	//初始化配置
 	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: dataTypes}}
-	v.SetDefault("schema.default-limit", 10)
-	v.SetDefault("schema.enable-camel-case", true)
 	v.SetDefault("schema.schema", "public")
+	v.SetDefault("schema.default-limit", 10)
+	v.SetDefault("schema.enable-singular", true)
+	v.SetDefault("schema.enable-camel-case", true)
 	v.SetDefault("schema.table-prefix", []string{})
 
 	if err = v.Unmarshal(cfg); err != nil {
