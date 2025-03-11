@@ -101,8 +101,8 @@ func (my *Renderer) Generate() (string, error) {
 	my.sb = &strings.Builder{}
 
 	// 添加schema版本和说明
-	my.writeLine("# " + DESC_SCHEMA_TITLE)
-	fmt.Fprintf(my.sb, "# 版本: %s\n\n", my.meta.Version)
+	my.writeLine("# ", DESC_SCHEMA_TITLE)
+	my.writeLine("# 版本: ", my.meta.Version, "\n")
 
 	// 定义渲染函数及对应的错误消息
 	renderFuncs := []struct {
@@ -140,14 +140,18 @@ func (my *Renderer) Generate() (string, error) {
 }
 
 // writeLine 写入一行文本（自动添加换行符）
-func (my *Renderer) writeLine(text string) {
-	my.write(text)
+// 支持可变参数，避免字符串相加操作，提高性能
+func (my *Renderer) writeLine(parts ...string) {
+	my.write(parts...)
 	my.write("\n")
 }
 
 // write 直接写入文本
-func (my *Renderer) write(text string) {
-	my.sb.WriteString(text)
+// 支持可变参数，避免字符串相加操作，提高性能
+func (my *Renderer) write(parts ...string) {
+	for _, part := range parts {
+		my.sb.WriteString(part)
+	}
 }
 
 // saveToFile 将生成的Schema保存到文件
@@ -164,19 +168,19 @@ func (my *Renderer) saveToFile(content string) error {
 
 // renderScalars 渲染标量类型
 func (my *Renderer) renderScalars() error {
-	my.writeLine("# " + DESC_SCALAR_TYPES)
-	my.writeLine("scalar " + SCALAR_JSON)
-	my.writeLine("scalar " + SCALAR_CURSOR)
-	my.writeLine("scalar " + SCALAR_DATE_TIME)
-	my.writeLine("")
+	my.writeLine("# ", DESC_SCALAR_TYPES)
+	my.writeLine("scalar ", SCALAR_JSON)
+	my.writeLine("scalar ", SCALAR_CURSOR)
+	my.writeLine("scalar ", SCALAR_DATE_TIME)
+	my.writeLine()
 	return nil
 }
 
 // renderEnums 渲染枚举类型
 func (my *Renderer) renderEnums() error {
 	// 渲染排序方向枚举
-	my.writeLine("# " + DESC_SORT_ENUM)
-	my.writeLine("enum " + TYPE_SORT_DIRECTION + " {")
+	my.writeLine("# ", DESC_SORT_ENUM)
+	my.writeLine("enum ", TYPE_SORT_DIRECTION, " {")
 	my.writeLine("  ASC")
 	my.writeLine("  DESC")
 	my.writeLine("  ASC_NULLS_FIRST")
@@ -184,15 +188,15 @@ func (my *Renderer) renderEnums() error {
 	my.writeLine("  ASC_NULLS_LAST")
 	my.writeLine("  DESC_NULLS_LAST")
 	my.writeLine("}")
-	my.writeLine("")
+	my.writeLine()
 
 	// 渲染空值条件枚举
-	my.writeLine("# " + DESC_IS_ENUM)
+	my.writeLine("# ", DESC_IS_ENUM)
 	my.writeLine("enum IsInput {")
 	my.writeLine("  NULL")
 	my.writeLine("  NOT_NULL")
 	my.writeLine("}")
-	my.writeLine("")
+	my.writeLine()
 
 	return nil
 }
@@ -200,25 +204,25 @@ func (my *Renderer) renderEnums() error {
 // renderCommon 渲染通用类型
 func (my *Renderer) renderCommon() error {
 	// 渲染分页信息类型
-	my.writeLine("# " + SEPARATOR_LINE + " " + SECTION_PAGING + " " + SEPARATOR_LINE + "\n")
-	my.writeLine("# " + DESC_PAGE_INFO)
-	my.writeLine("type " + TYPE_PAGE_INFO + " {")
+	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_PAGING, " ", SEPARATOR_LINE, "\n")
+	my.writeLine("# ", DESC_PAGE_INFO)
+	my.writeLine("type ", TYPE_PAGE_INFO, " {")
 	my.writeField("hasNext", SCALAR_BOOLEAN, field.NonNull(), field.WithComment(COMMENT_HAS_NEXT))
 	my.writeField("hasPrev", SCALAR_BOOLEAN, field.NonNull(), field.WithComment(COMMENT_HAS_PREV))
 	my.writeField("start", SCALAR_CURSOR, field.WithComment(COMMENT_START_CURSOR))
 	my.writeField("end", SCALAR_CURSOR, field.WithComment(COMMENT_END_CURSOR))
 	my.writeLine("}")
-	my.writeLine("")
+	my.writeLine()
 
 	// 渲染分组选项类型
-	my.writeLine("# " + DESC_GROUP_BY)
-	my.writeLine("input " + TYPE_GROUP_BY + " {")
+	my.writeLine("# ", DESC_GROUP_BY)
+	my.writeLine("input ", TYPE_GROUP_BY, " {")
 	my.writeField("fields", SCALAR_STRING, field.ListNonNull(), field.WithComment(COMMENT_GROUP_FIELDS))
 	my.writeField("having", SCALAR_JSON, field.WithComment(COMMENT_HAVING))
 	my.writeField("limit", SCALAR_INT, field.WithComment(COMMENT_LIMIT))
 	my.writeField("sort", SCALAR_JSON, field.WithComment(COMMENT_SORT))
 	my.writeLine("}")
-	my.writeLine("")
+	my.writeLine()
 
 	return nil
 }
@@ -234,11 +238,11 @@ func (my *Renderer) renderTypes() error {
 
 		// 添加类型描述
 		if class.Description != "" {
-			my.writeLine("# " + class.Description)
+			my.writeLine("# ", class.Description)
 		}
 
 		// 开始类型定义
-		my.writeLine("type " + className + " {")
+		my.writeLine("type ", className, " {")
 
 		// 添加所有字段，确保只处理真正的字段名
 		for fieldName, field := range class.Fields {
@@ -256,11 +260,11 @@ func (my *Renderer) renderTypes() error {
 
 			// 添加描述作为注释
 			if field.Description != "" {
-				my.writeLine("  # " + field.Description)
+				my.writeLine("  # ", field.Description)
 			}
 
 			// 输出字段定义
-			my.writeLine("  " + fieldName + ": " + typeName)
+			my.writeLine("  ", fieldName, ": ", typeName)
 		}
 
 		// 添加关系字段
@@ -270,7 +274,7 @@ func (my *Renderer) renderTypes() error {
 
 		// 结束类型定义
 		my.writeLine("}")
-		my.writeLine("")
+		my.writeLine()
 	}
 
 	return nil
@@ -301,8 +305,8 @@ func (my *Renderer) renderInput() error {
 		}
 
 		// 生成创建输入类型
-		my.writeLine("# " + className + "创建输入")
-		my.writeLine("input " + className + SUFFIX_CREATE_INPUT + " {")
+		my.writeLine("# ", className, "创建输入")
+		my.writeLine("input ", className, SUFFIX_CREATE_INPUT, " {")
 		// 添加创建时的必要字段
 		for fieldName, field := range class.Fields {
 			// 确保只处理真正的字段名，跳过列名索引
@@ -322,8 +326,8 @@ func (my *Renderer) renderInput() error {
 		my.writeLine("")
 
 		// 生成更新输入类型
-		my.writeLine("# " + className + "更新输入")
-		my.writeLine("input " + className + SUFFIX_UPDATE_INPUT + " {")
+		my.writeLine("# ", className, "更新输入")
+		my.writeLine("input ", className, SUFFIX_UPDATE_INPUT, " {")
 		// 添加可更新字段，全部为可选
 		for fieldName, field := range class.Fields {
 			// 确保只处理真正的字段名，跳过列名索引
@@ -347,13 +351,13 @@ func (my *Renderer) renderInput() error {
 	}
 
 	// 添加关系输入类型
-	my.writeLine("# " + DESC_RELATION)
+	my.writeLine("# ", DESC_RELATION)
 	my.writeLine("input ConnectInput {")
 	my.writeField("id", SCALAR_ID, field.NonNull())
 	my.writeLine("}")
 	my.writeLine("")
 
-	my.writeLine("# " + DESC_RELATION_OP)
+	my.writeLine("# ", DESC_RELATION_OP)
 	my.writeLine("input RelationInput {")
 	my.writeField("connect", SCALAR_ID, field.ListNonNull())
 	my.writeField("disconnect", SCALAR_ID, field.ListNonNull())
@@ -365,13 +369,13 @@ func (my *Renderer) renderInput() error {
 
 // renderFilter 渲染基础过滤器类型
 func (my *Renderer) renderFilter() error {
-	my.writeLine("# " + SEPARATOR_LINE + " " + SECTION_FILTER + " " + SEPARATOR_LINE + "\n")
+	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_FILTER, " ", SEPARATOR_LINE, "\n")
 
 	// 定义过滤器映射表，每种类型支持的操作
 	for scalarType, operators := range symbols {
 		filterName := scalarType + SUFFIX_FILTER
-		my.writeLine("# " + scalarType + "过滤器")
-		my.writeLine("input " + filterName + " {")
+		my.writeLine("# ", scalarType, "过滤器")
+		my.writeLine("input ", filterName, " {")
 
 		// 渲染该类型支持的所有操作符
 		for _, op := range operators {
@@ -387,7 +391,7 @@ func (my *Renderer) renderFilter() error {
 		}
 
 		my.writeLine("}")
-		my.writeLine("")
+		my.writeLine()
 	}
 	return nil
 }
@@ -402,8 +406,8 @@ func (my *Renderer) renderEntity() error {
 		}
 
 		// 生成过滤器类型
-		my.writeLine("# " + className + "查询条件")
-		my.writeLine("input " + className + SUFFIX_FILTER + " {")
+		my.writeLine("# ", className, "查询条件")
+		my.writeLine("input ", className, SUFFIX_FILTER, " {")
 
 		// 添加字段过滤条件
 		for fieldName, field := range class.Fields {
@@ -439,8 +443,8 @@ func (my *Renderer) renderSort() error {
 		}
 
 		// 生成排序类型
-		my.writeLine("# " + className + "排序")
-		my.writeLine("input " + className + SUFFIX_SORT + " {")
+		my.writeLine("# ", className, "排序")
+		my.writeLine("input ", className, SUFFIX_SORT, " {")
 
 		// 添加可排序字段
 		for fieldName, field := range class.Fields {
@@ -462,7 +466,7 @@ func (my *Renderer) renderSort() error {
 
 // renderQuery 渲染查询根类型
 func (my *Renderer) renderQuery() error {
-	my.writeLine("# " + SEPARATOR_LINE + " " + SECTION_QUERY + " " + SEPARATOR_LINE + "\n")
+	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_QUERY, " ", SEPARATOR_LINE, "\n")
 	my.writeLine("# 查询根类型")
 	my.writeLine("type Query {")
 
@@ -474,13 +478,13 @@ func (my *Renderer) renderQuery() error {
 		}
 
 		// 单个实体查询
-		my.writeLine("  # 单个" + className + "查询")
+		my.writeLine("  # 单个", className, "查询")
 		my.writeField(strcase.ToLowerCamel(className), className, field.WithArgs([]field.Argument{
 			{Name: "id", Type: SCALAR_ID + "!"},
 		}...))
 
 		// 统一列表查询（支持两种分页方式）
-		my.writeLine("\n  # " + className + "列表查询")
+		my.writeLine("\n  # ", className, "列表查询")
 		my.writeField(
 			strcase.ToLowerCamel(inflection.Plural(className)),
 			className+SUFFIX_PAGE,
@@ -499,7 +503,7 @@ func (my *Renderer) renderQuery() error {
 		)
 
 		// 统计查询
-		my.writeLine("\n  # " + className + "统计查询")
+		my.writeLine("\n  # ", className, "统计查询")
 		my.writeField(
 			strcase.ToLowerCamel(className)+SUFFIX_STATS,
 			className+SUFFIX_STATS,
@@ -512,7 +516,7 @@ func (my *Renderer) renderQuery() error {
 	}
 
 	my.writeLine("}")
-	my.writeLine("")
+	my.writeLine()
 	return nil
 }
 
@@ -529,29 +533,29 @@ func (my *Renderer) renderMutation() error {
 		}
 
 		// 创建操作
-		my.writeLine("  # 创建" + className)
+		my.writeLine("  # ", className, "创建")
 		my.writeField("create"+className, className, field.NonNull(), field.WithArgs([]field.Argument{
 			{Name: "data", Type: className + SUFFIX_CREATE_INPUT + "!"},
 		}...))
 
 		// 更新操作
-		my.writeLine("")
-		my.writeLine("  # 更新" + className)
+		my.writeLine()
+		my.writeLine("  # ", className, "更新")
 		my.writeField("update"+className, className, field.NonNull(), field.WithArgs([]field.Argument{
 			{Name: "id", Type: SCALAR_ID + "!"},
 			{Name: "data", Type: className + SUFFIX_UPDATE_INPUT + "!"},
 		}...))
 
 		// 删除操作
-		my.writeLine("")
-		my.writeLine("  # 删除" + className)
+		my.writeLine()
+		my.writeLine("  # ", className, "删除")
 		my.writeField("delete"+className, SCALAR_BOOLEAN, field.NonNull(), field.WithArgs([]field.Argument{
 			{Name: "id", Type: SCALAR_ID + "!"},
 		}...))
 
 		// 批量删除操作
-		my.writeLine("")
-		my.writeLine("  # 批量删除" + className)
+		my.writeLine()
+		my.writeLine("  # ", className, "批量删除")
 		my.writeField("delete"+className, SCALAR_INT, field.NonNull(), field.WithArgs([]field.Argument{
 			{Name: "filter", Type: className + SUFFIX_FILTER + "!"},
 		}...))
@@ -563,11 +567,11 @@ func (my *Renderer) renderMutation() error {
 
 // renderStats 渲染统计类型
 func (my *Renderer) renderStats() error {
-	my.writeLine("# " + SEPARATOR_LINE + " " + SECTION_AGGREGATION + " " + SEPARATOR_LINE + "\n")
+	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_AGGREGATION, " ", SEPARATOR_LINE, "\n")
 
 	// 数值聚合结果
-	my.writeLine("# " + DESC_NUMBER_STATS)
-	my.writeLine("type " + TYPE_NUMBER_STATS + " {")
+	my.writeLine("# ", DESC_NUMBER_STATS)
+	my.writeLine("type ", TYPE_NUMBER_STATS, " {")
 	my.writeField("sum", SCALAR_FLOAT, field.WithComment(COMMENT_SUM))
 	my.writeField("avg", SCALAR_FLOAT, field.WithComment(COMMENT_AVG))
 	my.writeField("min", SCALAR_FLOAT, field.WithComment(COMMENT_MIN))
@@ -575,27 +579,27 @@ func (my *Renderer) renderStats() error {
 	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
 	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
-	my.writeLine("")
+	my.writeLine()
 
 	// 日期聚合结果
-	my.writeLine("# " + DESC_DATE_TIME_STATS)
-	my.writeLine("type " + TYPE_DATE_TIME_STATS + " {")
+	my.writeLine("# ", DESC_DATE_TIME_STATS)
+	my.writeLine("type ", TYPE_DATE_TIME_STATS, " {")
 	my.writeField("min", SCALAR_DATE_TIME, field.WithComment(COMMENT_MIN_DATE))
 	my.writeField("max", SCALAR_DATE_TIME, field.WithComment(COMMENT_MAX_DATE))
 	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
 	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
-	my.writeLine("")
+	my.writeLine()
 
 	// 字符串聚合结果
-	my.writeLine("# " + DESC_STRING_STATS)
-	my.writeLine("type " + TYPE_STRING_STATS + " {")
+	my.writeLine("# ", DESC_STRING_STATS)
+	my.writeLine("type ", TYPE_STRING_STATS, " {")
 	my.writeField("min", SCALAR_STRING, field.WithComment(COMMENT_MIN_STRING))
 	my.writeField("max", SCALAR_STRING, field.WithComment(COMMENT_MAX_STRING))
 	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
 	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
-	my.writeLine("")
+	my.writeLine()
 
 	// 为每个实体类生成统计类型
 	for className, class := range my.meta.Nodes {
@@ -605,8 +609,8 @@ func (my *Renderer) renderStats() error {
 		}
 
 		// 生成统计类型
-		my.writeLine("# " + className + "聚合")
-		my.writeLine("type " + className + SUFFIX_STATS + " {")
+		my.writeLine("# ", className, "聚合")
+		my.writeLine("type ", className, SUFFIX_STATS, " {")
 		my.writeField("count", SCALAR_INT, field.NonNull())
 
 		// 添加统计字段
@@ -638,8 +642,8 @@ func (my *Renderer) renderStats() error {
 		my.writeLine("")
 
 		// 生成对应的分组类型
-		my.writeLine("# " + className + "分组结果")
-		my.writeLine("type " + className + SUFFIX_GROUP + " {")
+		my.writeLine("# ", className, "分组结果")
+		my.writeLine("type ", className, SUFFIX_GROUP, " {")
 		my.writeField("key", SCALAR_JSON, field.NonNull(), field.WithComment(COMMENT_GROUP_KEY))
 		my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
 		my.writeLine("  # 可以包含其他聚合字段")
@@ -652,7 +656,7 @@ func (my *Renderer) renderStats() error {
 
 // renderPaging 渲染分页类型
 func (my *Renderer) renderPaging() error {
-	my.writeLine("# " + SEPARATOR_LINE + " " + SECTION_CONNECTION + " " + SEPARATOR_LINE + "\n")
+	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_CONNECTION, " ", SEPARATOR_LINE, "\n")
 
 	// 为每个实体类生成分页类型
 	for className, class := range my.meta.Nodes {
@@ -662,13 +666,22 @@ func (my *Renderer) renderPaging() error {
 		}
 
 		// 生成分页类型
-		my.writeLine("# " + className + "分页结果")
-		my.writeLine("type " + className + SUFFIX_PAGE + " {")
+		my.writeLine("# ", className, "分页结果")
+		my.writeLine("type ", className, SUFFIX_PAGE, " {")
 		my.writeField("items", className, field.NonNull(), field.ListNonNull(), field.WithComment("直接返回"+className+"对象数组"))
 		my.writeField("pageInfo", TYPE_PAGE_INFO, field.NonNull())
 		my.writeField("total", SCALAR_INT, field.NonNull())
 		my.writeLine("}")
 		my.writeLine("")
+
+		// 生成对应的分组类型
+		my.writeLine("# ", className, "分组结果")
+		my.writeLine("type ", className, SUFFIX_GROUP, " {")
+		my.writeField("key", SCALAR_JSON, field.NonNull(), field.WithComment(COMMENT_GROUP_KEY))
+		my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
+		my.writeLine("  # 可以包含其他聚合字段")
+		my.writeLine("}")
+		my.writeLine()
 	}
 
 	return nil
