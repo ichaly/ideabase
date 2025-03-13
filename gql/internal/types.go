@@ -30,6 +30,7 @@ type Class struct {
 	PrimaryKeys []string          // 主键列表
 	Description string            // 描述信息
 	Fields      map[string]*Field // 字段映射表(包含字段名和列名的索引)
+	Resolver    string            // 类级别自定义Resolver
 }
 
 // Field 表示类的一个字段/列的完整定义
@@ -43,6 +44,7 @@ type Field struct {
 	IsUnique    bool      `json:"isUnique"`    // 是否唯一
 	Description string    `json:"description"` // 描述信息
 	Relation    *Relation `json:"relation"`    // 若为关系字段,指向关系定义
+	Resolver    string    `json:"resolver"`    // 字段级别自定义Resolver
 }
 
 // Relation 表示类之间的关系
@@ -54,13 +56,16 @@ type Relation struct {
 	Type        RelationType `json:"type"`              // 关系类型
 	Reverse     *Relation    `json:"-"`                 // 反向关系引用
 	Through     *Through     `json:"through,omitempty"` // 多对多关系配置
+	ReverseName string       `json:"reverseName"`       // 反向关系名称
 }
 
 // Through 表示多对多关系中的中间表配置
 type Through struct {
-	Table     string `json:"table"`     // 中间表名称
-	SourceKey string `json:"sourceKey"` // 中间表中指向源表的外键
-	TargetKey string `json:"targetKey"` // 中间表中指向目标表的外键
+	Name      string            `json:"name"`      // 中间表类名
+	Table     string            `json:"table"`     // 中间表名称
+	TargetKey string            `json:"targetKey"` // 中间表中指向目标表的外键
+	SourceKey string            `json:"sourceKey"` // 中间表中指向源表的外键
+	Fields    map[string]*Field `json:"fields"`    // 中间表额外字段
 }
 
 // AddField 添加字段到类中
@@ -76,11 +81,6 @@ func (my *Class) AddField(field *Field) {
 	if field.Column != "" && field.Column != field.Name {
 		my.Fields[field.Column] = field
 	}
-}
-
-// GetField 获取字段定义(支持字段名或列名)
-func (my *Class) GetField(nameOrColumn string) *Field {
-	return my.Fields[nameOrColumn]
 }
 
 // RemoveField 移除字段
@@ -116,6 +116,7 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		PrimaryKeys []string          `json:"primaryKeys"`
 		Description string            `json:"description"`
 		Fields      map[string]*Field `json:"fields"`
+		Resolver    string            `json:"resolver,omitempty"`
 	}{
 		Name:        my.Name,
 		Table:       my.Table,
@@ -123,6 +124,7 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		Virtual:     my.Virtual,
 		PrimaryKeys: my.PrimaryKeys,
 		Description: my.Description,
+		Resolver:    my.Resolver,
 	})
 }
 

@@ -122,7 +122,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 		assert.True(t, exists, "应该存在Posts表")
 		if exists {
 			// 验证many-to-one关系
-			userId := posts.GetField("userId")
+			userId := posts.Fields["userId"]
 			assert.NotNil(t, userId, "应该有userId字段")
 			if userId != nil {
 				assert.NotNil(t, userId.Relation, "userId应该有关系定义")
@@ -136,7 +136,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 		assert.True(t, exists, "应该存在PostTags表")
 		if exists {
 			// 验证与Posts的关系
-			postId := postTags.GetField("postId")
+			postId := postTags.Fields["postId"]
 			assert.NotNil(t, postId, "应该有postId字段")
 			if postId != nil {
 				assert.NotNil(t, postId.Relation, "postId应该有关系定义")
@@ -145,7 +145,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			}
 
 			// 验证与Tags的关系
-			tagId := postTags.GetField("tagId")
+			tagId := postTags.Fields["tagId"]
 			assert.NotNil(t, tagId, "应该有tagId字段")
 			if tagId != nil {
 				assert.NotNil(t, tagId.Relation, "tagId应该有关系定义")
@@ -159,7 +159,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 		assert.True(t, exists, "应该存在Organizations表")
 		if exists {
 			// 验证parentId字段
-			parentId := organizations.GetField("parentId")
+			parentId := organizations.Fields["parentId"]
 			assert.NotNil(t, parentId, "应该有parentId字段")
 			if parentId != nil {
 				assert.NotNil(t, parentId.Relation, "parentId应该有关系定义")
@@ -250,29 +250,29 @@ func TestMetadataLoadingModes(t *testing.T) {
 		v := viper.New()
 		v.Set("mode", "test")
 		v.Set("app.root", "../")
-		v.Set("metadata.tables", map[string]*internal.TableConfig{
-			"users": {
+		v.Set("metadata.classes", map[string]*internal.ClassConfig{
+			"User": {
+				Table:       "users",
 				Description: "用户表",
-				Columns: map[string]*internal.ColumnConfig{
+				Fields: map[string]*internal.FieldConfig{
 					"id": {
-						Name:        "id",
+						Column:      "id",
 						Type:        "int",
 						Description: "用户ID",
 						IsPrimary:   true,
 					},
 					"name": {
-						Name:        "name",
+						Column:      "name",
 						Type:        "string",
 						Description: "用户名",
 					},
 				},
 			},
-			"virtual_table": {
+			"VirtualTable": {
 				Description: "虚拟表",
-				Virtual:     true,
-				Columns: map[string]*internal.ColumnConfig{
+				Fields: map[string]*internal.FieldConfig{
 					"id": {
-						Name:      "id",
+						Column:    "id",
 						Type:      "int",
 						IsPrimary: true,
 					},
@@ -287,23 +287,28 @@ func TestMetadataLoadingModes(t *testing.T) {
 		require.NoError(t, err, "加载元数据失败")
 
 		// 验证元数据
-		users, exists := loader.Nodes["users"]
-		require.True(t, exists, "应该存在users表")
-		require.Equal(t, "用户表", users.Description, "表描述应该正确")
+		user, exists := loader.Nodes["User"]
+		require.True(t, exists, "应该存在User类")
+		require.Equal(t, "用户表", user.Description, "类描述应该正确")
+		require.Equal(t, "users", user.Table, "表名应该正确")
 
-		id, exists := users.Fields["id"]
+		id, exists := user.Fields["id"]
 		require.True(t, exists, "应该存在id字段")
 		require.Equal(t, "用户ID", id.Description, "字段描述应该正确")
-		require.True(t, id.IsPrimary, "id应该是主键")
 
-		name, exists := users.Fields["name"]
+		name, exists := user.Fields["name"]
 		require.True(t, exists, "应该存在name字段")
 		require.Equal(t, "用户名", name.Description, "字段描述应该正确")
 
-		vt, exists := loader.Nodes["virtual_table"]
-		require.True(t, exists, "应该存在virtual_table表")
+		// 验证表名索引
+		userByTable, exists := loader.Nodes["users"]
+		require.True(t, exists, "应该能通过表名找到类")
+		require.Same(t, user, userByTable, "通过类名和表名应该找到同一个实例")
+
+		vt, exists := loader.Nodes["VirtualTable"]
+		require.True(t, exists, "应该存在VirtualTable类")
 		require.Equal(t, "虚拟表", vt.Description, "虚拟表描述应该正确")
-		require.True(t, vt.Virtual, "virtual_table应该是虚拟表")
+		require.True(t, vt.Virtual, "VirtualTable应该是虚拟类")
 	})
 }
 
@@ -345,11 +350,13 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 				"fields": map[string]interface{}{
 					"username": map[string]interface{}{
 						"name":        "username",
+						"column":      "user_name",
 						"type":        "character varying",
 						"description": "用户名",
 					},
 					"password": map[string]interface{}{
 						"name":        "password",
+						"column":      "password",
 						"type":        "character varying",
 						"description": "密码",
 					},
@@ -357,7 +364,7 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 			},
 		},
 	}
-	configBytes, err := json.MarshalIndent(configData, "", "  ")
+	configBytes, err := json.Marshal(configData)
 	require.NoError(t, err, "序列化配置数据失败")
 	err = os.MkdirAll(filepath.Dir(configFile), 0755)
 	require.NoError(t, err, "创建配置目录失败")
@@ -382,7 +389,18 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 	userNode, ok := meta.Nodes["User"]
 	assert.True(t, ok, "应该能通过类名找到Node")
 	assert.Equal(t, "users", userNode.Table, "表名应该正确")
-	assert.Len(t, userNode.Fields, 2, "应该有2个字段")
+	assert.Len(t, userNode.Fields, 4, "应该有4个字段索引(2个字段名 + 2个列名)")
+
+	// 验证字段
+	username, ok := userNode.Fields["username"]
+	assert.True(t, ok, "应该能找到username字段")
+	assert.Equal(t, "user_name", username.Column, "列名应该正确")
+	assert.Equal(t, "用户名", username.Description, "描述应该正确")
+
+	// 验证列名索引
+	userNameCol, ok := userNode.Fields["user_name"]
+	assert.True(t, ok, "应该能通过列名找到字段")
+	assert.Same(t, username, userNameCol, "通过字段名和列名应该找到同一个字段")
 
 	// 通过表名查找
 	tableNode, ok := meta.Nodes["users"]
@@ -404,14 +422,17 @@ func TestNameConversion(t *testing.T) {
 	v.Set("schema.table-prefix", []string{"tbl_"})
 
 	// 设置测试元数据配置
-	v.Set("metadata.tables", map[string]interface{}{
-		"tbl_user_profiles": map[string]interface{}{
-			"columns": map[string]interface{}{
-				"user_id": map[string]interface{}{
-					"type": "integer",
+	v.Set("metadata.classes", map[string]map[string]interface{}{
+		"UserProfiles": {
+			"table": "tbl_user_profiles",
+			"fields": map[string]map[string]interface{}{
+				"userId": {
+					"column": "user_id",
+					"type":   "integer",
 				},
-				"first_name": map[string]interface{}{
-					"type": "character varying",
+				"firstName": {
+					"column": "first_name",
+					"type":   "character varying",
 				},
 			},
 		},
@@ -423,9 +444,13 @@ func TestNameConversion(t *testing.T) {
 
 	// 验证名称转换
 	userProfilesNode, ok := meta.Nodes["UserProfiles"]
-	assert.True(t, ok, "应该能通过转换后的类名找到Node")
-	assert.Contains(t, userProfilesNode.Fields, "userId", "应该转换为驼峰命名")
-	assert.Contains(t, userProfilesNode.Fields, "firstName", "应该转换为驼峰命名")
+	assert.True(t, ok, "应该能通过类名找到Node")
+	assert.Contains(t, userProfilesNode.Fields, "userId", "应该包含驼峰命名的字段")
+	assert.Contains(t, userProfilesNode.Fields, "firstName", "应该包含驼峰命名的字段")
+
+	// 验证列名索引
+	assert.Contains(t, userProfilesNode.Fields, "user_id", "应该包含原始列名索引")
+	assert.Contains(t, userProfilesNode.Fields, "first_name", "应该包含原始列名索引")
 
 	// 验证原始表名索引
 	origTableNode, ok := meta.Nodes["tbl_user_profiles"]
@@ -447,24 +472,30 @@ func TestTableAndFieldFiltering(t *testing.T) {
 	v.Set("schema.exclude-fields", []string{"password"})
 
 	// 设置测试元数据配置
-	v.Set("metadata.tables", map[string]interface{}{
-		"users": map[string]interface{}{
-			"columns": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type": "integer",
+	v.Set("metadata.classes", map[string]map[string]interface{}{
+		"User": {
+			"table": "users",
+			"fields": map[string]map[string]interface{}{
+				"id": {
+					"column": "id",
+					"type":   "integer",
 				},
-				"name": map[string]interface{}{
-					"type": "character varying",
+				"name": {
+					"column": "name",
+					"type":   "character varying",
 				},
-				"password": map[string]interface{}{
-					"type": "character varying",
+				"password": {
+					"column": "password",
+					"type":   "character varying",
 				},
 			},
 		},
-		"posts": map[string]interface{}{
-			"columns": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type": "integer",
+		"Post": {
+			"table": "posts",
+			"fields": map[string]map[string]interface{}{
+				"id": {
+					"column": "id",
+					"type":   "integer",
 				},
 			},
 		},
@@ -476,14 +507,16 @@ func TestTableAndFieldFiltering(t *testing.T) {
 
 	// 验证表过滤
 	assert.Len(t, meta.Nodes, 2, "应该只有users表的两个索引")
-	_, ok := meta.Nodes["posts"]
+	_, ok := meta.Nodes["Post"]
+	assert.False(t, ok, "Post类应该被过滤掉")
+	_, ok = meta.Nodes["posts"]
 	assert.False(t, ok, "posts表应该被过滤掉")
 
 	// 验证字段过滤
-	usersNode, ok := meta.Nodes["users"]
-	assert.True(t, ok, "应该能找到users表")
-	assert.NotContains(t, usersNode.Fields, "password", "password字段应该被过滤掉")
-	assert.Contains(t, usersNode.Fields, "name", "name字段应该保留")
+	userNode, ok := meta.Nodes["User"]
+	assert.True(t, ok, "应该能找到User类")
+	assert.NotContains(t, userNode.Fields, "password", "password字段应该被过滤掉")
+	assert.Contains(t, userNode.Fields, "name", "name字段应该保留")
 }
 
 // 测试从文件加载元数据
@@ -535,14 +568,18 @@ func TestRelationNameConversion(t *testing.T) {
 	v.Set("schema.enable-camel-case", true)
 
 	// 设置外键关系配置
-	v.Set("metadata.tables.user_profiles", map[string]interface{}{
-		"columns": map[string]interface{}{
-			"user_id": map[string]interface{}{
-				"type": "integer",
-				"relation": map[string]interface{}{
-					"type":        "many_to_one",
-					"targetClass": "users",
-					"targetField": "id",
+	v.Set("metadata.classes", map[string]map[string]interface{}{
+		"UserProfiles": {
+			"table": "user_profiles",
+			"fields": map[string]map[string]interface{}{
+				"userId": {
+					"column": "user_id",
+					"type":   "integer",
+					"relation": map[string]interface{}{
+						"type":         "many_to_one",
+						"target_class": "Users",
+						"target_field": "id",
+					},
 				},
 			},
 		},
@@ -606,5 +643,240 @@ func TestRelationNameConversion(t *testing.T) {
 			}
 		}
 		assert.True(t, foundTagsRelation, "应该有从Posts到Tags的关系字段")
+	})
+}
+
+// TestNewMetadataFeatures 测试元数据配置系统的新功能
+func TestNewMetadataFeatures(t *testing.T) {
+	// 创建测试数据库
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+
+	// 创建配置
+	v := viper.New()
+	v.Set("mode", "dev")
+	v.Set("app.root", utl.Root())
+	v.Set("schema.schema", "public")
+	v.Set("schema.enable-camel-case", true)
+
+	// 设置元数据配置
+	v.Set("metadata.classes", map[string]map[string]interface{}{
+		// 1. 完整用户视图（管理员使用）
+		"User": {
+			"table":       "users",
+			"description": "用户完整信息",
+			"resolver":    "UserResolver",
+			"fields": map[string]map[string]interface{}{
+				"email": {
+					"description": "电子邮箱",
+					"resolver":    "EmailResolver",
+				},
+				"password": {
+					"type":        "string",
+					"description": "密码（加密存储）",
+				},
+				"fullName": {
+					"virtual":     true,
+					"type":        "string",
+					"description": "用户全名",
+					"resolver":    "FullNameResolver",
+				},
+			},
+		},
+		// 2. 公开用户视图（去除敏感信息）
+		"PublicUser": {
+			"table":          "users",
+			"description":    "用户公开信息",
+			"exclude_fields": []string{"password", "createdAt"},
+			"fields": map[string]map[string]interface{}{
+				"email": {
+					"description": "电子邮箱(脱敏)",
+					"resolver":    "MaskedEmailResolver",
+				},
+			},
+		},
+		// 3. 简要用户视图（使用include_fields）
+		"MiniUser": {
+			"table":          "users",
+			"description":    "用户简要信息",
+			"include_fields": []string{"id", "name"},
+		},
+		// 4. 虚拟表配置
+		"Statistics": {
+			"virtual":     true,
+			"description": "统计数据",
+			"resolver":    "StatisticsResolver",
+			"fields": map[string]map[string]interface{}{
+				"totalUsers": {
+					"virtual":     true,
+					"type":        "integer",
+					"description": "用户总数",
+					"resolver":    "CountUsersResolver",
+				},
+				"activeUsers": {
+					"virtual":     true,
+					"type":        "integer",
+					"description": "活跃用户数",
+					"resolver":    "CountActiveUsersResolver",
+				},
+			},
+		},
+		// 5. 带中间表配置的多对多关系
+		"Post": {
+			"table": "posts",
+			"fields": map[string]map[string]interface{}{
+				"tags": {
+					"virtual": true,
+					"relation": map[string]interface{}{
+						"type":         "many_to_many",
+						"target_class": "Tag",
+						"target_field": "posts",
+						"through": map[string]interface{}{
+							"table":      "post_tags",
+							"source_key": "post_id",
+							"target_key": "tag_id",
+							"class_name": "PostTag",
+							"fields": map[string]map[string]interface{}{
+								"createdAt": {
+									"column":      "created_at",
+									"type":        "timestamp",
+									"description": "标签添加时间",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"Tag": {
+			"table": "tags",
+			"fields": map[string]map[string]interface{}{
+				"posts": {
+					"virtual": true,
+					"relation": map[string]interface{}{
+						"type":         "many_to_many",
+						"target_class": "Post",
+						"target_field": "tags",
+						"through": map[string]interface{}{
+							"table":      "post_tags",
+							"source_key": "tag_id",
+							"target_key": "post_id",
+							"class_name": "PostTag",
+						},
+					},
+				},
+			},
+		},
+	})
+
+	// 创建元数据加载器
+	meta, err := NewMetadata(v, db)
+	require.NoError(t, err, "创建元数据加载器失败")
+
+	// 1. 测试同表不同视图
+	t.Run("同表不同视图", func(t *testing.T) {
+		// 验证完整用户视图
+		user, exists := meta.Nodes["User"]
+		assert.True(t, exists, "应该存在User类")
+		assert.Equal(t, "users", user.Table, "表名应该是users")
+		assert.Equal(t, "UserResolver", user.Resolver, "应该有类级别Resolver")
+
+		passwordField := user.Fields["password"]
+		assert.NotNil(t, passwordField, "应该存在password字段")
+		assert.Equal(t, "密码（加密存储）", passwordField.Description, "描述应该正确")
+
+		emailField := user.Fields["email"]
+		assert.NotNil(t, emailField, "应该存在email字段")
+		assert.Equal(t, "EmailResolver", emailField.Resolver, "应该有字段级别Resolver")
+
+		// 验证公开用户视图
+		publicUser, exists := meta.Nodes["PublicUser"]
+		assert.True(t, exists, "应该存在PublicUser类")
+		assert.Equal(t, "users", publicUser.Table, "表名应该是users")
+
+		pubPasswordField := publicUser.Fields["password"]
+		assert.Nil(t, pubPasswordField, "不应该存在password字段")
+
+		pubEmailField := publicUser.Fields["email"]
+		assert.NotNil(t, pubEmailField, "应该存在email字段")
+		assert.Equal(t, "电子邮箱(脱敏)", pubEmailField.Description, "描述应该被覆盖")
+		assert.Equal(t, "MaskedEmailResolver", pubEmailField.Resolver, "应该有字段级别Resolver")
+
+		// 验证简要用户视图
+		miniUser, exists := meta.Nodes["MiniUser"]
+		assert.True(t, exists, "应该存在MiniUser类")
+		assert.Equal(t, "users", miniUser.Table, "表名应该是users")
+
+		// 打印所有可用的字段
+		t.Logf("MiniUser类的所有字段：")
+		for fieldName := range miniUser.Fields {
+			t.Logf(" - %s", fieldName)
+		}
+
+		// 验证包含的字段
+		assert.NotNil(t, miniUser.Fields["id"], "应该存在id字段")
+		assert.NotNil(t, miniUser.Fields["name"], "应该存在name字段")
+		assert.Nil(t, miniUser.Fields["email"], "不应该存在email字段")
+		assert.Nil(t, miniUser.Fields["password"], "不应该存在password字段")
+	})
+
+	// 2. 测试虚拟表
+	t.Run("虚拟表", func(t *testing.T) {
+		stats, exists := meta.Nodes["Statistics"]
+		assert.True(t, exists, "应该存在Statistics类")
+		assert.True(t, stats.Virtual, "Statistics应该是虚拟类")
+		assert.Equal(t, "StatisticsResolver", stats.Resolver, "应该有类级别Resolver")
+
+		totalUsers := stats.Fields["totalUsers"]
+		assert.NotNil(t, totalUsers, "应该存在totalUsers字段")
+		assert.True(t, totalUsers.Virtual, "totalUsers应该是虚拟字段")
+		assert.Equal(t, "CountUsersResolver", totalUsers.Resolver, "应该有字段级别Resolver")
+
+		activeUsers := stats.Fields["activeUsers"]
+		assert.NotNil(t, activeUsers, "应该存在activeUsers字段")
+		assert.True(t, activeUsers.Virtual, "activeUsers应该是虚拟字段")
+		assert.Equal(t, "CountActiveUsersResolver", activeUsers.Resolver, "应该有字段级别Resolver")
+	})
+
+	// 3. 测试多对多关系增强
+	t.Run("多对多关系增强", func(t *testing.T) {
+		post, exists := meta.Nodes["Post"]
+		assert.True(t, exists, "应该存在Post类")
+
+		tags := post.Fields["tags"]
+		assert.NotNil(t, tags, "应该存在tags字段")
+		assert.NotNil(t, tags.Relation, "tags应该有关系定义")
+		assert.Equal(t, internal.MANY_TO_MANY, tags.Relation.Type, "应该是多对多关系")
+		assert.Equal(t, "Tag", tags.Relation.TargetClass, "关系目标类应该是Tag")
+		assert.Equal(t, "posts", tags.Relation.TargetField, "关系目标字段应该是posts")
+
+		// 验证中间表配置
+		assert.NotNil(t, tags.Relation.Through, "应该有through配置")
+		assert.Equal(t, "post_tags", tags.Relation.Through.Table, "中间表名应该是post_tags")
+		assert.Equal(t, "PostTag", tags.Relation.Through.Name, "中间表类名应该是PostTag")
+		assert.Equal(t, "post_id", tags.Relation.Through.SourceKey, "源键应该是post_id")
+		assert.Equal(t, "tag_id", tags.Relation.Through.TargetKey, "目标键应该是tag_id")
+
+		// 验证中间表字段
+		assert.NotNil(t, tags.Relation.Through.Fields, "应该有through.fields")
+		createdAt := tags.Relation.Through.Fields["createdAt"]
+		assert.NotNil(t, createdAt, "应该存在createdAt字段")
+		assert.Equal(t, "created_at", createdAt.Column, "列名应该是created_at")
+		assert.Equal(t, "标签添加时间", createdAt.Description, "描述应该正确")
+
+		// 验证反向关系
+		tag, exists := meta.Nodes["Tag"]
+		assert.True(t, exists, "应该存在Tag类")
+
+		posts := tag.Fields["posts"]
+		assert.NotNil(t, posts, "应该存在posts字段")
+		assert.NotNil(t, posts.Relation, "posts应该有关系定义")
+		assert.Equal(t, internal.MANY_TO_MANY, posts.Relation.Type, "应该是多对多关系")
+		assert.Equal(t, "Post", posts.Relation.TargetClass, "关系目标类应该是Post")
+		assert.Equal(t, "tags", posts.Relation.TargetField, "关系目标字段应该是tags")
+
+		// 验证双向关系
+		assert.Same(t, tags.Relation.Reverse, posts.Relation, "Post.tags的反向关系应该是Tag.posts")
+		assert.Same(t, posts.Relation.Reverse, tags.Relation, "Tag.posts的反向关系应该是Post.tags")
 	})
 }

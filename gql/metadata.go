@@ -118,149 +118,453 @@ func (my *Metadata) loadMetadata() error {
 
 // loadFromConfig 从配置加载元数据
 func (my *Metadata) loadFromConfig() error {
-	tables := my.cfg.Metadata.Tables
-	if len(tables) == 0 {
+	// 获取配置中的元数据定义
+	classes := my.cfg.Metadata.Classes
+	if classes == nil || len(classes) == 0 {
+		log.Info().Msg("配置中没有定义元数据")
 		return nil
 	}
 
-	for tableName, table := range tables {
-		if tableName == "" || !my.shouldIncludeTable(tableName) {
+	log.Info().Msg("开始从配置加载元数据")
+
+	// 遍历配置中的类定义
+	for className, classConfig := range classes {
+		log.Info().Str("class", className).Msg("处理类配置")
+
+		// 确定表名，用于查找基类
+		tableName := classConfig.Table
+
+		// 按照表明从nodes中查找基类
+		baseClass, ok := my.Nodes[tableName]
+
+		// 未找到基类为虚拟类，基类名与当前类名不同为别名,都需要创建新类
+		if !ok || baseClass.Name != className {
+			log.Info().
+				Str("class", className).
+				Str("table", tableName).
+				Msg("未找到基类，创建新类")
+				// 处理虚拟类
+			baseClass = &internal.Class{
+				Name:        className,
+				Table:       tableName, // 可以为空
+				Virtual:     true,
+				PrimaryKeys: classConfig.PrimaryKeys,
+				Description: classConfig.Description,
+				Resolver:    classConfig.Resolver,
+			}
+			// 处理配置的字段
+			my.processClassFields(baseClass, classConfig.Fields)
+
+			// 添加类到元数据
+			my.Nodes[className] = baseClass
+
 			continue
 		}
 
-		// 确定类名
-		className := my.convertTableName(tableName)
-		if table.Name != "" {
-			className = table.Name
+		// 基于已有类创建新的视图类
+		log.Info().
+			Str("class", className).
+			Str("baseClass", baseClass.Name).
+			Msg("基于现有类创建视图")
+
+		// 创建新的类，复制基类属性
+		class := &internal.Class{
+			Name:        className,
+			Table:       tableName,
+			Virtual:     false,
+			PrimaryKeys: classConfig.PrimaryKeys,
+			Description: classConfig.Description,
+			Resolver:    classConfig.Resolver,
+			Fields:      make(map[string]*internal.Field),
 		}
 
-		// 获取或创建class
-		class, exists := my.Nodes[className]
-		if !exists {
-			class = &internal.Class{
-				Name:   className,
-				Table:  tableName,
-				Fields: make(map[string]*internal.Field),
-			}
-			my.Nodes[className] = class
-		}
+		// 复制基类字段
+		my.copyClassFields(class, baseClass)
 
-		// 更新class属性
-		if table.Description != "" {
-			class.Description = table.Description
-		}
-		if len(table.PrimaryKeys) > 0 {
-			class.PrimaryKeys = table.PrimaryKeys
-		}
-		class.Virtual = table.Virtual
+		// 应用字段过滤
+		my.applyFieldFiltering(class, classConfig)
 
-		// 合并字段和处理关系
-		for columnName, column := range table.Columns {
-			if columnName == "" || !my.shouldIncludeField(columnName) {
-				continue
-			}
+		// 处理字段覆盖和添加
+		my.processClassFields(class, classConfig.Fields)
 
-			// 确定字段名
-			fieldName := my.convertFieldName(tableName, columnName)
-			if column.Name != "" {
-				fieldName = column.Name
-			}
+		// 添加类到元数据
+		my.Nodes[className] = baseClass
 
-			// 获取或创建field
-			field, exists := class.Fields[fieldName]
-			if !exists {
-				field = &internal.Field{
-					Name:   fieldName,
-					Column: columnName,
-				}
-				class.Fields[fieldName] = field
-			}
-
-			// 更新field属性
-			if column.Type != "" {
-				field.Type = column.Type
-			}
-			if column.Description != "" {
-				field.Description = column.Description
-			}
-			if column.IsPrimary {
-				field.IsPrimary = true
-			}
-
-			// 处理字段关系
-			if column.Relation != nil {
-				// 转换关系中的类名和字段名
-				targetClassName := column.Relation.TargetClass
-				targetFieldName := column.Relation.TargetField
-
-				// 确保使用转换后的类名和字段名
-				convertedTargetClassName := my.convertTableName(targetClassName)
-				convertedTargetFieldName := my.convertFieldName(targetClassName, targetFieldName)
-
-				// 设置关系类型
-				kind := internal.RelationType("").FromString(column.Relation.Type)
-
-				// 设置关系
-				field.Relation = &internal.Relation{
-					SourceClass: class.Name,
-					SourceField: field.Name,
-					TargetClass: convertedTargetClassName,
-					TargetField: convertedTargetFieldName,
-					Type:        kind,
-				}
-
-				// 如果是多对多关系，设置中间表配置
-				if kind == internal.MANY_TO_MANY && column.Relation.Through != nil {
-					field.Relation.Through = &internal.Through{
-						Table:     column.Relation.Through.Table,
-						SourceKey: column.Relation.Through.SourceKey,
-						TargetKey: column.Relation.Through.TargetKey,
-					}
-				}
-
-				// 获取目标类
-				targetClass := my.Nodes[convertedTargetClassName]
-				if targetClass != nil {
-					// 创建反向关系(非递归关系)
-					if kind != internal.RECURSIVE {
-						reverseField := &internal.Field{
-							Name:    convertedTargetFieldName,
-							Virtual: true,
-							Relation: &internal.Relation{
-								SourceClass: convertedTargetClassName,
-								SourceField: convertedTargetFieldName,
-								TargetClass: class.Name,
-								TargetField: field.Name,
-								Type:        kind,
-							},
-						}
-
-						// 如果是多对多关系，设置反向关系的中间表配置
-						if kind == internal.MANY_TO_MANY && column.Relation.Through != nil {
-							reverseField.Relation.Through = &internal.Through{
-								Table:     column.Relation.Through.Table,
-								SourceKey: column.Relation.Through.TargetKey,
-								TargetKey: column.Relation.Through.SourceKey,
-							}
-						}
-
-						targetClass.Fields[reverseField.Name] = reverseField
-
-						// 建立双向引用
-						field.Relation.Reverse = reverseField.Relation
-						reverseField.Relation.Reverse = field.Relation
-					}
-				}
-			}
-		}
-
-		// 更新表名索引
-		if className != tableName {
-			my.Nodes[tableName] = class
+		// 如果类名与表名不同，添加表名索引
+		if tableName != "" && tableName != className {
+			my.Nodes[tableName] = baseClass
 		}
 	}
 
+	// 处理关系
+	my.processRelationships()
+
+	log.Info().Int("classes", len(my.Nodes)).Msg("配置元数据加载完成")
 	return nil
+}
+
+// 复制类字段 - 从基类到目标类
+func (my *Metadata) copyClassFields(targetClass, sourceClass *internal.Class) {
+	for fieldName, field := range sourceClass.Fields {
+		// 只复制原始字段，非索引字段
+		if field.Name == fieldName {
+			// 深度复制字段
+			newField := &internal.Field{
+				Type:        field.Type,
+				Name:        field.Name,
+				Column:      field.Column,
+				Virtual:     field.Virtual,
+				Nullable:    field.Nullable,
+				IsPrimary:   field.IsPrimary,
+				IsUnique:    field.IsUnique,
+				Description: field.Description,
+				Resolver:    field.Resolver,
+			}
+
+			// 复制关系
+			if field.Relation != nil {
+				newField.Relation = &internal.Relation{
+					SourceClass: targetClass.Name, // 更新源类为新类名
+					SourceField: field.Relation.SourceField,
+					TargetClass: field.Relation.TargetClass,
+					TargetField: field.Relation.TargetField,
+					Type:        field.Relation.Type,
+					ReverseName: field.Relation.ReverseName,
+				}
+
+				// 复制Through配置
+				if field.Relation.Through != nil {
+					newField.Relation.Through = &internal.Through{
+						Table:     field.Relation.Through.Table,
+						SourceKey: field.Relation.Through.SourceKey,
+						TargetKey: field.Relation.Through.TargetKey,
+						Name:      field.Relation.Through.Name,
+					}
+
+					// 复制Through字段
+					if field.Relation.Through.Fields != nil {
+						newField.Relation.Through.Fields = make(map[string]*internal.Field)
+						for thrFieldName, thrField := range field.Relation.Through.Fields {
+							newThrField := &internal.Field{
+								Type:        thrField.Type,
+								Name:        thrField.Name,
+								Column:      thrField.Column,
+								Virtual:     thrField.Virtual,
+								Nullable:    thrField.Nullable,
+								IsPrimary:   thrField.IsPrimary,
+								IsUnique:    thrField.IsUnique,
+								Description: thrField.Description,
+								Resolver:    thrField.Resolver,
+							}
+							newField.Relation.Through.Fields[thrFieldName] = newThrField
+						}
+					}
+				}
+			}
+
+			targetClass.AddField(newField)
+		}
+	}
+}
+
+// 应用字段过滤
+func (my *Metadata) applyFieldFiltering(class *internal.Class, config *internal.ClassConfig) {
+	// 如果指定了包含字段，则只保留这些字段
+	if len(config.IncludeFields) > 0 {
+		includeSet := make(map[string]bool)
+		for _, fieldName := range config.IncludeFields {
+			includeSet[fieldName] = true
+		}
+
+		// 创建需要移除的字段列表
+		var fieldsToRemove []*internal.Field
+
+		// 遍历所有字段，找出需要移除的
+		for fieldName, field := range class.Fields {
+			if field.Name == fieldName && !includeSet[fieldName] {
+				fieldsToRemove = append(fieldsToRemove, field)
+			}
+		}
+
+		// 移除不在包含列表中的字段
+		for _, field := range fieldsToRemove {
+			class.RemoveField(field)
+		}
+
+		// 包含字段优先，不再处理排除字段
+		return
+	}
+
+	// 处理排除字段
+	if len(config.ExcludeFields) > 0 {
+		for _, fieldName := range config.ExcludeFields {
+			field := class.Fields[fieldName]
+			if field != nil {
+				class.RemoveField(field)
+			}
+		}
+	}
+}
+
+// 处理类字段
+func (my *Metadata) processClassFields(class *internal.Class, fieldConfigs map[string]*internal.FieldConfig) {
+	if fieldConfigs == nil {
+		return
+	}
+
+	for fieldName, fieldConfig := range fieldConfigs {
+		// 检查是否已存在此字段
+		existingField := class.Fields[fieldName]
+
+		if existingField != nil {
+			// 更新现有字段
+			my.updateField(existingField, fieldConfig)
+		} else {
+			// 添加新字段
+			field := my.createField(class.Name, fieldName, fieldConfig)
+			class.AddField(field)
+		}
+	}
+}
+
+// 更新字段
+func (my *Metadata) updateField(field *internal.Field, config *internal.FieldConfig) {
+	// 更新非空值
+	if config.Description != "" {
+		field.Description = config.Description
+	}
+
+	if config.Type != "" {
+		field.Type = config.Type
+	}
+
+	if config.Column != "" {
+		field.Column = config.Column
+	}
+
+	// 更新Resolver
+	if config.Resolver != "" {
+		field.Resolver = config.Resolver
+	}
+
+	// 覆盖布尔属性
+	field.IsPrimary = config.IsPrimary
+	field.IsUnique = config.IsUnique
+	field.Nullable = config.IsNullable
+
+	// 处理关系配置
+	if config.Relation != nil {
+		// 如果字段没有关系，则创建一个
+		if field.Relation == nil {
+			field.Relation = &internal.Relation{
+				SourceField: field.Name,
+			}
+		}
+
+		rel := field.Relation
+		relConfig := config.Relation
+
+		// 更新关系属性
+		if relConfig.TargetClass != "" {
+			rel.TargetClass = relConfig.TargetClass
+		}
+
+		if relConfig.TargetField != "" {
+			rel.TargetField = relConfig.TargetField
+		}
+
+		if relConfig.Type != "" {
+			rel.Type = internal.RelationType(relConfig.Type)
+		}
+
+		if relConfig.ReverseName != "" {
+			rel.ReverseName = relConfig.ReverseName
+		}
+
+		// 处理Through配置
+		if relConfig.Through != nil {
+			if rel.Through == nil {
+				rel.Through = &internal.Through{}
+			}
+
+			through := rel.Through
+			throughConfig := relConfig.Through
+
+			if throughConfig.Table != "" {
+				through.Table = throughConfig.Table
+			}
+
+			if throughConfig.SourceKey != "" {
+				through.SourceKey = throughConfig.SourceKey
+			}
+
+			if throughConfig.TargetKey != "" {
+				through.TargetKey = throughConfig.TargetKey
+			}
+
+			if throughConfig.ClassName != "" {
+				through.Name = throughConfig.ClassName
+			}
+
+			// 处理中间表字段
+			if len(throughConfig.Fields) > 0 {
+				if through.Fields == nil {
+					through.Fields = make(map[string]*internal.Field)
+				}
+
+				for thrFieldName, thrFieldConfig := range throughConfig.Fields {
+					// 检查是否存在
+					existingThrField := through.Fields[thrFieldName]
+
+					if existingThrField != nil {
+						// 更新现有字段
+						my.updateField(existingThrField, thrFieldConfig)
+					} else {
+						// 创建新字段
+						thrField := my.createField(throughConfig.ClassName, thrFieldName, thrFieldConfig)
+						through.Fields[thrFieldName] = thrField
+					}
+				}
+			}
+		}
+	}
+}
+
+// 创建新字段
+func (my *Metadata) createField(className, fieldName string, config *internal.FieldConfig) *internal.Field {
+	// 如果没有指定列名，使用字段名
+	column := config.Column
+	if column == "" {
+		column = fieldName
+	}
+
+	field := &internal.Field{
+		Name:        fieldName,
+		Column:      column,
+		Type:        config.Type,
+		Description: config.Description,
+		Nullable:    config.IsNullable,
+		IsPrimary:   config.IsPrimary,
+		IsUnique:    config.IsUnique,
+		Resolver:    config.Resolver,
+	}
+
+	// 处理关系配置
+	if config.Relation != nil {
+		field.Relation = &internal.Relation{
+			SourceClass: className,
+			SourceField: fieldName,
+			TargetClass: config.Relation.TargetClass,
+			TargetField: config.Relation.TargetField,
+			Type:        internal.RelationType(config.Relation.Type),
+			ReverseName: config.Relation.ReverseName,
+		}
+
+		// 处理Through配置
+		if config.Relation.Through != nil {
+			field.Relation.Through = &internal.Through{
+				Table:     config.Relation.Through.Table,
+				SourceKey: config.Relation.Through.SourceKey,
+				TargetKey: config.Relation.Through.TargetKey,
+				Name:      config.Relation.Through.ClassName,
+			}
+
+			// 处理中间表字段
+			if len(config.Relation.Through.Fields) > 0 {
+				field.Relation.Through.Fields = make(map[string]*internal.Field)
+
+				for thrFieldName, thrFieldConfig := range config.Relation.Through.Fields {
+					thrField := my.createField(config.Relation.Through.ClassName, thrFieldName, thrFieldConfig)
+					field.Relation.Through.Fields[thrFieldName] = thrField
+				}
+			}
+		}
+	}
+
+	return field
+}
+
+// 处理关系
+func (my *Metadata) processRelationships() {
+	// 建立所有类之间的关系
+	for _, class := range my.Nodes {
+		for _, field := range class.Fields {
+			if field.Relation == nil {
+				continue
+			}
+
+			// 确保关系的源类和字段已设置
+			if field.Relation.SourceClass == "" {
+				field.Relation.SourceClass = class.Name
+			}
+
+			if field.Relation.SourceField == "" {
+				field.Relation.SourceField = field.Name
+			}
+
+			// 查找目标类
+			targetClass := my.Nodes[field.Relation.TargetClass]
+			if targetClass == nil {
+				log.Warn().
+					Str("class", class.Name).
+					Str("field", field.Name).
+					Str("targetClass", field.Relation.TargetClass).
+					Msg("关系目标类不存在")
+				continue
+			}
+
+			// 找到目标字段
+			targetField := targetClass.Fields[field.Relation.TargetField]
+			if targetField == nil {
+				log.Warn().
+					Str("class", class.Name).
+					Str("field", field.Name).
+					Str("targetClass", field.Relation.TargetClass).
+					Str("targetField", field.Relation.TargetField).
+					Msg("关系目标字段不存在")
+				continue
+			}
+
+			// 如果目标字段没有反向关系，创建一个
+			if targetField.Relation == nil {
+				reverseName := field.Relation.ReverseName
+				if reverseName == "" {
+					// 如果没有指定反向名称，使用默认命名
+					reverseName = my.generateReverseName(class.Name, field.Relation.Type)
+				}
+
+				reverseType := field.Relation.Type.Reverse()
+
+				// 创建反向关系
+				targetField.Relation = &internal.Relation{
+					SourceClass: targetClass.Name,
+					SourceField: targetField.Name,
+					TargetClass: class.Name,
+					TargetField: field.Name,
+					Type:        reverseType,
+					Reverse:     field.Relation,
+				}
+			}
+
+			// 链接反向关系
+			field.Relation.Reverse = targetField.Relation
+		}
+	}
+}
+
+// 生成反向关系名称
+func (my *Metadata) generateReverseName(className string, relationType internal.RelationType) string {
+	// 根据类名和关系类型生成合适的反向名称
+	switch relationType {
+	case internal.ONE_TO_MANY:
+		return strcase.ToLowerCamel(inflection.Plural(className))
+	case internal.MANY_TO_ONE:
+		return strcase.ToLowerCamel(className)
+	case internal.MANY_TO_MANY:
+		return strcase.ToLowerCamel(inflection.Plural(className))
+	default:
+		return strcase.ToLowerCamel(className)
+	}
 }
 
 // loadDatabase 从数据库加载元数据
@@ -596,7 +900,7 @@ func (my *Metadata) FindClass(className string, virtual bool) (*internal.Class, 
 // FindField 根据类名和字段名查找字段
 func (my *Metadata) FindField(className, fieldName string, virtual bool) (*internal.Field, bool) {
 	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
-		if field := node.GetField(fieldName); field != nil && field.Virtual == virtual {
+		if field := node.Fields[fieldName]; field != nil && field.Virtual == virtual {
 			return field, true
 		}
 	}
@@ -606,7 +910,7 @@ func (my *Metadata) FindField(className, fieldName string, virtual bool) (*inter
 // FindRelation 获取外键关系(支持字段名或列名)
 func (my *Metadata) FindRelation(sourceTable, nameOrColumn string) (*internal.Relation, bool) {
 	if node, ok := my.Nodes[sourceTable]; ok {
-		if field := node.GetField(nameOrColumn); field != nil {
+		if field := node.Fields[nameOrColumn]; field != nil {
 			return field.Relation, field.Relation != nil
 		}
 	}
@@ -624,7 +928,7 @@ func (my *Metadata) TableName(className string, virtual bool) (string, bool) {
 // ColumnName 获取字段的列名
 func (my *Metadata) ColumnName(className, fieldName string, virtual bool) (string, bool) {
 	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
-		if field := node.GetField(fieldName); field != nil && field.Virtual == virtual {
+		if field := node.Fields[fieldName]; field != nil && field.Virtual == virtual {
 			return field.Column, len(field.Column) > 0
 		}
 	}

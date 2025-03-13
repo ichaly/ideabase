@@ -50,14 +50,14 @@ type SchemaConfig struct {
 
 // MetadataConfig 表示元数据配置
 type MetadataConfig struct {
-	// 表定义映射(key: 原始表名)
-	Tables map[string]*TableConfig `mapstructure:"tables"`
+	// 类定义映射(key: 类名)
+	Classes map[string]*ClassConfig `mapstructure:"classes"`
 }
 
-// TableConfig 表示表配置
-type TableConfig struct {
-	// 转换后的表名
-	Name string `mapstructure:"name"`
+// ClassConfig 表示类配置
+type ClassConfig struct {
+	// 表名 (对应数据库表)
+	Table string `mapstructure:"table"`
 
 	// 描述
 	Description string `mapstructure:"description"`
@@ -65,20 +65,24 @@ type TableConfig struct {
 	// 主键列表
 	PrimaryKeys []string `mapstructure:"primary_keys"`
 
-	// 列定义映射(key: 原始列名)
-	Columns map[string]*ColumnConfig `mapstructure:"columns"`
+	// 类级别自定义Resolver
+	Resolver string `mapstructure:"resolver"`
 
-	// 是否虚拟表
-	Virtual bool `mapstructure:"virtual"`
+	// 字段定义 (使用字段名作为键)
+	Fields map[string]*FieldConfig `mapstructure:"fields"`
 
-	// 表级别的关系定义
+	// 关系定义
 	Relations []RelationConfig `mapstructure:"relations"`
+
+	// 字段过滤配置
+	ExcludeFields []string `mapstructure:"exclude_fields"` // 排除这些字段
+	IncludeFields []string `mapstructure:"include_fields"` // 仅包含这些字段
 }
 
-// ColumnConfig 表示列配置
-type ColumnConfig struct {
-	// 转换后的字段名
-	Name string `mapstructure:"name"`
+// FieldConfig 表示字段配置
+type FieldConfig struct {
+	// 列名 (数据库中的列名)
+	Column string `mapstructure:"column"`
 
 	// 数据类型
 	Type string `mapstructure:"type"`
@@ -86,44 +90,35 @@ type ColumnConfig struct {
 	// 描述
 	Description string `mapstructure:"description"`
 
-	// 是否主键
-	IsPrimary bool `mapstructure:"is_primary"`
-
-	// 是否可空
-	IsNullable bool `mapstructure:"is_nullable"`
-
-	// 是否唯一
-	IsUnique bool `mapstructure:"is_unique"`
-
-	// 是否虚拟字段
-	Virtual bool `mapstructure:"virtual"`
+	// 字段特性
+	IsPrimary  bool `mapstructure:"primary"`
+	IsNullable bool `mapstructure:"nullable"`
+	IsUnique   bool `mapstructure:"unique"`
 
 	// 默认值
 	DefaultValue string `mapstructure:"default_value"`
 
-	// 字段级别的关系定义
+	// 字段级别自定义Resolver
+	Resolver string `mapstructure:"resolver"`
+
+	// 关系配置
 	Relation *RelationConfig `mapstructure:"relation"`
 }
 
 // RelationConfig 表示关系配置
 type RelationConfig struct {
-	// 源类名
+	// 关系定义
 	SourceClass string `mapstructure:"source_class"`
-
-	// 源字段名
 	SourceField string `mapstructure:"source_field"`
+	TargetClass string `mapstructure:"target_class"`
+	TargetField string `mapstructure:"target_field"`
+	Type        string `mapstructure:"type"`
 
-	// 目标类名
-	TargetClass string `mapstructure:"targetClass,target_class"`
-
-	// 目标字段名
-	TargetField string `mapstructure:"targetField,target_field"`
-
-	// 关系类型: many_to_one, one_to_many, many_to_many, recursive
-	Type string `mapstructure:"type"`
-
-	// 多对多关系配置
+	// 多对多关系中间表配置
 	Through *ThroughConfig `mapstructure:"through,omitempty"`
+
+	// 反向关系名称
+	ReverseName string `mapstructure:"reverse_name"`
 }
 
 // ThroughConfig 表示多对多关系中的中间表配置
@@ -132,8 +127,14 @@ type ThroughConfig struct {
 	Table string `mapstructure:"table"`
 
 	// 中间表中指向源表的外键
-	SourceKey string `mapstructure:"sourceKey,source_key"`
+	SourceKey string `mapstructure:"source_key"`
 
 	// 中间表中指向目标表的外键
-	TargetKey string `mapstructure:"targetKey,target_key"`
+	TargetKey string `mapstructure:"target_key"`
+
+	// 中间表作为独立实体的类名
+	ClassName string `mapstructure:"class_name"`
+
+	// 中间表额外字段
+	Fields map[string]*FieldConfig `mapstructure:"fields"`
 }
