@@ -48,10 +48,44 @@ func createMockMetadata(t *testing.T) *Metadata {
 	v.Set("mode", "dev")
 	v.Set("app.root", t.TempDir()) // 使用临时目录作为根目录
 
+	// 定义类型映射
+	typeMapping := map[string]string{
+		"integer":     "Int",
+		"int":         "Int",
+		"int4":        "Int",
+		"bigint":      "Int",
+		"smallint":    "Int",
+		"serial":      "Int",
+		"decimal":     "Float",
+		"numeric":     "Float",
+		"real":        "Float",
+		"double":      "Float",
+		"float":       "Float",
+		"text":        "String",
+		"varchar":     "String",
+		"character":   "String",
+		"char":        "String",
+		"bytea":       "String",
+		"uuid":        "String",
+		"boolean":     "Boolean",
+		"bool":        "Boolean",
+		"timestamp":   "DateTime",
+		"timestamptz": "DateTime",
+		"date":        "DateTime",
+		"time":        "DateTime",
+		"jsonb":       "Json",
+		"json":        "Json",
+	}
+
 	meta := &Metadata{
 		v:       v,
 		Nodes:   make(map[string]*internal.Class),
 		Version: time.Now().Format("20060102150405"),
+		cfg: &internal.Config{
+			Schema: internal.SchemaConfig{
+				TypeMapping: typeMapping,
+			},
+		},
 	}
 
 	// 添加模拟的User类
@@ -179,7 +213,7 @@ func TestRenderer_Generate(t *testing.T) {
 	// 验证基本类型是否存在
 	if len(meta.Nodes) > 0 {
 		// 使用固定的类名进行验证，避免随机性
-		className := "Organizations"
+		className := "Organization"
 		t.Logf("验证生成的schema中包含%s类型", className)
 		assert.Contains(t, schema, "type "+className+" {")
 	}
@@ -224,10 +258,10 @@ func TestRenderer_WithMockData(t *testing.T) {
 	assert.Contains(t, generatedSchema, "type Post {")
 
 	// 验证字段类型 (根据实际生成的类型进行检查)
-	assert.Contains(t, generatedSchema, "id: String!")
+	assert.Contains(t, generatedSchema, "id: ID!")
 	assert.Contains(t, generatedSchema, "name: String!")
 	assert.Contains(t, generatedSchema, "email: String!")
-	assert.Contains(t, generatedSchema, "createdAt: String!")
+	assert.Contains(t, generatedSchema, "createdAt: DateTime!")
 
 	// 验证字段描述存在
 	assert.Contains(t, generatedSchema, "# 用户名")
@@ -538,41 +572,49 @@ func TestRenderer_DataTypeMapping(t *testing.T) {
 	// 添加各种数据类型的字段
 	class := meta.Nodes["User"]
 
-	// 添加不同类型的字段
-	dataTypes := map[string]string{
-		"int":       "String", // 实际渲染为String而非Int
-		"integer":   "String", // 实际渲染为String而非Int
-		"smallint":  "String", // 实际渲染为String而非Int
-		"bigint":    "String", // 实际渲染为String而非Int
-		"serial":    "String", // 实际渲染为String而非Int
-		"float":     "String", // 实际渲染为String而非Float
-		"real":      "String", // 实际渲染为String而非Float
-		"double":    "String", // 实际渲染为String而非Float
-		"numeric":   "String", // 实际渲染为String而非Float
-		"decimal":   "String", // 实际渲染为String而非Float
+	// 定义类型映射
+	typeMapping := map[string]string{
+		"int":       "Int",
+		"integer":   "Int",
+		"smallint":  "Int",
+		"bigint":    "Int",
+		"serial":    "Int",
+		"float":     "Float",
+		"real":      "Float",
+		"double":    "Float",
+		"numeric":   "Float",
+		"decimal":   "Float",
 		"text":      "String",
 		"varchar":   "String",
 		"character": "String",
 		"char":      "String",
-		"bool":      "String", // 实际渲染为String而非Boolean
-		"boolean":   "String", // 实际渲染为String而非Boolean
-		"timestamp": "String", // 实际渲染为String而非DateTime
-		"date":      "String", // 实际渲染为String而非DateTime
-		"time":      "String", // 实际渲染为String而非DateTime
+		"bool":      "Boolean",
+		"boolean":   "Boolean",
+		"timestamp": "DateTime",
+		"date":      "DateTime",
+		"time":      "DateTime",
 		"bytea":     "String",
-		"json":      "String", // 实际渲染为String而非JSON
-		"jsonb":     "String", // 实际渲染为String而非JSON
+		"json":      "Json",
+		"jsonb":     "Json",
 		"uuid":      "String",
 	}
 
 	// 先添加所有字段到类中
-	for dbType, _ := range dataTypes {
+	for dbType, _ := range typeMapping {
 		fieldName := "field_" + dbType
 		class.AddField(&internal.Field{
-			Name:   fieldName,
-			Column: fieldName,
-			Type:   dbType,
+			Name:      fieldName,
+			Column:    fieldName,
+			Type:      dbType,
+			IsPrimary: false, // 确保不会自动映射为ID
 		})
+	}
+
+	// 设置配置
+	meta.cfg = &internal.Config{
+		Schema: internal.SchemaConfig{
+			TypeMapping: typeMapping,
+		},
 	}
 
 	// 创建渲染器
@@ -590,7 +632,7 @@ func TestRenderer_DataTypeMapping(t *testing.T) {
 	generatedSchema := schema.String()
 
 	// 对每种类型进行验证
-	for dbType, graphqlType := range dataTypes {
+	for dbType, graphqlType := range typeMapping {
 		fieldName := "field_" + dbType
 		expectedField := fieldName + ": " + graphqlType
 		assert.Contains(t, generatedSchema, expectedField,
@@ -662,45 +704,58 @@ func TestRenderer_RenderRelation(t *testing.T) {
 	generatedSchema := schema.String()
 
 	// 验证Posts类包含userId字段
-	assert.Contains(t, generatedSchema, "userId: String!")
+	assert.Contains(t, generatedSchema, "userId: Int!")
 
 	// 注：在此测试中，由于mockMetadata中的设计，可能不会生成关系字段
 	// 实际项目中应确保mockMetadata包含关系字段以验证renderRelation方法
 }
 
 // 测试数据库类型到GraphQL类型的映射
-func TestRenderer_MapDBTypeToGraphQL(t *testing.T) {
-	// 创建渲染器
-	renderer := &Renderer{}
-
+func TestRenderer_GetGraphQLType(t *testing.T) {
 	// 定义测试用例
 	testCases := map[string]string{
-		"integer":     "String", // 默认映射为 String
-		"int":         "String",
-		"int4":        "String",
-		"serial":      "String",
-		"float":       "String",
-		"double":      "String",
-		"decimal":     "String",
-		"numeric":     "String",
-		"boolean":     "String",
-		"bool":        "String",
-		"timestamp":   "String",
-		"timestamptz": "String",
-		"date":        "String",
-		"time":        "String",
-		"jsonb":       "String",
-		"json":        "String",
+		"integer":     "Int",
+		"int":         "Int",
+		"int4":        "Int",
+		"serial":      "Int",
+		"bigint":      "Int",
+		"smallint":    "Int",
+		"decimal":     "Float",
+		"numeric":     "Float",
+		"real":        "Float",
+		"double":      "Float",
+		"float":       "Float",
 		"text":        "String",
 		"varchar":     "String",
+		"char":        "String",
 		"uuid":        "String",
-		"unknown":     "String", // 未知类型默认为 String
+		"boolean":     "Boolean",
+		"bool":        "Boolean",
+		"timestamp":   "DateTime",
+		"timestamptz": "DateTime",
+		"date":        "DateTime",
+		"time":        "DateTime",
+		"jsonb":       "Json",
+		"json":        "Json",
+		"unknown":     "unknown", // 未知类型保持不变
+	}
+
+	// 创建渲染器
+	renderer := &Renderer{
+		meta: &Metadata{
+			cfg: &internal.Config{
+				Schema: internal.SchemaConfig{
+					TypeMapping: testCases, // 直接使用testCases作为TypeMapping
+				},
+			},
+		},
 	}
 
 	// 测试每种类型的映射
 	for dbType, expectedGraphQLType := range testCases {
 		t.Run(dbType, func(t *testing.T) {
-			actualType := renderer.mapDBTypeToGraphQL(dbType)
+			field := &internal.Field{Type: dbType, IsPrimary: false}
+			actualType := renderer.getGraphQLType(field)
 			assert.Equal(t, expectedGraphQLType, actualType,
 				"数据库类型 %s 应该映射为 %s, 但得到了 %s",
 				dbType, expectedGraphQLType, actualType)

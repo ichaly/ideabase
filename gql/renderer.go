@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/iancoleman/strcase"
@@ -252,25 +251,26 @@ func (my *Renderer) renderTypes() error {
 				continue
 			}
 
-			// 获取GraphQL字段类型
-			typeName := my.mapDBTypeToGraphQL(field.Type)
-			// 非空字段添加!
-			if !field.Nullable {
-				typeName += "!"
-			}
-
 			// 添加描述作为注释
 			if field.Description != "" {
 				my.writeLine("  # ", field.Description)
 			}
 
+			// 获取GraphQL字段类型
+			typeName := my.getGraphQLType(field)
+
+			// 处理集合类型
+			if field.IsCollection {
+				typeName = "[" + typeName + "]"
+			}
+
+			// 处理非空标记
+			if !field.Nullable {
+				typeName += "!"
+			}
+
 			// 输出字段定义
 			my.writeLine("  ", fieldName, ": ", typeName)
-		}
-
-		// 添加关系字段
-		if err := my.renderRelation(className, class); err != nil {
-			return err
 		}
 
 		// 结束类型定义
@@ -281,241 +281,51 @@ func (my *Renderer) renderTypes() error {
 	return nil
 }
 
-// renderRelation 渲染关系字段
-func (my *Renderer) renderRelation(className string, class *internal.Class) error {
-	// 记录处理开始
-	log.Debug().Str("class", className).Str("table", class.Table).Msg("处理实体关系")
+// getGraphQLType 获取GraphQL类型
+func (my *Renderer) getGraphQLType(field *internal.Field) string {
+	fieldType := field.Type
 
-	// 用于跟踪已经添加的字段名，防止重复
-	addedFields := make(map[string]bool)
-	for fieldName, _ := range class.Fields {
-		// 记录类中已有的字段名，避免冲突
-		addedFields[fieldName] = true
+	// 处理集合类型
+	if field.IsCollection {
+		innerType := fieldType
+		if strings.HasPrefix(innerType, "[") && strings.HasSuffix(innerType, "]") {
+			innerType = innerType[1 : len(innerType)-1]
+		}
+		return "[" + my.getGraphQLType(&internal.Field{Type: innerType}) + "]"
 	}
 
-	// 跟踪中间表上下文
-	throughTablesAdded := make(map[string]bool)
+	// 1. 主键固定映射为ID类型
+	if field.IsPrimary {
+		return SCALAR_ID
+	}
 
-	// 处理多对多关系
-	// 多对多关系需要先处理，因为它们可能需要添加中间表关系
-	for fieldName, field := range class.Fields {
-		// 确保只处理真正的字段名，跳过列名索引
-		if fieldName != field.Name {
-			continue
-		}
+	// 处理标量类型
+	if fieldType == SCALAR_STRING ||
+		fieldType == SCALAR_INT ||
+		fieldType == SCALAR_FLOAT ||
+		fieldType == SCALAR_BOOLEAN ||
+		fieldType == SCALAR_ID ||
+		fieldType == SCALAR_JSON ||
+		fieldType == SCALAR_CURSOR ||
+		fieldType == SCALAR_DATE_TIME {
+		return fieldType
+	}
 
-		// 检查字段是否定义了关系并且是多对多关系
-		if field.Relation == nil || field.Relation.Type != internal.MANY_TO_MANY {
-			continue
-		}
-
-		// 获取目标类名
-		targetClassName := field.Relation.TargetClass
-
-		// 检查目标类是否存在
-		if _, exists := my.meta.Nodes[targetClassName]; !exists {
-			log.Warn().
-				Str("class", className).
-				Str("field", fieldName).
-				Str("targetClass", targetClassName).
-				Msg("关系目标类不存在，跳过关系字段渲染")
-			continue
-		}
-
-		// 设置多对多关系字段名
-		relationFieldName := strcase.ToLowerCamel(targetClassName) + "List"
-
-		// 检查字段名是否已存在，如果存在则添加后缀
-		if addedFields[relationFieldName] {
-			counter := 1
-			newFieldName := relationFieldName
-			for addedFields[newFieldName] {
-				newFieldName = relationFieldName + strconv.Itoa(counter)
-				counter++
-			}
-			relationFieldName = newFieldName
-		}
-		addedFields[relationFieldName] = true
-
-		// 记录当前处理的关系
-		log.Debug().
-			Str("class", className).
-			Str("originalField", fieldName).
-			Str("newField", relationFieldName).
-			Str("relation", string(field.Relation.Type)).
-			Str("targetClass", targetClassName).
-			Msg("渲染关系字段")
-
-		// 添加描述
-		description := "多对多关联的" + targetClassName + "列表"
-		my.writeLine("  # ", description)
-
-		// 渲染多对多关系字段
-		typeName := "[" + targetClassName + "]"
-		my.writeLine("  ", relationFieldName, ": ", typeName, "!")
-
-		// 如果配置为显示中间表关系，添加中间表关系字段
-		if my.meta.cfg.Schema.ShowThrough && field.Relation.Through != nil {
-			// 获取中间表信息
-			through := field.Relation.Through
-
-			// 查找中间表对应的实体类
-			var throughClass *internal.Class
-			var throughClassName string
-
-			for name, c := range my.meta.Nodes {
-				if c.Table == through.Table {
-					throughClass = c
-					throughClassName = name
-					break
-				}
-			}
-
-			// 如果找到中间表对应的实体类，添加中间表关系字段
-			if throughClass != nil && !throughTablesAdded[throughClassName] {
-				throughFieldName := strcase.ToLowerCamel(inflection.Singular(throughClassName)) + "List"
-
-				// 检查字段名是否已存在，如果存在则添加后缀
-				if addedFields[throughFieldName] {
-					counter := 1
-					newFieldName := throughFieldName
-					for addedFields[newFieldName] {
-						newFieldName = throughFieldName + strconv.Itoa(counter)
-						counter++
-					}
-					throughFieldName = newFieldName
-				}
-				addedFields[throughFieldName] = true
-				throughTablesAdded[throughClassName] = true
-
-				// 添加中间表关系字段描述
-				throughDescription := "关联的" + throughClassName + "记录列表"
-				my.writeLine("  # ", throughDescription)
-
-				// 渲染中间表关系字段
-				throughTypeName := "[" + throughClassName + "]"
-				my.writeLine("  ", throughFieldName, ": ", throughTypeName, "!")
-			}
+	// 2. 只从配置中获取类型映射
+	if my.meta != nil && my.meta.cfg != nil && my.meta.cfg.Schema.TypeMapping != nil {
+		if gqlType, ok := my.meta.cfg.Schema.TypeMapping[fieldType]; ok {
+			return gqlType
 		}
 	}
 
-	// 遍历所有字段，处理非多对多关系
-	for fieldName, field := range class.Fields {
-		// 确保只处理真正的字段名，跳过列名索引
-		if fieldName != field.Name {
-			continue
-		}
-
-		// 检查字段是否定义了关系
-		if field.Relation == nil {
-			continue
-		}
-
-		// 跳过多对多关系，它们已经在前面处理过了
-		if field.Relation.Type == internal.MANY_TO_MANY {
-			continue
-		}
-
-		// 获取目标类名
-		targetClassName := field.Relation.TargetClass
-
-		// 检查目标类是否存在
-		if _, exists := my.meta.Nodes[targetClassName]; !exists {
-			log.Warn().
-				Str("class", className).
-				Str("field", fieldName).
-				Str("targetClass", targetClassName).
-				Msg("关系目标类不存在，跳过关系字段渲染")
-			continue
-		}
-
-		// 根据关系类型生成合适的字段名
-		var relationFieldName string
-		var isCollection bool = false
-		switch field.Relation.Type {
-		case internal.MANY_TO_ONE:
-			// 多对一关系使用目标实体名称的单数形式
-			relationFieldName = strcase.ToLowerCamel(targetClassName)
-			isCollection = false
-		case internal.ONE_TO_MANY:
-			// 一对多和多对多关系使用目标实体名称+List
-			relationFieldName = strcase.ToLowerCamel(targetClassName) + "List"
-			isCollection = true
-		case internal.RECURSIVE:
-			// 递归关系
-			if strings.HasSuffix(fieldName, "s") || fieldName == "children" {
-				relationFieldName = "children"
-				isCollection = true
-			} else {
-				relationFieldName = "parent"
-				isCollection = false
-			}
-		}
-
-		// 检查字段名是否已存在，如果存在则添加后缀
-		if addedFields[relationFieldName] {
-			counter := 1
-			newFieldName := relationFieldName
-			for addedFields[newFieldName] {
-				newFieldName = relationFieldName + strconv.Itoa(counter)
-				counter++
-			}
-			relationFieldName = newFieldName
-		}
-		addedFields[relationFieldName] = true
-
-		// 记录当前处理的关系
-		log.Debug().
-			Str("class", className).
-			Str("originalField", fieldName).
-			Str("newField", relationFieldName).
-			Str("relation", string(field.Relation.Type)).
-			Str("targetClass", targetClassName).
-			Msg("渲染关系字段")
-
-		// 添加字段描述
-		var description string
-		if field.Description != "" {
-			description = field.Description
-		} else {
-			// 根据关系类型生成默认描述
-			switch field.Relation.Type {
-			case internal.MANY_TO_ONE:
-				description = "关联的" + targetClassName + "对象"
-			case internal.ONE_TO_MANY:
-				description = "关联的" + targetClassName + "列表"
-			case internal.RECURSIVE:
-				if isCollection {
-					description = "子" + className + "列表"
-				} else {
-					description = "父" + className + "对象"
-				}
-			}
-		}
-
-		// 如果有描述，添加为注释
-		if description != "" {
-			my.writeLine("  # ", description)
-		}
-
-		// 根据关系类型和集合标志渲染字段
-		if isCollection {
-			// 集合类型渲染为对象列表
-			typeName := "[" + targetClassName + "]"
-			// 列表本身通常不为null，但列表中的元素可能为null
-			my.writeLine("  ", relationFieldName, ": ", typeName, "!")
-		} else {
-			// 单个对象引用
-			typeName := targetClassName
-			if field.Nullable {
-				my.writeLine("  ", relationFieldName, ": ", typeName)
-			} else {
-				my.writeLine("  ", relationFieldName, ": ", typeName, "!")
-			}
-		}
+	// 3. 确保返回非空实体类型
+	if fieldType == "" {
+		// 如果类型为空，使用默认类型
+		return SCALAR_STRING
 	}
 
-	return nil
+	// 默认假设是实体类型
+	return fieldType
 }
 
 // renderInput 渲染输入类型
@@ -537,7 +347,7 @@ func (my *Renderer) renderInput() error {
 				continue
 			}
 
-			typeName := my.mapDBTypeToGraphQL(field.Type)
+			typeName := my.getGraphQLType(field)
 			// 非空字段添加!
 			if !field.Nullable {
 				typeName += "!"
@@ -565,7 +375,7 @@ func (my *Renderer) renderInput() error {
 				continue
 			}
 
-			typeName := my.mapDBTypeToGraphQL(field.Type)
+			typeName := my.getGraphQLType(field)
 			// 更新时所有字段都是可选的
 			my.writeField(fieldName, typeName)
 		}
@@ -639,9 +449,9 @@ func (my *Renderer) renderEntity() error {
 				continue
 			}
 
-			// 根据字段类型添加对应的过滤器
-			typeName := my.mapDBTypeToGraphQL(field.Type)
-			my.writeField(fieldName, typeName+"Filter")
+			// 获取字段类型
+			fieldType := my.getGraphQLType(field)
+			my.writeField(fieldName, fieldType+"Filter")
 		}
 
 		// 添加布尔逻辑操作符
@@ -844,7 +654,7 @@ func (my *Renderer) renderStats() error {
 			}
 
 			// 根据字段类型添加对应的统计类型
-			typeName := my.mapDBTypeToGraphQL(field.Type)
+			typeName := my.getGraphQLType(field)
 			switch typeName {
 			case SCALAR_INT, SCALAR_FLOAT, SCALAR_ID:
 				my.writeField(fieldName, TYPE_NUMBER_STATS)
@@ -908,21 +718,6 @@ func (my *Renderer) renderPaging() error {
 	}
 
 	return nil
-}
-
-// mapDBTypeToGraphQL 将数据库类型映射为GraphQL类型
-func (my *Renderer) mapDBTypeToGraphQL(dbType string) string {
-	// 根据数据库类型返回相应的GraphQL类型
-	dbType = strings.ToLower(dbType)
-
-	// 优先使用配置中的映射
-	if my.meta != nil && my.meta.cfg != nil && my.meta.cfg.Schema.TypeMapping != nil {
-		if mapping, ok := my.meta.cfg.Schema.TypeMapping[dbType]; ok {
-			return mapping
-		}
-	}
-
-	return SCALAR_STRING
 }
 
 // writeField 使用优化的子包渲染字段

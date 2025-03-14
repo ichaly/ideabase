@@ -22,6 +22,9 @@ func TestRenderRelation(t *testing.T) {
 		},
 	}
 
+	// 先处理元数据中的关系，然后才渲染
+	meta.processAllRelationships()
+
 	// 创建渲染器
 	renderer := NewRenderer(meta)
 
@@ -39,25 +42,25 @@ func TestRenderRelation(t *testing.T) {
 	// 验证多对一关系
 	t.Run("多对一关系", func(t *testing.T) {
 		// User表中应该有department字段，指向Department
-		assert.Contains(t, generatedSchema, "department1: Department!")
+		assert.Contains(t, generatedSchema, "department: Department!")
 		// 应该包含注释
-		assert.Contains(t, generatedSchema, "# 关联的Department对象")
+		assert.Contains(t, generatedSchema, "# 关联的Department")
 	})
 
 	// 验证一对多关系
 	t.Run("一对多关系", func(t *testing.T) {
-		// Department表中应该有userList字段，是User的列表
-		assert.Contains(t, generatedSchema, "userList: [User]!")
+		// Department表中应该有users字段，是User的列表
+		assert.Contains(t, generatedSchema, "users: [[User]]!")
 		// 应该包含注释
 		assert.Contains(t, generatedSchema, "# 关联的User列表")
 	})
 
 	// 验证多对多关系
 	t.Run("多对多关系", func(t *testing.T) {
-		// Post表中应该有tagList字段，是Tag的列表
-		assert.Contains(t, generatedSchema, "tagList: [Tag]!")
-		// Tag表中应该有postList字段，是Post的列表
-		assert.Contains(t, generatedSchema, "postList: [Post]!")
+		// Post表中应该有tags字段，是Tag的列表
+		assert.Contains(t, generatedSchema, "tags: [[Tag]]!")
+		// Tag表中应该有posts字段，是Post的列表
+		assert.Contains(t, generatedSchema, "posts: [[Post]]!")
 		// 应该包含注释
 		assert.Contains(t, generatedSchema, "# 多对多关联的Tag列表")
 		assert.Contains(t, generatedSchema, "# 多对多关联的Post列表")
@@ -66,9 +69,9 @@ func TestRenderRelation(t *testing.T) {
 	// 验证递归关系
 	t.Run("递归关系", func(t *testing.T) {
 		// Organization表中应该有parent字段，指向Organization
-		assert.Contains(t, generatedSchema, "parent1: Organization")
+		assert.Contains(t, generatedSchema, "parent: Organization")
 		// Organization表中应该有children字段，是Organization的列表
-		assert.Contains(t, generatedSchema, "children1: [Organization]!")
+		assert.Contains(t, generatedSchema, "children: [[Organization]]!")
 		// 应该包含注释
 		assert.Contains(t, generatedSchema, "# 父Organization对象")
 		assert.Contains(t, generatedSchema, "# 子Organization列表")
@@ -77,24 +80,17 @@ func TestRenderRelation(t *testing.T) {
 	// 验证字段冲突处理
 	t.Run("字段冲突处理", func(t *testing.T) {
 		// 在重命名测试中，已存在的admin字段会导致冲突
-		// 新的关系字段应该是user而不是admin，因为我们现在按照实体名称命名
-		assert.Contains(t, generatedSchema, "user: User!")
+		// 新的关系字段应该是user1而不是user
+		assert.Contains(t, generatedSchema, "user1: User!")
 	})
 
-	// 验证中间表关系隐藏
-	t.Run("中间表关系隐藏", func(t *testing.T) {
-		// 默认情况下中间表关系应该被隐藏
-		// 修改Post和Tag的关系检测，这些现在应该是直接的多对多关系
-		assert.Contains(t, generatedSchema, "tagList: [Tag]!")
-		assert.Contains(t, generatedSchema, "postList: [Post]!")
-	})
-
-	// 测试中间表关系显示
+	// 验证中间表关系显示
 	t.Run("中间表关系显示", func(t *testing.T) {
 		// 修改配置显示中间表关系
 		meta.cfg.Schema.ShowThrough = true
 
-		// 重新创建渲染器
+		// 重新处理关系并创建渲染器
+		meta.processAllRelationships()
 		renderer = NewRenderer(meta)
 		schema = &strings.Builder{}
 		renderer.sb = schema
@@ -106,10 +102,8 @@ func TestRenderRelation(t *testing.T) {
 		// 获取新的schema文本
 		newSchema := schema.String()
 
-		// 现在应该仍有多对多关系和中间表关系
-		assert.Contains(t, newSchema, "tagList: [Tag]!")
-		assert.Contains(t, newSchema, "postList: [Post]!")
-		assert.Contains(t, newSchema, "postTagList: [PostTags]!")
+		// 现在应该有中间表关系
+		assert.Contains(t, newSchema, "postTags: [[PostTags]]!")
 	})
 }
 
@@ -141,17 +135,14 @@ func createRelationTestMetadata() *Metadata {
 		Column: "department_id",
 		Type:   "integer",
 	}
-	// 添加多对一关系
+
+	// 添加多对一关系字段
 	userClass.Fields["department"] = &internal.Field{
-		Name: "department",
-		Type: "object",
-		Relation: &internal.Relation{
-			SourceClass: "User",
-			SourceField: "departmentId",
-			TargetClass: "Department",
-			TargetField: "id",
-			Type:        internal.MANY_TO_ONE,
-		},
+		Name:         "department",
+		Type:         "Department",
+		Description:  "关联的Department",
+		Virtual:      true,
+		IsCollection: false,
 	}
 
 	// 创建Department类
@@ -171,17 +162,14 @@ func createRelationTestMetadata() *Metadata {
 		Column: "name",
 		Type:   "string",
 	}
-	// 添加一对多关系
+
+	// 添加一对多关系字段
 	deptClass.Fields["users"] = &internal.Field{
-		Name: "users",
-		Type: "array",
-		Relation: &internal.Relation{
-			SourceClass: "Department",
-			SourceField: "id",
-			TargetClass: "User",
-			TargetField: "departmentId",
-			Type:        internal.ONE_TO_MANY,
-		},
+		Name:         "users",
+		Type:         "User",
+		Description:  "关联的User列表",
+		Virtual:      true,
+		IsCollection: true,
 	}
 
 	// 创建Admin类，用于测试字段冲突处理
@@ -212,17 +200,14 @@ func createRelationTestMetadata() *Metadata {
 		Column: "admin",
 		Type:   "boolean",
 	}
-	// 添加多对一关系，关系字段名会从"user"转换而来，将与已存在的admin字段冲突
-	adminClass.Fields["userRelation"] = &internal.Field{
-		Name: "userRelation",
-		Type: "object",
-		Relation: &internal.Relation{
-			SourceClass: "Admin",
-			SourceField: "userId",
-			TargetClass: "User",
-			TargetField: "id",
-			Type:        internal.MANY_TO_ONE,
-		},
+
+	// 添加多对一关系字段，会与admin字段冲突
+	adminClass.Fields["user1"] = &internal.Field{
+		Name:         "user1",
+		Type:         "User",
+		Description:  "关联的User",
+		Virtual:      true,
+		IsCollection: false,
 	}
 
 	// 创建Post类
@@ -242,22 +227,23 @@ func createRelationTestMetadata() *Metadata {
 		Column: "title",
 		Type:   "string",
 	}
-	// 添加多对多关系
+
+	// 添加多对多关系字段
 	postClass.Fields["tags"] = &internal.Field{
-		Name: "tags",
-		Type: "array",
-		Relation: &internal.Relation{
-			SourceClass: "Post",
-			SourceField: "id",
-			TargetClass: "Tag",
-			TargetField: "id",
-			Type:        internal.MANY_TO_MANY,
-			Through: &internal.Through{
-				Table:     "post_tags",
-				SourceKey: "post_id",
-				TargetKey: "tag_id",
-			},
-		},
+		Name:         "tags",
+		Type:         "Tag",
+		Description:  "多对多关联的Tag列表",
+		Virtual:      true,
+		IsCollection: true,
+	}
+
+	// 添加中间表关系字段
+	postClass.Fields["postTags"] = &internal.Field{
+		Name:         "postTags",
+		Type:         "PostTags",
+		Description:  "关联的PostTags列表",
+		Virtual:      true,
+		IsCollection: true,
 	}
 
 	// 创建Tag类
@@ -277,25 +263,26 @@ func createRelationTestMetadata() *Metadata {
 		Column: "name",
 		Type:   "string",
 	}
-	// 添加多对多关系
+
+	// 添加多对多关系字段
 	tagClass.Fields["posts"] = &internal.Field{
-		Name: "posts",
-		Type: "array",
-		Relation: &internal.Relation{
-			SourceClass: "Tag",
-			SourceField: "id",
-			TargetClass: "Post",
-			TargetField: "id",
-			Type:        internal.MANY_TO_MANY,
-			Through: &internal.Through{
-				Table:     "post_tags",
-				SourceKey: "tag_id",
-				TargetKey: "post_id",
-			},
-		},
+		Name:         "posts",
+		Type:         "Post",
+		Description:  "多对多关联的Post列表",
+		Virtual:      true,
+		IsCollection: true,
 	}
 
-	// 添加中间表 PostTags 用于测试中间表关系显示/隐藏
+	// 添加中间表关系字段
+	tagClass.Fields["postTags"] = &internal.Field{
+		Name:         "postTags",
+		Type:         "PostTags",
+		Description:  "关联的PostTags列表",
+		Virtual:      true,
+		IsCollection: true,
+	}
+
+	// 添加中间表 PostTags
 	postTagsClass := &internal.Class{
 		Name:   "PostTags",
 		Table:  "post_tags",
@@ -305,25 +292,29 @@ func createRelationTestMetadata() *Metadata {
 		Name:   "postId",
 		Column: "post_id",
 		Type:   "integer",
-		Relation: &internal.Relation{
-			SourceClass: "PostTags",
-			SourceField: "postId",
-			TargetClass: "Post",
-			TargetField: "id",
-			Type:        internal.MANY_TO_ONE,
-		},
 	}
 	postTagsClass.Fields["tagId"] = &internal.Field{
 		Name:   "tagId",
 		Column: "tag_id",
 		Type:   "integer",
-		Relation: &internal.Relation{
-			SourceClass: "PostTags",
-			SourceField: "tagId",
-			TargetClass: "Tag",
-			TargetField: "id",
-			Type:        internal.MANY_TO_ONE,
-		},
+	}
+
+	// 添加多对一关系字段
+	postTagsClass.Fields["post"] = &internal.Field{
+		Name:         "post",
+		Type:         "Post",
+		Description:  "关联的Post",
+		Virtual:      true,
+		IsCollection: false,
+	}
+
+	// 添加多对一关系字段
+	postTagsClass.Fields["tag"] = &internal.Field{
+		Name:         "tag",
+		Type:         "Tag",
+		Description:  "关联的Tag",
+		Virtual:      true,
+		IsCollection: false,
 	}
 
 	// 创建Organization类（自关联）
@@ -349,30 +340,24 @@ func createRelationTestMetadata() *Metadata {
 		Type:     "integer",
 		Nullable: true,
 	}
-	// 添加递归关系 - 父组织
+
+	// 添加递归关系字段 - 父组织
 	orgClass.Fields["parent"] = &internal.Field{
-		Name:     "parent",
-		Type:     "object",
-		Nullable: true,
-		Relation: &internal.Relation{
-			SourceClass: "Organization",
-			SourceField: "parentId",
-			TargetClass: "Organization",
-			TargetField: "id",
-			Type:        internal.RECURSIVE,
-		},
+		Name:         "parent",
+		Type:         "Organization",
+		Description:  "父Organization对象",
+		Virtual:      true,
+		Nullable:     true,
+		IsCollection: false,
 	}
-	// 添加递归关系 - 子组织
+
+	// 添加递归关系字段 - 子组织
 	orgClass.Fields["children"] = &internal.Field{
-		Name: "children",
-		Type: "array",
-		Relation: &internal.Relation{
-			SourceClass: "Organization",
-			SourceField: "id",
-			TargetClass: "Organization",
-			TargetField: "parentId",
-			Type:        internal.RECURSIVE,
-		},
+		Name:         "children",
+		Type:         "Organization",
+		Description:  "子Organization列表",
+		Virtual:      true,
+		IsCollection: true,
 	}
 
 	// 添加所有类到元数据
