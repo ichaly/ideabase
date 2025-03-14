@@ -287,6 +287,12 @@ func (my *Renderer) getGraphQLType(field *internal.Field) string {
 			innerType = innerType[1 : len(innerType)-1]
 		}
 
+		// 检查内部类型是否是类名
+		if _, exists := my.meta.Nodes[innerType]; exists {
+			// 如果是类名，直接使用类名
+			return "[" + innerType + "]"
+		}
+
 		// 避免递归调用导致嵌套数组，直接处理内部类型
 		innerField := &internal.Field{
 			Type:         innerType,
@@ -320,7 +326,13 @@ func (my *Renderer) getGraphQLType(field *internal.Field) string {
 		}
 	}
 
-	// 3. 确保返回非空实体类型
+	// 3. 检查是否是类名
+	if _, exists := my.meta.Nodes[fieldType]; exists {
+		// 如果是类名，直接使用类名
+		return fieldType
+	}
+
+	// 4. 确保返回非空实体类型
 	if fieldType == "" {
 		// 如果类型为空，使用默认类型
 		return SCALAR_STRING

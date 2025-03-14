@@ -186,13 +186,12 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.True(t, ok)
 		require.Equal(t, "posts", posts.Table)
 		require.Equal(t, "文章表", posts.Description)
-		require.Len(t, posts.Fields, 6)
+		require.Len(t, posts.Fields, 5)
 		require.Contains(t, posts.Fields, "id")
 		require.Contains(t, posts.Fields, "title")
 		require.Contains(t, posts.Fields, "content")
 		require.Contains(t, posts.Fields, "user_id")
 		require.Contains(t, posts.Fields, "created_at")
-		require.Contains(t, posts.Fields, "tagList")
 
 		// 验证comments表
 		comments, ok := classes["comments"]
@@ -225,11 +224,10 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		require.True(t, ok)
 		require.Equal(t, "tags", tags.Table)
 		require.Equal(t, "标签表", tags.Description)
-		require.Len(t, tags.Fields, 4)
+		require.Len(t, tags.Fields, 3)
 		require.Contains(t, tags.Fields, "id")
 		require.Contains(t, tags.Fields, "name")
 		require.Contains(t, tags.Fields, "created_at")
-		require.Contains(t, tags.Fields, "postList")
 
 		// 验证post_tags表
 		postTags, ok := classes["post_tags"]
@@ -246,52 +244,61 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 // 测试多对多关系检测
 func TestDetectManyToManyRelations(t *testing.T) {
 	// 创建测试数据
-	classes := map[string]*internal.Class{
-		"users": {
-			Name:        "users",
-			Table:       "users",
-			Fields:      make(map[string]*internal.Field),
-			PrimaryKeys: []string{"id"},
-		},
-		"roles": {
-			Name:        "roles",
-			Table:       "roles",
-			Fields:      make(map[string]*internal.Field),
-			PrimaryKeys: []string{"id"},
-		},
-		"user_roles": {
-			Name:        "user_roles",
-			Table:       "user_roles",
-			Fields:      make(map[string]*internal.Field),
-			PrimaryKeys: []string{"user_id", "role_id"},
-		},
-	}
+	classes := make(map[string]*internal.Class)
 
-	// 添加字段
-	classes["users"].Fields["id"] = &internal.Field{
-		Name:      "id",
-		Column:    "id",
-		Type:      "integer",
-		IsPrimary: true,
+	// 创建 users 类
+	users := &internal.Class{
+		Name:        "users",
+		Table:       "users",
+		PrimaryKeys: []string{"id"},
+		Fields: map[string]*internal.Field{
+			"id": {
+				Name:      "id",
+				Column:    "id",
+				Type:      "integer",
+				IsPrimary: true,
+			},
+		},
 	}
-	classes["roles"].Fields["id"] = &internal.Field{
-		Name:      "id",
-		Column:    "id",
-		Type:      "integer",
-		IsPrimary: true,
-	}
-	classes["user_roles"].Fields["user_id"] = &internal.Field{
-		Name:   "user_id",
-		Column: "user_id",
-		Type:   "integer",
-	}
-	classes["user_roles"].Fields["role_id"] = &internal.Field{
-		Name:   "role_id",
-		Column: "role_id",
-		Type:   "integer",
-	}
+	classes["users"] = users
 
-	// 创建外键关系
+	// 创建 roles 类
+	roles := &internal.Class{
+		Name:        "roles",
+		Table:       "roles",
+		PrimaryKeys: []string{"id"},
+		Fields: map[string]*internal.Field{
+			"id": {
+				Name:      "id",
+				Column:    "id",
+				Type:      "integer",
+				IsPrimary: true,
+			},
+		},
+	}
+	classes["roles"] = roles
+
+	// 创建 user_roles 类
+	userRoles := &internal.Class{
+		Name:        "user_roles",
+		Table:       "user_roles",
+		PrimaryKeys: []string{"user_id", "role_id"},
+		Fields: map[string]*internal.Field{
+			"user_id": {
+				Name:   "user_id",
+				Column: "user_id",
+				Type:   "integer",
+			},
+			"role_id": {
+				Name:   "role_id",
+				Column: "role_id",
+				Type:   "integer",
+			},
+		},
+	}
+	classes["user_roles"] = userRoles
+
+	// 创建外键信息
 	foreignKeys := []foreignKeyInfo{
 		{
 			SourceTable:  "user_roles",
@@ -307,16 +314,8 @@ func TestDetectManyToManyRelations(t *testing.T) {
 		},
 	}
 
-	// 创建主键
+	// 创建主键信息
 	primaryKeys := []primaryKeyInfo{
-		{
-			TableName:  "user_roles",
-			ColumnName: "user_id",
-		},
-		{
-			TableName:  "user_roles",
-			ColumnName: "role_id",
-		},
 		{
 			TableName:  "users",
 			ColumnName: "id",
@@ -325,47 +324,53 @@ func TestDetectManyToManyRelations(t *testing.T) {
 			TableName:  "roles",
 			ColumnName: "id",
 		},
+		{
+			TableName:  "user_roles",
+			ColumnName: "user_id",
+		},
+		{
+			TableName:  "user_roles",
+			ColumnName: "role_id",
+		},
 	}
 
 	// 创建加载器并检测多对多关系
 	loader := &DatabaseLoader{}
 	loader.detectManyToManyRelations(classes, foreignKeys, primaryKeys)
 
-	// 验证结果
-	// 1. users 类中应该有一个指向 roles 的多对多关系字段
-	rolesField, exists := classes["users"].Fields["roleList"]
-	assert.True(t, exists, "users 类中应该有 roleList 字段")
-	if exists {
-		assert.True(t, rolesField.Virtual, "roleList 应该是虚拟字段")
-		assert.NotNil(t, rolesField.Relation, "roleList 应该有关系定义")
-		assert.Equal(t, internal.MANY_TO_MANY, rolesField.Relation.Type, "roleList 关系类型应该是多对多")
-		assert.NotNil(t, rolesField.Relation.Through, "关系应该有Through配置")
-		if rolesField.Relation.Through != nil {
-			assert.Equal(t, "user_roles", rolesField.Relation.Through.Table, "中间表应该是 user_roles")
-			assert.Equal(t, "user_id", rolesField.Relation.Through.SourceKey, "源键应该是 user_id")
-			assert.Equal(t, "role_id", rolesField.Relation.Through.TargetKey, "目标键应该是 role_id")
+	// 在新的实现中，我们不再创建虚拟字段，而是将关系信息添加到现有字段中
+	// 验证 users 类的 id 字段是否有关系信息
+	idField := classes["users"].Fields["id"]
+	assert.NotNil(t, idField.Relation, "users.id 应该有关系定义")
+	if idField.Relation != nil {
+		assert.Equal(t, internal.MANY_TO_MANY, idField.Relation.Type, "关系类型应该是多对多")
+		assert.Equal(t, "users", idField.Relation.SourceClass, "源类应该是 users")
+		assert.Equal(t, "id", idField.Relation.SourceField, "源字段应该是 id")
+		assert.Equal(t, "roles", idField.Relation.TargetClass, "目标类应该是 roles")
+		assert.Equal(t, "id", idField.Relation.TargetField, "目标字段应该是 id")
+		assert.NotNil(t, idField.Relation.Through, "关系应该有Through配置")
+		if idField.Relation.Through != nil {
+			assert.Equal(t, "user_roles", idField.Relation.Through.Table, "中间表应该是 user_roles")
+			assert.Equal(t, "user_id", idField.Relation.Through.SourceKey, "源键应该是 user_id")
+			assert.Equal(t, "role_id", idField.Relation.Through.TargetKey, "目标键应该是 role_id")
 		}
 	}
 
-	// 2. roles 类中应该有一个指向 users 的多对多关系字段
-	usersField, exists := classes["roles"].Fields["userList"]
-	assert.True(t, exists, "roles 类中应该有 userList 字段")
-	if exists {
-		assert.True(t, usersField.Virtual, "userList 应该是虚拟字段")
-		assert.NotNil(t, usersField.Relation, "userList 应该有关系定义")
-		assert.Equal(t, internal.MANY_TO_MANY, usersField.Relation.Type, "userList 关系类型应该是多对多")
-		assert.NotNil(t, usersField.Relation.Through, "关系应该有Through配置")
-		if usersField.Relation.Through != nil {
-			assert.Equal(t, "user_roles", usersField.Relation.Through.Table, "中间表应该是 user_roles")
-			assert.Equal(t, "role_id", usersField.Relation.Through.SourceKey, "源键应该是 role_id")
-			assert.Equal(t, "user_id", usersField.Relation.Through.TargetKey, "目标键应该是 user_id")
+	// 验证 roles 类的 id 字段是否有关系信息
+	idField = classes["roles"].Fields["id"]
+	assert.NotNil(t, idField.Relation, "roles.id 应该有关系定义")
+	if idField.Relation != nil {
+		assert.Equal(t, internal.MANY_TO_MANY, idField.Relation.Type, "关系类型应该是多对多")
+		assert.Equal(t, "roles", idField.Relation.SourceClass, "源类应该是 roles")
+		assert.Equal(t, "id", idField.Relation.SourceField, "源字段应该是 id")
+		assert.Equal(t, "users", idField.Relation.TargetClass, "目标类应该是 users")
+		assert.Equal(t, "id", idField.Relation.TargetField, "目标字段应该是 id")
+		assert.NotNil(t, idField.Relation.Through, "关系应该有Through配置")
+		if idField.Relation.Through != nil {
+			assert.Equal(t, "user_roles", idField.Relation.Through.Table, "中间表应该是 user_roles")
+			assert.Equal(t, "role_id", idField.Relation.Through.SourceKey, "源键应该是 role_id")
+			assert.Equal(t, "user_id", idField.Relation.Through.TargetKey, "目标键应该是 user_id")
 		}
-	}
-
-	// 3. 验证反向引用
-	if exists && rolesField.Relation != nil && usersField.Relation != nil {
-		assert.Equal(t, rolesField.Relation, usersField.Relation.Reverse, "反向引用应正确设置")
-		assert.Equal(t, usersField.Relation, rolesField.Relation.Reverse, "反向引用应正确设置")
 	}
 }
 
