@@ -50,7 +50,7 @@ func TestRenderRelation(t *testing.T) {
 	// 验证一对多关系
 	t.Run("一对多关系", func(t *testing.T) {
 		// Department表中应该有users字段，是User的列表
-		assert.Contains(t, generatedSchema, "users: [[User]]!")
+		assert.Contains(t, generatedSchema, "users: [User]!")
 		// 应该包含注释
 		assert.Contains(t, generatedSchema, "# 关联的User列表")
 	})
@@ -58,9 +58,9 @@ func TestRenderRelation(t *testing.T) {
 	// 验证多对多关系
 	t.Run("多对多关系", func(t *testing.T) {
 		// Post表中应该有tags字段，是Tag的列表
-		assert.Contains(t, generatedSchema, "tags: [[Tag]]!")
+		assert.Contains(t, generatedSchema, "tags: [Tag]!")
 		// Tag表中应该有posts字段，是Post的列表
-		assert.Contains(t, generatedSchema, "posts: [[Post]]!")
+		assert.Contains(t, generatedSchema, "posts: [Post]!")
 		// 应该包含注释
 		assert.Contains(t, generatedSchema, "# 多对多关联的Tag列表")
 		assert.Contains(t, generatedSchema, "# 多对多关联的Post列表")
@@ -71,7 +71,7 @@ func TestRenderRelation(t *testing.T) {
 		// Organization表中应该有parent字段，指向Organization
 		assert.Contains(t, generatedSchema, "parent: Organization")
 		// Organization表中应该有children字段，是Organization的列表
-		assert.Contains(t, generatedSchema, "children: [[Organization]]!")
+		assert.Contains(t, generatedSchema, "children: [Organization]!")
 		// 应该包含注释
 		assert.Contains(t, generatedSchema, "# 父Organization对象")
 		assert.Contains(t, generatedSchema, "# 子Organization列表")
@@ -103,7 +103,7 @@ func TestRenderRelation(t *testing.T) {
 		newSchema := schema.String()
 
 		// 现在应该有中间表关系
-		assert.Contains(t, newSchema, "postTags: [[PostTags]]!")
+		assert.Contains(t, newSchema, "postTags: [PostTags]!")
 	})
 }
 
@@ -143,6 +143,15 @@ func createRelationTestMetadata() *Metadata {
 		Description:  "关联的Department",
 		Virtual:      true,
 		IsCollection: false,
+	}
+
+	// 添加一对多关系字段 - User指向Post
+	userClass.Fields["posts"] = &internal.Field{
+		Name:         "posts",
+		Type:         "Post",
+		Description:  "用户的文章列表",
+		Virtual:      true,
+		IsCollection: true,
 	}
 
 	// 创建Department类
@@ -226,6 +235,21 @@ func createRelationTestMetadata() *Metadata {
 		Name:   "title",
 		Column: "title",
 		Type:   "string",
+	}
+	// 添加userId字段
+	postClass.Fields["userId"] = &internal.Field{
+		Name:   "userId",
+		Column: "user_id",
+		Type:   "integer",
+	}
+
+	// 添加多对一关系字段 - Post指向User
+	postClass.Fields["user"] = &internal.Field{
+		Name:         "user",
+		Type:         "User",
+		Description:  "文章作者",
+		Virtual:      true,
+		IsCollection: false,
 	}
 
 	// 添加多对多关系字段

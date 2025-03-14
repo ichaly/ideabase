@@ -259,11 +259,6 @@ func (my *Renderer) renderTypes() error {
 			// 获取GraphQL字段类型
 			typeName := my.getGraphQLType(field)
 
-			// 处理集合类型
-			if field.IsCollection {
-				typeName = "[" + typeName + "]"
-			}
-
 			// 处理非空标记
 			if !field.Nullable {
 				typeName += "!"
@@ -291,7 +286,14 @@ func (my *Renderer) getGraphQLType(field *internal.Field) string {
 		if strings.HasPrefix(innerType, "[") && strings.HasSuffix(innerType, "]") {
 			innerType = innerType[1 : len(innerType)-1]
 		}
-		return "[" + my.getGraphQLType(&internal.Field{Type: innerType}) + "]"
+
+		// 避免递归调用导致嵌套数组，直接处理内部类型
+		innerField := &internal.Field{
+			Type:         innerType,
+			IsPrimary:    false,
+			IsCollection: false, // 重要：确保内部字段不是集合类型
+		}
+		return "[" + my.getGraphQLType(innerField) + "]"
 	}
 
 	// 1. 主键固定映射为ID类型
