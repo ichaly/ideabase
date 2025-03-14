@@ -7,7 +7,6 @@ import (
 
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/log"
-	"github.com/jinzhu/inflection"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
 )
@@ -461,10 +460,4 @@ func createManyToManyRelation(classes map[string]*internal.Class, throughTable s
 			break
 		}
 	}
-}
-
-// getVirtualFieldName 获取多对多关系的虚拟字段名
-func getVirtualFieldName(tableName string) string {
-	// 使用目标表名的复数形式作为关系字段名，与 createRelationshipFields 方法保持一致
-	return inflection.Plural(strings.ToLower(tableName))
 }
