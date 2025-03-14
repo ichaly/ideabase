@@ -964,6 +964,13 @@ func (my *Metadata) createRelationshipFields() {
 		}
 	}
 
+	// 第一阶段：收集所有需要创建的反向关系字段
+	// 用于记录需要创建的反向关系字段
+	reverseFields := make(map[string]map[string]*internal.Field)
+	for className, _ := range my.Nodes {
+		reverseFields[className] = make(map[string]*internal.Field)
+	}
+
 	// 遍历所有类和字段创建关系字段
 	for className, class := range my.Nodes {
 		// 确保只处理真正的类名，跳过表名索引
@@ -1098,6 +1105,47 @@ func (my *Metadata) createRelationshipFields() {
 				// 添加到类字段
 				class.Fields[relationFieldName] = relationField
 
+				// 在目标类中添加一对多关系字段
+				// 一对多关系字段名 - 使用复数形式
+				reverseFieldName := strcase.ToLowerCamel(inflection.Plural(className))
+
+				// 检查目标类中是否已经存在指向源类的一对多关系字段
+				// 我们需要检查字段的类型和目标类是否匹配
+				reverseFieldExists := false
+				for _, targetField := range targetClass.Fields {
+					if targetField.IsCollection &&
+						targetField.Type == className &&
+						targetField.Virtual {
+						// 找到了匹配的字段
+						reverseFieldExists = true
+						break
+					}
+				}
+
+				// 如果目标类中不存在指向源类的一对多关系字段，则创建一个
+				if !reverseFieldExists {
+					// 处理命名冲突
+					reverseFieldName = my.ensureUniqueFieldName(targetClassName, reverseFieldName, addedFieldsMap)
+
+					// 创建一对多关系字段
+					reverseField := &internal.Field{
+						Type:         className,
+						Name:         reverseFieldName,
+						Virtual:      true,
+						Nullable:     false,
+						Description:  "关联的" + className + "列表",
+						IsCollection: true,
+					}
+
+					// 指向原始关系的反向
+					if field.Relation.Reverse != nil {
+						reverseField.SourceRelation = field.Relation.Reverse
+					}
+
+					// 记录需要添加的反向关系字段
+					reverseFields[targetClassName][reverseFieldName] = reverseField
+				}
+
 			case internal.RECURSIVE:
 				// 递归关系处理
 				if strings.HasSuffix(fieldName, "Id") || strings.HasSuffix(fieldName, "ID") {
@@ -1148,6 +1196,18 @@ func (my *Metadata) createRelationshipFields() {
 					targetClass.Fields[childrenFieldName] = childrenField
 				}
 			}
+		}
+	}
+
+	// 第二阶段：添加所有收集到的反向关系字段
+	for className, fields := range reverseFields {
+		class := my.Nodes[className]
+		if class == nil {
+			continue
+		}
+
+		for fieldName, field := range fields {
+			class.Fields[fieldName] = field
 		}
 	}
 
