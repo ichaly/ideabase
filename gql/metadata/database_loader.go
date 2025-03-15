@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/duke-git/lancet/v2/slice"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/log"
 	"github.com/samber/lo"
@@ -333,32 +334,7 @@ func (my *DatabaseLoader) detectManyToManyRelations(classes map[string]*internal
 
 // containsSameElements 检查两个字符串切片是否包含相同的元素(不考虑顺序)
 func containsSameElements(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	// 创建map来跟踪元素出现次数
-	counts := make(map[string]int)
-	for _, item := range a {
-		counts[item]++
-	}
-
-	// 检查b中的元素是否与a中的匹配
-	for _, item := range b {
-		counts[item]--
-		if counts[item] < 0 {
-			return false
-		}
-	}
-
-	// 所有计数器应为0
-	for _, count := range counts {
-		if count != 0 {
-			return false
-		}
-	}
-
-	return true
+	return len(a) == len(b) && len(slice.Difference(a, b)) == 0
 }
 
 // isThroughTableByName 通过表名检查是否是中间表

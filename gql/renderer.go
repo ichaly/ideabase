@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/iancoleman/strcase"
@@ -230,7 +231,13 @@ func (my *Renderer) renderCommon() error {
 // renderTypes 渲染所有实体类型定义
 func (my *Renderer) renderTypes() error {
 	// 遍历所有类定义，确保只使用类名作为键
-	for className, class := range my.meta.Nodes {
+	classNames := make([]string, 0, len(my.meta.Nodes))
+	for k := range my.meta.Nodes {
+		classNames = append(classNames, k)
+	}
+	sort.Strings(classNames)
+	for _, className := range classNames {
+		class := my.meta.Nodes[className]
 		// 确保只处理真正的类名，跳过表名索引
 		if className != class.Name {
 			continue
@@ -245,7 +252,13 @@ func (my *Renderer) renderTypes() error {
 		my.writeLine("type ", className, " {")
 
 		// 添加所有字段，确保只处理真正的字段名
-		for fieldName, field := range class.Fields {
+		fieldNames := make([]string, 0, len(class.Fields))
+		for k := range class.Fields {
+			fieldNames = append(fieldNames, k)
+		}
+		sort.Strings(fieldNames)
+		for _, fieldName := range fieldNames {
+			field := class.Fields[fieldName]
 			// 确保只处理真正的字段名，跳过列名索引
 			if fieldName != field.Name {
 				continue
