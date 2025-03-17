@@ -348,92 +348,42 @@ func isThroughTableByName(tableName, table1, table2 string) bool {
 
 // createManyToManyRelation 修改 createManyToManyRelation 方法，使其不创建重复的字段，而是设置 Relation 字段
 func createManyToManyRelation(classes map[string]*internal.Class, throughTable string, fk1, fk2 foreignKeyInfo) {
-	// 获取相关表名
-	table1 := fk1.TargetTable
-	table2 := fk2.TargetTable
-
-	// 查找表名对应的类
-	var class1, class2 *internal.Class
-	var className1, className2 string
-
-	// 查找表1对应的类名
-	for name, class := range classes {
-		if class.Table == table1 {
-			class1 = class
-			className1 = name
-			break
-		}
-	}
-
-	// 查找表2对应的类名
-	for name, class := range classes {
-		if class.Table == table2 {
-			class2 = class
-			className2 = name
-			break
-		}
-	}
-
+	class1, class2 := classes[fk1.TargetTable], classes[fk2.TargetTable]
 	if class1 == nil || class2 == nil {
 		return
 	}
 
-	// 创建中间表配置
-	through1 := &internal.Through{
-		Table:     throughTable,
-		SourceKey: fk1.SourceColumn,
-		TargetKey: fk2.SourceColumn,
-	}
-
-	through2 := &internal.Through{
-		Table:     throughTable,
-		SourceKey: fk2.SourceColumn,
-		TargetKey: fk1.SourceColumn,
-	}
-
-	// 创建从表1到表2的多对多关系
-	relation1 := &internal.Relation{
-		SourceClass: className1,
-		SourceField: fk1.TargetColumn,
-		TargetClass: className2,
-		TargetField: fk2.TargetColumn,
-		Type:        internal.MANY_TO_MANY,
-		Through:     through1,
-	}
-
-	// 创建从表2到表1的多对多关系
-	relation2 := &internal.Relation{
-		SourceClass: className2,
-		SourceField: fk2.TargetColumn,
-		TargetClass: className1,
-		TargetField: fk1.TargetColumn,
-		Type:        internal.MANY_TO_MANY,
-		Through:     through2,
-	}
-
-	// 设置双向引用
-	relation1.Reverse = relation2
-	relation2.Reverse = relation1
-
-	// 将关系添加到类的字段中
-	// 注意：不创建新字段，而是将关系信息添加到现有字段中
-	// 这些关系将在 createRelationshipFields 方法中被使用来创建虚拟字段
-
-	// 添加关系到源表的主键字段
-	for _, fieldName := range class1.PrimaryKeys {
-		field := class1.Fields[fieldName]
-		if field != nil && field.Column == fk1.TargetColumn {
-			field.Relation = relation1
-			break
+	// 创建关系对象的辅助函数
+	createRelation := func(
+		sourceTable, targetTable, sourceColumn, targetColumn, sourceKey, targetKey string, reverse *internal.Relation,
+	) internal.Relation {
+		return internal.Relation{
+			SourceClass: sourceTable,
+			SourceField: sourceColumn,
+			TargetClass: targetTable,
+			TargetField: targetColumn,
+			Type:        internal.MANY_TO_MANY,
+			Through: &internal.Through{
+				Table:     throughTable,
+				SourceKey: sourceKey,
+				TargetKey: targetKey,
+			},
+			Reverse: reverse,
 		}
 	}
 
-	// 添加关系到目标表的主键字段
-	for _, fieldName := range class2.PrimaryKeys {
-		field := class2.Fields[fieldName]
-		if field != nil && field.Column == fk2.TargetColumn {
-			field.Relation = relation2
-			break
-		}
+	// 预先创建关系对象以便相互引用
+	r1, r2 := &internal.Relation{}, &internal.Relation{}
+
+	// 创建双向关系
+	*r1 = createRelation(fk1.TargetTable, fk2.TargetTable, fk1.TargetColumn, fk2.TargetColumn, fk1.SourceColumn, fk2.SourceColumn, r2)
+	*r2 = createRelation(fk2.TargetTable, fk1.TargetTable, fk2.TargetColumn, fk1.TargetColumn, fk2.SourceColumn, fk1.SourceColumn, r1)
+
+	// 设置字段关系
+	if f1 := class1.Fields[fk1.TargetColumn]; f1 != nil && f1.IsPrimary {
+		f1.Relation = r1
+	}
+	if f2 := class2.Fields[fk2.TargetColumn]; f2 != nil && f2.IsPrimary {
+		f2.Relation = r2
 	}
 }
