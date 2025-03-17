@@ -125,7 +125,7 @@ func (my *Metadata) loadMetadata() error {
 func (my *Metadata) loadFromConfig() error {
 	// 获取配置中的元数据定义
 	classes := my.cfg.Metadata.Classes
-	if classes == nil || len(classes) == 0 {
+	if len(classes) == 0 {
 		log.Info().Msg("配置中没有定义元数据")
 		return nil
 	}
@@ -193,11 +193,11 @@ func (my *Metadata) loadFromConfig() error {
 		my.processClassFields(class, classConfig.Fields)
 
 		// 添加类到元数据
-		my.Nodes[className] = baseClass
+		my.Nodes[className] = class
 
 		// 如果类名与表名不同，添加表名索引
 		if tableName != "" && tableName != className {
-			my.Nodes[tableName] = baseClass
+			my.Nodes[tableName] = class
 		}
 	}
 
@@ -274,39 +274,25 @@ func (my *Metadata) copyClassFields(targetClass, sourceClass *internal.Class) {
 
 // 应用字段过滤
 func (my *Metadata) applyFieldFiltering(class *internal.Class, config *internal.ClassConfig) {
-	// 如果指定了包含字段，则只保留这些字段
+	// 如果指定了包含字段，则将所有不在包含列表中的字段移除
 	if len(config.IncludeFields) > 0 {
 		includeSet := make(map[string]bool)
 		for _, fieldName := range config.IncludeFields {
 			includeSet[fieldName] = true
 		}
 
-		// 创建需要移除的字段列表
-		var fieldsToRemove []*internal.Field
-
-		// 遍历所有字段，找出需要移除的
+		// 找出并移除所有不在包含列表中的字段
 		for fieldName, field := range class.Fields {
 			if field.Name == fieldName && !includeSet[fieldName] {
-				fieldsToRemove = append(fieldsToRemove, field)
-			}
-		}
-
-		// 移除不在包含列表中的字段
-		for _, field := range fieldsToRemove {
-			class.RemoveField(field)
-		}
-
-		// 包含字段优先，不再处理排除字段
-		return
-	}
-
-	// 处理排除字段
-	if len(config.ExcludeFields) > 0 {
-		for _, fieldName := range config.ExcludeFields {
-			field := class.Fields[fieldName]
-			if field != nil {
 				class.RemoveField(field)
 			}
+		}
+	}
+
+	// 移除配置中指定要排除的字段
+	for _, fieldName := range config.ExcludeFields {
+		if field := class.Fields[fieldName]; field != nil {
+			class.RemoveField(field)
 		}
 	}
 }
