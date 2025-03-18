@@ -3,9 +3,10 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 
-	"github.com/duke-git/lancet/v2/slice"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/log"
 	"github.com/samber/lo"
@@ -334,7 +335,14 @@ func (my *DatabaseLoader) detectManyToManyRelations(classes map[string]*internal
 
 // containsSameElements 检查两个字符串切片是否包含相同的元素(不考虑顺序)
 func containsSameElements(a, b []string) bool {
-	return len(a) == len(b) && len(slice.Difference(a, b)) == 0
+	// 创建副本避免污染原始数据
+	aCopy := append([]string(nil), a...)
+	bCopy := append([]string(nil), b...)
+
+	sort.Strings(aCopy)
+	sort.Strings(bCopy)
+
+	return reflect.DeepEqual(aCopy, bCopy)
 }
 
 // isThroughTableByName 通过表名检查是否是中间表
