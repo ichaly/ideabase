@@ -138,67 +138,69 @@ func (my *Metadata) loadFromConfig() error {
 
 		// 确定表名，用于查找基类
 		tableName := classConfig.Table
+		baseClass, isFound := my.Nodes[tableName]
 
-		// 按照表明从nodes中查找基类
-		baseClass, ok := my.Nodes[tableName]
+		var newClass *internal.Class
 
-		// 未找到基类为虚拟类，基类名与当前类名不同为别名,都需要创建新类
-		if !ok || baseClass.Name != className {
+		// 确定类的状态如果基类不存在(虚拟类)或者基类名称与类名不一致(类别名)，则创建新类
+		if !isFound || baseClass.Name != className {
+			// 创建新类的情况
 			log.Info().
 				Str("class", className).
 				Str("table", tableName).
-				Msg("未找到基类，创建新类")
-				// 处理虚拟类
-			baseClass = &internal.Class{
-				Name:        className,
-				Table:       tableName, // 可以为空
-				Virtual:     true,
-				PrimaryKeys: classConfig.PrimaryKeys,
-				Description: classConfig.Description,
-				Resolver:    classConfig.Resolver,
+				Bool("virtual", !isFound).
+				Msg("创建新类")
+
+			// 创建新类对象
+			newClass = &internal.Class{
+				Name:    className,
+				Table:   tableName,
+				Virtual: !isFound,
+				Fields:  make(map[string]*internal.Field),
 			}
-			// 处理配置的字段
-			my.processClassFields(baseClass, classConfig.Fields)
+
+			// 如果是类别名而非虚拟类，复制基类字段
+			if isFound {
+				if len(classConfig.Fields) > 0 {
+					// 对原字段有改动则需要深度复制字段,避免有副作用
+					my.copyClassFields(newClass, baseClass)
+				} else {
+					// 尽可能复用原类字段对象
+					for fieldName, field := range baseClass.Fields {
+						newClass.Fields[fieldName] = field
+					}
+				}
+			}
 
 			// 添加类到元数据
-			my.Nodes[className] = baseClass
-
-			continue
+			my.Nodes[className] = newClass
+			// 如果是类别名并且有表名，添加表名索引
+			if isFound && tableName != className {
+				my.Nodes[tableName] = newClass
+			}
+		} else {
+			// 更新现有类的情况
+			log.Info().
+				Str("class", className).
+				Msg("更新现有类")
+			newClass = baseClass
 		}
 
-		// 基于已有类创建新的视图类
-		log.Info().
-			Str("class", className).
-			Str("baseClass", baseClass.Name).
-			Msg("基于现有类创建视图")
-
-		// 创建新的类，复制基类属性
-		class := &internal.Class{
-			Name:        className,
-			Table:       tableName,
-			Virtual:     false,
-			PrimaryKeys: classConfig.PrimaryKeys,
-			Description: classConfig.Description,
-			Resolver:    classConfig.Resolver,
-			Fields:      make(map[string]*internal.Field),
+		// 统一处理字段过滤和字段配置，无论是新类还是现有类
+		// 1. 更新类属性
+		if classConfig.Description != "" {
+			newClass.Description = classConfig.Description
 		}
-
-		// 复制基类字段
-		my.copyClassFields(class, baseClass)
-
-		// 应用字段过滤
-		my.applyFieldFiltering(class, classConfig)
-
-		// 处理字段覆盖和添加
-		my.processClassFields(class, classConfig.Fields)
-
-		// 添加类到元数据
-		my.Nodes[className] = class
-
-		// 如果类名与表名不同，添加表名索引
-		if tableName != "" && tableName != className {
-			my.Nodes[tableName] = class
+		if classConfig.Resolver != "" {
+			newClass.Resolver = classConfig.Resolver
 		}
+		if len(classConfig.PrimaryKeys) > 0 {
+			newClass.PrimaryKeys = classConfig.PrimaryKeys
+		}
+		// 2. 先应用字段过滤
+		my.applyFieldFiltering(newClass, classConfig)
+		// 3. 再处理配置的字段（覆盖或添加）
+		my.processClassFields(newClass, classConfig.Fields)
 	}
 
 	// 处理关系
