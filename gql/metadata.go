@@ -186,9 +186,9 @@ func (my *Metadata) loadFromConfig() error {
 			newClass.PrimaryKeys = classConfig.PrimaryKeys
 		}
 		// 2. 先应用字段过滤
-		my.applyFieldFiltering(newClass, classConfig)
+		my.applyFieldFilter(newClass, classConfig)
 		// 3. 再处理配置的字段（覆盖或添加）
-		my.processClassFields(newClass, classConfig.Fields)
+		my.applyFieldConfig(newClass, classConfig.Fields)
 	}
 
 	log.Info().Int("classes", len(my.Nodes)).Msg("配置元数据加载完成")
@@ -214,7 +214,7 @@ func (my *Metadata) copyClassFields(targetClass, sourceClass *internal.Class) {
 }
 
 // 应用字段过滤
-func (my *Metadata) applyFieldFiltering(class *internal.Class, config *internal.ClassConfig) {
+func (my *Metadata) applyFieldFilter(class *internal.Class, config *internal.ClassConfig) {
 	// 如果指定了包含字段，则将所有不在包含列表中的字段移除
 	if len(config.IncludeFields) > 0 {
 		includeSet := make(map[string]bool)
@@ -239,7 +239,7 @@ func (my *Metadata) applyFieldFiltering(class *internal.Class, config *internal.
 }
 
 // 处理类字段
-func (my *Metadata) processClassFields(class *internal.Class, fieldConfigs map[string]*internal.FieldConfig) {
+func (my *Metadata) applyFieldConfig(class *internal.Class, fieldConfigs map[string]*internal.FieldConfig) {
 	if fieldConfigs == nil {
 		return
 	}
