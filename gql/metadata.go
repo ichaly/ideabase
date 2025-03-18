@@ -913,7 +913,7 @@ func (my *Metadata) createRelationshipFields() {
 			switch relation.Type {
 			case internal.MANY_TO_MANY:
 				// 创建多对多关系字段
-				relName := my.ensureUniqueFieldName(class,
+				relName := my.uniqueFieldName(class,
 					strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 
 				class.Fields[relName] = &internal.Field{
@@ -934,7 +934,7 @@ func (my *Metadata) createRelationshipFields() {
 
 					if throughClass != nil {
 						// 创建中间表关系字段
-						throughFieldName := my.ensureUniqueFieldName(class,
+						throughFieldName := my.uniqueFieldName(class,
 							strcase.ToLowerCamel(inflection.Plural(throughClass.Name)))
 
 						class.Fields[throughFieldName] = &internal.Field{
@@ -950,7 +950,7 @@ func (my *Metadata) createRelationshipFields() {
 
 			case internal.ONE_TO_MANY:
 				// 创建一对多关系字段
-				relName := my.ensureUniqueFieldName(class,
+				relName := my.uniqueFieldName(class,
 					strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 
 				class.Fields[relName] = &internal.Field{
@@ -965,7 +965,7 @@ func (my *Metadata) createRelationshipFields() {
 
 			case internal.MANY_TO_ONE:
 				// 创建多对一关系字段
-				relName := my.ensureUniqueFieldName(class,
+				relName := my.uniqueFieldName(class,
 					strcase.ToLowerCamel(targetClassName))
 
 				class.Fields[relName] = &internal.Field{
@@ -989,7 +989,7 @@ func (my *Metadata) createRelationshipFields() {
 
 				if !reverseExists {
 					// 创建反向关系字段
-					reverseName := my.ensureUniqueFieldName(targetClass,
+					reverseName := my.uniqueFieldName(targetClass,
 						strcase.ToLowerCamel(inflection.Plural(className)))
 
 					reverseFields[targetClassName][reverseName] = &internal.Field{
@@ -1007,7 +1007,7 @@ func (my *Metadata) createRelationshipFields() {
 				// 处理递归关系
 				if strings.HasSuffix(fieldName, "Id") || strings.HasSuffix(fieldName, "ID") {
 					// 创建父级关系字段
-					parentName := my.ensureUniqueFieldName(class, "parent")
+					parentName := my.uniqueFieldName(class, "parent")
 					class.Fields[parentName] = &internal.Field{
 						Type:           className,
 						Name:           parentName,
@@ -1019,7 +1019,7 @@ func (my *Metadata) createRelationshipFields() {
 					}
 
 					// 创建子级关系字段
-					childrenName := my.ensureUniqueFieldName(targetClass, "children")
+					childrenName := my.uniqueFieldName(targetClass, "children")
 					targetClass.Fields[childrenName] = &internal.Field{
 						Type:           className,
 						Name:           childrenName,
@@ -1046,8 +1046,8 @@ func (my *Metadata) createRelationshipFields() {
 	log.Debug().Msg("关系字段创建完成")
 }
 
-// ensureUniqueFieldName 确保字段名在类中唯一
-func (my *Metadata) ensureUniqueFieldName(class *internal.Class, baseName string) string {
+// uniqueFieldName 确保字段名在类中唯一
+func (my *Metadata) uniqueFieldName(class *internal.Class, baseName string) string {
 	fieldName := baseName
 	counter := 1
 
