@@ -23,7 +23,7 @@ func TestRenderRelation(t *testing.T) {
 	}
 
 	// 先处理元数据中的关系，然后才渲染
-	meta.processAllRelationships()
+	meta.processAllRelation()
 
 	// 创建渲染器
 	renderer := NewRenderer(meta)
@@ -253,7 +253,7 @@ func TestRenderRelation(t *testing.T) {
 		}
 
 		// 处理关系
-		newMeta.processAllRelationships()
+		newMeta.processAllRelation()
 
 		// 重新创建渲染器，使用新的元数据
 		renderer = NewRenderer(newMeta)
