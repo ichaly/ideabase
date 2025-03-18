@@ -10,6 +10,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
@@ -216,57 +217,11 @@ func (my *Metadata) copyClassFields(targetClass, sourceClass *internal.Class) {
 		// 只复制原始字段，非索引字段
 		if field.Name == fieldName {
 			// 深度复制字段
-			newField := &internal.Field{
-				Type:        field.Type,
-				Name:        field.Name,
-				Column:      field.Column,
-				Virtual:     field.Virtual,
-				Nullable:    field.Nullable,
-				IsPrimary:   field.IsPrimary,
-				IsUnique:    field.IsUnique,
-				Description: field.Description,
-				Resolver:    field.Resolver,
-			}
+			newField := convertor.DeepClone(field)
 
-			// 复制关系
-			if field.Relation != nil {
-				newField.Relation = &internal.Relation{
-					SourceClass: targetClass.Name, // 更新源类为新类名
-					SourceField: field.Relation.SourceField,
-					TargetClass: field.Relation.TargetClass,
-					TargetField: field.Relation.TargetField,
-					Type:        field.Relation.Type,
-					ReverseName: field.Relation.ReverseName,
-				}
-
-				// 复制Through配置
-				if field.Relation.Through != nil {
-					newField.Relation.Through = &internal.Through{
-						Table:     field.Relation.Through.Table,
-						SourceKey: field.Relation.Through.SourceKey,
-						TargetKey: field.Relation.Through.TargetKey,
-						Name:      field.Relation.Through.Name,
-					}
-
-					// 复制Through字段
-					if field.Relation.Through.Fields != nil {
-						newField.Relation.Through.Fields = make(map[string]*internal.Field)
-						for thrFieldName, thrField := range field.Relation.Through.Fields {
-							newThrField := &internal.Field{
-								Type:        thrField.Type,
-								Name:        thrField.Name,
-								Column:      thrField.Column,
-								Virtual:     thrField.Virtual,
-								Nullable:    thrField.Nullable,
-								IsPrimary:   thrField.IsPrimary,
-								IsUnique:    thrField.IsUnique,
-								Description: thrField.Description,
-								Resolver:    thrField.Resolver,
-							}
-							newField.Relation.Through.Fields[thrFieldName] = newThrField
-						}
-					}
-				}
+			// 更新关系中的源类引用
+			if newField.Relation != nil {
+				newField.Relation.SourceClass = targetClass.Name
 			}
 
 			targetClass.AddField(newField)
