@@ -1,13 +1,11 @@
 package gql
 
 import (
-	"embed"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/duke-git/lancet/v2/convertor"
@@ -20,9 +18,6 @@ import (
 	"gorm.io/gorm"
 )
 
-//go:embed assets/tpl/*
-var templates embed.FS
-
 func init() {
 	inflection.AddUncountable("children")
 	strcase.ConfigureAcronym("ID", "Id")
@@ -33,7 +28,6 @@ type Metadata struct {
 	v   *viper.Viper
 	db  *gorm.DB
 	cfg *internal.Config
-	tpl *template.Template
 
 	// 统一索引: 支持类名、表名、原始表名查找
 	Nodes   map[string]*internal.Class `json:"nodes"`
@@ -42,12 +36,6 @@ type Metadata struct {
 
 // NewMetadata 创建一个新的元数据处理器
 func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
-	//初始化模板
-	tpl, err := template.ParseFS(templates, "assets/tpl/*.tpl")
-	if err != nil {
-		return nil, err
-	}
-
 	//初始化配置
 	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: dataTypes}}
 	v.SetDefault("schema.schema", "public")
@@ -56,7 +44,7 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 	v.SetDefault("schema.enable-camel-case", true)
 	v.SetDefault("schema.table-prefix", []string{})
 
-	if err = v.Unmarshal(cfg); err != nil {
+	if err := v.Unmarshal(cfg); err != nil {
 		return nil, err
 	}
 
@@ -64,7 +52,6 @@ func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
 		v:     v,
 		db:    d,
 		cfg:   cfg,
-		tpl:   tpl,
 		Nodes: make(map[string]*internal.Class),
 		//使用当前时间戳初始化版本
 		Version: time.Now().Format("20060102150405"),
@@ -803,15 +790,6 @@ func (my *Metadata) shouldIncludeField(fieldName string) bool {
 	}
 
 	return true
-}
-
-// Marshal 序列化元数据为GraphQL模式
-func (my *Metadata) Marshal() (string, error) {
-	var w strings.Builder
-	if err := my.tpl.ExecuteTemplate(&w, "build.tpl", my.Nodes); err != nil {
-		return "", err
-	}
-	return w.String(), nil
 }
 
 // MarshalJSON 自定义JSON序列化
