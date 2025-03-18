@@ -31,22 +31,24 @@ type Class struct {
 	Description string            // 描述信息
 	Fields      map[string]*Field // 字段映射表(包含字段名和列名的索引)
 	Resolver    string            // 类级别自定义Resolver
+	IsThrough   bool              // 是否为中间表关系表
 }
 
 // Field 表示类的一个字段/列的完整定义
 type Field struct {
-	Type           string    `json:"type"`         // 类型
-	Name           string    `json:"name"`         // 字段名
-	Column         string    `json:"column"`       // 列名
-	Virtual        bool      `json:"virtual"`      // 是否虚拟字段
-	Nullable       bool      `json:"nullable"`     // 是否可空
-	IsPrimary      bool      `json:"isPrimary"`    // 是否主键
-	IsUnique       bool      `json:"isUnique"`     // 是否唯一
-	Description    string    `json:"description"`  // 描述信息
-	Relation       *Relation `json:"relation"`     // 若为关系字段,指向关系定义
-	Resolver       string    `json:"resolver"`     // 字段级别自定义Resolver
-	IsCollection   bool      `json:"isCollection"` // 是否是集合类型
-	SourceRelation *Relation `json:"-"`            // 指向源关系
+	Type           string    `json:"type"`           // 类型
+	Name           string    `json:"name"`           // 字段名
+	Column         string    `json:"column"`         // 列名
+	Virtual        bool      `json:"virtual"`        // 是否虚拟字段
+	Nullable       bool      `json:"nullable"`       // 是否可空
+	IsPrimary      bool      `json:"isPrimary"`      // 是否主键
+	IsUnique       bool      `json:"isUnique"`       // 是否唯一
+	Description    string    `json:"description"`    // 描述信息
+	Relation       *Relation `json:"relation"`       // 若为关系字段,指向关系定义
+	Resolver       string    `json:"resolver"`       // 字段级别自定义Resolver
+	IsCollection   bool      `json:"isCollection"`   // 是否是集合类型
+	SourceRelation *Relation `json:"-"`              // 指向源关系
+	IsThrough      bool      `json:"isThroughField"` // 是否为中间表关系字段
 }
 
 // Relation 表示类之间的关系

@@ -361,6 +361,11 @@ func createManyToManyRelation(classes map[string]*internal.Class, throughTable s
 		return
 	}
 
+	// 标记中间表
+	if throughClass, exists := classes[throughTable]; exists {
+		throughClass.IsThrough = true
+	}
+
 	// 创建关系对象的辅助函数
 	createRelation := func(
 		sourceTable, targetTable, sourceColumn, targetColumn, sourceKey, targetKey string, reverse *internal.Relation,

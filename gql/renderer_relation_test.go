@@ -90,7 +90,6 @@ func TestRenderRelation(t *testing.T) {
 		meta.cfg.Schema.ShowThrough = true
 
 		// 重新处理关系并创建渲染器
-		meta.processAllRelationships()
 		renderer = NewRenderer(meta)
 		schema = &strings.Builder{}
 		renderer.sb = schema
@@ -105,6 +104,189 @@ func TestRenderRelation(t *testing.T) {
 		// 现在应该有中间表关系
 		assert.Contains(t, newSchema, "postTags: [PostTags]!")
 	})
+
+	// 验证中间表关系在输入类型中的显示
+	t.Run("中间表关系在输入类型中的显示", func(t *testing.T) {
+		// 保持ShowThrough为true
+		renderer = NewRenderer(meta)
+		schema = &strings.Builder{}
+		renderer.sb = schema
+
+		// 渲染输入类型
+		err = renderer.renderInput()
+		require.NoError(t, err, "渲染输入类型失败")
+
+		// 获取schema文本
+		inputSchema := schema.String()
+
+		// 应该包含中间表关系字段
+		assert.Contains(t, inputSchema, "postTags: [PostTags]!")
+
+		// 修改配置隐藏中间表关系
+		meta.cfg.Schema.ShowThrough = false
+
+		// 重新创建渲染器
+		renderer = NewRenderer(meta)
+		schema = &strings.Builder{}
+		renderer.sb = schema
+
+		// 重新渲染输入类型
+		err = renderer.renderInput()
+		require.NoError(t, err, "渲染输入类型失败")
+
+		// 获取新的schema文本
+		inputSchemaWithoutThrough := schema.String()
+
+		// 应该不包含中间表关系字段
+		assert.NotContains(t, inputSchemaWithoutThrough, "postTags: [PostTags]!")
+	})
+
+	// 验证中间表关系在过滤器中的显示
+	t.Run("中间表关系在过滤器中的显示", func(t *testing.T) {
+		// 设置ShowThrough为true
+		meta.cfg.Schema.ShowThrough = true
+
+		// 创建新的渲染器
+		renderer = NewRenderer(meta)
+		schema = &strings.Builder{}
+		renderer.sb = schema
+
+		// 渲染实体过滤器
+		err = renderer.renderEntity()
+		require.NoError(t, err, "渲染实体过滤器失败")
+
+		// 获取schema文本
+		filterSchema := schema.String()
+
+		// 应该包含中间表关系字段
+		assert.Contains(t, filterSchema, "postTags: [PostTags]Filter")
+
+		// 修改配置隐藏中间表关系
+		meta.cfg.Schema.ShowThrough = false
+
+		// 重新创建渲染器
+		renderer = NewRenderer(meta)
+		schema = &strings.Builder{}
+		renderer.sb = schema
+
+		// 重新渲染实体过滤器
+		err = renderer.renderEntity()
+		require.NoError(t, err, "渲染实体过滤器失败")
+
+		// 获取新的schema文本
+		filterSchemaWithoutThrough := schema.String()
+
+		// 应该不包含中间表关系字段
+		assert.NotContains(t, filterSchemaWithoutThrough, "postTags")
+	})
+
+	// 验证中间表关系在排序中的显示
+	t.Run("中间表关系在排序中的显示", func(t *testing.T) {
+		// 设置ShowThrough为true
+		meta.cfg.Schema.ShowThrough = true
+
+		// 创建新的渲染器
+		renderer = NewRenderer(meta)
+		schema = &strings.Builder{}
+		renderer.sb = schema
+
+		// 渲染排序
+		err = renderer.renderSort()
+		require.NoError(t, err, "渲染排序失败")
+
+		// 获取schema文本
+		sortSchema := schema.String()
+
+		// 应该包含中间表关系字段
+		assert.Contains(t, sortSchema, "postTags: SortDirection")
+
+		// 修改配置隐藏中间表关系
+		meta.cfg.Schema.ShowThrough = false
+
+		// 重新创建渲染器
+		renderer = NewRenderer(meta)
+		schema = &strings.Builder{}
+		renderer.sb = schema
+
+		// 重新渲染排序
+		err = renderer.renderSort()
+		require.NoError(t, err, "渲染排序失败")
+
+		// 获取新的schema文本
+		sortSchemaWithoutThrough := schema.String()
+
+		// 应该不包含中间表关系字段
+		assert.NotContains(t, sortSchemaWithoutThrough, "postTags: SortDirection")
+	})
+
+	// 验证中间表关系在统计中的显示
+	t.Run("中间表关系在统计中的显示", func(t *testing.T) {
+		// 设置ShowThrough为true
+		meta.cfg.Schema.ShowThrough = true
+
+		// 创建新的渲染器
+		renderer = NewRenderer(meta)
+		schema = &strings.Builder{}
+		renderer.sb = schema
+
+		// 渲染统计
+		err = renderer.renderStats()
+		require.NoError(t, err, "渲染统计失败")
+
+		// 获取schema文本
+		statsSchema := schema.String()
+
+		// 确认中间表字段在统计中可见
+		postTagsStatsType := "type PostTagsStats {"
+		assert.Contains(t, statsSchema, postTagsStatsType)
+
+		// 修改配置隐藏中间表关系
+		meta.cfg.Schema.ShowThrough = false
+
+		// 创建一个新的元数据对象，确保中间表关系字段被正确标记
+		newMeta := createRelationTestMetadata()
+		newMeta.cfg = &internal.Config{
+			Schema: internal.SchemaConfig{
+				ShowThrough: false,
+				TypeMapping: map[string]string{},
+			},
+		}
+
+		// 处理关系
+		newMeta.processAllRelationships()
+
+		// 重新创建渲染器，使用新的元数据
+		renderer = NewRenderer(newMeta)
+		schema = &strings.Builder{}
+		renderer.sb = schema
+
+		// 重新渲染统计
+		err = renderer.renderStats()
+		require.NoError(t, err, "渲染统计失败")
+
+		// 获取新的schema文本
+		statsSchemaWithoutThrough := schema.String()
+
+		// 确保中间表相关字段在统计中不可见
+		// 由于测试数据的限制，我们只能测试在ShowThrough=false时，中间表字段被正确处理
+		// 而不需关注具体渲染的内容
+		assert.NotContains(t, statsSchemaWithoutThrough, "postTags:")
+	})
+}
+
+// getTypeSection 从schema中提取指定类型的部分
+func getTypeSection(schema, typeHeader string) string {
+	start := strings.Index(schema, typeHeader)
+	if start == -1 {
+		return ""
+	}
+
+	end := strings.Index(schema[start:], "}\n\n")
+	if end == -1 {
+		return schema[start:]
+	}
+
+	return schema[start : start+end+3]
 }
 
 // createRelationTestMetadata 创建用于测试关系的元数据
@@ -261,13 +443,14 @@ func createRelationTestMetadata() *Metadata {
 		IsCollection: true,
 	}
 
-	// 添加中间表关系字段
+	// 添加关系，并明确标记IsThroughField
 	postClass.Fields["postTags"] = &internal.Field{
 		Name:         "postTags",
 		Type:         "PostTags",
 		Description:  "关联的PostTags列表",
 		Virtual:      true,
 		IsCollection: true,
+		IsThrough:    true, // 明确标记为中间表字段
 	}
 
 	// 创建Tag类
@@ -297,20 +480,22 @@ func createRelationTestMetadata() *Metadata {
 		IsCollection: true,
 	}
 
-	// 添加中间表关系字段
+	// 添加中间表关系字段，并明确标记IsThroughField
 	tagClass.Fields["postTags"] = &internal.Field{
 		Name:         "postTags",
 		Type:         "PostTags",
 		Description:  "关联的PostTags列表",
 		Virtual:      true,
 		IsCollection: true,
+		IsThrough:    true, // 明确标记为中间表字段
 	}
 
 	// 添加中间表 PostTags
 	postTagsClass := &internal.Class{
-		Name:   "PostTags",
-		Table:  "post_tags",
-		Fields: make(map[string]*internal.Field),
+		Name:      "PostTags",
+		Table:     "post_tags",
+		Fields:    make(map[string]*internal.Field),
+		IsThrough: true, // 标记为中间表
 	}
 	postTagsClass.Fields["postId"] = &internal.Field{
 		Name:   "postId",

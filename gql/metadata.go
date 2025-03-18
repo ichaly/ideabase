@@ -927,7 +927,7 @@ func (my *Metadata) createRelationshipFields() {
 				}
 
 				// 处理中间表
-				if my.cfg.Schema.ShowThrough && relation.Through != nil {
+				if relation.Through != nil {
 					// 直接从 Nodes 中查找表对应的类
 					throughTable := relation.Through.Table
 					throughClass := my.Nodes[throughTable]
@@ -944,6 +944,7 @@ func (my *Metadata) createRelationshipFields() {
 							IsCollection: true,
 							Nullable:     false,
 							Description:  "关联的" + throughClass.Name + "记录列表",
+							IsThrough:    true, // 标记为中间表字段，方便渲染时筛选
 						}
 					}
 				}

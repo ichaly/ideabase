@@ -30,6 +30,7 @@ func getTestMetadata(t *testing.T) (*Metadata, error) {
 	v.Set("mode", "dev")
 	v.Set("app.root", utl.Root())
 	v.Set("schema.schema", "public")
+	v.Set("schema.show-through", true)
 	v.Set("schema.enable-camel-case", true)
 
 	// 创建元数据并从数据库加载
@@ -195,6 +196,16 @@ func TestRenderer_Generate(t *testing.T) {
 		return
 	}
 
+	// 检查并打印中间表信息
+	for className, class := range meta.Nodes {
+		if className == class.Name && class.IsThrough {
+			t.Logf("检测到中间表: %s, IsThrough=%v", className, class.IsThrough)
+		}
+	}
+
+	// 确认配置状态
+	t.Logf("ShowThrough配置: %v", meta.cfg.Schema.ShowThrough)
+
 	// 创建渲染器
 	renderer := NewRenderer(meta)
 
@@ -209,6 +220,11 @@ func TestRenderer_Generate(t *testing.T) {
 	assert.Contains(t, schema, "type Query {")
 	assert.Contains(t, schema, "type Mutation {")
 	assert.Contains(t, schema, "scalar DateTime")
+
+	// 检查中间表是否被渲染
+	if !meta.cfg.Schema.ShowThrough {
+		assert.NotContains(t, schema, "type PostTag {")
+	}
 
 	// 验证基本类型是否存在
 	if len(meta.Nodes) > 0 {

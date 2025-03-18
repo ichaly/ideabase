@@ -243,6 +243,11 @@ func (my *Renderer) renderTypes() error {
 			continue
 		}
 
+		// 判断是否应该跳过中间表类
+		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+			continue
+		}
+
 		// 添加类型描述
 		if class.Description != "" {
 			my.writeLine("# ", class.Description)
@@ -261,6 +266,11 @@ func (my *Renderer) renderTypes() error {
 			field := class.Fields[fieldName]
 			// 确保只处理真正的字段名，跳过列名索引
 			if fieldName != field.Name {
+				continue
+			}
+
+			// 判断是否应该跳过中间表字段
+			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
 				continue
 			}
 
@@ -374,6 +384,11 @@ func (my *Renderer) renderInput() error {
 				continue
 			}
 
+			// 判断是否应该跳过中间表字段
+			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+				continue
+			}
+
 			typeName := my.getGraphQLType(field)
 			// 非空字段添加!
 			if !field.Nullable {
@@ -399,6 +414,11 @@ func (my *Renderer) renderInput() error {
 			if strings.EqualFold(fieldName, "id") ||
 				strings.EqualFold(fieldName, "createdAt") ||
 				strings.EqualFold(fieldName, "updatedAt") {
+				continue
+			}
+
+			// 判断是否应该跳过中间表字段
+			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
 				continue
 			}
 
@@ -476,6 +496,11 @@ func (my *Renderer) renderEntity() error {
 				continue
 			}
 
+			// 判断是否应该跳过中间表字段
+			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+				continue
+			}
+
 			// 获取字段类型
 			fieldType := my.getGraphQLType(field)
 			my.writeField(fieldName, fieldType+"Filter")
@@ -510,6 +535,11 @@ func (my *Renderer) renderSort() error {
 		for fieldName, field := range class.Fields {
 			// 确保只处理真正的字段名，跳过列名索引
 			if fieldName != field.Name {
+				continue
+			}
+
+			// 判断是否应该跳过中间表字段
+			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
 				continue
 			}
 
@@ -677,6 +707,11 @@ func (my *Renderer) renderStats() error {
 		for fieldName, field := range class.Fields {
 			// 确保只处理真正的字段名，跳过列名索引
 			if fieldName != field.Name {
+				continue
+			}
+
+			// 判断是否应该跳过中间表字段
+			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
 				continue
 			}
 
