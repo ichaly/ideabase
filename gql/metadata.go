@@ -191,9 +191,6 @@ func (my *Metadata) loadFromConfig() error {
 		my.processClassFields(newClass, classConfig.Fields)
 	}
 
-	// 处理关系
-	my.processRelationships()
-
 	log.Info().Int("classes", len(my.Nodes)).Msg("配置元数据加载完成")
 	return nil
 }
