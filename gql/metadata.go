@@ -101,7 +101,7 @@ func (my *Metadata) loadMetadata() error {
 
 	// 处理完配置加载后，处理所有关系
 	log.Info().Msg("处理所有关系信息")
-	my.processAllRelation()
+	my.processRelations()
 
 	log.Info().
 		Int("classes", len(my.Nodes)).
@@ -790,65 +790,74 @@ func (my *Metadata) ColumnName(className, fieldName string, virtual bool) (strin
 	return "", false
 }
 
-// processAllRelation 处理所有关系
-func (my *Metadata) processAllRelation() {
-	// 第一步：基本关系处理（确保原始关系信息正确）
-	my.buildRelationGraph()
+// processRelations 处理关系图并创建关系字段
+func (my *Metadata) processRelations() {
+	log.Debug().Msg("开始处理关系和创建关系字段")
 
-	// 第二步：创建关系字段（添加实际可用于GraphQL的字段）
-	my.createQueryFields()
-}
+	// 用于收集反向关系字段的映射
+	reverseFields := make(map[string]map[string]*internal.Field)
 
-// 处理关系
-func (my *Metadata) buildRelationGraph() {
-	// 建立所有类之间的关系
-	for _, class := range my.Nodes {
-		for _, field := range class.Fields {
-			if field.Relation == nil {
+	// 遍历所有类和字段，同时处理关系图和创建关系字段
+	for className, class := range my.Nodes {
+		// 跳过表名索引，只处理类名索引
+		if className != class.Name {
+			continue
+		}
+
+		// 在主循环中初始化反向字段映射
+		reverseFields[className] = make(map[string]*internal.Field)
+
+		for fieldName, field := range class.Fields {
+			// 跳过非主字段或没有关系的字段
+			if fieldName != field.Name || field.Relation == nil {
 				continue
 			}
 
+			// 第一部分：构建关系图
+
 			// 确保关系的源类和字段已设置
-			if field.Relation.SourceClass == "" {
-				field.Relation.SourceClass = class.Name
+			relation := field.Relation
+			if relation.SourceClass == "" {
+				relation.SourceClass = class.Name
 			}
 
-			if field.Relation.SourceField == "" {
-				field.Relation.SourceField = field.Name
+			if relation.SourceField == "" {
+				relation.SourceField = field.Name
 			}
 
 			// 查找目标类
-			targetClass := my.Nodes[field.Relation.TargetClass]
+			targetClassName := relation.TargetClass
+			targetClass := my.Nodes[targetClassName]
 			if targetClass == nil {
 				log.Warn().
 					Str("class", class.Name).
 					Str("field", field.Name).
-					Str("targetClass", field.Relation.TargetClass).
+					Str("targetClass", targetClassName).
 					Msg("关系目标类不存在")
 				continue
 			}
 
 			// 找到目标字段
-			targetField := targetClass.Fields[field.Relation.TargetField]
+			targetField := targetClass.Fields[relation.TargetField]
 			if targetField == nil {
 				log.Warn().
 					Str("class", class.Name).
 					Str("field", field.Name).
-					Str("targetClass", field.Relation.TargetClass).
-					Str("targetField", field.Relation.TargetField).
+					Str("targetClass", targetClassName).
+					Str("targetField", relation.TargetField).
 					Msg("关系目标字段不存在")
 				continue
 			}
 
 			// 如果目标字段没有反向关系，创建一个
 			if targetField.Relation == nil {
-				reverseName := field.Relation.ReverseName
+				reverseName := relation.ReverseName
 				if reverseName == "" {
 					// 如果没有指定反向名称，使用默认命名
-					reverseName = my.generateReverseName(class.Name, field.Relation.Type)
+					reverseName = my.generateReverseName(class.Name, relation.Type)
 				}
 
-				reverseType := field.Relation.Type.Reverse()
+				reverseType := relation.Type.Reverse()
 
 				// 创建反向关系
 				targetField.Relation = &internal.Relation{
@@ -858,54 +867,14 @@ func (my *Metadata) buildRelationGraph() {
 					TargetField: field.Name,
 					ReverseName: reverseName,
 					Type:        reverseType,
-					Reverse:     field.Relation,
+					Reverse:     relation,
 				}
 			}
 
 			// 链接反向关系
-			field.Relation.Reverse = targetField.Relation
-		}
-	}
-}
+			relation.Reverse = targetField.Relation
 
-// createQueryFields 根据关系创建关系字段
-func (my *Metadata) createQueryFields() {
-	log.Debug().Msg("开始创建关系字段")
-
-	// 只保留反向关系字段映射
-	reverseFields := make(map[string]map[string]*internal.Field)
-
-	// 初始化反向字段映射 - 只在真正的类名上创建
-	for className, class := range my.Nodes {
-		if className == class.Name {
-			reverseFields[className] = make(map[string]*internal.Field)
-		}
-	}
-
-	// 处理所有类和字段的关系
-	for className, class := range my.Nodes {
-		// 跳过表名索引，只处理类名索引
-		if className != class.Name {
-			continue
-		}
-
-		for fieldName, field := range class.Fields {
-			// 跳过非主字段或没有关系的字段
-			if fieldName != field.Name || field.Relation == nil {
-				continue
-			}
-
-			// 获取目标类
-			relation := field.Relation
-			targetClassName := relation.TargetClass
-			targetClass := my.Nodes[targetClassName]
-
-			// 验证目标类存在
-			if targetClass == nil {
-				log.Warn().Str("class", className).Str("field", fieldName).
-					Str("targetClass", targetClassName).Msg("关系目标类不存在")
-				continue
-			}
+			// 第二部分：创建关系字段
 
 			// 根据关系类型创建关系字段
 			switch relation.Type {
@@ -987,6 +956,11 @@ func (my *Metadata) createQueryFields() {
 				}
 
 				if !reverseExists {
+					// 确保目标类的反向字段映射已初始化
+					if reverseFields[targetClassName] == nil {
+						reverseFields[targetClassName] = make(map[string]*internal.Field)
+					}
+
 					// 创建反向关系字段
 					reverseName := my.uniqueFieldName(targetClass,
 						strcase.ToLowerCamel(inflection.Plural(className)))
@@ -1042,7 +1016,7 @@ func (my *Metadata) createQueryFields() {
 		}
 	}
 
-	log.Debug().Msg("关系字段创建完成")
+	log.Debug().Msg("关系处理和字段创建完成")
 }
 
 // uniqueFieldName 确保字段名在类中唯一
