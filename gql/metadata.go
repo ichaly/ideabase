@@ -334,6 +334,16 @@ func (my *Metadata) updateField(field *internal.Field, config *internal.FieldCon
 				through.Name = throughConfig.ClassName
 			}
 
+			// 确保中间表类名存在
+			if through.Name == "" && through.Table != "" {
+				// 使用表名转换规则生成类名
+				through.Name = my.convertTableName(through.Table)
+				log.Debug().
+					Str("table", through.Table).
+					Str("className", through.Name).
+					Msg("从表名自动推导中间表类名")
+			}
+
 			// 处理中间表字段
 			if len(throughConfig.Fields) > 0 {
 				if through.Fields == nil {
@@ -349,7 +359,7 @@ func (my *Metadata) updateField(field *internal.Field, config *internal.FieldCon
 						my.updateField(existingThrField, thrFieldConfig)
 					} else {
 						// 创建新字段
-						thrField := my.createField(throughConfig.ClassName, thrFieldName, thrFieldConfig)
+						thrField := my.createField(through.Name, thrFieldName, thrFieldConfig)
 						through.Fields[thrFieldName] = thrField
 					}
 				}
@@ -396,12 +406,22 @@ func (my *Metadata) createField(className, fieldName string, config *internal.Fi
 				Name:      config.Relation.Through.ClassName,
 			}
 
+			// 确保中间表类名存在
+			if field.Relation.Through.Name == "" && field.Relation.Through.Table != "" {
+				// 使用表名转换规则生成类名
+				field.Relation.Through.Name = my.convertTableName(field.Relation.Through.Table)
+				log.Debug().
+					Str("table", field.Relation.Through.Table).
+					Str("className", field.Relation.Through.Name).
+					Msg("从表名自动推导中间表类名")
+			}
+
 			// 处理中间表字段
 			if len(config.Relation.Through.Fields) > 0 {
 				field.Relation.Through.Fields = make(map[string]*internal.Field)
 
 				for thrFieldName, thrFieldConfig := range config.Relation.Through.Fields {
-					thrField := my.createField(config.Relation.Through.ClassName, thrFieldName, thrFieldConfig)
+					thrField := my.createField(field.Relation.Through.Name, thrFieldName, thrFieldConfig)
 					field.Relation.Through.Fields[thrFieldName] = thrField
 				}
 			}
@@ -868,6 +888,32 @@ func (my *Metadata) processRelations() {
 
 				// 处理中间表
 				if relation.Through != nil {
+					// 确保中间表类名和字段信息被正确保留
+					if relation.Through.Name == "" {
+						// 如果存在表名，使用表名转换规则生成类名
+						if relation.Through.Table != "" {
+							throughClassName := my.convertTableName(relation.Through.Table)
+							relation.Through.Name = throughClassName
+							log.Debug().
+								Str("table", relation.Through.Table).
+								Str("className", relation.Through.Name).
+								Msg("从表名自动推导中间表类名")
+						} else {
+							// 没有表名时使用类名组合
+							relation.Through.Name = class.Name + targetClass.Name
+							log.Debug().
+								Str("sourceClass", class.Name).
+								Str("targetClass", targetClass.Name).
+								Str("throughClass", relation.Through.Name).
+								Msg("从关联类名组合中间表类名")
+						}
+					}
+
+					// 确保Fields字段不为空
+					if relation.Through.Fields == nil {
+						relation.Through.Fields = make(map[string]*internal.Field)
+					}
+
 					// 直接从 Nodes 中查找表对应的类
 					throughTable := relation.Through.Table
 					throughClass := my.Nodes[throughTable]
