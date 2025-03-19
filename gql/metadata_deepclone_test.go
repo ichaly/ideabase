@@ -99,7 +99,6 @@ func TestCopyClassFields(t *testing.T) {
 				TargetClass: "Department",
 				TargetField: "id",
 				Type:        internal.MANY_TO_ONE,
-				ReverseName: "users",
 			},
 		}
 		sourceClass.AddField(userField)
@@ -130,7 +129,6 @@ func TestCopyClassFields(t *testing.T) {
 		assert.Equal(t, "Department", deptField.Relation.TargetClass, "目标类应该保持不变")
 		assert.Equal(t, "id", deptField.Relation.TargetField, "目标字段应该保持不变")
 		assert.Equal(t, internal.MANY_TO_ONE, deptField.Relation.Type, "关系类型应该保持不变")
-		assert.Equal(t, "users", deptField.Relation.ReverseName, "反向名称应该保持不变")
 
 		// 验证内存地址不同，确保是深复制
 		assert.NotSame(t, sourceClass.Fields["departmentId"], targetClass.Fields["departmentId"], "应该是不同的对象实例(深复制)")
@@ -163,7 +161,6 @@ func TestCopyClassFields(t *testing.T) {
 				TargetClass: "Tag",
 				TargetField: "id",
 				Type:        internal.MANY_TO_MANY,
-				ReverseName: "posts",
 				Through: &internal.Through{
 					Name:      "PostTag",
 					Table:     "post_tags",

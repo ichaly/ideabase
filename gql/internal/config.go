@@ -116,9 +116,6 @@ type RelationConfig struct {
 
 	// 多对多关系中间表配置
 	Through *ThroughConfig `mapstructure:"through,omitempty"`
-
-	// 反向关系名称
-	ReverseName string `mapstructure:"reverse_name"`
 }
 
 // ThroughConfig 表示多对多关系中的中间表配置

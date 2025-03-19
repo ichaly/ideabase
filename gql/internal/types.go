@@ -60,7 +60,6 @@ type Relation struct {
 	Type        RelationType `json:"type"`              // 关系类型
 	Reverse     *Relation    `json:"-"`                 // 反向关系引用
 	Through     *Through     `json:"through,omitempty"` // 多对多关系配置
-	ReverseName string       `json:"reverseName"`       // 反向关系名称
 }
 
 // Through 表示多对多关系中的中间表配置

@@ -309,10 +309,6 @@ func (my *Metadata) updateField(field *internal.Field, config *internal.FieldCon
 			rel.Type = internal.RelationType(relConfig.Type)
 		}
 
-		if relConfig.ReverseName != "" {
-			rel.ReverseName = relConfig.ReverseName
-		}
-
 		// 处理Through配置
 		if relConfig.Through != nil {
 			if rel.Through == nil {
@@ -389,7 +385,6 @@ func (my *Metadata) createField(className, fieldName string, config *internal.Fi
 			TargetClass: config.Relation.TargetClass,
 			TargetField: config.Relation.TargetField,
 			Type:        internal.RelationType(config.Relation.Type),
-			ReverseName: config.Relation.ReverseName,
 		}
 
 		// 处理Through配置
@@ -414,21 +409,6 @@ func (my *Metadata) createField(className, fieldName string, config *internal.Fi
 	}
 
 	return field
-}
-
-// 生成反向关系名称
-func (my *Metadata) generateReverseName(className string, relationType internal.RelationType) string {
-	// 根据类名和关系类型生成合适的反向名称
-	switch relationType {
-	case internal.ONE_TO_MANY:
-		return strcase.ToLowerCamel(inflection.Plural(className))
-	case internal.MANY_TO_ONE:
-		return strcase.ToLowerCamel(className)
-	case internal.MANY_TO_MANY:
-		return strcase.ToLowerCamel(inflection.Plural(className))
-	default:
-		return strcase.ToLowerCamel(className)
-	}
 }
 
 // loadDatabase 从数据库加载元数据
@@ -851,12 +831,6 @@ func (my *Metadata) processRelations() {
 
 			// 如果目标字段没有反向关系，创建一个
 			if targetField.Relation == nil {
-				reverseName := relation.ReverseName
-				if reverseName == "" {
-					// 如果没有指定反向名称，使用默认命名
-					reverseName = my.generateReverseName(class.Name, relation.Type)
-				}
-
 				reverseType := relation.Type.Reverse()
 
 				// 创建反向关系
@@ -865,7 +839,6 @@ func (my *Metadata) processRelations() {
 					SourceField: targetField.Name,
 					TargetClass: class.Name,
 					TargetField: field.Name,
-					ReverseName: reverseName,
 					Type:        reverseType,
 					Reverse:     relation,
 				}
