@@ -877,13 +877,12 @@ func (my *Metadata) processRelations() {
 					strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 
 				class.Fields[relName] = &internal.Field{
-					Type:           targetClassName,
-					Name:           relName,
-					Virtual:        true,
-					IsCollection:   true,
-					Nullable:       false,
-					Description:    "多对多关联的" + targetClassName + "列表",
-					SourceRelation: relation,
+					Type:         targetClassName,
+					Name:         relName,
+					Virtual:      true,
+					IsCollection: true,
+					Nullable:     false,
+					Description:  "多对多关联的" + targetClassName + "列表",
 				}
 
 				// 处理中间表
@@ -941,13 +940,12 @@ func (my *Metadata) processRelations() {
 					strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 
 				class.Fields[relName] = &internal.Field{
-					Type:           targetClassName,
-					Name:           relName,
-					Virtual:        true,
-					IsCollection:   true,
-					Nullable:       false,
-					Description:    "关联的" + targetClassName + "列表",
-					SourceRelation: relation,
+					Type:         targetClassName,
+					Name:         relName,
+					Virtual:      true,
+					IsCollection: true,
+					Nullable:     false,
+					Description:  "关联的" + targetClassName + "列表",
 				}
 
 			case internal.MANY_TO_ONE:
@@ -956,13 +954,12 @@ func (my *Metadata) processRelations() {
 					strcase.ToLowerCamel(targetClassName))
 
 				class.Fields[relName] = &internal.Field{
-					Type:           targetClassName,
-					Name:           relName,
-					Virtual:        true,
-					IsCollection:   false,
-					Nullable:       field.Nullable,
-					Description:    "关联的" + targetClassName,
-					SourceRelation: relation,
+					Type:         targetClassName,
+					Name:         relName,
+					Virtual:      true,
+					IsCollection: false,
+					Nullable:     field.Nullable,
+					Description:  "关联的" + targetClassName,
 				}
 
 				// 检查是否需要创建反向关系字段
@@ -985,13 +982,12 @@ func (my *Metadata) processRelations() {
 						strcase.ToLowerCamel(inflection.Plural(className)))
 
 					reverseFields[targetClassName][reverseName] = &internal.Field{
-						Type:           className,
-						Name:           reverseName,
-						Virtual:        true,
-						IsCollection:   true,
-						Nullable:       false,
-						Description:    "关联的" + className + "列表",
-						SourceRelation: relation.Reverse,
+						Type:         className,
+						Name:         reverseName,
+						Virtual:      true,
+						IsCollection: true,
+						Nullable:     false,
+						Description:  "关联的" + className + "列表",
 					}
 				}
 
@@ -1001,25 +997,23 @@ func (my *Metadata) processRelations() {
 					// 创建父级关系字段
 					parentName := my.uniqueFieldName(class, "parent")
 					class.Fields[parentName] = &internal.Field{
-						Type:           className,
-						Name:           parentName,
-						Virtual:        true,
-						IsCollection:   false,
-						Nullable:       true,
-						Description:    "父" + className + "对象",
-						SourceRelation: relation,
+						Type:         className,
+						Name:         parentName,
+						Virtual:      true,
+						IsCollection: false,
+						Nullable:     true,
+						Description:  "父" + className + "对象",
 					}
 
 					// 创建子级关系字段
 					childrenName := my.uniqueFieldName(targetClass, "children")
 					targetClass.Fields[childrenName] = &internal.Field{
-						Type:           className,
-						Name:           childrenName,
-						Virtual:        true,
-						IsCollection:   true,
-						Nullable:       false,
-						Description:    "子" + className + "列表",
-						SourceRelation: relation.Reverse,
+						Type:         className,
+						Name:         childrenName,
+						Virtual:      true,
+						IsCollection: true,
+						Nullable:     false,
+						Description:  "子" + className + "列表",
 					}
 				}
 			}

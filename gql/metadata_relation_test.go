@@ -101,23 +101,10 @@ func TestManyToManyRelationLoading(t *testing.T) {
 
 		assert.True(t, tagsField.IsCollection, "tags字段应该是集合类型")
 
-		// 在新实现中，关系信息可能在SourceRelation中
-		if tagsField.Relation == nil && tagsField.SourceRelation != nil {
-			// 验证关系类型
-			assert.Equal(t, internal.MANY_TO_MANY, tagsField.SourceRelation.Type, "应该是多对多关系")
+		// 验证关系定义
+		assert.NotNil(t, tagsField.Relation, "应该存在关系定义")
 
-			// 验证目标类信息 - 兼容大小写
-			targetClass := strings.ToLower(tagsField.SourceRelation.TargetClass)
-			assert.Equal(t, "tag", targetClass, "目标类应该是tag(不区分大小写)")
-
-			// 验证中间表配置
-			assert.NotNil(t, tagsField.SourceRelation.Through, "应该有中间表配置")
-			if tagsField.SourceRelation.Through != nil {
-				assert.Equal(t, "post_tags", tagsField.SourceRelation.Through.Table, "中间表名应该是post_tags")
-				assert.Equal(t, "post_id", tagsField.SourceRelation.Through.SourceKey, "源键应该是post_id")
-				assert.Equal(t, "tag_id", tagsField.SourceRelation.Through.TargetKey, "目标键应该是tag_id")
-			}
-		} else if tagsField.Relation != nil {
+		if tagsField.Relation != nil {
 			// 验证关系类型
 			assert.Equal(t, internal.MANY_TO_MANY, tagsField.Relation.Type, "应该是多对多关系")
 
@@ -140,7 +127,7 @@ func TestManyToManyRelationLoading(t *testing.T) {
 				}
 			}
 		} else {
-			assert.Fail(t, "tags字段应该有关系定义(Relation或SourceRelation)")
+			assert.Fail(t, "tags字段应该有关系定义")
 		}
 	})
 
@@ -170,23 +157,10 @@ func TestManyToManyRelationLoading(t *testing.T) {
 
 		assert.True(t, postsField.IsCollection, "posts字段应该是集合类型")
 
-		// 在新实现中，关系信息可能在SourceRelation中
-		if postsField.Relation == nil && postsField.SourceRelation != nil {
-			// 验证关系类型
-			assert.Equal(t, internal.MANY_TO_MANY, postsField.SourceRelation.Type, "应该是多对多关系")
+		// 验证关系定义
+		assert.NotNil(t, postsField.Relation, "应该存在关系定义")
 
-			// 验证目标类信息 - 兼容大小写
-			targetClass := strings.ToLower(postsField.SourceRelation.TargetClass)
-			assert.Equal(t, "post", targetClass, "目标类应该是post(不区分大小写)")
-
-			// 验证中间表配置
-			assert.NotNil(t, postsField.SourceRelation.Through, "应该有中间表配置")
-			if postsField.SourceRelation.Through != nil {
-				assert.Equal(t, "post_tags", postsField.SourceRelation.Through.Table, "中间表名应该是post_tags")
-				assert.Equal(t, "tag_id", postsField.SourceRelation.Through.SourceKey, "源键应该是tag_id")
-				assert.Equal(t, "post_id", postsField.SourceRelation.Through.TargetKey, "目标键应该是post_id")
-			}
-		} else if postsField.Relation != nil {
+		if postsField.Relation != nil {
 			// 验证关系类型
 			assert.Equal(t, internal.MANY_TO_MANY, postsField.Relation.Type, "应该是多对多关系")
 
@@ -203,7 +177,7 @@ func TestManyToManyRelationLoading(t *testing.T) {
 				assert.Equal(t, "post_id", postsField.Relation.Through.TargetKey, "目标键应该是post_id")
 			}
 		} else {
-			assert.Fail(t, "posts字段应该有关系定义(Relation或SourceRelation)")
+			assert.Fail(t, "posts字段应该有关系定义")
 		}
 	})
 
@@ -257,29 +231,13 @@ func TestManyToManyRelationLoading(t *testing.T) {
 			t.Log("tagsField.Relation 为空")
 		}
 
-		if tagsField.SourceRelation != nil {
-			t.Logf("tagsField.SourceRelation: %+v", tagsField.SourceRelation)
-			if tagsField.SourceRelation.Through != nil {
-				t.Logf("tagsField.SourceRelation.Through: %+v", tagsField.SourceRelation.Through)
-				t.Logf("tagsField.SourceRelation.Through.Name: %s", tagsField.SourceRelation.Through.Name)
-				t.Logf("tagsField.SourceRelation.Through.Fields: %+v", tagsField.SourceRelation.Through.Fields)
-			} else {
-				t.Log("tagsField.SourceRelation.Through 为空")
-			}
-		} else {
-			t.Log("tagsField.SourceRelation 为空")
-		}
-
-		// 获取关系信息，可能在Relation或SourceRelation中
+		// 获取关系信息
 		var relation *internal.Relation
 		if tagsField.Relation != nil {
 			relation = tagsField.Relation
 			t.Log("使用 tagsField.Relation")
-		} else if tagsField.SourceRelation != nil {
-			relation = tagsField.SourceRelation
-			t.Log("使用 tagsField.SourceRelation")
 		} else {
-			assert.Fail(t, "tags字段应该有关系定义(Relation或SourceRelation)")
+			assert.Fail(t, "tags字段应该有关系定义")
 			return
 		}
 
