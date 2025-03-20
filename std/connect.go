@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/std/internal"
-	"github.com/spf13/viper"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -13,12 +12,11 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-func NewConnect(v *viper.Viper, p []gorm.Plugin, e []interface{}) (*gorm.DB, error) {
+func NewConnect(k *Konfig, p []gorm.Plugin, e []interface{}) (*gorm.DB, error) {
 	c := &internal.DatabaseConfig{}
-	if err := v.Unmarshal(c); err != nil {
+	if err := k.Unmarshal(c); err != nil {
 		return nil, err
 	}
-
 	db, err := gorm.Open(
 		buildDialect(&c.DataSource),
 		&gorm.Config{PrepareStmt: true, Logger: logger.Default.LogMode(logger.Info)},

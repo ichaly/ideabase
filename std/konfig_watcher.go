@@ -22,26 +22,26 @@ type ConfigWatcher interface {
 	SetDebounceTime(time.Duration)
 }
 
-// koanfWatcher 实现了ConfigWatcher接口，用于监视koanf配置文件变更
-type koanfWatcher struct {
+// konfigWatcher 实现了ConfigWatcher接口，用于监视konfig配置文件变更
+type konfigWatcher struct {
 	configFile   string               // 配置文件路径
 	koanf        *koanf.Koanf         // koanf实例
 	watcher      *fsnotify.Watcher    // 文件监视器
 	callbacks    []func(*koanf.Koanf) // 回调函数列表
 	mu           sync.RWMutex         // 互斥锁
 	stopChan     chan struct{}        // 停止信号通道
-	options      []KoanfOption        // koanf配置选项
+	options      []KonfigOption       // konfig配置选项
 	debounceTime time.Duration        // 防抖时间
 }
 
 // NewConfigWatcher 创建配置文件监视器
-func NewConfigWatcher(k *koanf.Koanf, configFile string, options ...KoanfOption) (ConfigWatcher, error) {
+func NewConfigWatcher(k *koanf.Koanf, configFile string, options ...KonfigOption) (ConfigWatcher, error) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("创建文件监视器失败: %w", err)
 	}
 
-	return &koanfWatcher{
+	return &konfigWatcher{
 		configFile:   configFile,
 		koanf:        k,
 		watcher:      w,
@@ -53,10 +53,10 @@ func NewConfigWatcher(k *koanf.Koanf, configFile string, options ...KoanfOption)
 }
 
 // Start 开始监视配置文件变更
-func (w *koanfWatcher) Start() error {
+func (my *konfigWatcher) Start() error {
 	// 监视配置文件所在目录
-	dir := filepath.Dir(w.configFile)
-	if err := w.watcher.Add(dir); err != nil {
+	dir := filepath.Dir(my.configFile)
+	if err := my.watcher.Add(dir); err != nil {
 		return fmt.Errorf("添加监视目录失败: %w", err)
 	}
 
@@ -68,13 +68,13 @@ func (w *koanfWatcher) Start() error {
 	go func() {
 		for {
 			select {
-			case event, ok := <-w.watcher.Events:
+			case event, ok := <-my.watcher.Events:
 				if !ok {
 					return
 				}
 
 				// 检查是否是我们关注的配置文件
-				if filepath.Base(event.Name) != filepath.Base(w.configFile) {
+				if filepath.Base(event.Name) != filepath.Base(my.configFile) {
 					continue
 				}
 
@@ -85,7 +85,7 @@ func (w *koanfWatcher) Start() error {
 
 				// 防抖处理
 				now := time.Now()
-				if now.Sub(lastEvent) < w.debounceTime {
+				if now.Sub(lastEvent) < my.debounceTime {
 					if debounceTimer != nil {
 						debounceTimer.Stop()
 					}
@@ -93,17 +93,17 @@ func (w *koanfWatcher) Start() error {
 				lastEvent = now
 
 				// 设置防抖定时器
-				debounceTimer = time.AfterFunc(w.debounceTime, func() {
-					w.reloadConfig()
+				debounceTimer = time.AfterFunc(my.debounceTime, func() {
+					my.reloadConfig()
 				})
 
-			case err, ok := <-w.watcher.Errors:
+			case err, ok := <-my.watcher.Errors:
 				if !ok {
 					return
 				}
 				fmt.Printf("配置文件监视错误: %v\n", err)
 
-			case <-w.stopChan:
+			case <-my.stopChan:
 				return
 			}
 		}
@@ -118,42 +118,42 @@ func isWriteOrCreateOp(op fsnotify.Op) bool {
 }
 
 // 重新加载配置
-func (w *koanfWatcher) reloadConfig() {
+func (my *konfigWatcher) reloadConfig() {
 	// 创建新的配置实例
-	newKoanf, err := NewKoanf(w.configFile, w.options...)
+	newKonfig, err := NewKonfig(my.configFile, my.options...)
 	if err != nil {
 		fmt.Printf("重新加载配置失败: %v\n", err)
 		return
 	}
 
 	// 调用回调函数
-	w.mu.RLock()
-	defer w.mu.RUnlock()
+	my.mu.RLock()
+	defer my.mu.RUnlock()
 
-	for _, callback := range w.callbacks {
-		callback(newKoanf)
+	for _, callback := range my.callbacks {
+		callback(newKonfig.GetKoanf())
 	}
 
 	// 更新koanf实例（注意：这里只更新了引用，实际使用时需要考虑并发安全性）
-	w.koanf = newKoanf
+	my.koanf = newKonfig.GetKoanf()
 }
 
 // Stop 停止监视配置文件变更
-func (w *koanfWatcher) Stop() {
-	close(w.stopChan)
-	w.watcher.Close()
+func (my *konfigWatcher) Stop() {
+	close(my.stopChan)
+	my.watcher.Close()
 }
 
 // OnChange 设置配置文件变更回调函数
-func (w *koanfWatcher) OnChange(callback func(*koanf.Koanf)) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.callbacks = append(w.callbacks, callback)
+func (my *konfigWatcher) OnChange(callback func(*koanf.Koanf)) {
+	my.mu.Lock()
+	defer my.mu.Unlock()
+	my.callbacks = append(my.callbacks, callback)
 }
 
 // SetDebounceTime 设置配置文件变更防抖时间
-func (w *koanfWatcher) SetDebounceTime(duration time.Duration) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.debounceTime = duration
+func (my *konfigWatcher) SetDebounceTime(duration time.Duration) {
+	my.mu.Lock()
+	defer my.mu.Unlock()
+	my.debounceTime = duration
 }

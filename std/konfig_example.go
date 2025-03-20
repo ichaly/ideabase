@@ -11,12 +11,12 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
-// KoanfExample 展示如何使用koanf配置工具类
-func KoanfExample() {
-	// 创建koanf配置实例
+// KonfigExample 展示如何使用konfig配置工具类
+func KonfigExample() {
+	// 创建konfig配置实例
 	// 参数1: 配置文件路径
 	// 参数2..n: 配置选项
-	k, err := NewKoanf(
+	cfg, err := NewKonfig(
 		"config.yaml",
 		WithEnvPrefix("APP"),
 		WithConfigType("yaml"),
@@ -24,14 +24,14 @@ func KoanfExample() {
 		WithStrictMerge(true),
 	)
 	if err != nil {
-		log.Fatalf("创建koanf配置实例失败: %v", err)
+		log.Fatalf("创建konfig配置实例失败: %v", err)
 	}
 
 	// 读取配置项
-	appName := k.String("app.name")         // 获取字符串类型配置
-	debug := k.Bool("app.debug")            // 获取布尔类型配置
-	port := k.Int("server.port")            // 获取整数类型配置
-	timeout := k.Duration("server.timeout") // 获取时间间隔类型配置
+	appName := cfg.GetString("app.name")         // 获取字符串类型配置
+	debug := cfg.GetBool("app.debug")            // 获取布尔类型配置
+	port := cfg.GetInt("server.port")            // 获取整数类型配置
+	timeout := cfg.GetDuration("server.timeout") // 获取时间间隔类型配置
 
 	fmt.Printf("应用名称: %s\n", appName)
 	fmt.Printf("调试模式: %v\n", debug)
@@ -39,12 +39,12 @@ func KoanfExample() {
 	fmt.Printf("超时时间: %s\n", timeout)
 
 	// 获取嵌套结构
-	dbConfig := k.Cut("database") // 获取database开头的所有配置项
-	fmt.Printf("数据库主机: %s\n", dbConfig.String("host"))
-	fmt.Printf("数据库端口: %d\n", dbConfig.Int("port"))
+	dbConfig := cfg.Cut("database") // 获取database开头的所有配置项
+	fmt.Printf("数据库主机: %s\n", dbConfig.(map[string]interface{})["host"])
+	fmt.Printf("数据库端口: %d\n", int(dbConfig.(map[string]interface{})["port"].(float64)))
 
 	// 创建配置文件监视器
-	watcher, err := NewConfigWatcher(k, "config.yaml",
+	watcher, err := NewConfigWatcher(cfg.GetKoanf(), "config.yaml",
 		WithEnvPrefix("APP"),
 		WithConfigType("yaml"),
 		WithDelimiter("."),

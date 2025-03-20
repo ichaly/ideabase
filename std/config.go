@@ -2,7 +2,6 @@ package std
 
 import (
 	"github.com/ichaly/ideabase/std/internal"
-	"github.com/spf13/viper"
 )
 
 // Config 表示标准配置
@@ -11,9 +10,9 @@ type Config struct {
 	Mode               string `mapstructure:"mode"`
 }
 
-func NewConfig(v *viper.Viper) (*Config, error) {
+func NewConfig(k *Konfig) (*Config, error) {
 	c := &Config{}
-	if err := v.Unmarshal(c); err != nil {
+	if err := k.Unmarshal(&c); err != nil {
 		return nil, err
 	}
 	return c, nil
