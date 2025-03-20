@@ -11,6 +11,7 @@ import (
 	"github.com/ichaly/ideabase/utl"
 	"github.com/joho/godotenv"
 	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
@@ -344,6 +345,20 @@ func (my *Konfig) UnmarshalKey(path string, val interface{}) error {
 	})
 }
 
+// UnmarshalWithConf 使用自定义配置解析
 func (my *Konfig) UnmarshalWithConf(path string, val interface{}, conf koanf.UnmarshalConf) error {
 	return my.k.UnmarshalWithConf(path, val, conf)
+}
+
+// SetDefault 设置单个配置项的默认值，与 Viper 风格保持一致
+func (my *Konfig) SetDefault(path string, value interface{}) {
+	if !my.IsSet(path) {
+		my.Set(path, value)
+	}
+}
+
+// SetDefaults 从 map 批量加载默认值
+func (my *Konfig) SetDefaults(defaults map[string]interface{}) error {
+	// 使用 confmap.Provider 加载默认值
+	return my.k.Load(confmap.Provider(defaults, my.options.delim), nil)
 }
