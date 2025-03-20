@@ -14,7 +14,6 @@ require (
 	github.com/json-iterator/go v1.1.12
 	github.com/rs/zerolog v1.33.0
 	github.com/samber/lo v1.49.1
-	github.com/spf13/viper v1.19.0
 	github.com/stretchr/testify v1.10.0
 	github.com/testcontainers/testcontainers-go v0.35.0
 	github.com/vektah/gqlparser/v2 v2.5.23
@@ -84,6 +83,7 @@ require (
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spf13/cast v1.6.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/spf13/viper v1.19.0 // indirect
 	github.com/sqids/sqids-go v0.4.1 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect

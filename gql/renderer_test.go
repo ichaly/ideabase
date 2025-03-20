@@ -10,8 +10,8 @@ import (
 
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/renderer/field"
+	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,16 +25,17 @@ func getTestMetadata(t *testing.T) (*Metadata, error) {
 	// 数据库已连接，创建并加载元数据
 	t.Log("成功连接到数据库，准备加载元数据")
 
-	// 设置Viper配置
-	v := viper.New()
-	v.Set("mode", "dev")
-	v.Set("app.root", utl.Root())
-	v.Set("schema.schema", "public")
-	v.Set("schema.show-through", true)
-	v.Set("schema.enable-camel-case", true)
+	// 设置Konfig配置
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", utl.Root())
+	k.Set("schema.schema", "public")
+	k.Set("schema.show-through", true)
+	k.Set("schema.enable-camel-case", true)
 
 	// 创建元数据并从数据库加载
-	meta, err := NewMetadata(v, db)
+	meta, err := NewMetadata(k, db)
 	if err != nil {
 		return nil, fmt.Errorf("从数据库加载元数据失败: %w", err)
 	}
@@ -45,9 +46,10 @@ func getTestMetadata(t *testing.T) (*Metadata, error) {
 
 // 创建模拟元数据用于测试
 func createMockMetadata(t *testing.T) *Metadata {
-	v := viper.New()
-	v.Set("mode", "dev")
-	v.Set("app.root", t.TempDir()) // 使用临时目录作为根目录
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", t.TempDir()) // 使用临时目录作为根目录
 
 	// 定义类型映射
 	typeMapping := map[string]string{
@@ -79,7 +81,7 @@ func createMockMetadata(t *testing.T) *Metadata {
 	}
 
 	meta := &Metadata{
-		v:       v,
+		k:       k,
 		Nodes:   make(map[string]*internal.Class),
 		Version: time.Now().Format("20060102150405"),
 		cfg: &internal.Config{
@@ -545,7 +547,7 @@ func TestRenderer_SaveToFile(t *testing.T) {
 	meta := createMockMetadata(t)
 	// 先确保临时目录存在
 	tempDir := t.TempDir()
-	meta.v.Set("app.root", tempDir)
+	meta.k.Set("app.root", tempDir)
 
 	// 创建渲染器
 	renderer := NewRenderer(meta)

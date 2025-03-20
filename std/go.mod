@@ -3,12 +3,13 @@ module github.com/ichaly/ideabase/std
 go 1.22
 
 require (
-	github.com/duke-git/lancet/v2 v2.3.3
+	github.com/duke-git/lancet/v2 v2.3.5
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/ichaly/ideabase/utl v0.0.0-20250228111901-475eea8d4811
 	github.com/invzhi/next v1.1.1
 	github.com/joho/godotenv v1.5.1
 	github.com/knadh/koanf/parsers/yaml v0.1.0
+	github.com/knadh/koanf/providers/confmap v0.1.0
 	github.com/knadh/koanf/providers/env v1.0.0
 	github.com/knadh/koanf/providers/file v1.1.2
 	github.com/knadh/koanf/v2 v2.1.2

@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/joho/godotenv"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -97,13 +97,14 @@ func TestMetadataLoadingModes(t *testing.T) {
 
 	// 1. 测试从数据库加载
 	t.Run("从数据库加载", func(t *testing.T) {
-		v := viper.New()
-		v.Set("mode", "dev")
-		v.Set("app.root", utl.Root())
-		v.Set("schema.schema", "public")
-		v.Set("schema.enable-camel-case", true)
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
+		k.Set("mode", "dev")
+		k.Set("app.root", utl.Root())
+		k.Set("schema.schema", "public")
+		k.Set("schema.enable-camel-case", true)
 
-		meta, err := NewMetadata(v, db)
+		meta, err := NewMetadata(k, db)
 		require.NoError(t, err, "创建元数据加载器失败")
 		assert.NotEmpty(t, meta.Nodes, "应该从数据库加载到元数据")
 
@@ -180,18 +181,19 @@ func TestMetadataLoadingModes(t *testing.T) {
 	// 2. 测试从文件加载
 	t.Run("从文件加载", func(t *testing.T) {
 		// 先从数据库加载并保存到test.json
-		v := viper.New()
-		v.Set("mode", "dev")
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
+		k.Set("mode", "dev")
 
-		v.Set("app.root", "../")
-		loader1, err := NewMetadata(v, db)
+		k.Set("app.root", "../")
+		loader1, err := NewMetadata(k, db)
 		require.NoError(t, err, "从数据库创建元数据加载器失败")
 		err = loader1.saveToFile("../cfg/metadata.test.json")
 		require.NoError(t, err, "保存元数据到文件失败")
 
 		// 从test.json加载
-		v.Set("mode", "test")
-		loader2, err := NewMetadata(v, nil)
+		k.Set("mode", "test")
+		loader2, err := NewMetadata(k, nil)
 		require.NoError(t, err, "从文件创建元数据加载器失败")
 		require.NotEmpty(t, loader2.Nodes, "元数据不应为空")
 
@@ -266,10 +268,11 @@ func TestMetadataLoadingModes(t *testing.T) {
 	// 3. 测试配置增强
 	t.Run("配置增强", func(t *testing.T) {
 		// 创建配置
-		v := viper.New()
-		v.Set("mode", "test")
-		v.Set("app.root", "../")
-		v.Set("metadata.classes", map[string]*internal.ClassConfig{
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
+		k.Set("mode", "test")
+		k.Set("app.root", "../")
+		k.Set("metadata.classes", map[string]*internal.ClassConfig{
 			"User": {
 				Table:       "users",
 				Description: "用户表",
@@ -300,7 +303,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 		})
 
 		// 创建元数据加载器
-		loader, err := NewMetadata(v, nil)
+		loader, err := NewMetadata(k, nil)
 		require.NoError(t, err, "创建元数据加载器失败")
 		err = loader.loadMetadata()
 		require.NoError(t, err, "加载元数据失败")
@@ -336,19 +339,20 @@ func TestMetadataLoadingModes(t *testing.T) {
 
 // 测试数据库加载
 func TestLoadMetadataFromDatabase(t *testing.T) {
-	// 创建测试数据库
+	// 初始化测试数据库
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	// 创建配置
-	v := viper.New()
-	v.Set("mode", "dev")
-	v.Set("app.root", utl.Root())
-	v.Set("schema.schema", "public")
-	v.Set("schema.enable-camel-case", true)
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", utl.Root())
+	k.Set("schema.schema", "public")
+	k.Set("schema.enable-camel-case", true)
 
 	// 创建元数据加载器
-	meta, err := NewMetadata(v, db)
+	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 验证元数据已加载
@@ -357,7 +361,7 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 
 // 测试配置加载
 func TestLoadMetadataFromConfig(t *testing.T) {
-	// 创建测试数据库
+	// 初始化测试数据库
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
@@ -395,13 +399,14 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 	defer os.Remove(configFile)
 
 	// 创建配置
-	v := viper.New()
-	v.Set("mode", "config")
-	v.Set("app.root", utl.Root())
-	v.Set("metadata.file", "metadata.config.json") // 设置元数据配置文件路径
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "config")
+	k.Set("app.root", utl.Root())
+	k.Set("metadata.file", "metadata.config.json") // 设置元数据配置文件路径
 
 	// 创建元数据加载器
-	meta, err := NewMetadata(v, db)
+	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 验证元数据已加载
@@ -441,19 +446,20 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 
 // 测试名称转换
 func TestNameConversion(t *testing.T) {
-	// 创建测试数据库
+	// 初始化测试数据库
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	// 创建配置
-	v := viper.New()
-	v.Set("mode", "dev")
-	v.Set("app.root", utl.Root())
-	v.Set("schema.enable-camel-case", true)
-	v.Set("schema.table-prefix", []string{"tbl_"})
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", utl.Root())
+	k.Set("schema.enable-camel-case", true)
+	k.Set("schema.table-prefix", []string{"tbl_"})
 
 	// 设置测试元数据配置
-	v.Set("metadata.classes", map[string]map[string]interface{}{
+	k.Set("metadata.classes", map[string]map[string]interface{}{
 		"UserProfiles": {
 			"table": "tbl_user_profiles",
 			"fields": map[string]map[string]interface{}{
@@ -470,11 +476,11 @@ func TestNameConversion(t *testing.T) {
 	})
 
 	// 创建元数据加载器
-	meta, err := NewMetadata(v, db)
+	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 手动添加原始表名索引，因为测试可能不会自动处理原始表名映射
-	v.Set("metadata.classes.UserProfiles.table", "tbl_user_profiles")
+	k.Set("metadata.classes.UserProfiles.table", "tbl_user_profiles")
 	userProfilesNode, ok := meta.Nodes["UserProfiles"]
 	assert.True(t, ok, "应该能通过类名找到Node")
 	assert.Contains(t, userProfilesNode.Fields, "userId", "应该包含驼峰命名的字段")
@@ -497,19 +503,20 @@ func TestNameConversion(t *testing.T) {
 
 // 测试表和字段过滤
 func TestTableAndFieldFiltering(t *testing.T) {
-	// 创建测试数据库
+	// 初始化测试数据库
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	// 创建配置
-	v := viper.New()
-	v.Set("mode", "dev")
-	v.Set("app.root", utl.Root())
-	v.Set("schema.include-tables", []string{"users"})
-	v.Set("schema.exclude-fields", []string{"password"})
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", utl.Root())
+	k.Set("schema.include-tables", []string{"users"})
+	k.Set("schema.exclude-fields", []string{"password"})
 
 	// 设置测试元数据配置
-	v.Set("metadata.classes", map[string]map[string]interface{}{
+	k.Set("metadata.classes", map[string]map[string]interface{}{
 		"User": {
 			"table": "users",
 			"fields": map[string]map[string]interface{}{
@@ -527,7 +534,7 @@ func TestTableAndFieldFiltering(t *testing.T) {
 	})
 
 	// 创建元数据加载器
-	meta, err := NewMetadata(v, db)
+	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 验证表过滤 - User类名和users表名，共有2个索引
@@ -548,17 +555,18 @@ func TestTableAndFieldFiltering(t *testing.T) {
 
 // 测试从文件加载元数据
 func TestLoadMetadataFromFile(t *testing.T) {
-	// 创建测试数据库
+	// 初始化测试数据库
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	// 创建配置
-	v := viper.New()
-	v.Set("mode", "dev")
-	v.Set("app.root", utl.Root())
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", utl.Root())
 
 	// 创建元数据加载器
-	meta, err := NewMetadata(v, db)
+	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 验证基本信息
@@ -583,19 +591,20 @@ func TestLoadMetadataFromFile(t *testing.T) {
 
 // 测试关系名称转换
 func TestRelationNameConversion(t *testing.T) {
-	// 创建测试数据库
+	// 初始化测试数据库
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	// 创建配置
-	v := viper.New()
-	v.Set("mode", "dev")
-	v.Set("app.root", utl.Root())
-	v.Set("schema.schema", "public")
-	v.Set("schema.enable-camel-case", true)
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", utl.Root())
+	k.Set("schema.schema", "public")
+	k.Set("schema.enable-camel-case", true)
 
 	// 设置外键关系配置
-	v.Set("metadata.classes", map[string]map[string]interface{}{
+	k.Set("metadata.classes", map[string]map[string]interface{}{
 		"UserProfiles": {
 			"table": "user_profiles",
 			"fields": map[string]map[string]interface{}{
@@ -613,7 +622,7 @@ func TestRelationNameConversion(t *testing.T) {
 	})
 
 	// 创建元数据加载器
-	meta, err := NewMetadata(v, db)
+	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 验证关系名称转换
@@ -637,12 +646,12 @@ func TestRelationNameConversion(t *testing.T) {
 	// 验证多对多关系名称转换
 	t.Run("验证多对多关系名称转换", func(t *testing.T) {
 		// 手动设置多对多关系配置
-		v.Set("metadata.classes.Post.fields.tags.relation.type", "many_to_many")
-		v.Set("metadata.classes.Post.fields.tags.relation.target_class", "Tag")
-		v.Set("metadata.classes.Post.fields.tags.relation.through.table", "post_tags")
+		k.Set("metadata.classes.Post.fields.tags.relation.type", "many_to_many")
+		k.Set("metadata.classes.Post.fields.tags.relation.target_class", "Tag")
+		k.Set("metadata.classes.Post.fields.tags.relation.through.table", "post_tags")
 
 		// 重新加载元数据
-		newMeta, err := NewMetadata(v, db)
+		newMeta, err := NewMetadata(k, db)
 		require.NoError(t, err, "创建元数据加载器失败")
 
 		// 检查post_tags中间表中的关系
@@ -666,19 +675,20 @@ func TestRelationNameConversion(t *testing.T) {
 
 // TestNewMetadataFeatures 测试元数据配置系统的新功能
 func TestNewMetadataFeatures(t *testing.T) {
-	// 创建测试数据库
+	// 初始化测试数据库
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
 	// 创建配置
-	v := viper.New()
-	v.Set("mode", "dev")
-	v.Set("app.root", utl.Root())
-	v.Set("schema.schema", "public")
-	v.Set("schema.enable-camel-case", true)
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", utl.Root())
+	k.Set("schema.schema", "public")
+	k.Set("schema.enable-camel-case", true)
 
 	// 设置元数据配置
-	v.Set("metadata.classes", map[string]map[string]interface{}{
+	k.Set("metadata.classes", map[string]map[string]interface{}{
 		// 1. 完整用户视图（管理员使用）
 		"User": {
 			"table":       "users",
@@ -788,7 +798,7 @@ func TestNewMetadataFeatures(t *testing.T) {
 	})
 
 	// 创建元数据加载器
-	meta, err := NewMetadata(v, db)
+	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 1. 测试同表不同视图

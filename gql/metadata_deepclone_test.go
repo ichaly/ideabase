@@ -4,15 +4,18 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/spf13/viper"
+	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
 )
 
 // TestCopyClassFields 测试copyClassFields方法
 func TestCopyClassFields(t *testing.T) {
 	// 初始化测试元数据对象
+	k, err := std.NewKonfig()
+	assert.NoError(t, err, "创建配置失败")
+
 	meta := &Metadata{
-		v:       viper.New(),
+		k:       k,
 		Nodes:   make(map[string]*internal.Class),
 		Version: "test",
 	}

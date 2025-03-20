@@ -13,8 +13,8 @@ import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
 	"github.com/ichaly/ideabase/log"
+	"github.com/ichaly/ideabase/std"
 	"github.com/jinzhu/inflection"
-	"github.com/spf13/viper"
 	"gorm.io/gorm"
 )
 
@@ -25,7 +25,7 @@ func init() {
 
 // Metadata 表示GraphQL元数据
 type Metadata struct {
-	v   *viper.Viper
+	k   *std.Konfig
 	db  *gorm.DB
 	cfg *internal.Config
 
@@ -35,21 +35,21 @@ type Metadata struct {
 }
 
 // NewMetadata 创建一个新的元数据处理器
-func NewMetadata(v *viper.Viper, d *gorm.DB) (*Metadata, error) {
+func NewMetadata(k *std.Konfig, d *gorm.DB) (*Metadata, error) {
 	//初始化配置
 	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: dataTypes}}
-	v.SetDefault("schema.schema", "public")
-	v.SetDefault("schema.default-limit", 10)
-	v.SetDefault("schema.enable-singular", true)
-	v.SetDefault("schema.enable-camel-case", true)
-	v.SetDefault("schema.table-prefix", []string{})
+	k.SetDefault("schema.schema", "public")
+	k.SetDefault("schema.default-limit", 10)
+	k.SetDefault("schema.enable-singular", true)
+	k.SetDefault("schema.enable-camel-case", true)
+	k.SetDefault("schema.table-prefix", []string{})
 
-	if err := v.Unmarshal(cfg); err != nil {
+	if err := k.Unmarshal(cfg); err != nil {
 		return nil, err
 	}
 
 	my := &Metadata{
-		v:     v,
+		k:     k,
 		db:    d,
 		cfg:   cfg,
 		Nodes: make(map[string]*internal.Class),

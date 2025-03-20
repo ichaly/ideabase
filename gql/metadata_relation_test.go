@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/viper"
+	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/utl"
 )
 
@@ -23,35 +23,38 @@ func TestManyToManyRelationLoading(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
+	// 创建Konfig配置
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+
 	// 创建配置
-	v := viper.New()
-	v.Set("mode", "dev")
-	v.Set("app.root", utl.Root())
-	v.Set("schema.schema", "public")
-	v.Set("schema.enable-camel-case", true)
+	k.Set("mode", "dev")
+	k.Set("app.root", utl.Root())
+	k.Set("schema.schema", "public")
+	k.Set("schema.enable-camel-case", true)
 
 	// 添加多对多关系配置
-	v.Set("metadata.classes.Post.table", "posts")
-	v.Set("metadata.classes.Post.fields.tags.relation.type", "many_to_many")
-	v.Set("metadata.classes.Post.fields.tags.relation.target_class", "tag")
-	v.Set("metadata.classes.Post.fields.tags.relation.target_field", "posts")
-	v.Set("metadata.classes.Post.fields.tags.relation.through.table", "post_tags")
-	v.Set("metadata.classes.Post.fields.tags.relation.through.source_key", "post_id")
-	v.Set("metadata.classes.Post.fields.tags.relation.through.target_key", "tag_id")
-	v.Set("metadata.classes.Post.fields.tags.relation.through.name", "PostTag")
-	v.Set("metadata.classes.Post.fields.tags.relation.through.fields.createdAt.column", "created_at")
-	v.Set("metadata.classes.Post.fields.tags.relation.through.fields.createdAt.description", "标签添加时间")
+	k.Set("metadata.classes.Post.table", "posts")
+	k.Set("metadata.classes.Post.fields.tags.relation.type", "many_to_many")
+	k.Set("metadata.classes.Post.fields.tags.relation.target_class", "tag")
+	k.Set("metadata.classes.Post.fields.tags.relation.target_field", "posts")
+	k.Set("metadata.classes.Post.fields.tags.relation.through.table", "post_tags")
+	k.Set("metadata.classes.Post.fields.tags.relation.through.source_key", "post_id")
+	k.Set("metadata.classes.Post.fields.tags.relation.through.target_key", "tag_id")
+	k.Set("metadata.classes.Post.fields.tags.relation.through.name", "PostTag")
+	k.Set("metadata.classes.Post.fields.tags.relation.through.fields.createdAt.column", "created_at")
+	k.Set("metadata.classes.Post.fields.tags.relation.through.fields.createdAt.description", "标签添加时间")
 
-	v.Set("metadata.classes.Tag.table", "tags")
-	v.Set("metadata.classes.Tag.fields.posts.relation.type", "many_to_many")
-	v.Set("metadata.classes.Tag.fields.posts.relation.target_class", "post")
-	v.Set("metadata.classes.Tag.fields.posts.relation.target_field", "tags")
-	v.Set("metadata.classes.Tag.fields.posts.relation.through.table", "post_tags")
-	v.Set("metadata.classes.Tag.fields.posts.relation.through.source_key", "tag_id")
-	v.Set("metadata.classes.Tag.fields.posts.relation.through.target_key", "post_id")
+	k.Set("metadata.classes.Tag.table", "tags")
+	k.Set("metadata.classes.Tag.fields.posts.relation.type", "many_to_many")
+	k.Set("metadata.classes.Tag.fields.posts.relation.target_class", "post")
+	k.Set("metadata.classes.Tag.fields.posts.relation.target_field", "tags")
+	k.Set("metadata.classes.Tag.fields.posts.relation.through.table", "post_tags")
+	k.Set("metadata.classes.Tag.fields.posts.relation.through.source_key", "tag_id")
+	k.Set("metadata.classes.Tag.fields.posts.relation.through.target_key", "post_id")
 
 	// 创建元数据
-	meta, err := NewMetadata(v, db)
+	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "创建元数据失败")
 
 	// 添加调试信息：输出所有节点
@@ -185,7 +188,7 @@ func TestManyToManyRelationLoading(t *testing.T) {
 	t.Run("验证中间表配置", func(t *testing.T) {
 		// 先输出元数据中的所有配置，检查中间表配置是否正确传递
 		t.Log("元数据配置信息：")
-		t.Logf("Post中间表配置: %+v", v.Get("metadata.classes.Post.fields.tags.relation.through"))
+		t.Logf("Post中间表配置: %+v", k.Get("metadata.classes.Post.fields.tags.relation.through"))
 
 		// 支持大小写形式
 		var posts *internal.Class

@@ -4,31 +4,33 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/spf13/viper"
+	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestLoadFromConfig 专门测试 loadFromConfig 方法的各种情况
+// TestLoadFromConfig 测试从配置加载元数据
 func TestLoadFromConfig(t *testing.T) {
-	// 创建测试场景
 	t.Run("空配置", func(t *testing.T) {
-		v := viper.New()
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
+
 		meta := &Metadata{
-			v:     v,
+			k:     k,
 			cfg:   &internal.Config{},
 			Nodes: make(map[string]*internal.Class),
 		}
 
-		err := meta.loadFromConfig()
+		err = meta.loadFromConfig()
 		assert.NoError(t, err, "处理空配置不应该出错")
 		assert.Empty(t, meta.Nodes, "空配置不应该添加任何节点")
 	})
 
 	t.Run("虚拟类", func(t *testing.T) {
-		v := viper.New()
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
 		meta := &Metadata{
-			v:     v,
+			k:     k,
 			cfg:   &internal.Config{},
 			Nodes: make(map[string]*internal.Class),
 		}
@@ -52,7 +54,7 @@ func TestLoadFromConfig(t *testing.T) {
 			},
 		}
 
-		err := meta.loadFromConfig()
+		err = meta.loadFromConfig()
 		require.NoError(t, err, "处理虚拟类配置不应该出错")
 
 		// 验证虚拟类被正确创建
@@ -76,9 +78,11 @@ func TestLoadFromConfig(t *testing.T) {
 	})
 
 	t.Run("类别名-不需要字段处理", func(t *testing.T) {
-		v := viper.New()
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
+
 		meta := &Metadata{
-			v:     v,
+			k:     k,
 			cfg:   &internal.Config{},
 			Nodes: make(map[string]*internal.Class),
 		}
@@ -114,7 +118,7 @@ func TestLoadFromConfig(t *testing.T) {
 			},
 		}
 
-		err := meta.loadFromConfig()
+		err = meta.loadFromConfig()
 		require.NoError(t, err, "处理类别名配置不应该出错")
 
 		// 验证类别名被正确创建
@@ -136,9 +140,10 @@ func TestLoadFromConfig(t *testing.T) {
 	})
 
 	t.Run("类别名-需要字段处理", func(t *testing.T) {
-		v := viper.New()
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
 		meta := &Metadata{
-			v:     v,
+			k:     k,
 			cfg:   &internal.Config{},
 			Nodes: make(map[string]*internal.Class),
 		}
@@ -189,7 +194,7 @@ func TestLoadFromConfig(t *testing.T) {
 			},
 		}
 
-		err := meta.loadFromConfig()
+		err = meta.loadFromConfig()
 		require.NoError(t, err, "处理类别名配置不应该出错")
 
 		// 验证类别名被正确创建
@@ -216,9 +221,10 @@ func TestLoadFromConfig(t *testing.T) {
 	})
 
 	t.Run("更新现有类", func(t *testing.T) {
-		v := viper.New()
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
 		meta := &Metadata{
-			v:     v,
+			k:     k,
 			cfg:   &internal.Config{},
 			Nodes: make(map[string]*internal.Class),
 		}
@@ -272,7 +278,7 @@ func TestLoadFromConfig(t *testing.T) {
 			},
 		}
 
-		err := meta.loadFromConfig()
+		err = meta.loadFromConfig()
 		require.NoError(t, err, "更新现有类不应该出错")
 
 		// 验证类被正确更新
@@ -297,9 +303,10 @@ func TestLoadFromConfig(t *testing.T) {
 	})
 
 	t.Run("复杂关系处理", func(t *testing.T) {
-		v := viper.New()
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
 		meta := &Metadata{
-			v:     v,
+			k:     k,
 			cfg:   &internal.Config{},
 			Nodes: make(map[string]*internal.Class),
 		}
@@ -340,7 +347,7 @@ func TestLoadFromConfig(t *testing.T) {
 			},
 		}
 
-		err := meta.loadFromConfig()
+		err = meta.loadFromConfig()
 		require.NoError(t, err, "处理关系配置不应该出错")
 
 		// 验证关系处理
@@ -356,9 +363,11 @@ func TestLoadFromConfig(t *testing.T) {
 	})
 
 	t.Run("综合场景", func(t *testing.T) {
-		v := viper.New()
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
+
 		meta := &Metadata{
-			v:     v,
+			k:     k,
 			cfg:   &internal.Config{},
 			Nodes: make(map[string]*internal.Class),
 		}
@@ -506,7 +515,7 @@ func TestLoadFromConfig(t *testing.T) {
 			},
 		}
 
-		err := meta.loadFromConfig()
+		err = meta.loadFromConfig()
 		require.NoError(t, err, "处理综合场景配置不应该出错")
 
 		// 验证1: 虚拟类
