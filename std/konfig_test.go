@@ -200,9 +200,6 @@ database:
 }
 
 func TestNewKonfig_WithDelimiter(t *testing.T) {
-	// 跳过测试，因为koanf依赖尚未完全安装或配置
-	t.Skip("跳过测试，需要先安装并配置koanf依赖")
-
 	// 创建测试配置文件
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.yaml")
@@ -226,9 +223,6 @@ app:
 }
 
 func TestNewKonfig_WithMultipleFormats(t *testing.T) {
-	// 跳过测试，因为koanf依赖尚未安装
-	t.Skip("跳过测试，需要先安装koanf依赖")
-
 	// 创建测试配置文件
 	tempDir := t.TempDir()
 

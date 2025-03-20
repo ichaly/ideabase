@@ -324,12 +324,14 @@ func (k *Konfig) Merge(other *Konfig) error {
 
 // Unmarshal 将配置解析到结构体
 func (k *Konfig) Unmarshal(val interface{}) error {
-	return k.k.Unmarshal("", val)
+	return k.UnmarshalKey("", val)
 }
 
 // UnmarshalKey 将配置键解析到结构体
 func (k *Konfig) UnmarshalKey(path string, val interface{}) error {
-	return k.k.Unmarshal(path, val)
+	return k.k.UnmarshalWithConf(path, val, koanf.UnmarshalConf{
+		Tag: "mapstructure",
+	})
 }
 
 func (k *Konfig) UnmarshalWithConf(path string, val interface{}, conf koanf.UnmarshalConf) error {
