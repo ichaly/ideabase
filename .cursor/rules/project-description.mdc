@@ -35,7 +35,7 @@ IdeaBase/
 ### 技术栈
 - **工具库**：github.com/duke-git/lancet/v2, github.com/samber/lo
 - **Web框架**：github.com/gofiber/fiber
-- **配置管理**：github.com/spf13/viper
+- **配置管理**：github.com/knadh/koanf
 - **GraphQL解析**：github.com/vektah/gqlparser/v2
 - **ORM框架**：gorm.io/gorm
 - **依赖注入**：Google Wire或Uber Dig/Fx
