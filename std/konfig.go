@@ -239,85 +239,85 @@ func getActiveProfiles(k *koanf.Koanf) []string {
 }
 
 // GetKoanf 获取底层koanf实例
-func (k *Konfig) GetKoanf() *koanf.Koanf {
-	return k.k
+func (my *Konfig) GetKoanf() *koanf.Koanf {
+	return my.k
 }
 
 // Get 获取配置项
-func (k *Konfig) Get(path string) interface{} {
-	return k.k.Get(path)
+func (my *Konfig) Get(path string) interface{} {
+	return my.k.Get(path)
 }
 
 // Set 设置配置项
-func (k *Konfig) Set(path string, value interface{}) {
-	k.k.Set(path, value)
+func (my *Konfig) Set(path string, value interface{}) {
+	my.k.Set(path, value)
 }
 
 // IsSet 判断配置项是否存在
-func (k *Konfig) IsSet(path string) bool {
-	return k.k.Exists(path)
+func (my *Konfig) IsSet(path string) bool {
+	return my.k.Exists(path)
 }
 
 // GetString 获取字符串配置
-func (k *Konfig) GetString(path string) string {
-	return k.k.String(path)
+func (my *Konfig) GetString(path string) string {
+	return my.k.String(path)
 }
 
 // GetBool 获取布尔配置
-func (k *Konfig) GetBool(path string) bool {
-	return k.k.Bool(path)
+func (my *Konfig) GetBool(path string) bool {
+	return my.k.Bool(path)
 }
 
 // GetInt 获取整数配置
-func (k *Konfig) GetInt(path string) int {
-	return k.k.Int(path)
+func (my *Konfig) GetInt(path string) int {
+	return my.k.Int(path)
 }
 
 // GetFloat64 获取浮点数配置
-func (k *Konfig) GetFloat64(path string) float64 {
-	return k.k.Float64(path)
+func (my *Konfig) GetFloat64(path string) float64 {
+	return my.k.Float64(path)
 }
 
 // GetDuration 获取时间间隔配置
-func (k *Konfig) GetDuration(path string) time.Duration {
-	return k.k.Duration(path)
+func (my *Konfig) GetDuration(path string) time.Duration {
+	return my.k.Duration(path)
 }
 
 // GetStringSlice 获取字符串切片配置
-func (k *Konfig) GetStringSlice(path string) []string {
-	return k.k.Strings(path)
+func (my *Konfig) GetStringSlice(path string) []string {
+	return my.k.Strings(path)
 }
 
 // GetStringMapString 获取字符串映射配置
-func (k *Konfig) GetStringMapString(path string) map[string]string {
-	return k.k.StringMap(path)
+func (my *Konfig) GetStringMapString(path string) map[string]string {
+	return my.k.StringMap(path)
 }
 
 // Cut 剪切配置（获取后删除）
-func (k *Konfig) Cut(path string) interface{} {
-	value := k.Get(path)
-	k.k.Delete(path)
+func (my *Konfig) Cut(path string) interface{} {
+	value := my.Get(path)
+	my.k.Delete(path)
 	return value
 }
 
 // Copy 复制配置
-func (k *Konfig) Copy() *Konfig {
+func (my *Konfig) Copy() *Konfig {
 	// 创建新的koanf实例
 	newKoanf := koanf.New(".")
 
 	// 从原始文件重新加载
-	if k.options.filePath != "" {
-		_ = newKoanf.Load(file.Provider(k.options.filePath), yaml.Parser())
+	if my.options.filePath != "" {
+		_ = newKoanf.Load(file.Provider(my.options.filePath), yaml.Parser())
 	}
 
 	return &Konfig{
 		k:       newKoanf,
-		options: k.options,
+		options: my.options,
 	}
 }
 
 // Merge 合并配置
-func (k *Konfig) Merge(other *Konfig) error {
+func (my *Konfig) Merge(other *Konfig) error {
 	// 将other的原始数据转换为map
 	otherMap := make(map[string]interface{})
 	for key, val := range other.k.Raw() {
@@ -326,24 +326,24 @@ func (k *Konfig) Merge(other *Konfig) error {
 
 	// 对每个键进行设置
 	for key, val := range otherMap {
-		k.k.Set(key, val)
+		my.k.Set(key, val)
 	}
 
 	return nil
 }
 
 // Unmarshal 将配置解析到结构体
-func (k *Konfig) Unmarshal(val interface{}) error {
-	return k.UnmarshalKey("", val)
+func (my *Konfig) Unmarshal(val interface{}) error {
+	return my.UnmarshalKey("", val)
 }
 
 // UnmarshalKey 将配置键解析到结构体
-func (k *Konfig) UnmarshalKey(path string, val interface{}) error {
-	return k.k.UnmarshalWithConf(path, val, koanf.UnmarshalConf{
+func (my *Konfig) UnmarshalKey(path string, val interface{}) error {
+	return my.k.UnmarshalWithConf(path, val, koanf.UnmarshalConf{
 		Tag: "mapstructure",
 	})
 }
 
-func (k *Konfig) UnmarshalWithConf(path string, val interface{}, conf koanf.UnmarshalConf) error {
-	return k.k.UnmarshalWithConf(path, val, conf)
+func (my *Konfig) UnmarshalWithConf(path string, val interface{}, conf koanf.UnmarshalConf) error {
+	return my.k.UnmarshalWithConf(path, val, conf)
 }
