@@ -19,7 +19,6 @@ import (
 // Konfig 配置管理器，包装了koanf.Koanf
 type Konfig struct {
 	k       *koanf.Koanf      // 底层koanf实例
-	path    string            // 配置文件路径
 	options *konfigOptions    // 配置选项
 	watcher *fsnotify.Watcher // 文件监视器
 }
@@ -31,8 +30,21 @@ type KonfigOption func(*konfigOptions)
 type konfigOptions struct {
 	configType string
 	envPrefix  string
+	filePath   string
 	delim      string
 	strict     bool
+}
+
+// WithFilePath 设置配置文件路径
+func WithFilePath(filePath string) KonfigOption {
+	return func(options *konfigOptions) {
+		// 如果提供了文件路径，解析文件类型
+		if filePath != "" {
+			options.filePath = filePath
+			ext := filepath.Ext(filePath)
+			options.configType = strings.TrimPrefix(ext, ".")
+		}
+	}
 }
 
 // WithConfigType 设置配置文件类型
@@ -64,23 +76,13 @@ func WithStrictMerge(strict bool) KonfigOption {
 }
 
 // NewKonfig 创建新的配置管理器，实现与原有NewKoanf相同的功能
-func NewKonfig(filePath string, opts ...KonfigOption) (*Konfig, error) {
-	if filePath == "" {
-		return nil, fmt.Errorf("配置文件路径不能为空")
-	}
-
-	// 解析文件路径和名称
-	path := filepath.Dir(filePath)
-	ext := filepath.Ext(filePath)
-	name := strings.TrimSuffix(filepath.Base(filePath), ext)
-
+func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 	// 初始化选项
 	options := &konfigOptions{
-		configType: strings.TrimPrefix(ext, "."),
+		configType: "yaml", // 默认使用yaml
 		envPrefix:  "APP",
 		delim:      ".",
 	}
-
 	// 应用自定义配置选项
 	for _, opt := range opts {
 		opt(options)
@@ -100,7 +102,6 @@ func NewKonfig(filePath string, opts ...KonfigOption) (*Konfig, error) {
 	// 创建Konfig实例
 	konfig := &Konfig{
 		k:       k,
-		path:    filePath,
 		options: options,
 	}
 
@@ -109,14 +110,22 @@ func NewKonfig(filePath string, opts ...KonfigOption) (*Konfig, error) {
 		return nil, fmt.Errorf("加载环境变量文件: %w", err)
 	}
 
-	// 加载主配置文件
-	if err := loadConfigFile(k, filePath, options); err != nil {
-		return nil, fmt.Errorf("加载配置文件: %w", err)
-	}
+	// 如果提供了配置文件路径，加载配置文件
+	if options.filePath != "" {
+		// 加载主配置文件
+		if err := loadConfigFile(k, options.filePath, options); err != nil {
+			return nil, fmt.Errorf("加载配置文件: %w", err)
+		}
 
-	// 合并profile配置
-	if err := mergeProfiles(k, path, name, ext, options); err != nil {
-		return nil, fmt.Errorf("合并环境配置: %w", err)
+		// 解析文件路径和名称用于profile配置
+		path := filepath.Dir(options.filePath)
+		ext := filepath.Ext(options.filePath)
+		name := strings.TrimSuffix(filepath.Base(options.filePath), ext)
+
+		// 合并profile配置
+		if err := mergeProfiles(k, path, name, options); err != nil {
+			return nil, fmt.Errorf("合并环境配置: %w", err)
+		}
 	}
 
 	// 最后加载环境变量，确保环境变量优先级最高
@@ -171,7 +180,7 @@ func loadConfigFile(k *koanf.Koanf, filePath string, options *konfigOptions) err
 }
 
 // mergeProfiles 合并profile配置文件
-func mergeProfiles(k *koanf.Koanf, path, name, ext string, options *konfigOptions) error {
+func mergeProfiles(k *koanf.Koanf, path, name string, options *konfigOptions) error {
 	// 获取激活的profiles
 	profiles := getActiveProfiles(k)
 
@@ -182,7 +191,7 @@ func mergeProfiles(k *koanf.Koanf, path, name, ext string, options *konfigOption
 		}
 
 		// 构建profile配置文件路径
-		profileFilePath := filepath.Join(path, utl.JoinString(name, "-", profile, ext))
+		profileFilePath := filepath.Join(path, utl.JoinString(name, "-", profile, ".", options.configType))
 
 		// 检查文件是否存在
 		if _, err := os.Stat(profileFilePath); os.IsNotExist(err) {
@@ -297,12 +306,13 @@ func (k *Konfig) Copy() *Konfig {
 	newKoanf := koanf.New(".")
 
 	// 从原始文件重新加载
-	_ = newKoanf.Load(file.Provider(k.path), yaml.Parser())
+	if k.options.filePath != "" {
+		_ = newKoanf.Load(file.Provider(k.options.filePath), yaml.Parser())
+	}
 
 	return &Konfig{
 		k:       newKoanf,
 		options: k.options,
-		path:    k.path,
 	}
 }
 

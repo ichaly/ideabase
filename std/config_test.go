@@ -28,7 +28,7 @@ app:
 	assert.NoError(t, err)
 
 	// 初始化Konfig
-	cfg, err := NewKonfig(configPath)
+	cfg, err := NewKonfig(WithFilePath(configPath))
 	assert.NoError(t, err)
 	assert.NotNil(t, cfg)
 
@@ -65,7 +65,7 @@ app:
 	assert.NoError(t, err)
 
 	// 这将在解析时触发错误
-	cfg, err := NewKonfig(configPath)
+	cfg, err := NewKonfig(WithFilePath(configPath))
 	// 如果创建了konfig对象但解析失败，这里可能是nil或有错误
 	if err == nil {
 		// 手动强制触发一个错误
@@ -99,7 +99,7 @@ app:
 	defer os.Unsetenv("APP_APP_NAME")
 
 	// 初始化konfig，启用环境变量覆盖
-	cfg, err := NewKonfig(configPath, WithEnvPrefix("APP"))
+	cfg, err := NewKonfig(WithFilePath(configPath))
 	assert.NoError(t, err)
 	assert.NotNil(t, cfg)
 

@@ -25,7 +25,7 @@ app:
 	assert.NoError(t, err)
 
 	// 创建初始konfig实例
-	cfg, err := NewKonfig(configPath)
+	cfg, err := NewKonfig(WithFilePath(configPath))
 	assert.NoError(t, err)
 
 	// 创建配置监视器
@@ -90,7 +90,7 @@ app:
 	assert.NoError(t, err)
 
 	// 创建初始konfig实例
-	cfg, err := NewKonfig(configPath)
+	cfg, err := NewKonfig(WithFilePath(configPath))
 	assert.NoError(t, err)
 
 	// 创建配置监视器
@@ -151,7 +151,7 @@ app:
 	assert.NoError(t, err)
 
 	// 创建初始konfig实例
-	cfg, err := NewKonfig(configPath)
+	cfg, err := NewKonfig(WithFilePath(configPath))
 	assert.NoError(t, err)
 
 	// 创建配置监视器

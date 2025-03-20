@@ -120,7 +120,7 @@ func isWriteOrCreateOp(op fsnotify.Op) bool {
 // 重新加载配置
 func (my *konfigWatcher) reloadConfig() {
 	// 创建新的配置实例
-	newKonfig, err := NewKonfig(my.configFile, my.options...)
+	newKonfig, err := NewKonfig(append([]KonfigOption{WithFilePath(my.configFile)}, my.options...)...)
 	if err != nil {
 		fmt.Printf("重新加载配置失败: %v\n", err)
 		return

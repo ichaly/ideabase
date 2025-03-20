@@ -43,7 +43,7 @@ maps:
 	defer os.Unsetenv("APP_TEST_ENV")
 
 	// 创建 Konfig 实例
-	cfg, err := NewKonfig(configPath, WithEnvPrefix("APP"))
+	cfg, err := NewKonfig(WithFilePath(configPath), WithEnvPrefix("APP"))
 	assert.NoError(t, err)
 	assert.NotNil(t, cfg)
 
@@ -124,7 +124,7 @@ parent:
 	assert.NoError(t, err)
 
 	// 创建 Konfig 实例
-	cfg, err := NewKonfig(configPath)
+	cfg, err := NewKonfig(WithFilePath(configPath))
 	assert.NoError(t, err)
 
 	// 测试 Cut
@@ -139,7 +139,7 @@ parent:
 	assert.False(t, cfg.IsSet("new_key")) // 原实例没有被修改
 
 	// 测试 Merge
-	cfg2, err := NewKonfig(configPath)
+	cfg2, err := NewKonfig(WithFilePath(configPath))
 	assert.NoError(t, err)
 	cfg2.Set("merge_key", "merge_value")
 
@@ -183,7 +183,7 @@ database:
 	os.Setenv("APP_DATABASE_USERNAME", "env-user")
 
 	// 初始化konfig
-	cfg, err := NewKonfig(configPath, WithEnvPrefix("APP"))
+	cfg, err := NewKonfig(WithFilePath(configPath), WithEnvPrefix("APP"))
 	assert.NoError(t, err)
 	assert.NotNil(t, cfg)
 
@@ -214,7 +214,7 @@ app:
 	assert.NoError(t, err)
 
 	// 测试自定义分隔符
-	cfg, err := NewKonfig(configPath, WithDelimiter("/"))
+	cfg, err := NewKonfig(WithFilePath(configPath), WithDelimiter("/"))
 	assert.NoError(t, err)
 	assert.NotNil(t, cfg)
 
@@ -236,10 +236,38 @@ app:
 	assert.NoError(t, err)
 
 	// 测试YAML配置加载
-	cfg, err := NewKonfig(yamlPath)
+	cfg, err := NewKonfig(WithFilePath(yamlPath))
 	assert.NoError(t, err)
 	assert.Equal(t, "yaml-app", cfg.GetString("app.name"))
 
 	// 注：由于koanf依赖尚未安装，无法测试其他格式的解析器
 	// 如JSON、TOML等，实际实现中应当添加对应的解析器支持
+}
+
+func TestNewKonfig_WithoutConfigFile(t *testing.T) {
+	// 创建konfig实例，不提供配置文件
+	cfg, err := NewKonfig()
+	assert.NoError(t, err)
+	assert.NotNil(t, cfg)
+
+	// 验证默认配置
+	assert.Equal(t, "dev", cfg.GetString("mode"))
+	assert.NotEmpty(t, cfg.GetString("app.root"))
+
+	// 设置环境变量
+	os.Setenv("APP_MODE", "production")
+	os.Setenv("APP_APP_NAME", "test-app")
+	defer func() {
+		os.Unsetenv("APP_MODE")
+		os.Unsetenv("APP_APP_NAME")
+	}()
+
+	// 重新创建konfig实例以加载环境变量
+	cfg, err = NewKonfig()
+	assert.NoError(t, err)
+	assert.NotNil(t, cfg)
+
+	// 验证环境变量覆盖
+	assert.Equal(t, "production", cfg.GetString("mode"))
+	assert.Equal(t, "test-app", cfg.GetString("app.name"))
 }
