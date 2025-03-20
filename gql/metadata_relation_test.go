@@ -63,21 +63,6 @@ func TestManyToManyRelationLoading(t *testing.T) {
 		t.Logf("节点: %s", nodeName)
 	}
 
-	// 设置IsCollection字段 - 这可能是测试失败的原因
-	if postNode, exists := meta.Nodes["post"]; exists {
-		if tagsField := postNode.Fields["tags"]; tagsField != nil {
-			tagsField.IsCollection = true
-			t.Log("手动设置 post.tags.IsCollection = true")
-		}
-	}
-
-	if tagNode, exists := meta.Nodes["tag"]; exists {
-		if postsField := tagNode.Fields["posts"]; postsField != nil {
-			postsField.IsCollection = true
-			t.Log("手动设置 tag.posts.IsCollection = true")
-		}
-	}
-
 	// 测试Posts类的tags字段
 	t.Run("验证Posts类的tags字段", func(t *testing.T) {
 		// 查找节点，支持大小写形式

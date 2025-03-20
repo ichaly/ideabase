@@ -397,6 +397,14 @@ func (my *Metadata) createField(className, fieldName string, config *internal.Fi
 			Type:        internal.RelationType(config.Relation.Type),
 		}
 
+		// 根据关系类型设置IsCollection字段
+		switch field.Relation.Type {
+		case internal.MANY_TO_MANY, internal.ONE_TO_MANY:
+			field.IsCollection = true
+		case internal.MANY_TO_ONE, internal.RECURSIVE:
+			field.IsCollection = false
+		}
+
 		// 处理Through配置
 		if config.Relation.Through != nil {
 			field.Relation.Through = &internal.Through{
