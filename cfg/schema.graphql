@@ -261,13 +261,6 @@ type CommentStats {
   groupBy: [CommentGroup!]
 }
 
-# Comment分组结果
-type CommentGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
-}
-
 # Tag聚合
 type TagStats {
   count: Int!
@@ -276,13 +269,6 @@ type TagStats {
   createdAt: DateTimeStats
   # 分组聚合
   groupBy: [TagGroup!]
-}
-
-# Tag分组结果
-type TagGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
 }
 
 # Organization聚合
@@ -294,13 +280,6 @@ type OrganizationStats {
   parentId: NumberStats
   # 分组聚合
   groupBy: [OrganizationGroup!]
-}
-
-# Organization分组结果
-type OrganizationGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
 }
 
 # User聚合
@@ -315,13 +294,6 @@ type UserStats {
   groupBy: [UserGroup!]
 }
 
-# User分组结果
-type UserGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
-}
-
 # Post聚合
 type PostStats {
   count: Int!
@@ -334,13 +306,6 @@ type PostStats {
   groupBy: [PostGroup!]
 }
 
-# Post分组结果
-type PostGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
-}
-
 # PostTag聚合
 type PostTagStats {
   count: Int!
@@ -349,13 +314,6 @@ type PostTagStats {
   tagId: NumberStats
   # 分组聚合
   groupBy: [PostTagGroup!]
-}
-
-# PostTag分组结果
-type PostTagGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
 }
 
 # ------------------ 过滤器类型定义 ------------------
@@ -385,7 +343,6 @@ input IntFilter {
   is: IsInput  # Is value null (true) or not null (false)
   eq: Int  # Equals value
   in: [Int!]  # Is in list of values
-  is: IsInput  # Is value null (true) or not null (false)
   hasKey: String  # Value is a JSON object with the specified key
   hasKeyAny: String  # Value is a JSON object with any of the specified keys
   hasKeyAll: String  # Value is a JSON object with all of the specified keys
@@ -397,7 +354,6 @@ input FloatFilter {
   is: IsInput  # Is value null (true) or not null (false)
   eq: Float  # Equals value
   in: [Float!]  # Is in list of values
-  is: IsInput  # Is value null (true) or not null (false)
   hasKey: String  # Value is a JSON object with the specified key
   hasKeyAny: String  # Value is a JSON object with any of the specified keys
   hasKeyAll: String  # Value is a JSON object with all of the specified keys
@@ -409,7 +365,6 @@ input DateTimeFilter {
   is: IsInput  # Is value null (true) or not null (false)
   eq: DateTime  # Equals value
   in: [DateTime!]  # Is in list of values
-  is: IsInput  # Is value null (true) or not null (false)
   hasKey: String  # Value is a JSON object with the specified key
   hasKeyAny: String  # Value is a JSON object with any of the specified keys
   hasKeyAll: String  # Value is a JSON object with all of the specified keys
@@ -421,10 +376,6 @@ input StringFilter {
   is: IsInput  # Is value null (true) or not null (false)
   eq: String  # Equals value
   in: [String!]  # Is in list of values
-  is: IsInput  # Is value null (true) or not null (false)
-  hasKey: String  # Value is a JSON object with the specified key
-  hasKeyAny: String  # Value is a JSON object with any of the specified keys
-  hasKeyAll: String  # Value is a JSON object with all of the specified keys
   ne: String  # Does not equal value
   like: String  # Value matching pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values having 'r' in second position
   iLike: String  # Value matching (case-insensitive) pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values not having 'r' in second position
@@ -443,8 +394,8 @@ input BooleanFilter {
 
 # Tag查询条件
 input TagFilter {
-  posts: [Post]Filter
-  postTags: [PostTag]Filter
+  posts: PostFilter
+  postTags: PostTagFilter
   id: IDFilter
   name: StringFilter
   createdAt: DateTimeFilter
@@ -458,7 +409,7 @@ input OrganizationFilter {
   parentId: IntFilter
   createdAt: DateTimeFilter
   parent: OrganizationFilter
-  children: [Organization]Filter
+  children: OrganizationFilter
   name: StringFilter
   id: IDFilter
   and: [OrganizationFilter!]
@@ -468,7 +419,7 @@ input OrganizationFilter {
 
 # User查询条件
 input UserFilter {
-  comments: [Comment]Filter
+  comments: CommentFilter
   name: StringFilter
   id: IDFilter
   email: StringFilter
@@ -484,12 +435,12 @@ input PostFilter {
   content: StringFilter
   userId: IntFilter
   user: UserFilter
-  comments: [Comment]Filter
+  comments: CommentFilter
   title: StringFilter
   id: IDFilter
   createdAt: DateTimeFilter
-  tags: [Tag]Filter
-  postTags: [PostTag]Filter
+  tags: TagFilter
+  postTags: PostTagFilter
   and: [PostFilter!]
   or: [PostFilter!]
   not: PostFilter
@@ -517,7 +468,7 @@ input CommentFilter {
   content: StringFilter
   userId: IntFilter
   createdAt: DateTimeFilter
-  children: [Comment]Filter
+  children: CommentFilter
   user: UserFilter
   and: [CommentFilter!]
   or: [CommentFilter!]
@@ -592,119 +543,85 @@ input PostTagSort {
 # Comment创建输入
 input CommentCreateInput {
   parentId: Int
-  post: Post!
-  parent: Comment
+  postId: Int!
   content: String!
   userId: Int!
-  createdAt: DateTime!
-  children: [Comment]!
-  user: User!
-  id: ID!
-  postId: Int!
+  createdAt: DateTime
 }
 
 # Comment更新输入
 input CommentUpdateInput {
-  children: [Comment]
-  user: User
-  postId: Int
   parentId: Int
-  post: Post
-  parent: Comment
+  postId: Int
   content: String
   userId: Int
 }
 
 # Tag创建输入
 input TagCreateInput {
-  posts: [Post]!
-  postTags: [PostTag]!
-  id: ID!
   name: String!
-  createdAt: DateTime!
+  createdAt: DateTime
 }
 
 # Tag更新输入
 input TagUpdateInput {
   name: String
-  posts: [Post]
-  postTags: [PostTag]
 }
 
 # Organization创建输入
 input OrganizationCreateInput {
-  children: [Organization]!
   name: String!
-  id: ID!
   parentId: Int
-  createdAt: DateTime!
-  parent: Organization
+  createdAt: DateTime
 }
 
 # Organization更新输入
 input OrganizationUpdateInput {
   parentId: Int
-  parent: Organization
-  children: [Organization]
   name: String
 }
 
 # User创建输入
 input UserCreateInput {
   name: String!
-  id: ID!
   email: String!
   updatedAt: DateTime
-  createdAt: DateTime!
-  comments: [Comment]!
+  createdAt: DateTime
 }
 
 # User更新输入
 input UserUpdateInput {
-  comments: [Comment]
   name: String
   email: String
+  updatedAt: DateTime
 }
 
 # Post创建输入
 input PostCreateInput {
   userId: Int!
-  user: User!
-  comments: [Comment]!
   title: String!
-  id: ID!
-  createdAt: DateTime!
-  tags: [Tag]!
-  postTags: [PostTag]!
   content: String
+  createdAt: DateTime
 }
 
 # Post更新输入
 input PostUpdateInput {
   content: String
   userId: Int
-  user: User
-  comments: [Comment]
   title: String
-  tags: [Tag]
-  postTags: [PostTag]
 }
 
 # PostTag创建输入
 input PostTagCreateInput {
-  createdAt: DateTime!
   postId: ID!
   tagId: ID!
-  post: Post!
-  tag: Tag!
+  createdAt: DateTime
 }
 
 # PostTag更新输入
 input PostTagUpdateInput {
   postId: ID
   tagId: ID
-  post: Post
-  tag: Tag
 }
 
 # 关联操作
@@ -838,7 +755,8 @@ type Mutation {
   deleteComment(id: ID!): Boolean!
 
   # Comment批量删除
-  deleteComment(filter: CommentFilter!): Int!
+  deleteComments(filter: CommentFilter!): Int!
+  
   # Tag创建
   createTag(data: TagCreateInput!): Tag!
 
@@ -849,7 +767,8 @@ type Mutation {
   deleteTag(id: ID!): Boolean!
 
   # Tag批量删除
-  deleteTag(filter: TagFilter!): Int!
+  deleteTags(filter: TagFilter!): Int!
+  
   # Organization创建
   createOrganization(data: OrganizationCreateInput!): Organization!
 
@@ -860,7 +779,8 @@ type Mutation {
   deleteOrganization(id: ID!): Boolean!
 
   # Organization批量删除
-  deleteOrganization(filter: OrganizationFilter!): Int!
+  deleteOrganizations(filter: OrganizationFilter!): Int!
+  
   # User创建
   createUser(data: UserCreateInput!): User!
 
@@ -871,7 +791,8 @@ type Mutation {
   deleteUser(id: ID!): Boolean!
 
   # User批量删除
-  deleteUser(filter: UserFilter!): Int!
+  deleteUsers(filter: UserFilter!): Int!
+  
   # Post创建
   createPost(data: PostCreateInput!): Post!
 
@@ -882,7 +803,8 @@ type Mutation {
   deletePost(id: ID!): Boolean!
 
   # Post批量删除
-  deletePost(filter: PostFilter!): Int!
+  deletePosts(filter: PostFilter!): Int!
+  
   # PostTag创建
   createPostTag(data: PostTagCreateInput!): PostTag!
 
@@ -893,5 +815,5 @@ type Mutation {
   deletePostTag(id: ID!): Boolean!
 
   # PostTag批量删除
-  deletePostTag(filter: PostTagFilter!): Int!
+  deletePostTags(filter: PostTagFilter!): Int!
 }
