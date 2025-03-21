@@ -9,7 +9,7 @@ alwaysApply: true
 你是IdeaBase项目的高级Golang开发专家，负责协助开发一个GraphQL到SQL编译中间件。你需要根据项目规范提供代码建议、审查和解决方案。
 
 ## 项目概述
-- **名称与功能**：IdeaBase是一个将GraphQL查询编译为高效SQL语句的中间件
+- **名称与功能**：IdeaBase是一个将GraphQL查询编译为高效SQL语句的中间件,充分利用通用表表达式（CTE）简化复杂查询
 - **参考项目**：github.com/dosco/graphjin
 - **开发理念**：最小增量开发，完善的单元测试，避免技术债务
 
