@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20250321004800
+# 版本: 20250321093558
 
 # 自定义标量类型
 scalar Json
@@ -129,26 +129,10 @@ type User {
   id: ID!
   # 用户名
   name: String!
-  # 关联的Post列表
-  posts: [Post]!
   updatedAt: DateTime
 }
 
 # ------------------ 连接和边类型（游标分页） ------------------
-
-# Post分页结果
-type PostPage {
-  items: [Post!]!  # 直接返回Post对象数组
-  pageInfo: PageInfo!
-  total: Int!
-}
-
-# Post分组结果
-type PostGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
-}
 
 # PostTag分页结果
 type PostTagPage {
@@ -173,6 +157,20 @@ type OrganizationPage {
 
 # Organization分组结果
 type OrganizationGroup {
+  key: Json!  # 分组键
+  count: Int!  # 计数
+  # 可以包含其他聚合字段
+}
+
+# User分页结果
+type UserPage {
+  items: [User!]!  # 直接返回User对象数组
+  pageInfo: PageInfo!
+  total: Int!
+}
+
+# User分组结果
+type UserGroup {
   key: Json!  # 分组键
   count: Int!  # 计数
   # 可以包含其他聚合字段
@@ -206,15 +204,15 @@ type TagGroup {
   # 可以包含其他聚合字段
 }
 
-# User分页结果
-type UserPage {
-  items: [User!]!  # 直接返回User对象数组
+# Post分页结果
+type PostPage {
+  items: [Post!]!  # 直接返回Post对象数组
   pageInfo: PageInfo!
   total: Int!
 }
 
-# User分组结果
-type UserGroup {
+# Post分组结果
+type PostGroup {
   key: Json!  # 分组键
   count: Int!  # 计数
   # 可以包含其他聚合字段
@@ -248,78 +246,6 @@ type StringStats {
   countDistinct: Int!  # 去重计数
 }
 
-# PostTag聚合
-type PostTagStats {
-  count: Int!
-  tagId: NumberStats
-  createdAt: DateTimeStats
-  postId: NumberStats
-  # 分组聚合
-  groupBy: [PostTagGroup!]
-}
-
-# PostTag分组结果
-type PostTagGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
-}
-
-# Organization聚合
-type OrganizationStats {
-  count: Int!
-  name: StringStats
-  id: NumberStats
-  parentId: NumberStats
-  createdAt: DateTimeStats
-  # 分组聚合
-  groupBy: [OrganizationGroup!]
-}
-
-# Organization分组结果
-type OrganizationGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
-}
-
-# Comment聚合
-type CommentStats {
-  count: Int!
-  createdAt: DateTimeStats
-  parentId: NumberStats
-  userId: NumberStats
-  content: StringStats
-  id: NumberStats
-  postId: NumberStats
-  # 分组聚合
-  groupBy: [CommentGroup!]
-}
-
-# Comment分组结果
-type CommentGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
-}
-
-# Tag聚合
-type TagStats {
-  count: Int!
-  id: NumberStats
-  name: StringStats
-  createdAt: DateTimeStats
-  # 分组聚合
-  groupBy: [TagGroup!]
-}
-
-# Tag分组结果
-type TagGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
-}
-
 # User聚合
 type UserStats {
   count: Int!
@@ -339,13 +265,50 @@ type UserGroup {
   # 可以包含其他聚合字段
 }
 
+# Comment聚合
+type CommentStats {
+  count: Int!
+  parentId: NumberStats
+  userId: NumberStats
+  content: StringStats
+  id: NumberStats
+  postId: NumberStats
+  createdAt: DateTimeStats
+  # 分组聚合
+  groupBy: [CommentGroup!]
+}
+
+# Comment分组结果
+type CommentGroup {
+  key: Json!  # 分组键
+  count: Int!  # 计数
+  # 可以包含其他聚合字段
+}
+
+# Tag聚合
+type TagStats {
+  count: Int!
+  createdAt: DateTimeStats
+  id: NumberStats
+  name: StringStats
+  # 分组聚合
+  groupBy: [TagGroup!]
+}
+
+# Tag分组结果
+type TagGroup {
+  key: Json!  # 分组键
+  count: Int!  # 计数
+  # 可以包含其他聚合字段
+}
+
 # Post聚合
 type PostStats {
   count: Int!
   title: StringStats
-  content: StringStats
-  userId: NumberStats
   id: NumberStats
+  userId: NumberStats
+  content: StringStats
   createdAt: DateTimeStats
   # 分组聚合
   groupBy: [PostGroup!]
@@ -358,7 +321,77 @@ type PostGroup {
   # 可以包含其他聚合字段
 }
 
+# PostTag聚合
+type PostTagStats {
+  count: Int!
+  createdAt: DateTimeStats
+  postId: NumberStats
+  tagId: NumberStats
+  # 分组聚合
+  groupBy: [PostTagGroup!]
+}
+
+# PostTag分组结果
+type PostTagGroup {
+  key: Json!  # 分组键
+  count: Int!  # 计数
+  # 可以包含其他聚合字段
+}
+
+# Organization聚合
+type OrganizationStats {
+  count: Int!
+  parentId: NumberStats
+  createdAt: DateTimeStats
+  name: StringStats
+  id: NumberStats
+  # 分组聚合
+  groupBy: [OrganizationGroup!]
+}
+
+# Organization分组结果
+type OrganizationGroup {
+  key: Json!  # 分组键
+  count: Int!  # 计数
+  # 可以包含其他聚合字段
+}
+
 # ------------------ 过滤器类型定义 ------------------
+
+# String过滤器
+input StringFilter {
+  is: IsInput  # Is value null (true) or not null (false)
+  eq: String  # Equals value
+  in: [String!]  # Is in list of values
+  is: IsInput  # Is value null (true) or not null (false)
+  hasKey: String  # Value is a JSON object with the specified key
+  hasKeyAny: String  # Value is a JSON object with any of the specified keys
+  hasKeyAll: String  # Value is a JSON object with all of the specified keys
+  ne: String  # Does not equal value
+  like: String  # Value matching pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values having 'r' in second position
+  iLike: String  # Value matching (case-insensitive) pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values not having 'r' in second position
+  regex: String  # Value matching regular pattern
+  iRegex: String  # Value matching (case-insensitive) regex pattern
+  hasKey: String  # Value is a JSON object with the specified key
+  hasKeyAny: String  # Value is a JSON object with any of the specified keys
+  hasKeyAll: String  # Value is a JSON object with all of the specified keys
+}
+
+# Boolean过滤器
+input BooleanFilter {
+  eq: Boolean  # Equals value
+  in: [Boolean!]  # Is in list of values
+}
+
+# Json过滤器
+input JsonFilter {
+  eq: Json  # Equals value
+  in: [Json!]  # Is in list of values
+  is: IsInput  # Is value null (true) or not null (false)
+  hasKey: String  # Value is a JSON object with the specified key
+  hasKeyAny: String  # Value is a JSON object with any of the specified keys
+  hasKeyAll: String  # Value is a JSON object with all of the specified keys
+}
 
 # ID过滤器
 input IDFilter {
@@ -406,89 +439,13 @@ input DateTimeFilter {
   ne: DateTime  # Does not equal value
 }
 
-# String过滤器
-input StringFilter {
-  is: IsInput  # Is value null (true) or not null (false)
-  eq: String  # Equals value
-  in: [String!]  # Is in list of values
-  is: IsInput  # Is value null (true) or not null (false)
-  hasKey: String  # Value is a JSON object with the specified key
-  hasKeyAny: String  # Value is a JSON object with any of the specified keys
-  hasKeyAll: String  # Value is a JSON object with all of the specified keys
-  ne: String  # Does not equal value
-  like: String  # Value matching pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values having 'r' in second position
-  iLike: String  # Value matching (case-insensitive) pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values not having 'r' in second position
-  regex: String  # Value matching regular pattern
-  iRegex: String  # Value matching (case-insensitive) regex pattern
-  hasKey: String  # Value is a JSON object with the specified key
-  hasKeyAny: String  # Value is a JSON object with any of the specified keys
-  hasKeyAll: String  # Value is a JSON object with all of the specified keys
-}
-
-# Boolean过滤器
-input BooleanFilter {
-  eq: Boolean  # Equals value
-  in: [Boolean!]  # Is in list of values
-}
-
-# Json过滤器
-input JsonFilter {
-  eq: Json  # Equals value
-  in: [Json!]  # Is in list of values
-  is: IsInput  # Is value null (true) or not null (false)
-  hasKey: String  # Value is a JSON object with the specified key
-  hasKeyAny: String  # Value is a JSON object with any of the specified keys
-  hasKeyAll: String  # Value is a JSON object with all of the specified keys
-}
-
-# Tag查询条件
-input TagFilter {
-  id: IDFilter
-  name: StringFilter
-  createdAt: DateTimeFilter
-  posts: [Post]Filter
-  postTags: [PostTag]Filter
-  and: [TagFilter!]
-  or: [TagFilter!]
-  not: TagFilter
-}
-
-# User查询条件
-input UserFilter {
-  comments: [Comment]Filter
-  name: StringFilter
-  id: IDFilter
-  email: StringFilter
-  createdAt: DateTimeFilter
-  updatedAt: DateTimeFilter
-  posts: [Post]Filter
-  and: [UserFilter!]
-  or: [UserFilter!]
-  not: UserFilter
-}
-
-# Post查询条件
-input PostFilter {
-  id: IDFilter
-  createdAt: DateTimeFilter
-  tags: [Tag]Filter
-  postTags: [PostTag]Filter
-  title: StringFilter
-  content: StringFilter
-  userId: IntFilter
-  user: UserFilter
-  and: [PostFilter!]
-  or: [PostFilter!]
-  not: PostFilter
-}
-
 # PostTag查询条件
 input PostTagFilter {
-  tagId: IDFilter
   createdAt: DateTimeFilter
   postId: IDFilter
-  tag: TagFilter
+  tagId: IDFilter
   post: PostFilter
+  tag: TagFilter
   and: [PostTagFilter!]
   or: [PostTagFilter!]
   not: PostTagFilter
@@ -496,215 +453,252 @@ input PostTagFilter {
 
 # Organization查询条件
 input OrganizationFilter {
-  id: IDFilter
-  parentId: IntFilter
-  createdAt: DateTimeFilter
   parent: OrganizationFilter
   children: [Organization]Filter
   name: StringFilter
+  id: IDFilter
+  parentId: IntFilter
+  createdAt: DateTimeFilter
   and: [OrganizationFilter!]
   or: [OrganizationFilter!]
   not: OrganizationFilter
 }
 
+# User查询条件
+input UserFilter {
+  id: IDFilter
+  email: StringFilter
+  createdAt: DateTimeFilter
+  updatedAt: DateTimeFilter
+  comments: [Comment]Filter
+  name: StringFilter
+  and: [UserFilter!]
+  or: [UserFilter!]
+  not: UserFilter
+}
+
 # Comment查询条件
 input CommentFilter {
-  postId: IntFilter
-  children: [Comment]Filter
-  user: UserFilter
-  createdAt: DateTimeFilter
   parentId: IntFilter
   userId: IntFilter
-  parent: CommentFilter
   post: PostFilter
+  parent: CommentFilter
+  user: UserFilter
   content: StringFilter
   id: IDFilter
+  postId: IntFilter
+  createdAt: DateTimeFilter
+  children: [Comment]Filter
   and: [CommentFilter!]
   or: [CommentFilter!]
   not: CommentFilter
 }
 
-# Organization排序
-input OrganizationSort {
-  parentId: SortDirection
-  createdAt: SortDirection
-  parent: SortDirection
-  children: SortDirection
-  name: SortDirection
-  id: SortDirection
+# Tag查询条件
+input TagFilter {
+  postTags: [PostTag]Filter
+  id: IDFilter
+  name: StringFilter
+  createdAt: DateTimeFilter
+  posts: [Post]Filter
+  and: [TagFilter!]
+  or: [TagFilter!]
+  not: TagFilter
 }
 
-# Comment排序
-input CommentSort {
-  id: SortDirection
-  postId: SortDirection
-  children: SortDirection
-  user: SortDirection
-  createdAt: SortDirection
-  parentId: SortDirection
-  userId: SortDirection
-  parent: SortDirection
-  post: SortDirection
-  content: SortDirection
-}
-
-# Tag排序
-input TagSort {
-  posts: SortDirection
-  postTags: SortDirection
-  id: SortDirection
-  name: SortDirection
-  createdAt: SortDirection
-}
-
-# User排序
-input UserSort {
-  updatedAt: SortDirection
-  posts: SortDirection
-  comments: SortDirection
-  name: SortDirection
-  id: SortDirection
-  email: SortDirection
-  createdAt: SortDirection
+# Post查询条件
+input PostFilter {
+  postTags: [PostTag]Filter
+  content: StringFilter
+  createdAt: DateTimeFilter
+  title: StringFilter
+  id: IDFilter
+  userId: IntFilter
+  user: UserFilter
+  tags: [Tag]Filter
+  and: [PostFilter!]
+  or: [PostFilter!]
+  not: PostFilter
 }
 
 # Post排序
 input PostSort {
   createdAt: SortDirection
-  tags: SortDirection
-  postTags: SortDirection
   title: SortDirection
-  content: SortDirection
+  id: SortDirection
   userId: SortDirection
   user: SortDirection
-  id: SortDirection
+  tags: SortDirection
+  postTags: SortDirection
+  content: SortDirection
 }
 
 # PostTag排序
 input PostTagSort {
-  postId: SortDirection
-  tag: SortDirection
-  post: SortDirection
   tagId: SortDirection
+  post: SortDirection
+  tag: SortDirection
   createdAt: SortDirection
+  postId: SortDirection
 }
 
-# PostTag创建输入
-input PostTagCreateInput {
-  tag: Tag!
-  post: Post!
-  tagId: ID!
-  createdAt: DateTime!
-  postId: ID!
+# Organization排序
+input OrganizationSort {
+  id: SortDirection
+  parentId: SortDirection
+  createdAt: SortDirection
+  parent: SortDirection
+  children: SortDirection
+  name: SortDirection
 }
 
-# PostTag更新输入
-input PostTagUpdateInput {
-  tag: Tag
-  post: Post
-  tagId: ID
-  postId: ID
+# User排序
+input UserSort {
+  comments: SortDirection
+  name: SortDirection
+  id: SortDirection
+  email: SortDirection
+  createdAt: SortDirection
+  updatedAt: SortDirection
+}
+
+# Comment排序
+input CommentSort {
+  userId: SortDirection
+  post: SortDirection
+  parent: SortDirection
+  user: SortDirection
+  content: SortDirection
+  id: SortDirection
+  postId: SortDirection
+  createdAt: SortDirection
+  children: SortDirection
+  parentId: SortDirection
+}
+
+# Tag排序
+input TagSort {
+  id: SortDirection
+  name: SortDirection
+  createdAt: SortDirection
+  posts: SortDirection
+  postTags: SortDirection
 }
 
 # Organization创建输入
 input OrganizationCreateInput {
+  children: [Organization]!
+  name: String!
   id: ID!
   parentId: Int
   createdAt: DateTime!
   parent: Organization
-  children: [Organization]!
-  name: String!
 }
 
 # Organization更新输入
 input OrganizationUpdateInput {
-  name: String
   parentId: Int
   parent: Organization
   children: [Organization]
-}
-
-# Comment创建输入
-input CommentCreateInput {
-  content: String!
-  id: ID!
-  postId: Int!
-  children: [Comment]!
-  user: User!
-  createdAt: DateTime!
-  parentId: Int
-  userId: Int!
-  parent: Comment
-  post: Post!
-}
-
-# Comment更新输入
-input CommentUpdateInput {
-  parentId: Int
-  userId: Int
-  parent: Comment
-  post: Post
-  content: String
-  postId: Int
-  children: [Comment]
-  user: User
-}
-
-# Tag创建输入
-input TagCreateInput {
-  name: String!
-  createdAt: DateTime!
-  posts: [Post]!
-  postTags: [PostTag]!
-  id: ID!
-}
-
-# Tag更新输入
-input TagUpdateInput {
-  posts: [Post]
-  postTags: [PostTag]
   name: String
 }
 
 # User创建输入
 input UserCreateInput {
+  updatedAt: DateTime
+  comments: [Comment]!
   name: String!
   id: ID!
   email: String!
   createdAt: DateTime!
-  updatedAt: DateTime
-  posts: [Post]!
-  comments: [Comment]!
 }
 
 # User更新输入
 input UserUpdateInput {
-  email: String
-  posts: [Post]
   comments: [Comment]
   name: String
+  email: String
+}
+
+# Comment创建输入
+input CommentCreateInput {
+  parentId: Int
+  userId: Int!
+  post: Post!
+  parent: Comment
+  user: User!
+  content: String!
+  id: ID!
+  postId: Int!
+  createdAt: DateTime!
+  children: [Comment]!
+}
+
+# Comment更新输入
+input CommentUpdateInput {
+  children: [Comment]
+  parentId: Int
+  userId: Int
+  post: Post
+  parent: Comment
+  user: User
+  content: String
+  postId: Int
+}
+
+# Tag创建输入
+input TagCreateInput {
+  id: ID!
+  name: String!
+  createdAt: DateTime!
+  posts: [Post]!
+  postTags: [PostTag]!
+}
+
+# Tag更新输入
+input TagUpdateInput {
+  postTags: [PostTag]
+  name: String
+  posts: [Post]
 }
 
 # Post创建输入
 input PostCreateInput {
   title: String!
-  content: String
+  id: ID!
   userId: Int!
   user: User!
-  id: ID!
-  createdAt: DateTime!
   tags: [Tag]!
   postTags: [PostTag]!
+  content: String
+  createdAt: DateTime!
 }
 
 # Post更新输入
 input PostUpdateInput {
   title: String
-  content: String
   userId: Int
   user: User
   tags: [Tag]
   postTags: [PostTag]
+  content: String
+}
+
+# PostTag创建输入
+input PostTagCreateInput {
+  post: Post!
+  tag: Tag!
+  createdAt: DateTime!
+  postId: ID!
+  tagId: ID!
+}
+
+# PostTag更新输入
+input PostTagUpdateInput {
+  post: Post
+  tag: Tag
+  postId: ID
+  tagId: ID
 }
 
 # 关联操作
@@ -739,6 +733,23 @@ type Query {
 
   # Organization统计查询
   organizationStats(filter: OrganizationFilter, groupBy: GroupBy): OrganizationStats!
+  # 单个User查询
+  user(id: ID!): User
+
+  # User列表查询
+  users(
+    filter: UserFilter
+    sort: [UserSort!]
+    limit: Int
+    offset: Int
+    first: Int
+    last: Int
+    after: Cursor
+    before: Cursor
+  ): UserPage!
+
+  # User统计查询
+  userStats(filter: UserFilter, groupBy: GroupBy): UserStats!
   # 单个Comment查询
   comment(id: ID!): Comment
 
@@ -773,23 +784,6 @@ type Query {
 
   # Tag统计查询
   tagStats(filter: TagFilter, groupBy: GroupBy): TagStats!
-  # 单个User查询
-  user(id: ID!): User
-
-  # User列表查询
-  users(
-    filter: UserFilter
-    sort: [UserSort!]
-    limit: Int
-    offset: Int
-    first: Int
-    last: Int
-    after: Cursor
-    before: Cursor
-  ): UserPage!
-
-  # User统计查询
-  userStats(filter: UserFilter, groupBy: GroupBy): UserStats!
   # 单个Post查询
   post(id: ID!): Post
 
@@ -839,17 +833,6 @@ type Mutation {
 
   # Tag批量删除
   deleteTag(filter: TagFilter!): Int!
-  # User创建
-  createUser(data: UserCreateInput!): User!
-
-  # User更新
-  updateUser(id: ID!, data: UserUpdateInput!): User!
-
-  # User删除
-  deleteUser(id: ID!): Boolean!
-
-  # User批量删除
-  deleteUser(filter: UserFilter!): Int!
   # Post创建
   createPost(data: PostCreateInput!): Post!
 
@@ -883,6 +866,17 @@ type Mutation {
 
   # Organization批量删除
   deleteOrganization(filter: OrganizationFilter!): Int!
+  # User创建
+  createUser(data: UserCreateInput!): User!
+
+  # User更新
+  updateUser(id: ID!, data: UserUpdateInput!): User!
+
+  # User删除
+  deleteUser(id: ID!): Boolean!
+
+  # User批量删除
+  deleteUser(filter: UserFilter!): Int!
   # Comment创建
   createComment(data: CommentCreateInput!): Comment!
 

@@ -320,20 +320,20 @@ func createRelationTestMetadata() *Metadata {
 
 	// 添加多对一关系字段
 	userClass.Fields["department"] = &internal.Field{
-		Name:         "department",
-		Type:         "Department",
-		Description:  "关联的Department",
-		Virtual:      true,
-		IsCollection: false,
+		Name:        "department",
+		Type:        "Department",
+		Description: "关联的Department",
+		Virtual:     true,
+		IsList:      false,
 	}
 
 	// 添加一对多关系字段 - User指向Post
 	userClass.Fields["posts"] = &internal.Field{
-		Name:         "posts",
-		Type:         "Post",
-		Description:  "用户的文章列表",
-		Virtual:      true,
-		IsCollection: true,
+		Name:        "posts",
+		Type:        "Post",
+		Description: "用户的文章列表",
+		Virtual:     true,
+		IsList:      true,
 	}
 
 	// 创建Department类
@@ -356,11 +356,11 @@ func createRelationTestMetadata() *Metadata {
 
 	// 添加一对多关系字段
 	deptClass.Fields["users"] = &internal.Field{
-		Name:         "users",
-		Type:         "User",
-		Description:  "关联的User列表",
-		Virtual:      true,
-		IsCollection: true,
+		Name:        "users",
+		Type:        "User",
+		Description: "关联的User列表",
+		Virtual:     true,
+		IsList:      true,
 	}
 
 	// 创建Admin类，用于测试字段冲突处理
@@ -394,11 +394,11 @@ func createRelationTestMetadata() *Metadata {
 
 	// 添加多对一关系字段，会与admin字段冲突
 	adminClass.Fields["user1"] = &internal.Field{
-		Name:         "user1",
-		Type:         "User",
-		Description:  "关联的User",
-		Virtual:      true,
-		IsCollection: false,
+		Name:        "user1",
+		Type:        "User",
+		Description: "关联的User",
+		Virtual:     true,
+		IsList:      false,
 	}
 
 	// 创建Post类
@@ -427,30 +427,30 @@ func createRelationTestMetadata() *Metadata {
 
 	// 添加多对一关系字段 - Post指向User
 	postClass.Fields["user"] = &internal.Field{
-		Name:         "user",
-		Type:         "User",
-		Description:  "文章作者",
-		Virtual:      true,
-		IsCollection: false,
+		Name:        "user",
+		Type:        "User",
+		Description: "文章作者",
+		Virtual:     true,
+		IsList:      false,
 	}
 
 	// 添加多对多关系字段
 	postClass.Fields["tags"] = &internal.Field{
-		Name:         "tags",
-		Type:         "Tag",
-		Description:  "多对多关联的Tag列表",
-		Virtual:      true,
-		IsCollection: true,
+		Name:        "tags",
+		Type:        "Tag",
+		Description: "多对多关联的Tag列表",
+		Virtual:     true,
+		IsList:      true,
 	}
 
 	// 添加关系，并明确标记IsThroughField
 	postClass.Fields["postTags"] = &internal.Field{
-		Name:         "postTags",
-		Type:         "PostTags",
-		Description:  "关联的PostTags列表",
-		Virtual:      true,
-		IsCollection: true,
-		IsThrough:    true, // 明确标记为中间表字段
+		Name:        "postTags",
+		Type:        "PostTags",
+		Description: "关联的PostTags列表",
+		Virtual:     true,
+		IsList:      true,
+		IsThrough:   true, // 明确标记为中间表字段
 	}
 
 	// 创建Tag类
@@ -473,21 +473,21 @@ func createRelationTestMetadata() *Metadata {
 
 	// 添加多对多关系字段
 	tagClass.Fields["posts"] = &internal.Field{
-		Name:         "posts",
-		Type:         "Post",
-		Description:  "多对多关联的Post列表",
-		Virtual:      true,
-		IsCollection: true,
+		Name:        "posts",
+		Type:        "Post",
+		Description: "多对多关联的Post列表",
+		Virtual:     true,
+		IsList:      true,
 	}
 
 	// 添加中间表关系字段，并明确标记IsThroughField
 	tagClass.Fields["postTags"] = &internal.Field{
-		Name:         "postTags",
-		Type:         "PostTags",
-		Description:  "关联的PostTags列表",
-		Virtual:      true,
-		IsCollection: true,
-		IsThrough:    true, // 明确标记为中间表字段
+		Name:        "postTags",
+		Type:        "PostTags",
+		Description: "关联的PostTags列表",
+		Virtual:     true,
+		IsList:      true,
+		IsThrough:   true, // 明确标记为中间表字段
 	}
 
 	// 添加中间表 PostTags
@@ -510,20 +510,20 @@ func createRelationTestMetadata() *Metadata {
 
 	// 添加多对一关系字段
 	postTagsClass.Fields["post"] = &internal.Field{
-		Name:         "post",
-		Type:         "Post",
-		Description:  "关联的Post",
-		Virtual:      true,
-		IsCollection: false,
+		Name:        "post",
+		Type:        "Post",
+		Description: "关联的Post",
+		Virtual:     true,
+		IsList:      false,
 	}
 
 	// 添加多对一关系字段
 	postTagsClass.Fields["tag"] = &internal.Field{
-		Name:         "tag",
-		Type:         "Tag",
-		Description:  "关联的Tag",
-		Virtual:      true,
-		IsCollection: false,
+		Name:        "tag",
+		Type:        "Tag",
+		Description: "关联的Tag",
+		Virtual:     true,
+		IsList:      false,
 	}
 
 	// 创建Organization类（自关联）
@@ -552,21 +552,21 @@ func createRelationTestMetadata() *Metadata {
 
 	// 添加递归关系字段 - 父组织
 	orgClass.Fields["parent"] = &internal.Field{
-		Name:         "parent",
-		Type:         "Organization",
-		Description:  "父Organization对象",
-		Virtual:      true,
-		Nullable:     true,
-		IsCollection: false,
+		Name:        "parent",
+		Type:        "Organization",
+		Description: "父Organization对象",
+		Virtual:     true,
+		Nullable:    true,
+		IsList:      false,
 	}
 
 	// 添加递归关系字段 - 子组织
 	orgClass.Fields["children"] = &internal.Field{
-		Name:         "children",
-		Type:         "Organization",
-		Description:  "子Organization列表",
-		Virtual:      true,
-		IsCollection: true,
+		Name:        "children",
+		Type:        "Organization",
+		Description: "子Organization列表",
+		Virtual:     true,
+		IsList:      true,
 	}
 
 	// 添加所有类到元数据

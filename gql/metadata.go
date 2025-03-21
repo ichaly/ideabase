@@ -397,12 +397,12 @@ func (my *Metadata) createField(className, fieldName string, config *internal.Fi
 			Type:        internal.RelationType(config.Relation.Type),
 		}
 
-		// 根据关系类型设置IsCollection字段
+		// 根据关系类型设置IsList字段
 		switch field.Relation.Type {
 		case internal.MANY_TO_MANY, internal.ONE_TO_MANY:
-			field.IsCollection = true
+			field.IsList = true
 		case internal.MANY_TO_ONE, internal.RECURSIVE:
-			field.IsCollection = false
+			field.IsList = false
 		}
 
 		// 处理Through配置
@@ -885,12 +885,12 @@ func (my *Metadata) processRelations() {
 					strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 
 				class.Fields[relName] = &internal.Field{
-					Type:         targetClassName,
-					Name:         relName,
-					Virtual:      true,
-					IsCollection: true,
-					Nullable:     false,
-					Description:  "多对多关联的" + targetClassName + "列表",
+					Type:        targetClassName,
+					Name:        relName,
+					Virtual:     true,
+					IsList:      true,
+					Nullable:    false,
+					Description: "多对多关联的" + targetClassName + "列表",
 				}
 
 				// 处理中间表
@@ -931,13 +931,13 @@ func (my *Metadata) processRelations() {
 							strcase.ToLowerCamel(inflection.Plural(throughClass.Name)))
 
 						class.Fields[throughFieldName] = &internal.Field{
-							Type:         throughClass.Name,
-							Name:         throughFieldName,
-							Virtual:      true,
-							IsCollection: true,
-							Nullable:     false,
-							Description:  "关联的" + throughClass.Name + "记录列表",
-							IsThrough:    true, // 标记为中间表字段，方便渲染时筛选
+							Type:        throughClass.Name,
+							Name:        throughFieldName,
+							Virtual:     true,
+							IsList:      true,
+							Nullable:    false,
+							Description: "关联的" + throughClass.Name + "记录列表",
+							IsThrough:   true, // 标记为中间表字段，方便渲染时筛选
 						}
 					}
 				}
@@ -948,12 +948,12 @@ func (my *Metadata) processRelations() {
 					strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 
 				class.Fields[relName] = &internal.Field{
-					Type:         targetClassName,
-					Name:         relName,
-					Virtual:      true,
-					IsCollection: true,
-					Nullable:     false,
-					Description:  "关联的" + targetClassName + "列表",
+					Type:        targetClassName,
+					Name:        relName,
+					Virtual:     true,
+					IsList:      true,
+					Nullable:    false,
+					Description: "关联的" + targetClassName + "列表",
 				}
 
 			case internal.MANY_TO_ONE:
@@ -962,18 +962,18 @@ func (my *Metadata) processRelations() {
 					strcase.ToLowerCamel(targetClassName))
 
 				class.Fields[relName] = &internal.Field{
-					Type:         targetClassName,
-					Name:         relName,
-					Virtual:      true,
-					IsCollection: false,
-					Nullable:     field.Nullable,
-					Description:  "关联的" + targetClassName,
+					Type:        targetClassName,
+					Name:        relName,
+					Virtual:     true,
+					IsList:      false,
+					Nullable:    field.Nullable,
+					Description: "关联的" + targetClassName,
 				}
 
 				// 检查是否需要创建反向关系字段
 				reverseExists := false
 				for _, tf := range targetClass.Fields {
-					if tf.IsCollection && tf.Type == className && tf.Virtual {
+					if tf.IsList && tf.Type == className && tf.Virtual {
 						reverseExists = true
 						break
 					}
@@ -990,12 +990,12 @@ func (my *Metadata) processRelations() {
 						strcase.ToLowerCamel(inflection.Plural(className)))
 
 					reverseFields[targetClassName][reverseName] = &internal.Field{
-						Type:         className,
-						Name:         reverseName,
-						Virtual:      true,
-						IsCollection: true,
-						Nullable:     false,
-						Description:  "关联的" + className + "列表",
+						Type:        className,
+						Name:        reverseName,
+						Virtual:     true,
+						IsList:      true,
+						Nullable:    false,
+						Description: "关联的" + className + "列表",
 					}
 				}
 
@@ -1005,23 +1005,23 @@ func (my *Metadata) processRelations() {
 					// 创建父级关系字段
 					parentName := my.uniqueFieldName(class, "parent")
 					class.Fields[parentName] = &internal.Field{
-						Type:         className,
-						Name:         parentName,
-						Virtual:      true,
-						IsCollection: false,
-						Nullable:     true,
-						Description:  "父" + className + "对象",
+						Type:        className,
+						Name:        parentName,
+						Virtual:     true,
+						IsList:      false,
+						Nullable:    true,
+						Description: "父" + className + "对象",
 					}
 
 					// 创建子级关系字段
 					childrenName := my.uniqueFieldName(targetClass, "children")
 					targetClass.Fields[childrenName] = &internal.Field{
-						Type:         className,
-						Name:         childrenName,
-						Virtual:      true,
-						IsCollection: true,
-						Nullable:     false,
-						Description:  "子" + className + "列表",
+						Type:        className,
+						Name:        childrenName,
+						Virtual:     true,
+						IsList:      true,
+						Nullable:    false,
+						Description: "子" + className + "列表",
 					}
 				}
 			}

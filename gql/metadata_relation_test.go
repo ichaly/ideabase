@@ -87,7 +87,7 @@ func TestManyToManyRelationLoading(t *testing.T) {
 			return
 		}
 
-		assert.True(t, tagsField.IsCollection, "tags字段应该是集合类型")
+		assert.True(t, tagsField.IsList, "tags字段应该是集合类型")
 
 		// 验证关系定义
 		assert.NotNil(t, tagsField.Relation, "应该存在关系定义")
@@ -143,7 +143,7 @@ func TestManyToManyRelationLoading(t *testing.T) {
 			return
 		}
 
-		assert.True(t, postsField.IsCollection, "posts字段应该是集合类型")
+		assert.True(t, postsField.IsList, "posts字段应该是集合类型")
 
 		// 验证关系定义
 		assert.NotNil(t, postsField.Relation, "应该存在关系定义")

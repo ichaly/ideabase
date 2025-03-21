@@ -304,7 +304,7 @@ func (my *Renderer) getGraphQLType(field *internal.Field) string {
 	fieldType := field.Type
 
 	// 处理集合类型
-	if field.IsCollection {
+	if field.IsList {
 		innerType := fieldType
 		if strings.HasPrefix(innerType, "[") && strings.HasSuffix(innerType, "]") {
 			innerType = innerType[1 : len(innerType)-1]
@@ -318,9 +318,9 @@ func (my *Renderer) getGraphQLType(field *internal.Field) string {
 
 		// 避免递归调用导致嵌套数组，直接处理内部类型
 		innerField := &internal.Field{
-			Type:         innerType,
-			IsPrimary:    false,
-			IsCollection: false, // 重要：确保内部字段不是集合类型
+			Type:      innerType,
+			IsPrimary: false,
+			IsList:    false, // 重要：确保内部字段不是集合类型
 		}
 		return "[" + my.getGraphQLType(innerField) + "]"
 	}
