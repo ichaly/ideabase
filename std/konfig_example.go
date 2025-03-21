@@ -17,7 +17,7 @@ func KonfigExample() {
 	// 参数1: 配置文件路径
 	// 参数2..n: 配置选项
 	cfg, err := NewKonfig(
-		"config.yaml",
+		WithFilePath("config.yaml"),
 		WithEnvPrefix("APP"),
 		WithConfigType("yaml"),
 		WithDelimiter("."),
@@ -43,30 +43,23 @@ func KonfigExample() {
 	fmt.Printf("数据库主机: %s\n", dbConfig.(map[string]interface{})["host"])
 	fmt.Printf("数据库端口: %d\n", int(dbConfig.(map[string]interface{})["port"].(float64)))
 
-	// 创建配置文件监视器
-	watcher, err := NewConfigWatcher(cfg.GetKoanf(), "config.yaml",
-		WithEnvPrefix("APP"),
-		WithConfigType("yaml"),
-		WithDelimiter("."),
-	)
-	if err != nil {
-		log.Fatalf("创建配置文件监视器失败: %v", err)
+	// 启动配置文件监听
+	if err := cfg.WatchConfig(); err != nil {
+		log.Fatalf("启动配置文件监听失败: %v", err)
 	}
+	defer cfg.StopWatch() // 确保程序结束时停止监听
 
 	// 设置防抖时间
-	watcher.SetDebounceTime(200 * time.Millisecond)
+	cfg.SetDebounceTime(200 * time.Millisecond)
 
 	// 设置配置文件变更回调函数
-	watcher.OnChange(func(newConfig *koanf.Koanf) {
+	cfg.OnConfigChange(func(newConfig *koanf.Koanf) {
 		fmt.Println("配置文件已更新!")
 		fmt.Printf("新的应用名称: %s\n", newConfig.String("app.name"))
-	})
 
-	// 启动配置文件监视
-	if err := watcher.Start(); err != nil {
-		log.Fatalf("启动配置文件监视失败: %v", err)
-	}
-	defer watcher.Stop()
+		// 配置变更后可以在这里执行一些操作
+		// 比如重新初始化数据库连接、更新日志级别等
+	})
 
 	// 应用程序运行中...
 	fmt.Println("应用程序运行中，请修改config.yaml文件以测试配置热重载...")

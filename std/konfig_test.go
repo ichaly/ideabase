@@ -3,10 +3,13 @@ package std
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/knadh/koanf/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewKonfig(t *testing.T) {
@@ -270,4 +273,240 @@ func TestNewKonfig_WithoutConfigFile(t *testing.T) {
 	// 验证环境变量覆盖
 	assert.Equal(t, "production", cfg.GetString("mode"))
 	assert.Equal(t, "test-app", cfg.GetString("app.name"))
+}
+
+func TestKonfigWatchConfig(t *testing.T) {
+	// 创建临时目录和临时配置文件
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.yaml")
+
+	// 写入初始配置内容
+	initialConfig := `
+app:
+  name: TestApp
+  version: 1.0.0
+database:
+  host: localhost
+  port: 5432
+`
+	err := os.WriteFile(configPath, []byte(initialConfig), 0644)
+	require.NoError(t, err)
+
+	// 创建配置实例
+	cfg, err := NewKonfig(WithFilePath(configPath))
+	require.NoError(t, err)
+
+	// 验证初始配置
+	assert.Equal(t, "TestApp", cfg.GetString("app.name"))
+	assert.Equal(t, "1.0.0", cfg.GetString("app.version"))
+	assert.Equal(t, "localhost", cfg.GetString("database.host"))
+	assert.Equal(t, 5432, cfg.GetInt("database.port"))
+
+	// 启动配置监听
+	err = cfg.WatchConfig()
+	require.NoError(t, err)
+	defer cfg.StopWatch()
+
+	// 设置更短的防抖时间用于测试
+	cfg.SetDebounceTime(50 * time.Millisecond)
+
+	// 设置配置变更回调并等待配置变更
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	var newConfig *koanf.Koanf
+	cfg.OnConfigChange(func(config *koanf.Koanf) {
+		newConfig = config
+		wg.Done()
+	})
+
+	// 修改配置文件
+	updatedConfig := `
+app:
+  name: UpdatedApp
+  version: 2.0.0
+database:
+  host: db.example.com
+  port: 5432
+`
+	// 确保写入生效，文件系统需要一些时间来处理
+	time.Sleep(100 * time.Millisecond)
+
+	err = os.WriteFile(configPath, []byte(updatedConfig), 0644)
+	require.NoError(t, err)
+
+	// 等待配置变更通知，最多等待1秒
+	waitDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		// 配置变更通知已接收
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待配置变更通知超时")
+	}
+
+	// 验证配置已被正确更新
+	assert.Equal(t, "UpdatedApp", cfg.GetString("app.name"))
+	assert.Equal(t, "2.0.0", cfg.GetString("app.version"))
+	assert.Equal(t, "db.example.com", cfg.GetString("database.host"))
+	assert.Equal(t, 5432, cfg.GetInt("database.port"))
+
+	// 验证回调接收到的配置与实际配置一致
+	assert.Equal(t, "UpdatedApp", newConfig.String("app.name"))
+	assert.Equal(t, "2.0.0", newConfig.String("app.version"))
+}
+
+func TestKonfigWatchProfileConfig(t *testing.T) {
+	// 创建临时目录和临时配置文件
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.yaml")
+	devConfigPath := filepath.Join(tempDir, "config-dev.yaml")
+
+	// 写入主配置内容
+	mainConfig := `
+mode: dev
+profiles:
+  active: dev
+app:
+  name: BaseApp
+database:
+  host: localhost
+  port: 5432
+`
+	err := os.WriteFile(configPath, []byte(mainConfig), 0644)
+	require.NoError(t, err)
+
+	// 写入dev环境配置
+	devConfig := `
+app:
+  name: DevApp
+`
+	err = os.WriteFile(devConfigPath, []byte(devConfig), 0644)
+	require.NoError(t, err)
+
+	// 创建配置实例
+	cfg, err := NewKonfig(WithFilePath(configPath))
+	require.NoError(t, err)
+
+	// 验证初始配置（已合并dev环境）
+	assert.Equal(t, "DevApp", cfg.GetString("app.name"))
+	assert.Equal(t, "localhost", cfg.GetString("database.host"))
+
+	// 启动配置监听
+	err = cfg.WatchConfig()
+	require.NoError(t, err)
+	defer cfg.StopWatch()
+
+	// 设置更短的防抖时间用于测试
+	cfg.SetDebounceTime(50 * time.Millisecond)
+
+	// 设置配置变更回调并等待配置变更
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	cfg.OnConfigChange(func(config *koanf.Koanf) {
+		wg.Done()
+	})
+
+	// 修改profile配置文件
+	updatedDevConfig := `
+app:
+  name: UpdatedDevApp
+`
+	// 确保写入生效，文件系统需要一些时间来处理
+	time.Sleep(100 * time.Millisecond)
+
+	err = os.WriteFile(devConfigPath, []byte(updatedDevConfig), 0644)
+	require.NoError(t, err)
+
+	// 等待配置变更通知，最多等待2秒
+	waitDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		// 配置变更通知已接收
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待配置变更通知超时")
+	}
+
+	// 验证配置已被正确更新
+	assert.Equal(t, "UpdatedDevApp", cfg.GetString("app.name"))
+	assert.Equal(t, "localhost", cfg.GetString("database.host"))
+}
+
+func TestKonfigConcurrentAccess(t *testing.T) {
+	// 创建临时配置文件
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.yaml")
+
+	// 写入初始配置
+	initialConfig := `
+app:
+  name: TestApp
+  count: 0
+database:
+  host: localhost
+  port: 5432
+`
+	err := os.WriteFile(configPath, []byte(initialConfig), 0644)
+	require.NoError(t, err)
+
+	// 创建配置实例
+	cfg, err := NewKonfig(WithFilePath(configPath))
+	require.NoError(t, err)
+
+	// 启动配置监听
+	err = cfg.WatchConfig()
+	require.NoError(t, err)
+	defer cfg.StopWatch()
+
+	// 设置更短的防抖时间
+	cfg.SetDebounceTime(50 * time.Millisecond)
+
+	// 并发访问测试
+	var wg sync.WaitGroup
+	// 添加50个协程同时读取配置
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// 读取配置
+			_ = cfg.GetString("app.name")
+			_ = cfg.GetInt("database.port")
+			_ = cfg.IsSet("app.count")
+		}()
+	}
+
+	// 同时更新配置文件
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 5; i++ {
+			updatedConfig := `
+app:
+  name: UpdatedApp
+  count: ` + string(rune('0'+i)) + `
+database:
+  host: db.example.com
+  port: 5432
+`
+			_ = os.WriteFile(configPath, []byte(updatedConfig), 0644)
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+
+	// 等待所有协程完成
+	wg.Wait()
+
+	// 验证最终配置
+	assert.Equal(t, "UpdatedApp", cfg.GetString("app.name"))
+	assert.Equal(t, "db.example.com", cfg.GetString("database.host"))
 }
