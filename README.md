@@ -1,50 +1,99 @@
 # IdeaBase
 
-## 项目简介
-IdeaBase是一个基于Golang开发的GraphQL到SQL编译中间件，能够自动将GraphQL查询转换为高效的SQL语句，简化数据库访问层开发。
+IdeaBase 是一个高性能的 GraphQL 到 SQL 编译中间件，专注于将 GraphQL 查询高效地转换为优化的 SQL 语句。
 
-## 核心特性
-- 🚀 高性能GraphQL到SQL的编译转换
-- 🔄 支持复杂的CRUD操作和表关系
-- 🛠️ 配置化虚拟表和自定义resolver
-- 💾 内置缓存机制和连接池管理
-- 🔌 模块化设计，支持独立使用或服务化部署
+## 项目特点
 
-## 数据库支持
-- ✅ PostgreSQL 9.6+ (已实现)
-  - 利用JSON聚合功能实现高效单查询
-  - 需要PostgreSQL 9.6或更高版本
-- ✅ MySQL 8.0+ (已实现)
-  - 利用CTE和JSON函数实现高效单查询
-  - 需要MySQL 8.0或更高版本
-
-## 版本兼容性说明
-本项目对数据库版本有严格要求，以充分利用现代数据库特性：
-- **PostgreSQL**: 要求9.6+版本，利用`json_agg`和`json_build_object`等函数
-- **MySQL**: 要求8.0+版本，利用CTE(WITH语句)和JSON_OBJECT等函数
-
-使用低于要求版本的数据库将导致初始化失败，并返回明确的错误信息。
-
-详细的兼容性说明请参考[数据库兼容性文档](doc/database-compatibility.md)。
+- 高效的 GraphQL 到 SQL 的转换引擎
+- 支持复杂的表关系处理（一对一、一对多、多对多）
+- 可配置的元数据管理
+- 完善的单元测试覆盖
+- 模块化设计，易于扩展
 
 ## 项目结构
+
 ```
 IdeaBase/
-├── gql/    # GraphQL解析与SQL转换核心
-├── svc/    # 服务发布与API暴露
-├── gtw/    # 多服务整合与网关
-├── std/    # 基础设施与共享组件
-└── utl/    # 通用工具集合
+├── gql/                    # GraphQL核心处理模块
+│   ├── compiler/          # GraphQL编译器
+│   ├── executor/          # SQL执行器
+│   ├── metadata/          # 元数据管理
+│   ├── renderer/          # SQL渲染器
+│   └── resolver/          # 自定义解析器
+├── svc/                    # 服务层实现
+├── gtw/                    # API网关层
+├── std/                    # 标准库和基础设施
+│   ├── konfig.go          # 配置管理
+│   ├── connect.go         # 数据库连接
+│   └── entity.go          # 基础实体定义
+├── utl/                    # 通用工具集
+│   ├── maps.go            # Map相关工具
+│   ├── strings.go         # 字符串处理
+│   └── files.go           # 文件操作
+└── cfg/                    # 配置文件目录
 ```
 
-## 快速开始
-请参考`project-description-chinese.mdc`文件获取详细的项目开发指南。
+## 核心功能
 
-## 参考项目
-本项目参考了[GraphJin](https://github.com/dosco/graphjin)的设计理念，并进行了重新实现和扩展。
+### GraphQL 编译器 (gql/compiler)
+- GraphQL 查询解析和验证
+- AST 转换
+- 查询优化
 
-## 开发理念
-- 最小增量开发
-- 完善的单元测试
-- 清晰的模块边界
-- 高性能设计
+### SQL 渲染器 (gql/renderer)
+- 支持复杂的表关系处理
+- SQL 语句优化
+- 多数据库方言支持
+
+### 元数据管理 (gql/metadata)
+- 表结构和关系配置
+- 字段映射
+- 权限控制
+
+## 技术栈
+
+- Go 1.21+
+- GraphQL Parser: github.com/vektah/gqlparser/v2
+- 配置管理: github.com/knadh/koanf
+- 工具库: github.com/duke-git/lancet/v2
+- JSON处理: github.com/json-iterator/go
+
+## 开发指南
+
+### 环境要求
+
+- Go 1.21 或更高版本
+- PostgreSQL 14+ 或 MySQL 8+
+- Docker (可选，用于本地开发)
+
+### 本地开发
+
+1. 克隆仓库
+```bash
+git clone https://github.com/your-org/ideabase.git
+cd ideabase
+```
+
+2. 安装依赖
+```bash
+go work init
+go work use ./gql ./svc ./std ./utl
+go mod download
+```
+
+3. 运行测试
+```bash
+go test ./...
+```
+
+## 贡献指南
+
+1. Fork 项目
+2. 创建特性分支
+3. 提交变更
+4. 推送到分支
+5. 创建 Pull Request
+
+## 许可证
+
+[License Name] - 详见 LICENSE 文件
