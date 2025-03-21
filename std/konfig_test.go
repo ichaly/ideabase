@@ -1,6 +1,7 @@
 package std
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,104 +13,221 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewKonfig(t *testing.T) {
-	// 创建测试配置文件
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, "config.yaml")
+func TestKonfigBasic(t *testing.T) {
+	// 创建临时配置文件
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	err := os.WriteFile(configPath, []byte("test: value"), 0644)
+	require.NoError(t, err)
 
-	// 写入测试配置
-	testConfig := `
-mode: development
-app:
-  name: test-app
-  port: "8080"
-  host: localhost
-  root: /api
-  debug: true
-  prefix: /v1
-numbers:
-  int: 42
-  float: 3.14
-  duration: 5s
-slices:
-  strings: [a, b, c]
-maps:
-  string_map:
-    key1: value1
-    key2: value2
-`
-	err := os.WriteFile(configPath, []byte(testConfig), 0644)
-	assert.NoError(t, err)
+	// 使用options模式创建配置
+	k, err := NewKonfig(WithFilePath(configPath))
+	require.NoError(t, err)
 
-	// 测试环境变量
-	os.Setenv("APP_TEST_ENV", "env-value")
-	defer os.Unsetenv("APP_TEST_ENV")
+	assert.Equal(t, "value", k.GetString("test"))
+}
 
-	// 创建 Konfig 实例
-	cfg, err := NewKonfig(WithFilePath(configPath), WithEnvPrefix("APP"))
-	assert.NoError(t, err)
-	assert.NotNil(t, cfg)
+func TestKonfigWatch(t *testing.T) {
+	// 创建临时配置文件
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	err := os.WriteFile(configPath, []byte("test: initial"), 0644)
+	require.NoError(t, err)
 
-	// 测试基本获取方法
-	assert.Equal(t, "development", cfg.GetString("mode"))
-	assert.Equal(t, "test-app", cfg.GetString("app.name"))
-	assert.Equal(t, "8080", cfg.GetString("app.port"))
-	assert.Equal(t, true, cfg.GetBool("app.debug"))
-
-	// 测试数字类型
-	assert.Equal(t, 42, cfg.GetInt("numbers.int"))
-	assert.Equal(t, 3.14, cfg.GetFloat64("numbers.float"))
-	assert.Equal(t, 5*time.Second, cfg.GetDuration("numbers.duration"))
-
-	// 测试切片
-	assert.Equal(t, []string{"a", "b", "c"}, cfg.GetStringSlice("slices.strings"))
-
-	// 测试映射
-	stringMap := cfg.GetStringMapString("maps.string_map")
-	assert.Equal(t, "value1", stringMap["key1"])
-	assert.Equal(t, "value2", stringMap["key2"])
-
-	// 测试环境变量覆盖
-	envVal := cfg.GetString("test.env")
-	if envVal == "" {
-		// 尝试其他可能的键名格式
-		envVal = cfg.GetString("test_env")
-	}
-	assert.Equal(t, "env-value", envVal)
-
-	// 测试 IsSet
-	assert.True(t, cfg.IsSet("mode"))
-	assert.False(t, cfg.IsSet("non_existent"))
-
-	// 测试 Set 和 Get
-	cfg.Set("new_key", "new_value")
-	assert.Equal(t, "new_value", cfg.GetString("new_key"))
-
-	// 测试 Unmarshal
-	type TestConfig struct {
-		Mode string `mapstructure:"mode"`
-		App  struct {
-			Name string `mapstructure:"name"`
-			Port string `mapstructure:"port"`
-		} `mapstructure:"app"`
+	// 创建通道用于同步测试
+	configChanged := make(chan struct{})
+	callback := func(k *koanf.Koanf) {
+		configChanged <- struct{}{}
 	}
 
-	var config TestConfig
-	err = cfg.Unmarshal(&config)
-	assert.NoError(t, err)
-	assert.Equal(t, "development", config.Mode)
-	assert.Equal(t, "test-app", config.App.Name)
-	assert.Equal(t, "8080", config.App.Port)
+	// 使用options模式创建配置
+	k, err := NewKonfig(
+		WithFilePath(configPath),
+		WithDebounceTime(50*time.Millisecond),
+		WithConfigChangeCallback(callback),
+	)
+	require.NoError(t, err)
 
-	// 测试 UnmarshalKey
-	var appConfig struct {
-		Name string `mapstructure:"name"`
-		Port string `mapstructure:"port"`
+	// 启动配置监听
+	err = k.WatchConfig()
+	require.NoError(t, err)
+
+	// 修改配置文件
+	err = os.WriteFile(configPath, []byte("test: updated"), 0644)
+	require.NoError(t, err)
+
+	// 等待配置变更通知
+	select {
+	case <-configChanged:
+		assert.Equal(t, "updated", k.GetString("test"))
+	case <-time.After(time.Second):
+		t.Fatal("配置变更回调未在预期时间内执行")
 	}
-	err = cfg.UnmarshalKey("app", &appConfig)
-	assert.NoError(t, err)
-	assert.Equal(t, "test-app", appConfig.Name)
-	assert.Equal(t, "8080", appConfig.Port)
+
+	k.StopWatch()
+}
+
+func TestKonfigOptions(t *testing.T) {
+	t.Run("默认值测试", func(t *testing.T) {
+		k, err := NewKonfig()
+		require.NoError(t, err)
+		assert.Equal(t, "yaml", k.options.configType)
+		assert.Equal(t, "APP", k.options.envPrefix)
+		assert.Equal(t, ".", k.options.delim)
+		assert.Equal(t, 100*time.Millisecond, k.options.debounceTime)
+		assert.Empty(t, k.options.callbacks)
+	})
+
+	t.Run("自定义选项测试", func(t *testing.T) {
+		callback1 := func(k *koanf.Koanf) {}
+		callback2 := func(k *koanf.Koanf) {}
+
+		k, err := NewKonfig(
+			WithConfigType("json"),
+			WithEnvPrefix("TEST"),
+			WithDelimiter("/"),
+			WithDebounceTime(200*time.Millisecond),
+			WithConfigChangeCallback(callback1),
+			WithConfigChangeCallback(callback2),
+			WithStrictMerge(true),
+		)
+
+		require.NoError(t, err)
+		assert.Equal(t, "json", k.options.configType)
+		assert.Equal(t, "TEST", k.options.envPrefix)
+		assert.Equal(t, "/", k.options.delim)
+		assert.Equal(t, 200*time.Millisecond, k.options.debounceTime)
+		assert.Len(t, k.options.callbacks, 2)
+		assert.True(t, k.options.strict)
+	})
+
+	t.Run("配置文件路径测试", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		// 创建测试配置文件
+		err := os.WriteFile(configPath, []byte("test: value"), 0644)
+		require.NoError(t, err)
+
+		k, err := NewKonfig(WithFilePath(configPath))
+		require.NoError(t, err)
+		assert.Equal(t, configPath, k.options.filePath)
+		assert.Equal(t, "yaml", k.options.configType)
+	})
+
+	t.Run("配置复制测试", func(t *testing.T) {
+		callback := func(k *koanf.Koanf) {}
+		original, err := NewKonfig(
+			WithDebounceTime(200*time.Millisecond),
+			WithConfigChangeCallback(callback),
+		)
+		require.NoError(t, err)
+
+		copied := original.Copy()
+		assert.Equal(t, original.options.debounceTime, copied.debounceTime)
+		assert.Equal(t, len(original.callbacks), len(copied.callbacks))
+	})
+
+	t.Run("配置变更回调测试", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		// 创建初始配置文件
+		err := os.WriteFile(configPath, []byte("test: initial"), 0644)
+		require.NoError(t, err)
+
+		callbackCalled := make(chan struct{})
+		callback := func(k *koanf.Koanf) {
+			close(callbackCalled)
+		}
+
+		k, err := NewKonfig(
+			WithFilePath(configPath),
+			WithConfigChangeCallback(callback),
+			WithDebounceTime(50*time.Millisecond),
+		)
+		require.NoError(t, err)
+
+		// 启动配置监听
+		err = k.WatchConfig()
+		require.NoError(t, err)
+
+		// 修改配置文件
+		err = os.WriteFile(configPath, []byte("test: updated"), 0644)
+		require.NoError(t, err)
+
+		// 等待回调被调用
+		select {
+		case <-callbackCalled:
+			// 回调成功执行
+		case <-time.After(time.Second):
+			t.Fatal("回调函数未在预期时间内执行")
+		}
+
+		k.StopWatch()
+	})
+
+	t.Run("防抖功能测试", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		// 创建初始配置文件
+		err := os.WriteFile(configPath, []byte("test: initial"), 0644)
+		require.NoError(t, err)
+
+		callCount := 0
+		callback := func(k *koanf.Koanf) {
+			callCount++
+		}
+
+		k, err := NewKonfig(
+			WithFilePath(configPath),
+			WithConfigChangeCallback(callback),
+			WithDebounceTime(100*time.Millisecond),
+		)
+		require.NoError(t, err)
+
+		err = k.WatchConfig()
+		require.NoError(t, err)
+
+		// 快速连续修改配置文件
+		for i := 0; i < 5; i++ {
+			err = os.WriteFile(configPath, []byte(fmt.Sprintf("test: update%d", i)), 0644)
+			require.NoError(t, err)
+			time.Sleep(20 * time.Millisecond)
+		}
+
+		// 等待防抖时间结束
+		time.Sleep(200 * time.Millisecond)
+
+		assert.Equal(t, 1, callCount, "防抖功能应该只触发一次回调")
+
+		k.StopWatch()
+	})
+
+	t.Run("环境变量测试", func(t *testing.T) {
+		os.Setenv("TEST_CONFIG_VALUE", "env_test_value")
+		defer os.Unsetenv("TEST_CONFIG_VALUE")
+
+		k, err := NewKonfig(WithEnvPrefix("TEST"))
+		require.NoError(t, err)
+
+		assert.Equal(t, "env_test_value", k.GetString("config.value"))
+	})
+
+	t.Run("配置合并测试", func(t *testing.T) {
+		k1, err := NewKonfig()
+		require.NoError(t, err)
+		k1.Set("test.key", "value1")
+
+		k2, err := NewKonfig()
+		require.NoError(t, err)
+		k2.Set("test.key", "value2")
+
+		err = k1.Merge(k2)
+		require.NoError(t, err)
+		assert.Equal(t, "value2", k1.GetString("test.key"))
+	})
 }
 
 func TestKonfigAdvancedFeatures(t *testing.T) {
@@ -292,8 +410,18 @@ database:
 	err := os.WriteFile(configPath, []byte(initialConfig), 0644)
 	require.NoError(t, err)
 
-	// 创建配置实例
-	cfg, err := NewKonfig(WithFilePath(configPath))
+	// 创建配置变更通道
+	configChanged := make(chan *koanf.Koanf, 1)
+	callback := func(k *koanf.Koanf) {
+		configChanged <- k
+	}
+
+	// 创建配置实例，使用新的 options 模式
+	cfg, err := NewKonfig(
+		WithFilePath(configPath),
+		WithDebounceTime(50*time.Millisecond),
+		WithConfigChangeCallback(callback),
+	)
 	require.NoError(t, err)
 
 	// 验证初始配置
@@ -306,19 +434,6 @@ database:
 	err = cfg.WatchConfig()
 	require.NoError(t, err)
 	defer cfg.StopWatch()
-
-	// 设置更短的防抖时间用于测试
-	cfg.SetDebounceTime(50 * time.Millisecond)
-
-	// 设置配置变更回调并等待配置变更
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	var newConfig *koanf.Koanf
-	cfg.OnConfigChange(func(config *koanf.Koanf) {
-		newConfig = config
-		wg.Done()
-	})
 
 	// 修改配置文件
 	updatedConfig := `
@@ -335,16 +450,12 @@ database:
 	err = os.WriteFile(configPath, []byte(updatedConfig), 0644)
 	require.NoError(t, err)
 
-	// 等待配置变更通知，最多等待1秒
-	waitDone := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(waitDone)
-	}()
-
+	// 等待配置变更通知，最多等待2秒
 	select {
-	case <-waitDone:
-		// 配置变更通知已接收
+	case newConfig := <-configChanged:
+		// 验证回调接收到的配置与实际配置一致
+		assert.Equal(t, "UpdatedApp", newConfig.String("app.name"))
+		assert.Equal(t, "2.0.0", newConfig.String("app.version"))
 	case <-time.After(2 * time.Second):
 		t.Fatal("等待配置变更通知超时")
 	}
@@ -354,10 +465,6 @@ database:
 	assert.Equal(t, "2.0.0", cfg.GetString("app.version"))
 	assert.Equal(t, "db.example.com", cfg.GetString("database.host"))
 	assert.Equal(t, 5432, cfg.GetInt("database.port"))
-
-	// 验证回调接收到的配置与实际配置一致
-	assert.Equal(t, "UpdatedApp", newConfig.String("app.name"))
-	assert.Equal(t, "2.0.0", newConfig.String("app.version"))
 }
 
 func TestKonfigWatchProfileConfig(t *testing.T) {
@@ -388,8 +495,18 @@ app:
 	err = os.WriteFile(devConfigPath, []byte(devConfig), 0644)
 	require.NoError(t, err)
 
-	// 创建配置实例
-	cfg, err := NewKonfig(WithFilePath(configPath))
+	// 创建配置变更通道
+	configChanged := make(chan struct{}, 1)
+	callback := func(k *koanf.Koanf) {
+		configChanged <- struct{}{}
+	}
+
+	// 创建配置实例，使用新的 options 模式
+	cfg, err := NewKonfig(
+		WithFilePath(configPath),
+		WithDebounceTime(50*time.Millisecond),
+		WithConfigChangeCallback(callback),
+	)
 	require.NoError(t, err)
 
 	// 验证初始配置（已合并dev环境）
@@ -400,17 +517,6 @@ app:
 	err = cfg.WatchConfig()
 	require.NoError(t, err)
 	defer cfg.StopWatch()
-
-	// 设置更短的防抖时间用于测试
-	cfg.SetDebounceTime(50 * time.Millisecond)
-
-	// 设置配置变更回调并等待配置变更
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	cfg.OnConfigChange(func(config *koanf.Koanf) {
-		wg.Done()
-	})
 
 	// 修改profile配置文件
 	updatedDevConfig := `
@@ -424,22 +530,14 @@ app:
 	require.NoError(t, err)
 
 	// 等待配置变更通知，最多等待2秒
-	waitDone := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(waitDone)
-	}()
-
 	select {
-	case <-waitDone:
+	case <-configChanged:
 		// 配置变更通知已接收
+		assert.Equal(t, "UpdatedDevApp", cfg.GetString("app.name"))
+		assert.Equal(t, "localhost", cfg.GetString("database.host"))
 	case <-time.After(2 * time.Second):
 		t.Fatal("等待配置变更通知超时")
 	}
-
-	// 验证配置已被正确更新
-	assert.Equal(t, "UpdatedDevApp", cfg.GetString("app.name"))
-	assert.Equal(t, "localhost", cfg.GetString("database.host"))
 }
 
 func TestKonfigConcurrentAccess(t *testing.T) {
@@ -459,17 +557,24 @@ database:
 	err := os.WriteFile(configPath, []byte(initialConfig), 0644)
 	require.NoError(t, err)
 
-	// 创建配置实例
-	cfg, err := NewKonfig(WithFilePath(configPath))
+	// 创建配置变更通道
+	configChanged := make(chan struct{}, 1)
+	callback := func(k *koanf.Koanf) {
+		configChanged <- struct{}{}
+	}
+
+	// 创建配置实例，使用新的 options 模式
+	cfg, err := NewKonfig(
+		WithFilePath(configPath),
+		WithDebounceTime(50*time.Millisecond),
+		WithConfigChangeCallback(callback),
+	)
 	require.NoError(t, err)
 
 	// 启动配置监听
 	err = cfg.WatchConfig()
 	require.NoError(t, err)
 	defer cfg.StopWatch()
-
-	// 设置更短的防抖时间
-	cfg.SetDebounceTime(50 * time.Millisecond)
 
 	// 并发访问测试
 	var wg sync.WaitGroup
@@ -509,6 +614,119 @@ database:
 	// 验证最终配置
 	assert.Equal(t, "UpdatedApp", cfg.GetString("app.name"))
 	assert.Equal(t, "db.example.com", cfg.GetString("database.host"))
+}
+
+func TestEnvVarWithWatchConfig(t *testing.T) {
+	// 创建临时目录和临时配置文件
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.yaml")
+
+	// 写入初始配置内容
+	initialConfig := `
+app:
+  name: file-name
+  version: 1.0.0
+env:
+  setting: file-setting
+`
+	err := os.WriteFile(configPath, []byte(initialConfig), 0644)
+	require.NoError(t, err)
+
+	// 设置环境变量
+	os.Setenv("APP_ENV_SETTING", "env-setting")
+	os.Setenv("APP_ENV_ONLY", "env-only-value")
+	defer func() {
+		os.Unsetenv("APP_ENV_SETTING")
+		os.Unsetenv("APP_ENV_ONLY")
+		os.Unsetenv("APP_NEW_ENV_VAR")
+	}()
+
+	// 创建配置变更通道
+	configChanged := make(chan struct{}, 1)
+	callback := func(k *koanf.Koanf) {
+		configChanged <- struct{}{}
+	}
+
+	// 创建配置实例，使用新的 options 模式
+	cfg, err := NewKonfig(
+		WithFilePath(configPath),
+		WithDebounceTime(50*time.Millisecond),
+		WithConfigChangeCallback(callback),
+	)
+	require.NoError(t, err)
+
+	// 验证初始配置（环境变量优先）
+	assert.Equal(t, "file-name", cfg.GetString("app.name"))
+	assert.Equal(t, "env-setting", cfg.GetString("env.setting")) // 环境变量覆盖文件
+	assert.Equal(t, "env-only-value", cfg.GetString("env.only")) // 仅环境变量
+
+	// 启动配置监听
+	err = cfg.WatchConfig()
+	require.NoError(t, err)
+	defer cfg.StopWatch()
+
+	// 修改配置文件
+	updatedConfig := `
+app:
+  name: new-file-name
+  version: 2.0.0
+env:
+  setting: new-file-setting
+  file_only: file-only-value
+`
+	// 确保写入生效
+	time.Sleep(50 * time.Millisecond)
+	err = os.WriteFile(configPath, []byte(updatedConfig), 0644)
+	require.NoError(t, err)
+
+	// 设置新的环境变量
+	os.Setenv("APP_NEW_ENV_VAR", "new-env-value")
+
+	// 等待配置变更通知
+	select {
+	case <-configChanged:
+		// 验证更新后的配置
+		// 1. 文件中更新的内容
+		assert.Equal(t, "new-file-name", cfg.GetString("app.name"))
+		assert.Equal(t, "2.0.0", cfg.GetString("app.version"))
+		assert.Equal(t, "file-only-value", cfg.GetString("env.file_only"))
+
+		// 2. 环境变量应该仍然覆盖文件
+		assert.Equal(t, "env-setting", cfg.GetString("env.setting"))
+
+		// 3. 仅在环境变量中的设置应该保留
+		assert.Equal(t, "env-only-value", cfg.GetString("env.only"))
+
+		// 4. 新环境变量应该被正确加载
+		assert.Equal(t, "new-env-value", cfg.GetString("new.env.var"))
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待配置变更通知超时")
+	}
+
+	// 确认修改环境变量后WatchConfig不会导致值丢失
+	os.Setenv("APP_ENV_SETTING", "updated-env-value")
+
+	// 触发一次配置修改，来确保监听器生效
+	minorUpdate := `
+app:
+  name: minor-update-name
+  version: 2.0.0
+env:
+  setting: new-file-setting
+  file_only: file-only-value
+`
+	err = os.WriteFile(configPath, []byte(minorUpdate), 0644)
+	require.NoError(t, err)
+
+	// 等待配置变更通知
+	select {
+	case <-configChanged:
+		// 验证环境变量依然正确覆盖了文件设置
+		assert.Equal(t, "minor-update-name", cfg.GetString("app.name"))
+		assert.Equal(t, "updated-env-value", cfg.GetString("env.setting"))
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待配置变更通知超时")
+	}
 }
 
 func TestKonfigEnvVarSpecifics(t *testing.T) {
@@ -782,134 +1000,4 @@ func TestEnvVarCaseHandling(t *testing.T) {
 	// 路径中的驼峰命名转换
 	// 注意：在env.go的callback中，环境变量键名会被转为小写
 	assert.Equal(t, "should-become-camelCase", cfg.GetString("camel.case.key"))
-}
-
-func TestEnvVarWithWatchConfig(t *testing.T) {
-	// 创建临时目录和临时配置文件
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, "config.yaml")
-
-	// 写入初始配置内容
-	initialConfig := `
-app:
-  name: file-name
-  version: 1.0.0
-env:
-  setting: file-setting
-`
-	err := os.WriteFile(configPath, []byte(initialConfig), 0644)
-	require.NoError(t, err)
-
-	// 设置环境变量
-	os.Setenv("APP_ENV_SETTING", "env-setting")
-	os.Setenv("APP_ENV_ONLY", "env-only-value")
-	defer func() {
-		os.Unsetenv("APP_ENV_SETTING")
-		os.Unsetenv("APP_ENV_ONLY")
-		os.Unsetenv("APP_NEW_ENV_VAR")
-	}()
-
-	// 创建配置实例
-	cfg, err := NewKonfig(WithFilePath(configPath))
-	require.NoError(t, err)
-
-	// 验证初始配置（环境变量优先）
-	assert.Equal(t, "file-name", cfg.GetString("app.name"))
-	assert.Equal(t, "env-setting", cfg.GetString("env.setting")) // 环境变量覆盖文件
-	assert.Equal(t, "env-only-value", cfg.GetString("env.only")) // 仅环境变量
-
-	// 启动配置监听
-	err = cfg.WatchConfig()
-	require.NoError(t, err)
-	defer cfg.StopWatch()
-
-	// 设置更短的防抖时间
-	cfg.SetDebounceTime(50 * time.Millisecond)
-
-	// 设置配置变更回调
-	var wg sync.WaitGroup
-	wg.Add(1)
-	cfg.OnConfigChange(func(config *koanf.Koanf) {
-		wg.Done()
-	})
-
-	// 修改配置文件
-	updatedConfig := `
-app:
-  name: new-file-name
-  version: 2.0.0
-env:
-  setting: new-file-setting
-  file_only: file-only-value
-`
-	// 确保写入生效
-	time.Sleep(50 * time.Millisecond)
-	err = os.WriteFile(configPath, []byte(updatedConfig), 0644)
-	require.NoError(t, err)
-
-	// 设置新的环境变量
-	os.Setenv("APP_NEW_ENV_VAR", "new-env-value")
-
-	// 等待配置变更通知
-	waitDone := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(waitDone)
-	}()
-
-	select {
-	case <-waitDone:
-		// 变更通知已接收
-	case <-time.After(2 * time.Second):
-		t.Fatal("等待配置变更通知超时")
-	}
-
-	// 验证更新后的配置
-	// 1. 文件中更新的内容
-	assert.Equal(t, "new-file-name", cfg.GetString("app.name"))
-	assert.Equal(t, "2.0.0", cfg.GetString("app.version"))
-	assert.Equal(t, "file-only-value", cfg.GetString("env.file_only"))
-
-	// 2. 环境变量应该仍然覆盖文件
-	assert.Equal(t, "env-setting", cfg.GetString("env.setting"))
-
-	// 3. 仅在环境变量中的设置应该保留
-	assert.Equal(t, "env-only-value", cfg.GetString("env.only"))
-
-	// 4. 新环境变量应该被正确加载
-	assert.Equal(t, "new-env-value", cfg.GetString("new.env.var"))
-
-	// 确认修改环境变量后WatchConfig不会导致值丢失
-	os.Setenv("APP_ENV_SETTING", "updated-env-value")
-
-	// 触发一次配置修改，来确保监听器生效
-	minorUpdate := `
-app:
-  name: minor-update-name
-  version: 2.0.0
-env:
-  setting: new-file-setting
-  file_only: file-only-value
-`
-	wg.Add(1)
-	err = os.WriteFile(configPath, []byte(minorUpdate), 0644)
-	require.NoError(t, err)
-
-	// 等待配置变更通知
-	waitDone = make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(waitDone)
-	}()
-
-	select {
-	case <-waitDone:
-		// 变更通知已接收
-	case <-time.After(2 * time.Second):
-		t.Fatal("等待配置变更通知超时")
-	}
-
-	// 验证环境变量依然正确覆盖了文件设置
-	assert.Equal(t, "minor-update-name", cfg.GetString("app.name"))
-	assert.Equal(t, "updated-env-value", cfg.GetString("env.setting"))
 }

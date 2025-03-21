@@ -36,11 +36,13 @@ type KonfigOption func(*konfigOptions)
 
 // konfigOptions 保存koanf的配置选项
 type konfigOptions struct {
-	configType string
-	envPrefix  string
-	filePath   string
-	delim      string
-	strict     bool
+	configType   string
+	envPrefix    string
+	filePath     string
+	delim        string
+	strict       bool
+	debounceTime time.Duration
+	callbacks    []func(*koanf.Koanf)
 }
 
 // WithFilePath 设置配置文件路径
@@ -83,13 +85,29 @@ func WithStrictMerge(strict bool) KonfigOption {
 	}
 }
 
+// WithDebounceTime 设置配置文件变更的防抖时间
+func WithDebounceTime(duration time.Duration) KonfigOption {
+	return func(options *konfigOptions) {
+		options.debounceTime = duration
+	}
+}
+
+// WithConfigChangeCallback 添加配置变更回调函数
+func WithConfigChangeCallback(callback func(*koanf.Koanf)) KonfigOption {
+	return func(options *konfigOptions) {
+		options.callbacks = append(options.callbacks, callback)
+	}
+}
+
 // NewKonfig 创建新的配置管理器，实现与原有NewKoanf相同的功能
 func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 	// 初始化选项
 	options := &konfigOptions{
-		configType: "yaml", // 默认使用yaml
-		envPrefix:  "APP",
-		delim:      ".",
+		configType:   "yaml", // 默认使用yaml
+		envPrefix:    "APP",
+		delim:        ".",
+		debounceTime: 100 * time.Millisecond, // 默认防抖时间
+		callbacks:    make([]func(*koanf.Koanf), 0),
 	}
 	// 应用自定义配置选项
 	for _, opt := range opts {
@@ -112,8 +130,8 @@ func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 	// 创建Konfig实例
 	konfig := &Konfig{
 		options:      options,
-		callbacks:    make([]func(*koanf.Koanf), 0),
-		debounceTime: 100 * time.Millisecond, // 默认防抖时间
+		callbacks:    options.callbacks,
+		debounceTime: options.debounceTime,
 	}
 	// 使用原子操作设置koanf指针
 	atomic.StorePointer(&konfig.k, unsafe.Pointer(k))
@@ -237,7 +255,7 @@ func (my *Konfig) Copy() *Konfig {
 
 	konfig := &Konfig{
 		options:      my.options,
-		callbacks:    make([]func(*koanf.Koanf), 0),
+		callbacks:    my.callbacks, // 保持回调函数
 		debounceTime: my.debounceTime,
 		strategies:   my.strategies,
 	}
@@ -487,24 +505,4 @@ func (my *Konfig) StopWatch() {
 			log.Info().Msg("已停止配置文件监听")
 		}
 	}
-}
-
-// OnConfigChange 设置配置变更回调函数
-func (my *Konfig) OnConfigChange(callback func(*koanf.Koanf)) {
-	my.mu.Lock()
-	defer my.mu.Unlock()
-	my.callbacks = append(my.callbacks, callback)
-	log.Debug().Int("totalCallbacks", len(my.callbacks)).Msg("已添加配置变更回调函数")
-}
-
-// SetDebounceTime 设置防抖时间
-func (my *Konfig) SetDebounceTime(duration time.Duration) {
-	my.mu.Lock()
-	defer my.mu.Unlock()
-	oldDuration := my.debounceTime
-	my.debounceTime = duration
-	log.Debug().
-		Dur("oldValue", oldDuration).
-		Dur("newValue", duration).
-		Msg("已设置配置监听防抖时间")
 }
