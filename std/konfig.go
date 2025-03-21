@@ -2,7 +2,6 @@ package std
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,25 +11,24 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/ichaly/ideabase/log"
+	"github.com/ichaly/ideabase/std/internal/strategy"
 	"github.com/ichaly/ideabase/utl"
-	"github.com/joho/godotenv"
 	"github.com/knadh/koanf/parsers/yaml"
-	"github.com/knadh/koanf/providers/confmap"
-	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 )
 
 // Konfig 配置管理器，包装了koanf.Koanf，并集成了配置文件监听功能
 type Konfig struct {
-	k            unsafe.Pointer       // 底层koanf实例，使用原子指针操作确保并发安全
-	options      *konfigOptions       // 配置选项
-	watcher      *fsnotify.Watcher    // 文件监视器
-	callbacks    []func(*koanf.Koanf) // 配置变更回调函数列表
-	mu           sync.RWMutex         // 互斥锁
-	watchActive  int32                // 监听状态，使用原子操作
-	stopChan     chan struct{}        // 停止信号通道
-	debounceTime time.Duration        // 防抖时间
+	k            unsafe.Pointer          // 底层koanf实例，使用原子指针操作确保并发安全
+	options      *konfigOptions          // 配置选项
+	watcher      *fsnotify.Watcher       // 文件监视器
+	callbacks    []func(*koanf.Koanf)    // 配置变更回调函数列表
+	mu           sync.RWMutex            // 互斥锁
+	watchActive  int32                   // 监听状态，使用原子操作
+	stopChan     chan struct{}           // 停止信号通道
+	debounceTime time.Duration           // 防抖时间
+	strategies   []strategy.LoadStrategy // 加载策略列表
 }
 
 // KonfigOption 定义配置选项函数类型
@@ -104,10 +102,12 @@ func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 		StrictMerge: options.strict,
 	})
 
-	// 设置基础配置
-	k.Set("mode", "dev")
-	k.Set("profiles.active", "")
-	k.Set("app.root", filepath.Dir(utl.Root()))
+	// 默认值
+	defaults := map[string]interface{}{
+		"mode":            "dev",
+		"profiles.active": "",
+		"app.root":        filepath.Dir(utl.Root()),
+	}
 
 	// 创建Konfig实例
 	konfig := &Konfig{
@@ -118,139 +118,43 @@ func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 	// 使用原子操作设置koanf指针
 	atomic.StorePointer(&konfig.k, unsafe.Pointer(k))
 
-	// 加载环境变量文件(可选)
-	if err := loadEnvFile(); err != nil {
-		return nil, fmt.Errorf("加载环境变量文件: %w", err)
+	// 创建加载策略
+	konfig.strategies = []strategy.LoadStrategy{
+		strategy.NewDefaultsLoadStrategy(defaults, options.delim),
+		strategy.NewDotEnvLoadStrategy(),
 	}
 
-	// 如果提供了配置文件路径，加载配置
+	// 如果提供了配置文件路径，添加文件加载策略
 	if options.filePath != "" {
-		configK, err := loadKonfigFromFile(options.filePath, options)
-		if err != nil {
-			return nil, err
-		}
+		konfig.strategies = append(konfig.strategies,
+			strategy.NewFileLoadStrategy(options.filePath, options.configType, options.delim),
+			strategy.NewProfileLoadStrategy(options.filePath, options.configType, options.delim),
+		)
+	}
 
-		// 合并配置到初始实例
-		for key, val := range configK.Raw() {
-			k.Set(key, val)
-		}
-	} else {
-		// 即使没有配置文件，也加载环境变量
-		envProvider := env.Provider(options.envPrefix+"_", options.delim, func(s string) string {
-			return strings.Replace(strings.ToLower(strings.TrimPrefix(s, options.envPrefix+"_")), "_", options.delim, -1)
-		})
+	// 添加环境变量加载策略（最后加载，优先级最高）
+	konfig.strategies = append(konfig.strategies,
+		strategy.NewEnvLoadStrategy(options.envPrefix, options.delim),
+	)
 
-		if err := k.Load(envProvider, nil); err != nil {
-			return nil, fmt.Errorf("加载环境变量失败: %w", err)
-		}
+	// 执行所有加载策略
+	if err := konfig.executeStrategies(); err != nil {
+		return nil, err
 	}
 
 	return konfig, nil
 }
 
-// loadEnvFile 加载环境变量文件(可选)
-func loadEnvFile() error {
-	envFile := filepath.Join(utl.Root(), ".env")
-
-	// 检查文件是否存在
-	if _, err := os.Stat(envFile); os.IsNotExist(err) {
-		// .env 文件不存在,跳过加载
-		return nil
+// executeStrategies 执行所有加载策略
+func (my *Konfig) executeStrategies() error {
+	k := my.loadKoanf()
+	for _, strategy := range my.strategies {
+		log.Debug().Str("strategy", strategy.GetName()).Msg("执行配置加载策略")
+		if err := strategy.Load(k); err != nil {
+			return fmt.Errorf("%s策略加载失败: %w", strategy.GetName(), err)
+		}
 	}
-
-	// 加载 .env 文件
-	if err := godotenv.Load(envFile); err != nil {
-		return fmt.Errorf("加载.env文件失败: %w", err)
-	}
-
 	return nil
-}
-
-// loadConfigFile 加载配置文件
-func loadConfigFile(k *koanf.Koanf, filePath string, options *konfigOptions) error {
-	// 根据文件类型选择合适的解析器
-	var parser koanf.Parser
-
-	switch options.configType {
-	case "yaml", "yml":
-		parser = yaml.Parser()
-	// 可以根据需要添加其他格式的解析器
-	default:
-		return fmt.Errorf("不支持的配置文件类型: %s", options.configType)
-	}
-
-	// 加载配置文件
-	if err := k.Load(file.Provider(filePath), parser); err != nil {
-		return fmt.Errorf("加载配置文件失败: %w", err)
-	}
-
-	// 记录日志
-	log.Info().Str("file", filePath).Msg("配置文件已加载")
-
-	return nil
-}
-
-// mergeProfiles 合并profile配置文件
-func mergeProfiles(k *koanf.Koanf, path, name string, options *konfigOptions) error {
-	// 获取激活的profiles
-	profiles := getActiveProfiles(k)
-
-	// 合并每个profile的配置
-	for _, profile := range profiles {
-		if profile == "" {
-			continue
-		}
-
-		// 构建profile配置文件路径
-		profileFilePath := filepath.Join(path, utl.JoinString(name, "-", profile, ".", options.configType))
-
-		// 检查文件是否存在
-		if _, err := os.Stat(profileFilePath); os.IsNotExist(err) {
-			// profile配置文件不存在,跳过加载
-			log.Debug().Str("profile", profile).Str("file", profileFilePath).Msg("配置文件不存在，跳过")
-			continue
-		}
-
-		// 根据文件类型选择合适的解析器
-		var parser koanf.Parser
-		switch options.configType {
-		case "yaml", "yml":
-			parser = yaml.Parser()
-		// 可以根据需要添加其他格式的解析器
-		default:
-			return fmt.Errorf("不支持的配置文件类型: %s", options.configType)
-		}
-
-		// 合并profile配置
-		if err := k.Load(file.Provider(profileFilePath), parser); err != nil {
-			return fmt.Errorf("合并profile配置文件失败: %w", err)
-		}
-
-		// 记录日志
-		log.Info().Str("profile", profile).Str("file", profileFilePath).Msg("配置文件已合并")
-	}
-
-	return nil
-}
-
-// getActiveProfiles 获取激活的profiles
-func getActiveProfiles(k *koanf.Koanf) []string {
-	var profiles []string
-
-	// 添加profiles.active中指定的profiles
-	activeProfiles := strings.Split(k.String("profiles.active"), ",")
-	for _, p := range activeProfiles {
-		if p = strings.TrimSpace(p); p != "" {
-			profiles = append(profiles, p)
-		}
-	}
-
-	// 添加mode作为profile
-	if mode := k.String("mode"); mode != "" {
-		profiles = append(profiles, mode)
-	}
-
-	return profiles
 }
 
 // loadKoanf 安全获取当前koanf实例
@@ -335,6 +239,7 @@ func (my *Konfig) Copy() *Konfig {
 		options:      my.options,
 		callbacks:    make([]func(*koanf.Koanf), 0),
 		debounceTime: my.debounceTime,
+		strategies:   my.strategies,
 	}
 	atomic.StorePointer(&konfig.k, unsafe.Pointer(newKoanf))
 
@@ -400,16 +305,9 @@ func (my *Konfig) SetDefault(path string, value interface{}) {
 
 // SetDefaults 从 map 批量加载默认值
 func (my *Konfig) SetDefaults(defaults map[string]interface{}) error {
-	// 使用 confmap.Provider 加载默认值
-	err := my.loadKoanf().Load(confmap.Provider(defaults, my.options.delim), nil)
-
-	if err != nil {
-		log.Error().Err(err).Msg("批量加载默认值失败")
-	} else {
-		log.Debug().Int("count", len(defaults)).Msg("批量加载默认值成功")
-	}
-
-	return err
+	// 添加默认值加载策略并执行
+	defaultsStrategy := strategy.NewDefaultsLoadStrategy(defaults, my.options.delim)
+	return defaultsStrategy.Load(my.loadKoanf())
 }
 
 // WatchConfig 启用配置文件变更监听
@@ -538,21 +436,30 @@ func (my *Konfig) getDebounceTime() time.Duration {
 
 // reloadConfig 重新加载配置
 func (my *Konfig) reloadConfig() {
-	// 使用抽取的方法加载配置
-	k, err := loadKonfigFromFile(my.options.filePath, my.options)
-	if err != nil {
-		log.Error().Err(err).Str("file", my.options.filePath).Msg("重新加载配置失败")
-		return
+	// 创建新的koanf实例
+	newK := koanf.NewWithConf(koanf.Conf{
+		Delim:       my.options.delim,
+		StrictMerge: my.options.strict,
+	})
+
+	// 执行所有加载策略
+	for _, strategy := range my.strategies {
+		if err := strategy.Load(newK); err != nil {
+			log.Error().Err(err).Str("strategy", strategy.GetName()).Msg("重新加载配置失败")
+			return
+		}
 	}
 
 	log.Info().Str("file", my.options.filePath).Msg("配置已重新加载")
 
-	// 原子更新配置指针
+	// 保存旧配置，用于对比变更
 	oldK := my.loadKoanf()
-	atomic.StorePointer(&my.k, unsafe.Pointer(k))
+
+	// 原子更新配置指针
+	atomic.StorePointer(&my.k, unsafe.Pointer(newK))
 
 	// 调用回调函数
-	my.notifyCallbacks(k, oldK)
+	my.notifyCallbacks(newK, oldK)
 }
 
 // notifyCallbacks 通知所有回调函数
@@ -600,38 +507,4 @@ func (my *Konfig) SetDebounceTime(duration time.Duration) {
 		Dur("oldValue", oldDuration).
 		Dur("newValue", duration).
 		Msg("已设置配置监听防抖时间")
-}
-
-// loadKonfigFromFile 从文件加载配置并处理profiles和环境变量
-func loadKonfigFromFile(filePath string, options *konfigOptions) (*koanf.Koanf, error) {
-	// 创建新的koanf实例
-	k := koanf.NewWithConf(koanf.Conf{
-		Delim:       options.delim,
-		StrictMerge: options.strict,
-	})
-
-	// 加载主配置文件
-	if err := loadConfigFile(k, filePath, options); err != nil {
-		return nil, fmt.Errorf("加载配置文件失败: %w", err)
-	}
-
-	// 获取profile路径和名称
-	path := filepath.Dir(filePath)
-	ext := filepath.Ext(filePath)
-	name := strings.TrimSuffix(filepath.Base(filePath), ext)
-
-	// 合并profile配置
-	if err := mergeProfiles(k, path, name, options); err != nil {
-		return nil, fmt.Errorf("合并环境配置失败: %w", err)
-	}
-
-	// 加载环境变量
-	envProvider := env.Provider(options.envPrefix+"_", options.delim, func(s string) string {
-		return strings.Replace(strings.ToLower(strings.TrimPrefix(s, options.envPrefix+"_")), "_", options.delim, -1)
-	})
-	if err := k.Load(envProvider, nil); err != nil {
-		return nil, fmt.Errorf("加载环境变量失败: %w", err)
-	}
-
-	return k, nil
 }
