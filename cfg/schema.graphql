@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20250324184831
+# 版本: 20250324185730
 
 # 自定义标量类型
 scalar Json
@@ -320,16 +320,10 @@ type UserGroup {
 
 # ------------------ 过滤器类型定义 ------------------
 
-# Float过滤器
-input FloatFilter {
-  is: IsInput  # Is value null (true) or not null (false)
-  eq: Float  # Equals value
-  in: [Float!]  # Is in list of values
-  hasKey: String  # Value is a JSON object with the specified key
-  hasKeyAny: String  # Value is a JSON object with any of the specified keys
-  hasKeyAll: String  # Value is a JSON object with all of the specified keys
-  le: Float  # Is less than or equal to value
-  ne: Float  # Does not equal value
+# Boolean过滤器
+input BooleanFilter {
+  eq: Boolean  # Equals value
+  in: [Boolean!]  # Is in list of values
 }
 
 # DateTime过滤器
@@ -344,36 +338,16 @@ input DateTimeFilter {
   ne: DateTime  # Does not equal value
 }
 
-# String过滤器
-input StringFilter {
+# Float过滤器
+input FloatFilter {
   is: IsInput  # Is value null (true) or not null (false)
-  eq: String  # Equals value
-  in: [String!]  # Is in list of values
+  eq: Float  # Equals value
+  in: [Float!]  # Is in list of values
   hasKey: String  # Value is a JSON object with the specified key
   hasKeyAny: String  # Value is a JSON object with any of the specified keys
   hasKeyAll: String  # Value is a JSON object with all of the specified keys
-  le: String  # Is less than or equal to value
-  ne: String  # Does not equal value
-  like: String  # Value matching pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values having 'r' in second position
-  iLike: String  # Value matching (case-insensitive) pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values not having 'r' in second position
-  regex: String  # Value matching regular pattern
-  iRegex: String  # Value matching (case-insensitive) regex pattern
-}
-
-# Boolean过滤器
-input BooleanFilter {
-  eq: Boolean  # Equals value
-  in: [Boolean!]  # Is in list of values
-}
-
-# Json过滤器
-input JsonFilter {
-  is: IsInput  # Is value null (true) or not null (false)
-  eq: Json  # Equals value
-  in: [Json!]  # Is in list of values
-  hasKey: String  # Value is a JSON object with the specified key
-  hasKeyAny: String  # Value is a JSON object with any of the specified keys
-  hasKeyAll: String  # Value is a JSON object with all of the specified keys
+  le: Float  # Is less than or equal to value
+  ne: Float  # Does not equal value
 }
 
 # ID过滤器
@@ -396,6 +370,32 @@ input IntFilter {
   hasKeyAll: String  # Value is a JSON object with all of the specified keys
   le: Int  # Is less than or equal to value
   ne: Int  # Does not equal value
+}
+
+# Json过滤器
+input JsonFilter {
+  is: IsInput  # Is value null (true) or not null (false)
+  eq: Json  # Equals value
+  in: [Json!]  # Is in list of values
+  hasKey: String  # Value is a JSON object with the specified key
+  hasKeyAny: String  # Value is a JSON object with any of the specified keys
+  hasKeyAll: String  # Value is a JSON object with all of the specified keys
+}
+
+# String过滤器
+input StringFilter {
+  is: IsInput  # Is value null (true) or not null (false)
+  eq: String  # Equals value
+  in: [String!]  # Is in list of values
+  hasKey: String  # Value is a JSON object with the specified key
+  hasKeyAny: String  # Value is a JSON object with any of the specified keys
+  hasKeyAll: String  # Value is a JSON object with all of the specified keys
+  le: String  # Is less than or equal to value
+  ne: String  # Does not equal value
+  like: String  # Value matching pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values having 'r' in second position
+  iLike: String  # Value matching (case-insensitive) pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values not having 'r' in second position
+  regex: String  # Value matching regular pattern
+  iRegex: String  # Value matching (case-insensitive) regex pattern
 }
 
 # Comment查询条件
@@ -747,7 +747,7 @@ type Query {
   userStats(filter: UserFilter, groupBy: GroupBy): UserStats!
 }
 
-# 查询和变更
+# 突变根类型
 type Mutation {
   # Comment创建
   createComment(data: CommentCreateInput!): Comment!
