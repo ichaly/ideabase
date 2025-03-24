@@ -2,9 +2,28 @@ package utl
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
+
+	"golang.org/x/exp/constraints"
 )
+
+func MapKeys[M ~map[K]V, K comparable, V any](m M) []K {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func SortKeys[M ~map[K]V, K constraints.Ordered, V any](m M) []K {
+	keys := MapKeys(m)
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i] < keys[j]
+	})
+	return keys
+}
 
 // AnyMap 是一个字符串键的泛型map
 type AnyMap[V any] map[string]V
