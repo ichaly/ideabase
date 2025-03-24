@@ -120,6 +120,6 @@ func TestIntrospection(t *testing.T) {
 		// 验证字段
 		fields, ok := typeData["fields"].([]interface{})
 		assert.True(t, ok, "结果中应包含fields")
-		assert.Len(t, fields, 4) // id, name, email, posts
+		assert.Len(t, fields, 7) // comments, createdAt, email, id, name, posts, updatedAt
 	})
 }

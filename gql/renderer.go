@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/renderer/field"
+	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/rs/zerolog/log"
 )
@@ -231,12 +231,8 @@ func (my *Renderer) renderCommon() error {
 // renderTypes 渲染所有实体类型定义
 func (my *Renderer) renderTypes() error {
 	// 遍历所有类定义，确保只使用类名作为键
-	classNames := make([]string, 0, len(my.meta.Nodes))
-	for k := range my.meta.Nodes {
-		classNames = append(classNames, k)
-	}
-	sort.Strings(classNames)
-	for _, className := range classNames {
+	keys := utl.SortKeys(my.meta.Nodes)
+	for _, className := range keys {
 		class := my.meta.Nodes[className]
 		// 确保只处理真正的类名，跳过表名索引
 		if className != class.Name {
@@ -257,12 +253,8 @@ func (my *Renderer) renderTypes() error {
 		my.writeLine("type ", className, " {")
 
 		// 添加所有字段，确保只处理真正的字段名
-		fieldNames := make([]string, 0, len(class.Fields))
-		for k := range class.Fields {
-			fieldNames = append(fieldNames, k)
-		}
-		sort.Strings(fieldNames)
-		for _, fieldName := range fieldNames {
+		fields := utl.SortKeys(class.Fields)
+		for _, fieldName := range fields {
 			field := class.Fields[fieldName]
 			// 确保只处理真正的字段名，跳过列名索引
 			if fieldName != field.Name {
@@ -368,7 +360,9 @@ func (my *Renderer) getGraphQLType(field *internal.Field) string {
 // renderInput 渲染输入类型
 func (my *Renderer) renderInput() error {
 	// 为每个实体类生成创建和更新输入类型
-	for className, class := range my.meta.Nodes {
+	keys := utl.SortKeys(my.meta.Nodes)
+	for _, className := range keys {
+		class := my.meta.Nodes[className]
 		// 确保只处理真正的类名，跳过表名索引
 		if className != class.Name {
 			continue
@@ -378,7 +372,9 @@ func (my *Renderer) renderInput() error {
 		my.writeLine("# ", className, "创建输入")
 		my.writeLine("input ", className, SUFFIX_CREATE_INPUT, " {")
 		// 添加创建时的必要字段
-		for fieldName, field := range class.Fields {
+		fields := utl.SortKeys(class.Fields)
+		for _, fieldName := range fields {
+			field := class.Fields[fieldName]
 			// 确保只处理真正的字段名，跳过列名索引
 			if fieldName != field.Name {
 				continue
@@ -386,6 +382,11 @@ func (my *Renderer) renderInput() error {
 
 			// 判断是否应该跳过中间表字段
 			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+				continue
+			}
+
+			// 跳过虚拟字段，这些通常是关系或计算字段
+			if field.Virtual {
 				continue
 			}
 
@@ -404,7 +405,8 @@ func (my *Renderer) renderInput() error {
 		my.writeLine("# ", className, "更新输入")
 		my.writeLine("input ", className, SUFFIX_UPDATE_INPUT, " {")
 		// 添加可更新字段，全部为可选
-		for fieldName, field := range class.Fields {
+		for _, fieldName := range fields {
+			field := class.Fields[fieldName]
 			// 确保只处理真正的字段名，跳过列名索引
 			if fieldName != field.Name {
 				continue
@@ -422,23 +424,27 @@ func (my *Renderer) renderInput() error {
 				continue
 			}
 
+			// 跳过虚拟字段，这些通常是关系或计算字段
+			if field.Virtual {
+				continue
+			}
+
 			typeName := my.getGraphQLType(field)
-			// 更新时所有字段都是可选的
 			my.writeField(fieldName, typeName)
 		}
+
+		// 添加关系操作字段
+		my.writeLine("  # 关系操作")
+		my.writeLine("  relation: RelationInput")
+
 		my.writeLine("}")
 		my.writeLine("")
 	}
 
-	// 添加关系输入类型
+	// 渲染关系操作输入类型
 	my.writeLine("# ", DESC_RELATION)
-	my.writeLine("input ConnectInput {")
-	my.writeField("id", SCALAR_ID, field.NonNull())
-	my.writeLine("}")
-	my.writeLine("")
-
-	my.writeLine("# ", DESC_RELATION_OP)
 	my.writeLine("input RelationInput {")
+	my.writeField("id", SCALAR_ID, field.NonNull())
 	my.writeField("connect", SCALAR_ID, field.ListNonNull())
 	my.writeField("disconnect", SCALAR_ID, field.ListNonNull())
 	my.writeLine("}")
@@ -452,13 +458,24 @@ func (my *Renderer) renderFilter() error {
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_FILTER, " ", SEPARATOR_LINE, "\n")
 
 	// 定义过滤器映射表，每种类型支持的操作
-	for scalarType, operators := range symbols {
+	keys := utl.SortKeys(symbols)
+	for _, scalarType := range keys {
+		operators := symbols[scalarType]
 		filterName := scalarType + SUFFIX_FILTER
 		my.writeLine("# ", scalarType, "过滤器")
 		my.writeLine("input ", filterName, " {")
 
+		// 使用map防止操作符重复
+		renderedOps := make(map[string]bool)
+
 		// 渲染该类型支持的所有操作符
 		for _, op := range operators {
+			// 跳过已经渲染过的操作符
+			if renderedOps[op.Name] {
+				continue
+			}
+			renderedOps[op.Name] = true
+
 			if op.Name == HAS_KEY || op.Name == HAS_KEY_ANY || op.Name == HAS_KEY_ALL {
 				my.writeField(op.Name, SCALAR_STRING, field.WithComment(op.Desc))
 			} else if op.Name == IN || op.Name == NI {
@@ -479,7 +496,9 @@ func (my *Renderer) renderFilter() error {
 // renderEntity 渲染实体过滤器
 func (my *Renderer) renderEntity() error {
 	// 为每个实体类生成过滤器
-	for className, class := range my.meta.Nodes {
+	keys := utl.SortKeys(my.meta.Nodes)
+	for _, className := range keys {
+		class := my.meta.Nodes[className]
 		// 确保只处理真正的类名，跳过表名索引
 		if className != class.Name {
 			continue
@@ -489,8 +508,10 @@ func (my *Renderer) renderEntity() error {
 		my.writeLine("# ", className, "查询条件")
 		my.writeLine("input ", className, SUFFIX_FILTER, " {")
 
-		// 添加字段过滤条件
-		for fieldName, field := range class.Fields {
+		// 添加常规字段过滤条件
+		fields := utl.SortKeys(class.Fields)
+		for _, fieldName := range fields {
+			field := class.Fields[fieldName]
 			// 确保只处理真正的字段名，跳过列名索引
 			if fieldName != field.Name {
 				continue
@@ -501,15 +522,20 @@ func (my *Renderer) renderEntity() error {
 				continue
 			}
 
+			// 跳过虚拟关系字段
+			if field.Virtual {
+				continue
+			}
+
 			// 获取字段类型
 			fieldType := my.getGraphQLType(field)
-			my.writeField(fieldName, fieldType+"Filter")
+			my.writeLine("  ", fieldName, ": ", fieldType, "Filter")
 		}
 
 		// 添加布尔逻辑操作符
-		my.writeField(AND, className+SUFFIX_FILTER, field.ListNonNull())
-		my.writeField(OR, className+SUFFIX_FILTER, field.ListNonNull())
-		my.writeField(NOT, className+SUFFIX_FILTER)
+		my.writeLine("  and: [", className, SUFFIX_FILTER, "!]")
+		my.writeLine("  or: [", className, SUFFIX_FILTER, "!]")
+		my.writeLine("  not: ", className, SUFFIX_FILTER)
 
 		my.writeLine("}")
 		my.writeLine("")
@@ -521,7 +547,9 @@ func (my *Renderer) renderEntity() error {
 // renderSort 渲染排序类型
 func (my *Renderer) renderSort() error {
 	// 为每个实体类生成排序类型
-	for className, class := range my.meta.Nodes {
+	keys := utl.SortKeys(my.meta.Nodes)
+	for _, className := range keys {
+		class := my.meta.Nodes[className]
 		// 确保只处理真正的类名，跳过表名索引
 		if className != class.Name {
 			continue
@@ -532,7 +560,9 @@ func (my *Renderer) renderSort() error {
 		my.writeLine("input ", className, SUFFIX_SORT, " {")
 
 		// 添加可排序字段
-		for fieldName, field := range class.Fields {
+		fields := utl.SortKeys(class.Fields)
+		for _, fieldName := range fields {
+			field := class.Fields[fieldName]
 			// 确保只处理真正的字段名，跳过列名索引
 			if fieldName != field.Name {
 				continue
@@ -561,7 +591,9 @@ func (my *Renderer) renderQuery() error {
 	my.writeLine("type Query {")
 
 	// 为每个实体类生成查询字段
-	for className, class := range my.meta.Nodes {
+	keys := utl.SortKeys(my.meta.Nodes)
+	for _, className := range keys {
+		class := my.meta.Nodes[className]
 		// 确保只处理真正的类名，跳过表名索引
 		if className != class.Name {
 			continue
@@ -612,43 +644,39 @@ func (my *Renderer) renderQuery() error {
 
 // renderMutation 渲染变更根类型
 func (my *Renderer) renderMutation() error {
-	my.writeLine("# 变更根类型")
+	my.writeLine("# 突变根类型")
 	my.writeLine("type Mutation {")
 
-	// 为每个实体类生成变更字段
-	for className, class := range my.meta.Nodes {
-		// 确保只处理真正的类名，跳过表名索引
+	// 按排序顺序渲染每种类型的变更操作
+	keys := utl.SortKeys(my.meta.Nodes)
+	for _, className := range keys {
+		class := my.meta.Nodes[className]
+		// 跳过表名别名
 		if className != class.Name {
 			continue
 		}
+		// 跳过中间表类（除非配置了显示中间表）
+		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+			continue
+		}
 
-		// 创建操作
-		my.writeLine("  # ", className, "创建")
+		my.writeLine("  # ", class.Name, "创建")
+		// my.writeLine("  create", class.Name, "(data: ", class.Name, SUFFIX_CREATE_INPUT, "!): ", class.Name, "!")
 		my.writeField("create"+className, className, field.NonNull(), field.WithArgs([]field.Argument{
 			{Name: "data", Type: className + SUFFIX_CREATE_INPUT + "!"},
 		}...))
-
-		// 更新操作
 		my.writeLine()
-		my.writeLine("  # ", className, "更新")
-		my.writeField("update"+className, className, field.NonNull(), field.WithArgs([]field.Argument{
-			{Name: "id", Type: SCALAR_ID + "!"},
-			{Name: "data", Type: className + SUFFIX_UPDATE_INPUT + "!"},
-		}...))
 
-		// 删除操作
+		my.writeLine("  # ", class.Name, "更新")
+		my.writeLine("  update", class.Name, "(id: ID!, data: ", class.Name, "UpdateInput!): ", class.Name, "!")
 		my.writeLine()
-		my.writeLine("  # ", className, "删除")
-		my.writeField("delete"+className, SCALAR_BOOLEAN, field.NonNull(), field.WithArgs([]field.Argument{
-			{Name: "id", Type: SCALAR_ID + "!"},
-		}...))
 
-		// 批量删除操作
+		my.writeLine("  # ", class.Name, "删除")
+		my.writeLine("  delete", class.Name, "(id: ID!): Boolean!")
 		my.writeLine()
-		my.writeLine("  # ", className, "批量删除")
-		my.writeField("delete"+className, SCALAR_INT, field.NonNull(), field.WithArgs([]field.Argument{
-			{Name: "filter", Type: className + SUFFIX_FILTER + "!"},
-		}...))
+
+		my.writeLine("  # ", class.Name, "批量删除")
+		my.writeLine("  batchDelete", class.Name, "(filter: ", class.Name, SUFFIX_FILTER, "!): Int!")
 	}
 
 	my.writeLine("}")
@@ -690,9 +718,10 @@ func (my *Renderer) renderStats() error {
 	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
 	my.writeLine()
-
+	keys := utl.SortKeys(my.meta.Nodes)
 	// 为每个实体类生成统计类型
-	for className, class := range my.meta.Nodes {
+	for _, className := range keys {
+		class := my.meta.Nodes[className]
 		// 确保只处理真正的类名，跳过表名索引
 		if className != class.Name {
 			continue
@@ -704,7 +733,9 @@ func (my *Renderer) renderStats() error {
 		my.writeField("count", SCALAR_INT, field.NonNull())
 
 		// 添加统计字段
-		for fieldName, field := range class.Fields {
+		fields := utl.SortKeys(class.Fields)
+		for _, fieldName := range fields {
+			field := class.Fields[fieldName]
 			// 确保只处理真正的字段名，跳过列名索引
 			if fieldName != field.Name {
 				continue
@@ -752,9 +783,10 @@ func (my *Renderer) renderStats() error {
 // renderPaging 渲染分页类型
 func (my *Renderer) renderPaging() error {
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_CONNECTION, " ", SEPARATOR_LINE, "\n")
-
+	keys := utl.SortKeys(my.meta.Nodes)
 	// 为每个实体类生成分页类型
-	for className, class := range my.meta.Nodes {
+	for _, className := range keys {
+		class := my.meta.Nodes[className]
 		// 确保只处理真正的类名，跳过表名索引
 		if className != class.Name {
 			continue
@@ -768,15 +800,6 @@ func (my *Renderer) renderPaging() error {
 		my.writeField("total", SCALAR_INT, field.NonNull())
 		my.writeLine("}")
 		my.writeLine("")
-
-		// 生成对应的分组类型
-		my.writeLine("# ", className, "分组结果")
-		my.writeLine("type ", className, SUFFIX_GROUP, " {")
-		my.writeField("key", SCALAR_JSON, field.NonNull(), field.WithComment(COMMENT_GROUP_KEY))
-		my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
-		my.writeLine("  # 可以包含其他聚合字段")
-		my.writeLine("}")
-		my.writeLine()
 	}
 
 	return nil
