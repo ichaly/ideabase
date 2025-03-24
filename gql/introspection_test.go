@@ -14,7 +14,7 @@ import (
 
 func TestGqlParserSchema(t *testing.T) {
 	// 从cfg/schema.graphql文件中读取数据
-	data, err := os.ReadFile(filepath.Join(utl.Root(), "cfg/schema.graphql"))
+	data, err := os.ReadFile(filepath.Join(utl.Root(), "cfg/schema_example.graphql"))
 	assert.NoError(t, err)
 
 	schema, err := gqlparser.LoadSchema(&ast.Source{
