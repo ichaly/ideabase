@@ -206,13 +206,13 @@ var operators = []*internal.Symbol{
 
 // 构建操作符和内置标量的关系
 var symbols = map[string][]*internal.Symbol{
-	SCALAR_ID:        operators[1:7],                                                  //[eq,in,gt,ge,lt,le]
-	SCALAR_INT:       operators[:8],                                                   //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_FLOAT:     operators[:8],                                                   //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_DATE_TIME: operators[:8],                                                   //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_STRING:    operators,                                                       //[is,eq,in,gt,ge,lt,le,ne,like,iLike,regex,iRegex]
-	SCALAR_BOOLEAN:   operators[1:3],                                                  //[is,eq]
-	SCALAR_JSON:      append(append(operators[1:3], operators[0]), operators[12:]...), //[is,eq,in,hasKey,hasKeyAny,hasKeyAll]
+	SCALAR_ID:        operators[1:7],                           //[eq,in,gt,ge,lt,le]
+	SCALAR_INT:       operators[:8],                            //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_FLOAT:     operators[:8],                            //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_DATE_TIME: operators[:8],                            //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_STRING:    operators,                                //[is,eq,in,gt,ge,lt,le,ne,like,iLike,regex,iRegex,hasKey,hasKeyAny,hasKeyAll]
+	SCALAR_BOOLEAN:   operators[1:3],                           //[eq,in]
+	SCALAR_JSON:      append(operators[:3], operators[12:]...), //[eq,in,is,hasKey,hasKeyAny,hasKeyAll]
 }
 
 // 运算符按照名字索引字典
