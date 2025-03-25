@@ -40,7 +40,13 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 			"POSTGRES_USER":     "test",
 			"POSTGRES_PASSWORD": "test",
 		},
-		WaitingFor: wait.ForLog("database system is ready to accept connections"),
+		// 使用等待日志和端口可用策略，比固定时间更可靠
+		WaitingFor: wait.ForAll(
+			// 等待日志
+			wait.ForLog("database system is ready to accept connections"),
+			// 等待端口可用
+			wait.ForListeningPort("5432/tcp"),
+		).WithDeadline(30 * time.Second),
 	}
 
 	// 启动容器
@@ -55,9 +61,6 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 	require.NoError(t, err, "获取容器主机失败")
 	port, err := container.MappedPort(ctx, "5432")
 	require.NoError(t, err, "获取容器端口失败")
-
-	// 等待数据库就绪
-	time.Sleep(2 * time.Second)
 
 	// 构建连接字符串
 	dsn := fmt.Sprintf("host=%s port=%s user=test password=test dbname=test sslmode=disable", host, port.Port())
