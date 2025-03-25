@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20250324185730
+# 版本: 20250325231707
 
 # 自定义标量类型
 scalar Json
@@ -78,7 +78,7 @@ type Organization {
 
 # 文章表
 type Post {
-  # 关联的Comment列表
+  # 关联的Comment记录列表
   comments: [Comment]!
   # 内容
   content: String
@@ -123,7 +123,7 @@ type Tag {
 
 # 用户表
 type User {
-  # 关联的Comment列表
+  # 关联的Comment记录列表
   comments: [Comment]!
   createdAt: DateTime!
   # 邮箱
@@ -131,7 +131,7 @@ type User {
   id: ID!
   # 用户名
   name: String!
-  # 关联的Post列表
+  # 关联的Post记录列表
   posts: [Post]!
   updatedAt: DateTime
 }
