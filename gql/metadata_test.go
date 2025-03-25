@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/joho/godotenv"
@@ -870,6 +871,108 @@ func TestNewMetadataFeatures(t *testing.T) {
 			t.Logf("tags字段关系类型: %v", tagsField.Relation)
 		} else {
 			t.Skip("缺少tags字段，跳过后续检查")
+		}
+	})
+}
+
+// TestMetadataIndexPointers 验证元数据索引指针的一致性
+func TestMetadataIndexPointers(t *testing.T) {
+	// 初始化测试数据库
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+
+	// 创建配置
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", utl.Root())
+	k.Set("schema.schema", "public")
+	k.Set("schema.enable-camel-case", true)
+
+	// 创建元数据
+	meta, err := NewMetadata(k, db)
+	require.NoError(t, err, "创建元数据加载器失败")
+	require.NotEmpty(t, meta.Nodes, "元数据不应为空")
+
+	// 1. 验证类名索引和表名索引指向同一个对象
+	t.Run("验证类名和表名索引指向同一实例", func(t *testing.T) {
+		// 遍历所有类
+		for className, classPtr := range meta.Nodes {
+			// 跳过不是类名的键
+			if className != classPtr.Name {
+				continue
+			}
+
+			// 获取对应的表名
+			tableName := classPtr.Table
+			assert.NotEmpty(t, tableName, "表名不应为空")
+
+			// 通过表名获取Class指针
+			tablePtr, exists := meta.Nodes[tableName]
+			assert.True(t, exists, "应该能通过表名 %s 找到类", tableName)
+
+			if exists {
+				// 关键断言：确保类名和表名索引指向同一个指针
+				assert.Same(t, classPtr, tablePtr,
+					"类名 %s 和表名 %s 应该指向同一个Class实例",
+					className, tableName)
+
+				// 额外验证：确保两个指针的内容一致
+				assert.Equal(t, classPtr, tablePtr,
+					"类名 %s 和表名 %s 指向的Class实例内容应该一致",
+					className, tableName)
+			} else {
+				log.Error().Msgf("没找到类 %s 对应的表名 %s", className, tableName)
+			}
+		}
+	})
+
+	// 2. 验证字段名索引和列名索引指向同一个对象
+	t.Run("验证字段名和列名索引指向同一实例", func(t *testing.T) {
+		// 遍历所有类
+		for className, classPtr := range meta.Nodes {
+			// 跳过不是类名的键
+			if className != classPtr.Name {
+				continue
+			}
+
+			// 遍历该类的所有字段
+			for fieldName, fieldPtr := range classPtr.Fields {
+				// 跳过不是字段名的键
+				if fieldName != fieldPtr.Name {
+					continue
+				}
+
+				// 获取对应的列名
+				columnName := fieldPtr.Column
+
+				// 只检查有实际列名的字段（跳过虚拟字段或关系字段）
+				if columnName == "" {
+					log.Error().Msgf("类 %s 中字段 %s 没有对应的列名，可能是虚拟字段或关系字段",
+						className, fieldName)
+					continue
+				}
+
+				// 通过列名获取Field指针
+				columnPtr, exists := classPtr.Fields[columnName]
+				assert.True(t, exists,
+					"应该能在类 %s 中通过列名 %s 找到字段",
+					className, columnName)
+
+				if exists {
+					// 关键断言：确保字段名和列名索引指向同一个指针
+					assert.Same(t, fieldPtr, columnPtr,
+						"类 %s 中字段名 %s 和列名 %s 应该指向同一个Field实例",
+						className, fieldName, columnName)
+
+					// 额外验证：确保两个指针的内容一致
+					assert.Equal(t, fieldPtr, columnPtr,
+						"类 %s 中字段名 %s 和列名 %s 指向的Field实例内容应该一致",
+						className, fieldName, columnName)
+				} else {
+					log.Error().Msgf("类 %s 中没有找到列名 %s 对应的字段名 %s", className, columnName, fieldName)
+				}
+			}
 		}
 	})
 }
