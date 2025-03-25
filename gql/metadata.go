@@ -800,20 +800,34 @@ func (my *Metadata) ColumnName(className, fieldName string, virtual bool) (strin
 
 // processRelations 处理关系图并创建关系字段
 func (my *Metadata) processRelations() {
-	log.Debug().Msg("开始处理关系和创建关系字段")
+	log.Debug().Msg("处理所有关系信息")
 
-	// 用于收集反向关系字段的映射
-	reverseFields := make(map[string]map[string]*internal.Field)
+	// 第一阶段：处理所有关系图，不创建任何字段
+	// 收集所有潜在的关系字段信息
+	type RelationFieldInfo struct {
+		SourceClass  string
+		TargetClass  string
+		FieldName    string
+		IsReverse    bool
+		IsList       bool
+		Nullable     bool
+		Description  string
+		IsThrough    bool
+		RelationType internal.RelationType
+	}
 
-	// 遍历所有类和字段，同时处理关系图和创建关系字段
+	// 存储所有需要创建的关系字段
+	fieldsToCreate := make([]RelationFieldInfo, 0)
+
+	// 用于避免重复创建反向关系字段的映射
+	reverseRelationKeys := make(map[string]bool)
+
+	// 第一阶段：收集所有关系字段信息
 	for className, class := range my.Nodes {
 		// 跳过表名索引，只处理类名索引
 		if className != class.Name {
 			continue
 		}
-
-		// 在主循环中初始化反向字段映射
-		reverseFields[className] = make(map[string]*internal.Field)
 
 		for fieldName, field := range class.Fields {
 			// 跳过非主字段或没有关系的字段
@@ -821,9 +835,7 @@ func (my *Metadata) processRelations() {
 				continue
 			}
 
-			// 第一部分：构建关系图
-
-			// 确保关系的源类和字段已设置
+			// 获取关系信息
 			relation := field.Relation
 			if relation.SourceClass == "" {
 				relation.SourceClass = class.Name
@@ -875,23 +887,22 @@ func (my *Metadata) processRelations() {
 			// 链接反向关系
 			relation.Reverse = targetField.Relation
 
-			// 第二部分：创建关系字段
-
-			// 根据关系类型创建关系字段
+			// 根据关系类型收集需要创建的字段信息
 			switch relation.Type {
 			case internal.MANY_TO_MANY:
-				// 创建多对多关系字段
+				// 添加多对多关系字段信息
 				relName := my.uniqueFieldName(class,
 					strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 
-				class.Fields[relName] = &internal.Field{
-					Type:        targetClassName,
-					Name:        relName,
-					Virtual:     true,
-					IsList:      true,
-					Nullable:    false,
-					Description: "多对多关联的" + targetClassName + "列表",
-				}
+				fieldsToCreate = append(fieldsToCreate, RelationFieldInfo{
+					SourceClass:  class.Name,
+					TargetClass:  targetClassName,
+					FieldName:    relName,
+					IsList:       true,
+					Nullable:     false,
+					Description:  "多对多关联的" + targetClassName + "列表",
+					RelationType: internal.MANY_TO_MANY,
+				})
 
 				// 处理中间表
 				if relation.Through != nil {
@@ -926,113 +937,131 @@ func (my *Metadata) processRelations() {
 					throughClass := my.Nodes[throughTable]
 
 					if throughClass != nil {
-						// 创建中间表关系字段
+						// 添加中间表关系字段信息
 						throughFieldName := my.uniqueFieldName(class,
 							strcase.ToLowerCamel(inflection.Plural(throughClass.Name)))
 
-						class.Fields[throughFieldName] = &internal.Field{
-							Type:        throughClass.Name,
-							Name:        throughFieldName,
-							Virtual:     true,
-							IsList:      true,
-							Nullable:    false,
-							Description: "关联的" + throughClass.Name + "记录列表",
-							IsThrough:   true, // 标记为中间表字段，方便渲染时筛选
-						}
+						fieldsToCreate = append(fieldsToCreate, RelationFieldInfo{
+							SourceClass:  class.Name,
+							TargetClass:  throughClass.Name,
+							FieldName:    throughFieldName,
+							IsList:       true,
+							Nullable:     false,
+							Description:  "关联的" + throughClass.Name + "记录列表",
+							IsThrough:    true,
+							RelationType: internal.MANY_TO_MANY,
+						})
 					}
 				}
 
 			case internal.ONE_TO_MANY:
-				// 创建一对多关系字段
+				// 添加一对多关系字段信息
 				relName := my.uniqueFieldName(class,
 					strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 
-				class.Fields[relName] = &internal.Field{
-					Type:        targetClassName,
-					Name:        relName,
-					Virtual:     true,
-					IsList:      true,
-					Nullable:    false,
-					Description: "关联的" + targetClassName + "列表",
-				}
+				fieldsToCreate = append(fieldsToCreate, RelationFieldInfo{
+					SourceClass:  class.Name,
+					TargetClass:  targetClassName,
+					FieldName:    relName,
+					IsList:       true,
+					Nullable:     false,
+					Description:  "关联的" + targetClassName + "记录列表",
+					RelationType: internal.ONE_TO_MANY,
+				})
 
 			case internal.MANY_TO_ONE:
-				// 创建多对一关系字段
+				// 添加多对一关系字段信息
 				relName := my.uniqueFieldName(class,
 					strcase.ToLowerCamel(targetClassName))
 
-				class.Fields[relName] = &internal.Field{
-					Type:        targetClassName,
-					Name:        relName,
-					Virtual:     true,
-					IsList:      false,
-					Nullable:    field.Nullable,
-					Description: "关联的" + targetClassName,
-				}
+				fieldsToCreate = append(fieldsToCreate, RelationFieldInfo{
+					SourceClass:  class.Name,
+					TargetClass:  targetClassName,
+					FieldName:    relName,
+					IsList:       false,
+					Nullable:     field.Nullable,
+					Description:  "关联的" + targetClassName,
+					RelationType: internal.MANY_TO_ONE,
+				})
 
-				// 检查是否需要创建反向关系字段
-				reverseExists := false
-				for _, tf := range targetClass.Fields {
-					if tf.IsList && tf.Type == className && tf.Virtual {
-						reverseExists = true
-						break
-					}
-				}
-
-				if !reverseExists {
-					// 确保目标类的反向字段映射已初始化
-					if reverseFields[targetClassName] == nil {
-						reverseFields[targetClassName] = make(map[string]*internal.Field)
-					}
-
-					// 创建反向关系字段
+				// 收集反向关系字段信息（一对多）
+				// 创建唯一的键来防止重复
+				reverseKey := targetClassName + ":" + class.Name
+				if !reverseRelationKeys[reverseKey] {
 					reverseName := my.uniqueFieldName(targetClass,
 						strcase.ToLowerCamel(inflection.Plural(className)))
 
-					reverseFields[targetClassName][reverseName] = &internal.Field{
-						Type:        className,
-						Name:        reverseName,
-						Virtual:     true,
-						IsList:      true,
-						Nullable:    false,
-						Description: "关联的" + className + "列表",
-					}
+					fieldsToCreate = append(fieldsToCreate, RelationFieldInfo{
+						SourceClass:  targetClassName,
+						TargetClass:  class.Name,
+						FieldName:    reverseName,
+						IsReverse:    true,
+						IsList:       true,
+						Nullable:     false,
+						Description:  "关联的" + className + "记录列表",
+						RelationType: internal.ONE_TO_MANY,
+					})
+
+					reverseRelationKeys[reverseKey] = true
 				}
 
 			case internal.RECURSIVE:
 				// 处理递归关系
 				if strings.HasSuffix(fieldName, "Id") || strings.HasSuffix(fieldName, "ID") {
-					// 创建父级关系字段
+					// 添加父级关系字段信息
 					parentName := my.uniqueFieldName(class, "parent")
-					class.Fields[parentName] = &internal.Field{
-						Type:        className,
-						Name:        parentName,
-						Virtual:     true,
-						IsList:      false,
-						Nullable:    true,
-						Description: "父" + className + "对象",
-					}
+					fieldsToCreate = append(fieldsToCreate, RelationFieldInfo{
+						SourceClass:  class.Name,
+						TargetClass:  className,
+						FieldName:    parentName,
+						IsList:       false,
+						Nullable:     true,
+						Description:  "父" + className + "对象",
+						RelationType: internal.RECURSIVE,
+					})
 
-					// 创建子级关系字段
+					// 添加子级关系字段信息
 					childrenName := my.uniqueFieldName(targetClass, "children")
-					targetClass.Fields[childrenName] = &internal.Field{
-						Type:        className,
-						Name:        childrenName,
-						Virtual:     true,
-						IsList:      true,
-						Nullable:    false,
-						Description: "子" + className + "列表",
-					}
+					fieldsToCreate = append(fieldsToCreate, RelationFieldInfo{
+						SourceClass:  className,
+						TargetClass:  className,
+						FieldName:    childrenName,
+						IsList:       true,
+						Nullable:     false,
+						Description:  "子" + className + "列表",
+						RelationType: internal.RECURSIVE,
+					})
 				}
 			}
 		}
 	}
 
-	// 添加收集的反向关系字段
-	for className, fields := range reverseFields {
-		if class := my.Nodes[className]; class != nil {
-			for fieldName, field := range fields {
-				class.Fields[fieldName] = field
+	// 第二阶段：创建所有关系字段
+	for _, info := range fieldsToCreate {
+		sourceClass := my.Nodes[info.SourceClass]
+		if sourceClass == nil {
+			continue
+		}
+
+		// 检查字段是否已存在
+		exists := false
+		for _, existingField := range sourceClass.Fields {
+			if existingField.Name == info.FieldName {
+				exists = true
+				break
+			}
+		}
+
+		// 如果字段不存在，则创建
+		if !exists {
+			sourceClass.Fields[info.FieldName] = &internal.Field{
+				Type:        info.TargetClass,
+				Name:        info.FieldName,
+				Virtual:     true,
+				IsList:      info.IsList,
+				Nullable:    info.Nullable,
+				Description: info.Description,
+				IsThrough:   info.IsThrough,
 			}
 		}
 	}
