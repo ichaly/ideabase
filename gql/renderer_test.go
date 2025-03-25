@@ -238,7 +238,7 @@ func TestRenderer_Generate(t *testing.T) {
 
 	// 验证Post类型是否有comments字段
 	assert.Contains(t, schema, "type Post {")
-	assert.Contains(t, schema, "# 关联的Comment记录ß列表")
+	assert.Contains(t, schema, "# 关联的Comment记录列表")
 
 	// 验证User类型是否有posts字段
 	assert.Contains(t, schema, "type User {")
