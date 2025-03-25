@@ -235,6 +235,14 @@ func TestRenderer_Generate(t *testing.T) {
 		t.Logf("验证生成的schema中包含%s类型", className)
 		assert.Contains(t, schema, "type "+className+" {")
 	}
+
+	// 验证Post类型是否有comments字段
+	assert.Contains(t, schema, "type Post {")
+	assert.Contains(t, schema, "# 关联的Comment列表")
+
+	// 验证User类型是否有posts字段
+	assert.Contains(t, schema, "type User {")
+	assert.Contains(t, schema, "# 关联的Post列表")
 }
 
 // 使用模拟数据测试渲染器
