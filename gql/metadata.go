@@ -984,17 +984,17 @@ func (my *Metadata) processRelations() {
 
 	// 第二阶段：创建所有关系字段
 	for _, info := range fieldsToCreate {
-		if sourceClass := my.Nodes[info.SourceClass]; sourceClass != nil {
+		if class := my.Nodes[info.SourceClass]; class != nil {
 			// 如果字段不存在，则创建
-			if _, has := sourceClass.Fields[info.FieldName]; !has {
-				sourceClass.Fields[info.FieldName] = &internal.Field{
+			if _, has := class.Fields[info.FieldName]; !has {
+				class.Fields[info.FieldName] = &internal.Field{
 					Type:        info.TargetClass,
 					Name:        info.FieldName,
 					Virtual:     true,
 					IsList:      info.IsList,
 					Nullable:    info.Nullable,
-					Description: info.Description,
 					IsThrough:   info.IsThrough,
+					Description: info.Description,
 				}
 			}
 		}
