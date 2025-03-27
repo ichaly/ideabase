@@ -22,11 +22,11 @@ else
   NC=''
 fi
 
-echo -e "${YELLOW}IdeaBase 依赖安装工具${NC}"
+echo "${YELLOW}IdeaBase 依赖安装工具${NC}"
 
 # 确保在项目根目录执行
 if [ ! -f "go.work" ]; then
-    echo -e "${RED}错误: 未找到go.work文件，请确保在项目根目录执行此脚本!${NC}"
+    echo "${RED}错误: 未找到go.work文件，请确保在项目根目录执行此脚本!${NC}"
     exit 1
 fi
 
@@ -34,11 +34,11 @@ fi
 MODULES=$(awk '/^use \(/{flag=1;next}/^\)/{flag=0}flag{gsub(/^[ \t]+/,"",$0);print $0}' go.work)
 
 # 清理.sum文件
-echo -e "${YELLOW}清理.sum文件...${NC}"
+echo "${YELLOW}清理.sum文件...${NC}"
 
 # 删除go.work.sum文件（如果存在）
 if [ -f "go.work.sum" ]; then
-    echo -e "${BLUE}删除: go.work.sum${NC}"
+    echo "${BLUE}删除: go.work.sum${NC}"
     rm go.work.sum
 fi
 
@@ -46,37 +46,37 @@ fi
 for MODULE in $MODULES; do
     if [ -d "$MODULE" ] && [ -f "${MODULE}/go.mod" ]; then
         if [ -f "${MODULE}/go.sum" ]; then
-            echo -e "${BLUE}删除: ${MODULE}/go.sum${NC}"
+            echo "${BLUE}删除: ${MODULE}/go.sum${NC}"
             rm "${MODULE}/go.sum"
         fi
     fi
 done
-echo -e "${GREEN}.sum文件清理完成!${NC}"
+echo "${GREEN}.sum文件清理完成!${NC}"
 
 # 执行go work sync
-echo -e "${YELLOW}执行: go work sync${NC}"
+echo "${YELLOW}执行: go work sync${NC}"
 go work sync
 if [ $? -ne 0 ]; then
-    echo -e "${RED}go work sync 执行失败!${NC}"
+    echo "${RED}go work sync 执行失败!${NC}"
     exit 1
 fi
-echo -e "${GREEN}go work sync 执行成功!${NC}"
+echo "${GREEN}go work sync 执行成功!${NC}"
 
 # 安装模块依赖
-echo -e "${YELLOW}安装模块依赖...${NC}"
+echo "${YELLOW}安装模块依赖...${NC}"
 # 为每个模块执行go mod tidy
 for MODULE in $MODULES; do
-    echo -e "处理模块: ${MODULE}"
+    echo "处理模块: ${MODULE}"
     if [ -d "$MODULE" ] && [ -f "${MODULE}/go.mod" ]; then
         (cd "$MODULE" && go mod tidy)
         if [ $? -ne 0 ]; then
-            echo -e "${RED}模块 ${MODULE} 依赖安装失败!${NC}"
+            echo "${RED}模块 ${MODULE} 依赖安装失败!${NC}"
         else
-            echo -e "${GREEN}模块 ${MODULE} 依赖安装成功!${NC}"
+            echo "${GREEN}模块 ${MODULE} 依赖安装成功!${NC}"
         fi
     else
-        echo -e "${YELLOW}跳过: ${MODULE} (不是有效的Go模块)${NC}"
+        echo "${YELLOW}跳过: ${MODULE} (不是有效的Go模块)${NC}"
     fi
 done
 
-echo -e "\n${GREEN}所有模块依赖安装完成!${NC}"
+echo "\n${GREEN}所有模块依赖安装完成!${NC}"
