@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# 脚本名称: install.sh
+# 功能: 同步Go工作区并整理各模块依赖
+# 作者: IdeaBase团队
+# 日期: 2025-03-27
+
+# 设置颜色输出
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+echo -e "${YELLOW}IdeaBase 依赖安装工具${NC}"
+
+# 确保在项目根目录执行
+if [ ! -f "go.work" ]; then
+    echo -e "${RED}错误: 未找到go.work文件，请确保在项目根目录执行此脚本!${NC}"
+    exit 1
+fi
+
+# 执行go work sync
+echo -e "${YELLOW}执行: go work sync${NC}"
+go work sync
+if [ $? -ne 0 ]; then
+    echo -e "${RED}go work sync 执行失败!${NC}"
+    exit 1
+fi
+echo -e "${GREEN}go work sync 执行成功!${NC}"
+
+# 从go.work文件中提取模块目录
+echo -e "${YELLOW}整理模块依赖...${NC}"
+# 提取use块中的所有模块路径
+MODULES=$(awk '/^use \(/{flag=1;next}/^\)/{flag=0}flag{gsub(/^[ \t]+/,"",$0);print $0}' go.work)
+
+# 为每个模块执行go mod tidy
+for MODULE in $MODULES; do
+    echo -e "处理模块: ${MODULE}"
+    if [ -d "$MODULE" ] && [ -f "${MODULE}/go.mod" ]; then
+        (cd "$MODULE" && go mod tidy)
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}模块 ${MODULE} 依赖整理失败!${NC}"
+        else
+            echo -e "${GREEN}模块 ${MODULE} 依赖整理成功!${NC}"
+        fi
+    else
+        echo -e "${YELLOW}跳过: ${MODULE} (不是有效的Go模块)${NC}"
+    fi
+done
+
+echo -e "\n${GREEN}所有模块依赖整理完成!${NC}"

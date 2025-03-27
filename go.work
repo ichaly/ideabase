@@ -1,8 +1,10 @@
 go 1.22
 
 use (
+	./app
 	./gql
 	./gtw
+	./ioc
 	./log
 	./run
 	./std
