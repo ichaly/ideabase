@@ -8,8 +8,8 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "next",
-	Short: "Content management system implemented by Golang.",
+	Use:   "ibc",
+	Short: "IdeaBase CLI 工具",
 }
 
 func Execute() {

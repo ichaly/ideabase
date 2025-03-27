@@ -8,13 +8,14 @@ import (
 	"go.uber.org/fx"
 )
 
-var configFile string
+const configFlag = "config"
 
 var runCmd = &cobra.Command{
-	Use:   "start",
-	Short: "Start Service.",
-
+	Use:     "start",
+	Aliases: []string{"run", "s", "r"},
+	Short:   "Start Service.",
 	Run: func(cmd *cobra.Command, args []string) {
+		configFile, _ := cmd.Flags().GetString(configFlag)
 		if configFile == "" {
 			configFile = filepath.Join("./cfg", "config.yml")
 		}
@@ -26,8 +27,8 @@ var runCmd = &cobra.Command{
 }
 
 func init() {
-	runCmd.PersistentFlags().StringVarP(
-		&configFile, "config", "c", "", "start app with config file",
+	runCmd.Flags().StringP(
+		configFlag, "c", "", "start app with config file",
 	)
 	rootCmd.AddCommand(runCmd)
 }
