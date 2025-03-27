@@ -5,11 +5,22 @@
 # 作者: IdeaBase团队
 # 日期: 2025-03-27
 
-# 设置颜色输出
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+# 检测终端是否支持颜色
+if [ -t 1 ]; then
+  # 终端支持颜色
+  GREEN='\033[0;32m'
+  YELLOW='\033[0;33m'
+  RED='\033[0;31m'
+  BLUE='\033[0;34m'
+  NC='\033[0m' # No Color
+else
+  # 终端不支持颜色或输出被重定向
+  GREEN=''
+  YELLOW=''
+  RED=''
+  BLUE=''
+  NC=''
+fi
 
 echo -e "${YELLOW}IdeaBase 依赖安装工具${NC}"
 
@@ -27,7 +38,7 @@ echo -e "${YELLOW}清理.sum文件...${NC}"
 
 # 删除go.work.sum文件（如果存在）
 if [ -f "go.work.sum" ]; then
-    echo -e "删除: go.work.sum"
+    echo -e "${BLUE}删除: go.work.sum${NC}"
     rm go.work.sum
 fi
 
@@ -35,7 +46,7 @@ fi
 for MODULE in $MODULES; do
     if [ -d "$MODULE" ] && [ -f "${MODULE}/go.mod" ]; then
         if [ -f "${MODULE}/go.sum" ]; then
-            echo -e "删除: ${MODULE}/go.sum"
+            echo -e "${BLUE}删除: ${MODULE}/go.sum${NC}"
             rm "${MODULE}/go.sum"
         fi
     fi
