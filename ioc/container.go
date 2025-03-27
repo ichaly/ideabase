@@ -1,6 +1,7 @@
 package ioc
 
 import (
+	"github.com/ichaly/ideabase/std"
 	"go.uber.org/fx"
 )
 
@@ -12,4 +13,8 @@ func Add(args ...fx.Option) {
 
 func Get() fx.Option {
 	return fx.Options(options...)
+}
+
+func init() {
+	Add(fx.Invoke(std.Bootstrap))
 }
