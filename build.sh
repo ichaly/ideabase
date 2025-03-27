@@ -10,40 +10,75 @@ BUILD_DIR="out"
 MAIN_FILE="app/main.go"
 APP_NAME="ideabase"
 
+# 颜色设置 - 仅根据终端是否支持颜色来决定
+if [ -t 1 ]; then
+  # 终端支持颜色
+  GREEN='\033[0;32m'
+  YELLOW='\033[0;33m'
+  RED='\033[0;31m'
+  BLUE='\033[0;34m'
+  NC='\033[0m' # No Color
+else
+  # 终端不支持颜色或输出被重定向
+  GREEN=''
+  YELLOW=''
+  RED=''
+  BLUE=''
+  NC=''
+fi
+
 # 确保构建目录存在
 mkdir -p ${BUILD_DIR}
 
-echo "开始构建 ${APP_NAME} ${VERSION}-${GIT_COMMIT}"
-echo "构建时间: ${BUILD_TIME}"
+echo -e "${YELLOW}开始构建 ${APP_NAME} ${VERSION}-${GIT_COMMIT}${NC}"
+echo -e "${BLUE}构建时间: ${BUILD_TIME}${NC}"
 
 # 编译Mac版本
-echo "编译MacOS版本..."
+echo -e "${YELLOW}编译MacOS版本...${NC}"
 CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
   -ldflags "-w -s \
   -X 'github.com/ichaly/ideabase/std.Version=${VERSION}' \
   -X 'github.com/ichaly/ideabase/std.GitCommit=${GIT_COMMIT}' \
   -X 'github.com/ichaly/ideabase/std.BuildTime=${BUILD_TIME}'" \
   -o ${BUILD_DIR}/${APP_NAME}-darwin ${MAIN_FILE}
+if [ $? -eq 0 ]; then
+  echo -e "${GREEN}MacOS版本编译成功!${NC}"
+else
+  echo -e "${RED}MacOS版本编译失败!${NC}"
+  exit 1
+fi
 
 # 编译Linux版本
-echo "编译Linux版本..."
+echo -e "${YELLOW}编译Linux版本...${NC}"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
   -ldflags "-w -s \
   -X 'github.com/ichaly/ideabase/std.Version=${VERSION}' \
   -X 'github.com/ichaly/ideabase/std.GitCommit=${GIT_COMMIT}' \
   -X 'github.com/ichaly/ideabase/std.BuildTime=${BUILD_TIME}'" \
   -o ${BUILD_DIR}/${APP_NAME}-linux ${MAIN_FILE}
+if [ $? -eq 0 ]; then
+  echo -e "${GREEN}Linux版本编译成功!${NC}"
+else
+  echo -e "${RED}Linux版本编译失败!${NC}"
+  exit 1
+fi
 
 # 编译Windows版本
-echo "编译Windows版本..."
+echo -e "${YELLOW}编译Windows版本...${NC}"
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
   -ldflags "-w -s \
   -X 'github.com/ichaly/ideabase/std.Version=${VERSION}' \
   -X 'github.com/ichaly/ideabase/std.GitCommit=${GIT_COMMIT}' \
   -X 'github.com/ichaly/ideabase/std.BuildTime=${BUILD_TIME}'" \
   -o ${BUILD_DIR}/${APP_NAME}-windows.exe ${MAIN_FILE}
+if [ $? -eq 0 ]; then
+  echo -e "${GREEN}Windows版本编译成功!${NC}"
+else
+  echo -e "${RED}Windows版本编译失败!${NC}"
+  exit 1
+fi
 
-echo "构建完成！"
+echo -e "${GREEN}构建完成！${NC}"
 
 
 #删除所有旧镜像
@@ -53,11 +88,16 @@ echo "构建完成！"
 # docker login -u 15210203617 -p docker123 registry.cn-qingdao.aliyuncs.com
 
 # Docker相关构建（取消注释使用）
-# echo "构建Docker镜像..."
+# echo -e "${YELLOW}构建Docker镜像...${NC}"
 # docker buildx build --platform linux/amd64 -t registry.cn-qingdao.aliyuncs.com/ichaly/ideabase:latest \
 #   -t registry.cn-qingdao.aliyuncs.com/ichaly/ideabase:${VERSION}-${GIT_COMMIT} . --push
+# if [ $? -eq 0 ]; then
+#   echo -e "${GREEN}Docker镜像构建成功!${NC}"
+# else
+#   echo -e "${RED}Docker镜像构建失败!${NC}"
+# fi
 
-echo "版本信息："
-echo "版本号: ${VERSION}"
-echo "Git提交: ${GIT_COMMIT}"
-echo "构建时间: ${BUILD_TIME}"
+echo -e "${BLUE}版本信息：${NC}"
+echo -e "版本号: ${VERSION}"
+echo -e "Git提交: ${GIT_COMMIT}"
+echo -e "构建时间: ${BUILD_TIME}"
