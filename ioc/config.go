@@ -14,6 +14,7 @@ func init() {
 				return std.WithFilePath(filePath)
 			},
 			std.NewKonfig,
+			std.NewConfig,
 		),
 	))
 }

@@ -12,13 +12,9 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-func NewConnect(k *Konfig, p []gorm.Plugin, e []interface{}) (*gorm.DB, error) {
-	c := &internal.DatabaseConfig{}
-	if err := k.Unmarshal(c); err != nil {
-		return nil, err
-	}
+func NewConnect(c Config, p []gorm.Plugin, e []interface{}) (*gorm.DB, error) {
 	db, err := gorm.Open(
-		buildDialect(&c.DataSource),
+		buildDialect(c.Database),
 		&gorm.Config{PrepareStmt: true, Logger: logger.Default.LogMode(logger.Info)},
 	)
 	if err != nil {
@@ -30,7 +26,7 @@ func NewConnect(k *Konfig, p []gorm.Plugin, e []interface{}) (*gorm.DB, error) {
 			return nil, err
 		}
 	}
-	if c.Debug {
+	if c.IsDebug() {
 		for _, v := range e {
 			name, desc := "", ""
 			if n, ok := v.(schema.Tabler); ok {

@@ -17,3 +17,8 @@ func NewConfig(k *Konfig) (*Config, error) {
 	}
 	return c, nil
 }
+
+// IsDebug 判断是否为开发模式
+func (my *Config) IsDebug() bool {
+	return my.Mode == "development" || my.Mode == "dev"
+}

@@ -43,8 +43,6 @@ app:
 	assert.Equal(t, "8080", config.Port)
 	assert.Equal(t, "localhost", config.Host)
 	assert.Equal(t, "/api", config.Root)
-	assert.Equal(t, true, config.Debug)
-	assert.Equal(t, "/v1", config.Prefix)
 }
 
 func TestNewConfigWithError(t *testing.T) {

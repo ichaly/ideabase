@@ -10,15 +10,10 @@ import (
 
 var sf *sonyflake.Sonyflake
 
-func init() {
+func NewSonyFlake() gorm.Plugin {
 	t, _ := time.Parse("2006-01-02", "2023-07-24")
 	sf = sonyflake.NewSonyflake(sonyflake.Settings{StartTime: t})
-	if sf == nil {
-		panic("sonyflake not created")
-	}
-}
 
-func NewSonyFlake() gorm.Plugin {
 	plugin := next.NewPlugin()
 	plugin.Register("sonyflake", func(_, zero bool) (interface{}, error) {
 		if !zero {

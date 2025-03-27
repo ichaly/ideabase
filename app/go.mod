@@ -1,6 +1,6 @@
 module github.com/ichaly/ideabase/app
 
-go 1.22
+go 1.23
 
 require (
 	github.com/ichaly/ideabase/ioc v0.0.0-00010101000000-000000000000
@@ -55,5 +55,3 @@ require (
 	gorm.io/driver/postgres v1.5.9 // indirect
 	gorm.io/gorm v1.25.12 // indirect
 )
-
-replace github.com/ichaly/ideabase/ioc => ../ioc
