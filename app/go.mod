@@ -3,7 +3,7 @@ module github.com/ichaly/ideabase/app
 go 1.23
 
 require (
-	github.com/ichaly/ideabase/ioc v0.0.0-00010101000000-000000000000
+	github.com/ichaly/ideabase/ioc v0.0.0-20250327072946-530e8b6eceac
 	github.com/spf13/cobra v1.9.1
 	go.uber.org/fx v1.23.0
 )

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 脚本名称: install.sh
-# 功能: 同步Go工作区并整理各模块依赖
+# 功能: 同步Go工作区并安装各模块依赖
 # 作者: IdeaBase团队
 # 日期: 2025-03-27
 
@@ -19,6 +19,29 @@ if [ ! -f "go.work" ]; then
     exit 1
 fi
 
+# 从go.work文件中提取模块目录
+MODULES=$(awk '/^use \(/{flag=1;next}/^\)/{flag=0}flag{gsub(/^[ \t]+/,"",$0);print $0}' go.work)
+
+# 清理.sum文件
+echo -e "${YELLOW}清理.sum文件...${NC}"
+
+# 删除go.work.sum文件（如果存在）
+if [ -f "go.work.sum" ]; then
+    echo -e "删除: go.work.sum"
+    rm go.work.sum
+fi
+
+# 删除各模块下的go.sum文件
+for MODULE in $MODULES; do
+    if [ -d "$MODULE" ] && [ -f "${MODULE}/go.mod" ]; then
+        if [ -f "${MODULE}/go.sum" ]; then
+            echo -e "删除: ${MODULE}/go.sum"
+            rm "${MODULE}/go.sum"
+        fi
+    fi
+done
+echo -e "${GREEN}.sum文件清理完成!${NC}"
+
 # 执行go work sync
 echo -e "${YELLOW}执行: go work sync${NC}"
 go work sync
@@ -28,24 +51,21 @@ if [ $? -ne 0 ]; then
 fi
 echo -e "${GREEN}go work sync 执行成功!${NC}"
 
-# 从go.work文件中提取模块目录
-echo -e "${YELLOW}整理模块依赖...${NC}"
-# 提取use块中的所有模块路径
-MODULES=$(awk '/^use \(/{flag=1;next}/^\)/{flag=0}flag{gsub(/^[ \t]+/,"",$0);print $0}' go.work)
-
+# 安装模块依赖
+echo -e "${YELLOW}安装模块依赖...${NC}"
 # 为每个模块执行go mod tidy
 for MODULE in $MODULES; do
     echo -e "处理模块: ${MODULE}"
     if [ -d "$MODULE" ] && [ -f "${MODULE}/go.mod" ]; then
         (cd "$MODULE" && go mod tidy)
         if [ $? -ne 0 ]; then
-            echo -e "${RED}模块 ${MODULE} 依赖整理失败!${NC}"
+            echo -e "${RED}模块 ${MODULE} 依赖安装失败!${NC}"
         else
-            echo -e "${GREEN}模块 ${MODULE} 依赖整理成功!${NC}"
+            echo -e "${GREEN}模块 ${MODULE} 依赖安装成功!${NC}"
         fi
     else
         echo -e "${YELLOW}跳过: ${MODULE} (不是有效的Go模块)${NC}"
     fi
 done
 
-echo -e "\n${GREEN}所有模块依赖整理完成!${NC}"
+echo -e "\n${GREEN}所有模块依赖安装完成!${NC}"
