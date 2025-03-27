@@ -6,9 +6,23 @@ import (
 	"github.com/ichaly/ideabase/std"
 )
 
-var Dependencies = fx.Options(
-	fx.Provide(fx.Annotated{
-		Group:  "gorm",
-		Target: std.NewSonyFlake,
-	}),
-)
+var options []fx.Option
+
+func init() {
+	Add(
+		fx.Provide(
+			fx.Annotated{
+				Group:  "gorm",
+				Target: std.NewSonyFlake,
+			},
+		),
+	)
+}
+
+func Add(args ...fx.Option) {
+	options = append(options, args...)
+}
+
+func Get() fx.Option {
+	return fx.Options(options...)
+}

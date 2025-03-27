@@ -20,7 +20,7 @@ var runCmd = &cobra.Command{
 			configFile = filepath.Join("./cfg", "config.yml")
 		}
 		fx.New(
-			ioc.Dependencies,
+			ioc.Get(),
 			fx.Supply(configFile),
 		).Run()
 	},
