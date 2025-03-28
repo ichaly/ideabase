@@ -125,6 +125,29 @@ func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 		"mode":            "dev",
 		"profiles.active": "",
 		"app.root":        filepath.Dir(utl.Root()),
+		// Fiber基础设置
+		"app.fiber.server_header": "IdeaBase",
+		"app.fiber.read_timeout":  "5s",
+		"app.fiber.write_timeout": "10s",
+		"app.fiber.idle_timeout":  "120s",
+		// 压缩中间件设置
+		"app.fiber.compress_level": "levelDefault",
+		// 幂等性中间件设置
+		"app.fiber.idempotency_lifetime":   "24h",
+		"app.fiber.idempotency_key_header": "X-Idempotency-Key",
+		// CSRF中间件设置
+		"app.fiber.csrf_key_lookup":       "header:X-CSRF-Token",
+		"app.fiber.csrf_cookie_name":      "csrf_",
+		"app.fiber.csrf_cookie_same_site": "Strict",
+		"app.fiber.csrf_expiration":       "1h",
+		// 限流中间件设置
+		"app.fiber.limiter_max":        100,
+		"app.fiber.limiter_expiration": "1m",
+		// 健康检查中间件设置
+		"app.fiber.liveness_endpoint":  "/health/live",
+		"app.fiber.readiness_endpoint": "/health/ready",
+		// 日志中间件设置
+		"app.fiber.log_format": "[${time}] ${ip} ${status} - ${method} ${path}\n",
 	}
 
 	// 创建Konfig实例

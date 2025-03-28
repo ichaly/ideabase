@@ -17,6 +17,11 @@ func mockConfig(name string, mode string, port string) *Config {
 		AppConfig: internal.AppConfig{
 			Name: name,
 			Port: port,
+			Fiber: &internal.FiberConfig{
+				ReadTimeout:  5 * time.Second,
+				WriteTimeout: 5 * time.Second,
+				IdleTimeout:  5 * time.Second,
+			},
 		},
 		Mode: mode,
 	}
@@ -84,23 +89,37 @@ func TestHealthCheck(t *testing.T) {
 
 // TestRequestTimeout 测试请求超时处理
 func TestRequestTimeout(t *testing.T) {
-	// 创建配置
+	// 创建配置，设置较短的超时时间以便测试
 	cfg := mockConfig("TestApp", "development", "8080")
+	// 设置1秒的读取超时时间
+	cfg.Fiber.ReadTimeout = 1 * time.Second
 
 	// 创建Fiber应用
 	app := NewFiber(cfg)
 
 	// 添加一个会超时的路由
 	app.Get("/timeout", func(c *fiber.Ctx) error {
-		// 睡眠超过上下文超时时间
-		time.Sleep(31 * time.Second)
+		// 睡眠时间超过读取超时时间
+		time.Sleep(2 * time.Second)
 		return c.SendString("这不应该返回")
 	})
 
-	// 由于超时时间较长，不进行实际测试，仅验证路由配置
-	assert.NotPanics(t, func() {
-		app.GetRoutes()
-	}, "获取路由不应引发panic")
+	// 执行测试请求 - 使用fiber的Test方法
+	req := httptest.NewRequest(http.MethodGet, "/timeout", nil)
+	// 设置较短的超时，以便测试能够快速完成
+	app.Server().ReadTimeout = 1 * time.Second
+	resp, err := app.Test(req)
+
+	// 判断是否因超时导致失败
+	// 超时通常会导致请求错误或返回5xx状态码
+	if err != nil {
+		// 如果有错误，可能是因为连接关闭或超时
+		assert.Contains(t, err.Error(), "timeout", "错误应该是因为超时")
+	} else {
+		// 或者是返回了服务器错误
+		assert.GreaterOrEqual(t, resp.StatusCode, 500, 
+			"应该返回服务器错误状态码")
+	}
 }
 
 // TestIdempotency 测试幂等性中间件

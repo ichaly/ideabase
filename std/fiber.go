@@ -2,7 +2,6 @@ package std
 
 import (
 	"encoding/base64"
-	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
@@ -22,14 +21,16 @@ import (
 
 // NewFiber 创建并配置一个新的fiber应用实例
 func NewFiber(c *Config) *fiber.App {
+	// 获取Fiber配置（由konfig默认加载）
+	fiberConf := c.Fiber
+
 	// 创建fiber应用配置
 	config := fiber.Config{
 		AppName:      c.Name,
-		ServerHeader: "IdeaBase",
-		// 添加超时处理
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		ServerHeader: fiberConf.ServerHeader,
+		ReadTimeout:  fiberConf.ReadTimeout,
+		WriteTimeout: fiberConf.WriteTimeout,
+		IdleTimeout:  fiberConf.IdleTimeout,
 	}
 
 	// 生产模式下调整配置
@@ -60,7 +61,7 @@ func NewFiber(c *Config) *fiber.App {
 
 	// 压缩中间件
 	app.Use(compress.New(compress.Config{
-		Level: compress.LevelDefault,
+		Level: parseCompressLevel(fiberConf.CompressLevel),
 	}))
 
 	// ETag中间件 - 优化缓存控制
@@ -68,8 +69,8 @@ func NewFiber(c *Config) *fiber.App {
 
 	// 幂等性中间件 - 防止重复处理
 	app.Use(idempotency.New(idempotency.Config{
-		Lifetime:  24 * time.Hour,
-		KeyHeader: "X-Idempotency-Key",
+		Lifetime:  fiberConf.IdempotencyLifetime,
+		KeyHeader: fiberConf.IdempotencyKeyHeader,
 		// 默认情况下会自动跳过安全的HTTP方法（GET、HEAD等）
 		// 可以使用Next自定义跳过逻辑
 		Next: func(c *fiber.Ctx) bool {
@@ -81,18 +82,18 @@ func NewFiber(c *Config) *fiber.App {
 
 	// CSRF保护中间件 - 防止跨站请求伪造
 	app.Use(csrf.New(csrf.Config{
-		KeyLookup:      "header:X-CSRF-Token",
-		CookieName:     "csrf_",
-		CookieSameSite: "Strict",
-		Expiration:     1 * time.Hour,
+		KeyLookup:      fiberConf.CSRFKeyLookup,
+		CookieName:     fiberConf.CSRFCookieName,
+		CookieSameSite: fiberConf.CSRFCookieSameSite,
+		Expiration:     fiberConf.CSRFExpiration,
 		// 调试模式下可以关闭
 		CookieSecure: !c.IsDebug(),
 	}))
 
 	// 请求限制中间件 - 防止DoS攻击
 	app.Use(limiter.New(limiter.Config{
-		Max:        100,             // 最大请求数
-		Expiration: 1 * time.Minute, // 时间窗口
+		Max:        fiberConf.LimiterMax, // 最大请求数
+		Expiration: fiberConf.LimiterExpiration,
 		KeyGenerator: func(c *fiber.Ctx) string {
 			return c.IP() // 基于IP的限制
 		},
@@ -106,16 +107,30 @@ func NewFiber(c *Config) *fiber.App {
 
 	// 健康检查中间件
 	app.Use(healthcheck.New(healthcheck.Config{
-		LivenessEndpoint:  "/health/live",
-		ReadinessEndpoint: "/health/ready",
+		LivenessEndpoint:  fiberConf.LivenessEndpoint,
+		ReadinessEndpoint: fiberConf.ReadinessEndpoint,
 	}))
 
 	// 调试模式下添加日志
 	if c.IsDebug() {
 		app.Use(logger.New(logger.Config{
-			Format: "[${time}] ${ip} ${status} - ${method} ${path}\n",
+			Format: fiberConf.LogFormat,
 		}))
 	}
 
 	return app
+}
+
+// 辅助函数 - 将字符串解析为压缩级别
+func parseCompressLevel(levelStr string) compress.Level {
+	switch levelStr {
+	case "levelDisabled", "LevelDisabled":
+		return compress.LevelDisabled
+	case "levelBestSpeed", "LevelBestSpeed":
+		return compress.LevelBestSpeed
+	case "levelBestCompression", "LevelBestCompression":
+		return compress.LevelBestCompression
+	default:
+		return compress.LevelDefault
+	}
 }
