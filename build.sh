@@ -1,15 +1,5 @@
 #!/bin/bash
 
-# 设置版本信息
-VERSION="v0.1.0"
-GIT_COMMIT=$(git rev-parse --short HEAD)
-BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S')
-
-# 构建参数
-BUILD_DIR="out"
-MAIN_FILE="app/main.go"
-APP_NAME="ideabase"
-
 # 颜色设置 - 仅根据终端是否支持颜色来决定
 if [ -t 1 ]; then
   # 终端支持颜色
@@ -26,6 +16,24 @@ else
   BLUE=''
   NC=''
 fi
+
+# 加载.env文件中的环境变量
+if [ -f .env ]; then
+  source .env
+  echo -e "${GREEN}加载.env文件中的环境变量...${NC}"
+else
+  echo -e "${YELLOW}警告: .env文件不存在，某些功能可能无法正常工作${NC}"
+fi
+
+# 设置版本信息
+VERSION="v0.1.0"
+GIT_COMMIT=$(git rev-parse --short HEAD)
+BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+
+# 构建参数
+BUILD_DIR="out"
+MAIN_FILE="app/main.go"
+APP_NAME="ideabase"
 
 # 确保构建目录存在
 mkdir -p ${BUILD_DIR}
@@ -80,12 +88,13 @@ fi
 
 echo -e "${GREEN}构建完成！${NC}"
 
-
 #删除所有旧镜像
 # docker rmi -f $(docker images | grep "yugong" | awk '{print $3}')
 
 #登录到阿里云镜像中心
-# docker login -u 15210203617 -p docker123 registry.cn-qingdao.aliyuncs.com
+# echo -e "${YELLOW}登录到阿里云镜像中心...${NC}"
+# docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD} registry.cn-qingdao.aliyuncs.com
+echo -e "${YELLOW}账号: ${DOCKER_USERNAME} 密码:${DOCKER_PASSWORD}登录到阿里云镜像中心...${NC}"
 
 # Docker相关构建（取消注释使用）
 # echo -e "${YELLOW}构建Docker镜像...${NC}"
