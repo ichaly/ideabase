@@ -12,7 +12,6 @@ require (
 	github.com/eko/gocache/store/redis/v4 v4.2.1
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/gofiber/fiber/v2 v2.52.6
-	github.com/google/uuid v1.6.0
 	github.com/ichaly/go-next/pkg v0.0.0-20231106065705-0a54b78360c4
 	github.com/ichaly/ideabase/log v0.0.0-20250326064410-373e295423ea
 	github.com/ichaly/ideabase/utl v0.0.0-20250228111901-475eea8d4811
@@ -45,6 +44,7 @@ require (
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
 	github.com/golang/mock v1.6.0 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20231201235250-de7065d80cb9 // indirect
 	github.com/jackc/pgx/v5 v5.5.5 // indirect
