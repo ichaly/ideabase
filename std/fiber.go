@@ -1,9 +1,7 @@
 package std
 
 import (
-	"context"
 	"encoding/base64"
-	"errors"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -111,29 +109,6 @@ func NewFiber(c *Config) *fiber.App {
 		LivenessEndpoint:  "/health/live",
 		ReadinessEndpoint: "/health/ready",
 	}))
-
-	// 超时处理 - 设置为全局超时
-	app.Use(func(c *fiber.Ctx) error {
-		// 设置超时上下文
-		ctx, cancel := context.WithTimeout(c.Context(), 30*time.Second)
-		defer cancel()
-
-		// 替换请求上下文
-		c.SetUserContext(ctx)
-
-		// 继续处理请求
-		err := c.Next()
-
-		// 检查是否超时
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return c.Status(fiber.StatusRequestTimeout).JSON(fiber.Map{
-				"status":  "error",
-				"message": "请求处理超时",
-			})
-		}
-
-		return err
-	})
 
 	// 调试模式下添加日志
 	if c.IsDebug() {
