@@ -1001,3 +1001,53 @@ func TestEnvVarCaseHandling(t *testing.T) {
 	// 注意：在env.go的callback中，环境变量键名会被转为小写
 	assert.Equal(t, "should-become-camelCase", cfg.GetString("camel.case.key"))
 }
+
+func TestKonfigDurationParsing(t *testing.T) {
+	// 创建临时配置文件，包含duration类型的配置项
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	
+	configContent := `
+timeout:
+  short: 5s
+  medium: 1m30s
+  long: 2h
+  custom: 1h30m45s
+intervals:
+  heartbeat: 10s
+  retry: 500ms
+  backoff: 2m
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	// 初始化配置
+	k, err := NewKonfig(WithFilePath(configPath))
+	require.NoError(t, err)
+
+	// 测试获取duration值
+	tests := []struct {
+		path     string
+		expected time.Duration
+	}{
+		{"timeout.short", 5 * time.Second},
+		{"timeout.medium", 90 * time.Second},
+		{"timeout.long", 2 * time.Hour},
+		{"timeout.custom", 90*time.Minute + 45*time.Second},
+		{"intervals.heartbeat", 10 * time.Second},
+		{"intervals.retry", 500 * time.Millisecond},
+		{"intervals.backoff", 2 * time.Minute},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			duration := k.GetDuration(tc.path)
+			assert.Equal(t, tc.expected, duration, "Duration value for %s should be parsed correctly", tc.path)
+		})
+	}
+
+	// 测试零值
+	zeroPath := "timeout.zero"
+	zeroDuration := k.GetDuration(zeroPath)
+	assert.Equal(t, time.Duration(0), zeroDuration, "Should return zero duration for undefined path")
+}
