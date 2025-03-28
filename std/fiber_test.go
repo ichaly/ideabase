@@ -1,12 +1,14 @@
 package std
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/encryptcookie"
 	"github.com/ichaly/ideabase/std/internal"
 	"github.com/stretchr/testify/assert"
 )
@@ -190,4 +192,210 @@ func TestCSRF(t *testing.T) {
 	// 验证是否有任何响应
 	// 注意：实际情况下没有令牌应该会失败，但测试环境可能有特殊处理
 	assert.True(t, resp.StatusCode < 600, "应返回有效的HTTP状态码")
+}
+
+// TestRecover 测试异常恢复中间件
+func TestRecover(t *testing.T) {
+	// 创建配置
+	cfg := mockConfig("TestApp", "development", "8080")
+
+	// 创建Fiber应用
+	app := NewFiber(cfg)
+
+	// 添加一个会引发panic的路由
+	app.Get("/panic", func(c *fiber.Ctx) error {
+		panic("测试异常恢复")
+	})
+
+	// 执行请求
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	resp, err := app.Test(req)
+
+	// 验证异常被正确恢复，并返回500错误
+	assert.NoError(t, err, "恢复中间件应成功捕获异常")
+	assert.Equal(t, fiber.StatusInternalServerError, resp.StatusCode, "应返回500状态码")
+}
+
+// TestCORS 测试跨域请求支持中间件
+func TestCORS(t *testing.T) {
+	// 创建配置
+	cfg := mockConfig("TestApp", "development", "8080")
+
+	// 创建Fiber应用
+	app := NewFiber(cfg)
+
+	// 添加测试路由
+	app.Get("/cors-test", func(c *fiber.Ctx) error {
+		return c.SendString("cors-enabled")
+	})
+
+	// 准备带有Origin头的请求
+	req := httptest.NewRequest(http.MethodGet, "/cors-test", nil)
+	req.Header.Set("Origin", "http://example.com")
+
+	// 执行请求
+	resp, err := app.Test(req)
+
+	// 验证CORS头是否正确设置
+	assert.NoError(t, err, "CORS请求应成功执行")
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "应返回200状态码")
+	assert.NotEmpty(t, resp.Header.Get("Access-Control-Allow-Origin"), "应设置Access-Control-Allow-Origin头")
+
+	// OPTIONS预检请求测试
+	reqOptions := httptest.NewRequest(http.MethodOptions, "/cors-test", nil)
+	reqOptions.Header.Set("Origin", "http://example.com")
+	reqOptions.Header.Set("Access-Control-Request-Method", "GET")
+
+	respOptions, err := app.Test(reqOptions)
+	assert.NoError(t, err, "CORS预检请求应成功执行")
+	assert.Equal(t, http.StatusNoContent, respOptions.StatusCode, "预检请求应返回204状态码")
+	assert.NotEmpty(t, respOptions.Header.Get("Access-Control-Allow-Methods"), "应设置Access-Control-Allow-Methods头")
+}
+
+// TestRequestID 测试请求ID中间件
+func TestRequestID(t *testing.T) {
+	// 创建配置
+	cfg := mockConfig("TestApp", "development", "8080")
+
+	// 创建Fiber应用
+	app := NewFiber(cfg)
+
+	// 添加测试路由，返回请求ID
+	app.Get("/request-id", func(c *fiber.Ctx) error {
+		return c.SendString(c.GetRespHeader("X-Request-ID"))
+	})
+
+	// 执行请求
+	req := httptest.NewRequest(http.MethodGet, "/request-id", nil)
+	resp, err := app.Test(req)
+
+	// 验证请求ID是否生成
+	assert.NoError(t, err, "请求ID生成应成功执行")
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "应返回200状态码")
+	
+	// 读取响应体内容
+	buffer := make([]byte, 1024)
+	n, _ := resp.Body.Read(buffer)
+	requestID := string(buffer[:n])
+	
+	assert.NotEmpty(t, requestID, "请求ID不应为空")
+}
+
+// TestEncryptCookie 测试Cookie加密中间件
+func TestEncryptCookie(t *testing.T) {
+	// 创建一个32字节的密钥并进行base64编码
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	encodedKey := base64.StdEncoding.EncodeToString(key)
+	
+	// 测试cookie加密中间件集成
+	app := fiber.New()
+	app.Use(encryptcookie.New(encryptcookie.Config{
+		Key: encodedKey, // 使用base64编码的32字节密钥
+	}))
+	app.Get("/set", func(c *fiber.Ctx) error {
+		c.Cookie(&fiber.Cookie{
+			Name:  "test",
+			Value: "value",
+		})
+		return c.SendString("cookie set")
+	})
+	
+	req := httptest.NewRequest("GET", "/set", nil)
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+	
+	// 确保设置了加密cookie
+	cookies := resp.Cookies()
+	assert.GreaterOrEqual(t, len(cookies), 1)
+	assert.Equal(t, "test", cookies[0].Name)
+	assert.NotEqual(t, "value", cookies[0].Value, "cookie值应该被加密")
+}
+
+// TestCompress 测试压缩中间件
+func TestCompress(t *testing.T) {
+	// 创建配置
+	cfg := mockConfig("TestApp", "development", "8080")
+	
+	// 创建Fiber应用
+	app := NewFiber(cfg)
+	
+	// 添加返回大量文本的路由
+	app.Get("/compress", func(c *fiber.Ctx) error {
+		// 返回较大的内容触发压缩
+		largeText := "test content " + string(make([]byte, 2000))
+		return c.SendString(largeText)
+	})
+	
+	// 准备请求，指定接受压缩
+	req := httptest.NewRequest(http.MethodGet, "/compress", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	
+	resp, err := app.Test(req)
+	
+	assert.NoError(t, err, "压缩请求应成功执行")
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "应返回200状态码")
+	assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"), "应返回gzip压缩编码")
+}
+
+// TestETag 测试ETag中间件
+func TestETag(t *testing.T) {
+	// 创建配置
+	cfg := mockConfig("TestApp", "development", "8080")
+	
+	// 创建Fiber应用
+	app := NewFiber(cfg)
+	
+	// 添加返回固定内容的路由
+	app.Get("/etag", func(c *fiber.Ctx) error {
+		return c.SendString("etag-test-content")
+	})
+	
+	// 执行首次请求
+	reqFirst := httptest.NewRequest(http.MethodGet, "/etag", nil)
+	respFirst, err := app.Test(reqFirst)
+	
+	assert.NoError(t, err, "ETag首次请求应成功执行")
+	assert.Equal(t, http.StatusOK, respFirst.StatusCode, "应返回200状态码")
+	
+	// 获取ETag
+	etag := respFirst.Header.Get("ETag")
+	assert.NotEmpty(t, etag, "应生成ETag")
+	
+	// 执行条件请求
+	reqCond := httptest.NewRequest(http.MethodGet, "/etag", nil)
+	reqCond.Header.Set("If-None-Match", etag)
+	
+	respCond, err := app.Test(reqCond)
+	assert.NoError(t, err, "ETag条件请求应成功执行")
+	assert.Equal(t, http.StatusNotModified, respCond.StatusCode, "应返回304状态码")
+}
+
+// TestLogger 测试日志中间件
+func TestLogger(t *testing.T) {
+	// 创建开发环境配置，确保启用日志
+	cfg := mockConfig("TestApp", "development", "8080")
+	
+	// 创建Fiber应用
+	app := NewFiber(cfg)
+	
+	// 添加测试路由
+	app.Get("/logger-test", func(c *fiber.Ctx) error {
+		return c.SendString("logged")
+	})
+	
+	// 执行请求
+	req := httptest.NewRequest(http.MethodGet, "/logger-test", nil)
+	resp, err := app.Test(req)
+	
+	// 验证请求是否成功，但无法直接验证日志输出
+	assert.NoError(t, err, "日志中间件请求应成功执行")
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "应返回200状态码")
+	
+	// 注意：我们无法在单元测试中验证实际日志输出，
+	// 这通常需要通过捕获标准输出或使用模拟日志记录器来完成
+	// 此处仅验证应用配置了日志中间件并且正常工作
 }
