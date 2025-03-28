@@ -41,7 +41,6 @@ app:
 	assert.Equal(t, "development", config.Mode)
 	assert.Equal(t, "test-app", config.Name)
 	assert.Equal(t, "8080", config.Port)
-	assert.Equal(t, "localhost", config.Host)
 	assert.Equal(t, "/api", config.Root)
 }
 

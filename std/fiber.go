@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/csrf"
+	"github.com/gofiber/fiber/v2/middleware/encryptcookie"
 	"github.com/gofiber/fiber/v2/middleware/etag"
 	"github.com/gofiber/fiber/v2/middleware/healthcheck"
 	"github.com/gofiber/fiber/v2/middleware/idempotency"
@@ -42,6 +43,13 @@ func NewFiber(c *Config) *fiber.App {
 	app.Use(recover.New())   // 异常恢复中间件
 	app.Use(cors.New())      // 跨域请求支持
 	app.Use(requestid.New()) // 请求ID中间件
+
+	// Cookie加密中间件
+	if c.EncryptKey != "" {
+		app.Use(encryptcookie.New(encryptcookie.Config{
+			Key: c.EncryptKey,
+		}))
+	}
 
 	// 压缩中间件
 	app.Use(compress.New(compress.Config{
