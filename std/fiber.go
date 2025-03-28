@@ -2,6 +2,7 @@ package std
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
+
+	"github.com/ichaly/ideabase/utl"
 )
 
 // NewFiber 创建并配置一个新的fiber应用实例
@@ -46,8 +49,14 @@ func NewFiber(c *Config) *fiber.App {
 
 	// Cookie加密中间件
 	if c.EncryptKey != "" {
+		// 使用安全填充确保密钥长度为32字节(AES-256)
+		paddedKey := utl.SecurePadKey(c.EncryptKey, 32)
+		// encryptcookie中间件需要base64编码的密钥
+		encodedKey := base64.StdEncoding.EncodeToString([]byte(paddedKey))
+
+		// 配置加密cookie中间件
 		app.Use(encryptcookie.New(encryptcookie.Config{
-			Key: c.EncryptKey,
+			Key: encodedKey,
 		}))
 	}
 
