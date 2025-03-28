@@ -69,13 +69,6 @@ func NewFiber(c *Config) *fiber.App {
 	app.Use(idempotency.New(idempotency.Config{
 		Lifetime:  fiberConf.IdempotencyLifetime,
 		KeyHeader: fiberConf.IdempotencyKeyHeader,
-		// 默认情况下会自动跳过安全的HTTP方法（GET、HEAD等）
-		// 可以使用Next自定义跳过逻辑
-		Next: func(c *fiber.Ctx) bool {
-			// 只对这些方法启用幂等性检查
-			method := c.Method()
-			return !(method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE")
-		},
 	}))
 
 	// CSRF保护中间件 - 防止跨站请求伪造
