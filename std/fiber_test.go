@@ -117,8 +117,7 @@ func TestRequestTimeout(t *testing.T) {
 		assert.Contains(t, err.Error(), "timeout", "错误应该是因为超时")
 	} else {
 		// 或者是返回了服务器错误
-		assert.GreaterOrEqual(t, resp.StatusCode, 500, 
-			"应该返回服务器错误状态码")
+		assert.GreaterOrEqual(t, resp.StatusCode, 500, "应该返回服务器错误状态码")
 	}
 }
 

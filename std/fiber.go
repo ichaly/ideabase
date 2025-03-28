@@ -42,9 +42,10 @@ func NewFiber(c *Config) *fiber.App {
 	app := fiber.New(config)
 
 	// 注册基础中间件
+	app.Use(requestid.New()) // 请求ID中间件
 	app.Use(recover.New())   // 异常恢复中间件
 	app.Use(cors.New())      // 跨域请求支持
-	app.Use(requestid.New()) // 请求ID中间件
+	app.Use(etag.New())      // ETag中间件 - 优化缓存控制
 
 	// Cookie加密中间件
 	if c.EncryptKey != "" {
@@ -61,11 +62,8 @@ func NewFiber(c *Config) *fiber.App {
 
 	// 压缩中间件
 	app.Use(compress.New(compress.Config{
-		Level: parseCompressLevel(fiberConf.CompressLevel),
+		Level: compress.Level(fiberConf.CompressLevel),
 	}))
-
-	// ETag中间件 - 优化缓存控制
-	app.Use(etag.New())
 
 	// 幂等性中间件 - 防止重复处理
 	app.Use(idempotency.New(idempotency.Config{
@@ -119,18 +117,4 @@ func NewFiber(c *Config) *fiber.App {
 	}
 
 	return app
-}
-
-// 辅助函数 - 将字符串解析为压缩级别
-func parseCompressLevel(levelStr string) compress.Level {
-	switch levelStr {
-	case "levelDisabled", "LevelDisabled":
-		return compress.LevelDisabled
-	case "levelBestSpeed", "LevelBestSpeed":
-		return compress.LevelBestSpeed
-	case "levelBestCompression", "LevelBestCompression":
-		return compress.LevelBestCompression
-	default:
-		return compress.LevelDefault
-	}
 }

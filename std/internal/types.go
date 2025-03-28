@@ -1,6 +1,11 @@
 package internal
 
-import "time"
+import (
+	"strconv"
+	"time"
+
+	"github.com/gofiber/fiber/v2/middleware/compress"
+)
 
 // AppConfig 应用程序配置信息
 type AppConfig struct {
@@ -35,7 +40,7 @@ type FiberConfig struct {
 	ServerHeader string        `mapstructure:"server_header"` // 服务器响应头
 
 	// 压缩中间件设置
-	CompressLevel string `mapstructure:"compress_level"` // 压缩级别
+	CompressLevel CompressLevel `mapstructure:"compress_level"` // 压缩级别
 
 	// 幂等性中间件设置
 	IdempotencyLifetime  time.Duration `mapstructure:"idempotency_lifetime"`   // 幂等性键生存时间
@@ -57,4 +62,33 @@ type FiberConfig struct {
 
 	// 日志中间件设置
 	LogFormat string `mapstructure:"log_format"` // 日志格式
+}
+
+// CompressLevel 自定义的压缩级别类型
+type CompressLevel compress.Level
+
+// UnmarshalText 实现TextUnmarshaler接口
+func (my *CompressLevel) UnmarshalText(text []byte) error {
+	str := string(text)
+	// 字符串处理
+	switch str {
+	case "levelDisabled", "LevelDisabled":
+		*my = CompressLevel(compress.LevelDisabled)
+	case "levelBestSpeed", "LevelBestSpeed":
+		*my = CompressLevel(compress.LevelBestSpeed)
+	case "levelBestCompression", "LevelBestCompression":
+		*my = CompressLevel(compress.LevelBestCompression)
+	default:
+		// 尝试解析字符串数字
+		if num, err := strconv.Atoi(str); err == nil {
+			level := CompressLevel(num)
+			// 检查值是否在有效范围内
+			if level >= CompressLevel(compress.LevelDisabled) && level <= CompressLevel(compress.LevelBestCompression) {
+				*my = level
+				return nil
+			}
+		}
+		*my = CompressLevel(compress.LevelDefault)
+	}
+	return nil
 }
