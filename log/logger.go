@@ -129,8 +129,8 @@ func (my *Logger) Panic() *zerolog.Event {
 // 全局默认logger实例
 var std = NewLogger(WithOutput(os.Stderr), WithLevel(InfoLevel))
 
-// Default 返回默认logger实例
-func Default() *Logger { return std }
+// GetDefault 返回默认logger实例
+func GetDefault() *zerolog.Logger { return &std.l }
 
 // SetDefault 设置默认logger实例
 func SetDefault(l *Logger) { std = l }
