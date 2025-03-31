@@ -146,8 +146,6 @@ func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 		// 健康检查中间件设置
 		"app.fiber.liveness_endpoint":  "/health/live",
 		"app.fiber.readiness_endpoint": "/health/ready",
-		// 日志中间件设置
-		"app.fiber.log_format": "[${time}] ${ip} ${status} - ${method} ${path}\n",
 	}
 
 	// 创建Konfig实例

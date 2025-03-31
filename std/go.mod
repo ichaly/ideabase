@@ -11,6 +11,7 @@ require (
 	github.com/eko/gocache/store/bigcache/v4 v4.2.1
 	github.com/eko/gocache/store/redis/v4 v4.2.1
 	github.com/fsnotify/fsnotify v1.7.0
+	github.com/gofiber/contrib/fiberzerolog v1.0.2
 	github.com/gofiber/fiber/v2 v2.52.6
 	github.com/ichaly/go-next/pkg v0.0.0-20231106065705-0a54b78360c4
 	github.com/ichaly/ideabase/log v0.0.0-20250326064410-373e295423ea

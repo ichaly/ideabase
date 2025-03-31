@@ -3,6 +3,7 @@ package std
 import (
 	"encoding/base64"
 
+	"github.com/gofiber/contrib/fiberzerolog"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -12,10 +13,10 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/healthcheck"
 	"github.com/gofiber/fiber/v2/middleware/idempotency"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
-	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 
+	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/utl"
 )
 
@@ -104,8 +105,8 @@ func NewFiber(c *Config) *fiber.App {
 
 	// 调试模式下添加日志
 	if c.IsDebug() {
-		app.Use(logger.New(logger.Config{
-			Format: fiberConf.LogFormat,
+		app.Use(fiberzerolog.New(fiberzerolog.Config{
+			Logger: log.GetDefault(),
 		}))
 	}
 

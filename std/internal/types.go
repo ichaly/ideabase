@@ -59,9 +59,6 @@ type FiberConfig struct {
 	// 健康检查中间件设置
 	LivenessEndpoint  string `mapstructure:"liveness_endpoint"`  // 存活检查端点
 	ReadinessEndpoint string `mapstructure:"readiness_endpoint"` // 就绪检查端点
-
-	// 日志中间件设置
-	LogFormat string `mapstructure:"log_format"` // 日志格式
 }
 
 // CompressLevel 自定义的压缩级别类型
