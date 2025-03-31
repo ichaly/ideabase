@@ -16,5 +16,8 @@ func Get() fx.Option {
 }
 
 func init() {
-	Add(fx.Invoke(std.Bootstrap))
+	Add(
+		fx.Provide(std.NewFiber),
+		fx.Invoke(std.Bootstrap),
+	)
 }

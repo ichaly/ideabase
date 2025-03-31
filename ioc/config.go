@@ -9,11 +9,15 @@ import (
 func init() {
 	Add(fx.Module("config",
 		fx.Provide(
-			// 通过闭包传递 Option 参数,filePath由调fx.Supply方法提供
-			func(filePath string) std.KonfigOption {
-				return std.WithFilePath(filePath)
-			},
-			std.NewKonfig,
+			// 传递 Option 参数,filePath由调fx.Supply方法提供
+			fx.Annotate(
+				std.WithFilePath,
+				fx.ResultTags(`group:"konfigOptions"`),
+			),
+			fx.Annotate(
+				std.NewKonfig,
+				fx.ParamTags(`group:"konfigOptions"`),
+			),
 			std.NewConfig,
 		),
 	))
