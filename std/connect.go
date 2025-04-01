@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-func NewConnect(c Config, p []gorm.Plugin, e []interface{}) (*gorm.DB, error) {
+func NewConnect(c *Config, p []gorm.Plugin, e []interface{}) (*gorm.DB, error) {
 	db, err := gorm.Open(
 		buildDialect(c.Database),
 		&gorm.Config{PrepareStmt: true, Logger: logger.Default.LogMode(logger.Info)},

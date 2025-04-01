@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/gofiber/fiber/v2"
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -13,26 +14,16 @@ import (
 
 // 请求和结果类型定义
 type (
-	// gqlRequest GraphQL请求
 	gqlRequest struct {
-		Query         string
-		OperationName string
-		Variables     map[string]interface{}
+		Query         string                 `json:"query"`
+		OperationName string                 `json:"operationName"`
+		Variables     map[string]interface{} `json:"variables"`
 	}
-
-	// gqlResult GraphQL结果
 	gqlResult struct {
 		sql    string
 		args   []any
 		Data   map[string]interface{} `json:"data,omitempty"`
 		Errors gqlerror.List          `json:"errors,omitempty"`
-	}
-
-	// gqlValue GraphQL值
-	gqlValue struct {
-		value interface{}
-		name  string
-		err   error
 	}
 )
 
@@ -45,7 +36,18 @@ type Executor struct {
 }
 
 // NewExecutor 创建一个新的执行器
-func NewExecutor(d *gorm.DB, s *ast.Schema, c *Compiler) (*Executor, error) {
+func NewExecutor(d *gorm.DB, r *Renderer, c *Compiler) (*Executor, error) {
+	data, err := r.Generate()
+	if err != nil {
+		return nil, err
+	}
+	s, err := gqlparser.LoadSchema(&ast.Source{
+		Name:  "schema.graphql",
+		Input: string(data),
+	})
+	if err != nil {
+		return nil, err
+	}
 	i := intro.New(s)
 	return &Executor{
 		db:       d,
@@ -53,6 +55,46 @@ func NewExecutor(d *gorm.DB, s *ast.Schema, c *Compiler) (*Executor, error) {
 		schema:   s,
 		compiler: c,
 	}, nil
+}
+
+// Base 实现Plugin接口的Base方法，返回插件的基础路径
+func (my *Executor) Base() string {
+	return "/graphql"
+}
+
+// Init 实现Plugin接口的Init方法，初始化插件
+func (my *Executor) Init(r fiber.Router) {
+	// 注册GraphQL请求处理路由
+	r.Post("/", my.Handler)
+}
+
+// Handler 处理GraphQL请求
+func (my *Executor) Handler(c *fiber.Ctx) error {
+	// 解析请求
+	var req gqlRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"errors": []gqlerror.Error{*gqlerror.Wrap(err)},
+		})
+	}
+
+	// 将变量转换为RawMessage
+	var variables RawMessage
+	if len(req.Variables) > 0 {
+		var err error
+		variables, err = json.Marshal(req.Variables)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"errors": []gqlerror.Error{*gqlerror.Wrap(err)},
+			})
+		}
+	}
+
+	// 执行GraphQL查询
+	result := my.Execute(c.Context(), req.Query, variables)
+
+	// 返回结果
+	return c.JSON(result)
 }
 
 // Execute 执行GraphQL查询

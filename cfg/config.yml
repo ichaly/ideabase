@@ -3,6 +3,18 @@ app:
   name: "Go Next App"
   port: 8080
   root: /Users/Chaly/Downloads/YuGone/
+  cache:
+    dialect: redis
+    host: 127.0.0.1
+    port: 6379
+    password: redis123
+  database:
+    dialect: postgres
+    host: 127.0.0.1
+    port: 5678
+    name: demo
+    username: postgres
+    password: postgres
 
 captcha:
   length: 6
@@ -34,20 +46,6 @@ phone:
   template_code:
   access_key_id:
   access_key_secret:
-
-cache:
-  dialect: redis
-  host: 127.0.0.1
-  port: 6379
-  password: redis123
-
-database:
-  dialect: postgres
-  host: 127.0.0.1
-  port: 5678
-  name: demo
-  username: postgres
-  password: postgres
 
 oss:
   #  vendor: 本地

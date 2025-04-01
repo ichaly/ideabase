@@ -122,9 +122,10 @@ func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 
 	// 默认值
 	defaults := map[string]interface{}{
-		"mode":            "dev",
-		"profiles.active": "",
-		"app.root":        filepath.Dir(utl.Root()),
+		"mode":              "dev",
+		"profiles.active":   "",
+		"app.root":          filepath.Dir(utl.Root()),
+		"app.cache.dialect": "memory",
 		// Fiber基础设置
 		"app.fiber.server_header": "IdeaBase",
 		"app.fiber.read_timeout":  "5s",
