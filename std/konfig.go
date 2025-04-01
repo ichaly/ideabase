@@ -124,7 +124,7 @@ func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 	defaults := map[string]interface{}{
 		"mode":              "dev",
 		"profiles.active":   "",
-		"app.root":          filepath.Dir(utl.Root()),
+		"app.root":          utl.Root(),
 		"app.cache.dialect": "memory",
 		// Fiber基础设置
 		"app.fiber.server_header": "IdeaBase",

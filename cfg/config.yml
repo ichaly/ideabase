@@ -2,7 +2,7 @@ app:
   debug: true
   name: "Go Next App"
   port: 8080
-  root: /Users/Chaly/Downloads/YuGone/
+  # root: /Users/Chaly/Downloads/YuGone/
   cache:
     dialect: redis
     host: 127.0.0.1
@@ -22,10 +22,10 @@ captcha:
 
 schema:
   use-camel: true
-  prefixes:
+  table-prefix:
     - sys_
     - cms_
-  block-list:
+  exclude-fields:
     - secret
     - password
     - encrypted
