@@ -266,6 +266,20 @@ func (my *Renderer) renderTypes() error {
 				continue
 			}
 
+			// 判断字段类型是否引用了中间表类型
+			if !my.meta.cfg.Schema.ShowThrough {
+				// 检查字段是否引用了中间表类型
+				refType := field.Type
+				if field.Relation != nil && field.Relation.TargetClass != "" {
+					refType = field.Relation.TargetClass
+				}
+
+				// 如果引用的类型是中间表类型，则跳过该字段
+				if refClass, exists := my.meta.Nodes[refType]; exists && refClass.IsThrough {
+					continue
+				}
+			}
+
 			// 添加描述作为注释
 			if field.Description != "" {
 				my.writeLine("  # ", field.Description)
@@ -277,6 +291,11 @@ func (my *Renderer) renderTypes() error {
 			// 处理非空标记
 			if !field.Nullable {
 				typeName += "!"
+			}
+
+			// 添加描述作为注释
+			if field.Description != "" {
+				my.writeLine("  # ", field.Description)
 			}
 
 			// 输出字段定义
@@ -365,6 +384,11 @@ func (my *Renderer) renderInput() error {
 		class := my.meta.Nodes[className]
 		// 确保只处理真正的类名，跳过表名索引
 		if className != class.Name {
+			continue
+		}
+
+		// 判断是否应该跳过中间表类
+		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
 			continue
 		}
 
@@ -504,6 +528,11 @@ func (my *Renderer) renderEntity() error {
 			continue
 		}
 
+		// 判断是否应该跳过中间表类
+		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+			continue
+		}
+
 		// 生成过滤器类型
 		my.writeLine("# ", className, "查询条件")
 		my.writeLine("input ", className, SUFFIX_FILTER, " {")
@@ -525,6 +554,20 @@ func (my *Renderer) renderEntity() error {
 			// 跳过虚拟关系字段
 			if field.Virtual {
 				continue
+			}
+
+			// 判断字段类型是否引用了中间表类型
+			if !my.meta.cfg.Schema.ShowThrough {
+				// 检查字段是否引用了中间表类型
+				refType := field.Type
+				if field.Relation != nil && field.Relation.TargetClass != "" {
+					refType = field.Relation.TargetClass
+				}
+
+				// 如果引用的类型是中间表类型，则跳过该字段
+				if refClass, exists := my.meta.Nodes[refType]; exists && refClass.IsThrough {
+					continue
+				}
 			}
 
 			// 获取字段类型
@@ -555,6 +598,11 @@ func (my *Renderer) renderSort() error {
 			continue
 		}
 
+		// 判断是否应该跳过中间表类
+		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+			continue
+		}
+
 		// 生成排序类型
 		my.writeLine("# ", className, "排序")
 		my.writeLine("input ", className, SUFFIX_SORT, " {")
@@ -573,7 +621,21 @@ func (my *Renderer) renderSort() error {
 				continue
 			}
 
-			// 判断字段是否可排序
+			// 判断字段类型是否引用了中间表类型
+			if !my.meta.cfg.Schema.ShowThrough {
+				// 检查字段是否引用了中间表类型
+				refType := field.Type
+				if field.Relation != nil && field.Relation.TargetClass != "" {
+					refType = field.Relation.TargetClass
+				}
+
+				// 如果引用的类型是中间表类型，则跳过该字段
+				if refClass, exists := my.meta.Nodes[refType]; exists && refClass.IsThrough {
+					continue
+				}
+			}
+
+			// 添加排序选项
 			my.writeField(fieldName, TYPE_SORT_DIRECTION)
 		}
 
@@ -596,6 +658,11 @@ func (my *Renderer) renderQuery() error {
 		class := my.meta.Nodes[className]
 		// 确保只处理真正的类名，跳过表名索引
 		if className != class.Name {
+			continue
+		}
+
+		// 判断是否应该跳过中间表类
+		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
 			continue
 		}
 
@@ -727,6 +794,11 @@ func (my *Renderer) renderStats() error {
 			continue
 		}
 
+		// 判断是否应该跳过中间表类
+		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+			continue
+		}
+
 		// 生成统计类型
 		my.writeLine("# ", className, "聚合")
 		my.writeLine("type ", className, SUFFIX_STATS, " {")
@@ -746,18 +818,32 @@ func (my *Renderer) renderStats() error {
 				continue
 			}
 
+			// 判断字段类型是否引用了中间表类型
+			if !my.meta.cfg.Schema.ShowThrough {
+				// 检查字段是否引用了中间表类型
+				refType := field.Type
+				if field.Relation != nil && field.Relation.TargetClass != "" {
+					refType = field.Relation.TargetClass
+				}
+
+				// 如果引用的类型是中间表类型，则跳过该字段
+				if refClass, exists := my.meta.Nodes[refType]; exists && refClass.IsThrough {
+					continue
+				}
+			}
+
 			// 根据字段类型添加对应的统计类型
 			typeName := my.getGraphQLType(field)
 			switch typeName {
-			case SCALAR_INT, SCALAR_FLOAT, SCALAR_ID:
+			case SCALAR_ID, SCALAR_INT, SCALAR_FLOAT:
 				my.writeField(fieldName, TYPE_NUMBER_STATS)
 			case SCALAR_STRING:
 				my.writeField(fieldName, TYPE_STRING_STATS)
 			case SCALAR_DATE_TIME:
 				my.writeField(fieldName, TYPE_DATE_TIME_STATS)
-			case SCALAR_BOOLEAN:
-				my.writeField(fieldName+"True", SCALAR_INT)
-				my.writeField(fieldName+"False", SCALAR_INT)
+			default:
+				// 跳过不支持统计的类型
+				continue
 			}
 		}
 
@@ -789,6 +875,11 @@ func (my *Renderer) renderPaging() error {
 		class := my.meta.Nodes[className]
 		// 确保只处理真正的类名，跳过表名索引
 		if className != class.Name {
+			continue
+		}
+
+		// 判断是否应该跳过中间表类
+		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
 			continue
 		}
 
