@@ -33,6 +33,7 @@ func getTestMetadata(t *testing.T) (*Metadata, error) {
 	k.Set("schema.schema", "public")
 	k.Set("schema.show-through", true)
 	k.Set("schema.enable-camel-case", true)
+	k.Set("schema.table-prefix", []string{"sys_"})
 
 	// 创建元数据并从数据库加载
 	meta, err := NewMetadata(k, db)
