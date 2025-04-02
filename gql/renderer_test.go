@@ -31,7 +31,6 @@ func getTestMetadata(t *testing.T) (*Metadata, error) {
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
 	k.Set("schema.schema", "public")
-	k.Set("schema.show-through", true)
 	k.Set("schema.enable-camel-case", true)
 	k.Set("schema.table-prefix", []string{"sys_"})
 
