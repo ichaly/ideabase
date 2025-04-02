@@ -14,7 +14,7 @@ import (
 
 func TestGqlParserSchema(t *testing.T) {
 	// 从cfg/schema.graphql文件中读取数据
-	data, err := os.ReadFile(filepath.Join(utl.Root(), "cfg/schema_example.graphql"))
+	data, err := os.ReadFile(filepath.Join(utl.Root(), "cfg/schema.graphql"))
 	assert.NoError(t, err)
 
 	schema, err := gqlparser.LoadSchema(&ast.Source{
@@ -36,21 +36,9 @@ func TestIntrospection(t *testing.T) {
 	// 创建渲染器
 	renderer := NewRenderer(meta)
 
-	// 生成schema
-	data, err := renderer.Generate()
-	assert.NoError(t, err)
-
-	// 解析Schema
-	schema, err := gqlparser.LoadSchema(&ast.Source{
-		Name:  "test.graphql",
-		Input: data,
-	})
-	t.Log(err)
-	assert.NoError(t, err)
-
 	// 创建测试执行器
 	compiler := NewCompiler(nil) // 这里不需要元数据
-	executor, err := NewExecutor(nil, schema, compiler)
+	executor, err := NewExecutor(nil, renderer, compiler)
 	assert.NoError(t, err)
 
 	// 测试__schema查询
