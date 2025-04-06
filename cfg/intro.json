@@ -1,16 +1,12 @@
 {
   "data": {
     "__schema": {
-      "queryType": {
-        "name": "Query"
-      },
-      "types": [
+      "directives": [
         {
-          "fields": [
+          "args": [
             {
-              "args": [],
-              "isDeprecated": false,
-              "name": "username",
+              "description": "The URL that specifies the behavior of this scalar.",
+              "name": "url",
               "type": {
                 "kind": "NON_NULL",
                 "ofType": {
@@ -20,33 +16,2061 @@
               }
             }
           ],
-          "interfaces": [
+          "description": "Exposes a URL that specifies the behavior of this scalar.",
+          "locations": [
+            "SCALAR"
+          ],
+          "name": "specifiedBy"
+        },
+        {
+          "args": [],
+          "description": "Indicates exactly one field must be supplied and this field must not be `null`.",
+          "locations": [
+            "INPUT_OBJECT"
+          ],
+          "name": "oneOf"
+        },
+        {
+          "args": [
             {
-              "kind": "INTERFACE",
-              "name": "Character"
+              "defaultValue": "true",
+              "description": "Deferred when true or undefined.",
+              "name": "if",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Boolean"
+              }
+            },
+            {
+              "description": "Unique name",
+              "name": "label",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
             }
           ],
-          "kind": "OBJECT",
-          "name": "User"
+          "description": "Directs the executor to defer this fragment when the `if` argument is true or undefined.",
+          "locations": [
+            "FRAGMENT_SPREAD",
+            "INLINE_FRAGMENT"
+          ],
+          "name": "defer"
+        },
+        {
+          "args": [
+            {
+              "description": "Included when true.",
+              "name": "if",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Boolean"
+                }
+              }
+            }
+          ],
+          "description": "Directs the executor to include this field or fragment only when the `if` argument is true.",
+          "locations": [
+            "FIELD",
+            "FRAGMENT_SPREAD",
+            "INLINE_FRAGMENT"
+          ],
+          "name": "include"
+        },
+        {
+          "args": [
+            {
+              "description": "Skipped when true.",
+              "name": "if",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Boolean"
+                }
+              }
+            }
+          ],
+          "description": "Directs the executor to skip this field or fragment when the `if` argument is true.",
+          "locations": [
+            "FIELD",
+            "FRAGMENT_SPREAD",
+            "INLINE_FRAGMENT"
+          ],
+          "name": "skip"
+        },
+        {
+          "args": [
+            {
+              "defaultValue": "\"No longer supported\"",
+              "description": "Explains why this element was deprecated, usually also including a suggestion for how to access supported similar data. Formatted using the Markdown syntax, as specified by [CommonMark](https://commonmark.org/).",
+              "name": "reason",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            }
+          ],
+          "description": "Marks an element of a GraphQL schema as no longer supported.",
+          "locations": [
+            "FIELD_DEFINITION",
+            "ARGUMENT_DEFINITION",
+            "INPUT_FIELD_DEFINITION",
+            "ENUM_VALUE"
+          ],
+          "name": "deprecated"
+        }
+      ],
+      "mutationType": {
+        "name": "Mutation"
+      },
+      "queryType": {
+        "name": "Query"
+      },
+      "types": [
+        {
+          "inputFields": [
+            {
+              "name": "area",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            },
+            {
+              "name": "areaId",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            },
+            {
+              "name": "id",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            },
+            {
+              "name": "name",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            },
+            {
+              "name": "teams",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "UserSort"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "areaId",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            },
+            {
+              "name": "id",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "ID"
+                }
+              }
+            },
+            {
+              "name": "name",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "UserCreateInput"
         },
         {
           "fields": [
             {
               "args": [
                 {
-                  "description": "",
-                  "name": "id",
+                  "name": "data",
                   "type": {
                     "kind": "NON_NULL",
                     "ofType": {
-                      "kind": "SCALAR",
-                      "name": "String"
+                      "kind": "INPUT_OBJECT",
+                      "name": "AreaCreateInput"
                     }
                   }
                 }
               ],
               "isDeprecated": false,
+              "name": "createArea",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "Area"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "id",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "SCALAR",
+                      "name": "ID"
+                    }
+                  }
+                },
+                {
+                  "name": "data",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "INPUT_OBJECT",
+                      "name": "AreaUpdateInput"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "updateArea",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "Area"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "id",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "SCALAR",
+                      "name": "ID"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "deleteArea",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Boolean"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "filter",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "INPUT_OBJECT",
+                      "name": "AreaFilter"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "batchDeleteArea",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "data",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "INPUT_OBJECT",
+                      "name": "TeamCreateInput"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "createTeam",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "Team"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "id",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "SCALAR",
+                      "name": "ID"
+                    }
+                  }
+                },
+                {
+                  "name": "data",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "INPUT_OBJECT",
+                      "name": "TeamUpdateInput"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "updateTeam",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "Team"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "id",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "SCALAR",
+                      "name": "ID"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "deleteTeam",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Boolean"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "filter",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "INPUT_OBJECT",
+                      "name": "TeamFilter"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "batchDeleteTeam",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "data",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "INPUT_OBJECT",
+                      "name": "UserCreateInput"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "createUser",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "User"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "id",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "SCALAR",
+                      "name": "ID"
+                    }
+                  }
+                },
+                {
+                  "name": "data",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "INPUT_OBJECT",
+                      "name": "UserUpdateInput"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "updateUser",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "User"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "id",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "SCALAR",
+                      "name": "ID"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "deleteUser",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Boolean"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "filter",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "INPUT_OBJECT",
+                      "name": "UserFilter"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "batchDeleteUser",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "Mutation"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "key",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Json"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "count",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "AreaGroup"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "is",
+              "type": {
+                "kind": "ENUM",
+                "name": "IsInput"
+              }
+            },
+            {
+              "name": "eq",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            },
+            {
+              "name": "in",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                }
+              }
+            },
+            {
+              "name": "hasKey",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAny",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAll",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "le",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            },
+            {
+              "name": "ne",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "IntFilter"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "areaId",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            },
+            {
+              "name": "name",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "relation",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "RelationInput"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "UserUpdateInput"
+        },
+        {
+          "kind": "SCALAR",
+          "name": "Json"
+        },
+        {
+          "enumValues": [
+            {
+              "isDeprecated": false,
+              "name": "ASC"
+            },
+            {
+              "isDeprecated": false,
+              "name": "DESC"
+            },
+            {
+              "isDeprecated": false,
+              "name": "ASC_NULLS_FIRST"
+            },
+            {
+              "isDeprecated": false,
+              "name": "DESC_NULLS_FIRST"
+            },
+            {
+              "isDeprecated": false,
+              "name": "ASC_NULLS_LAST"
+            },
+            {
+              "isDeprecated": false,
+              "name": "DESC_NULLS_LAST"
+            }
+          ],
+          "kind": "ENUM",
+          "name": "SortDirection"
+        },
+        {
+          "enumValues": [
+            {
+              "isDeprecated": false,
+              "name": "NULL"
+            },
+            {
+              "isDeprecated": false,
+              "name": "NOT_NULL"
+            }
+          ],
+          "kind": "ENUM",
+          "name": "IsInput"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "items",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "LIST",
+                  "ofType": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "OBJECT",
+                      "name": "Team"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "pageInfo",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "PageInfo"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "total",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "TeamPage"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "name",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "pid",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            },
+            {
+              "name": "weight",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            },
+            {
+              "name": "relation",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "RelationInput"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "AreaUpdateInput"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "hasNext",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Boolean"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "hasPrev",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Boolean"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "start",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Cursor"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "end",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Cursor"
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "PageInfo"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "name",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "relation",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "RelationInput"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "TeamUpdateInput"
+        },
+        {
+          "description": "The `ID` scalar type represents a unique identifier, often used to refetch an object or as key for a cache. The ID type appears in a JSON response as a String; however, it is not intended to be human-readable. When expected as an input type, any string (such as \"4\") or integer (such as 4) input value will be accepted as an ID.",
+          "kind": "SCALAR",
+          "name": "ID"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "area",
+              "type": {
+                "kind": "OBJECT",
+                "name": "Area"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "areaId",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "id",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "ID"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "name",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "teams",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "LIST",
+                  "ofType": {
+                    "kind": "OBJECT",
+                    "name": "Team"
+                  }
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "User"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "eq",
+              "type": {
+                "kind": "SCALAR",
+                "name": "ID"
+              }
+            },
+            {
+              "name": "in",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "SCALAR",
+                    "name": "ID"
+                  }
+                }
+              }
+            },
+            {
+              "name": "hasKey",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAny",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAll",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "le",
+              "type": {
+                "kind": "SCALAR",
+                "name": "ID"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "IDFilter"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "id",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            },
+            {
+              "name": "name",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            },
+            {
               "name": "users",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "TeamSort"
+        },
+        {
+          "kind": "SCALAR",
+          "name": "DateTime"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "items",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "LIST",
+                  "ofType": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "OBJECT",
+                      "name": "Area"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "pageInfo",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "PageInfo"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "total",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "AreaPage"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "is",
+              "type": {
+                "kind": "ENUM",
+                "name": "IsInput"
+              }
+            },
+            {
+              "name": "eq",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Float"
+              }
+            },
+            {
+              "name": "in",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "SCALAR",
+                    "name": "Float"
+                  }
+                }
+              }
+            },
+            {
+              "name": "hasKey",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAny",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAll",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "le",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Float"
+              }
+            },
+            {
+              "name": "ne",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Float"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "FloatFilter"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "areaId",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "IntFilter"
+              }
+            },
+            {
+              "name": "id",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "IDFilter"
+              }
+            },
+            {
+              "name": "name",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "StringFilter"
+              }
+            },
+            {
+              "name": "and",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "UserFilter"
+                  }
+                }
+              }
+            },
+            {
+              "name": "or",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "UserFilter"
+                  }
+                }
+              }
+            },
+            {
+              "name": "not",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "UserFilter"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "UserFilter"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "min",
+              "type": {
+                "kind": "SCALAR",
+                "name": "DateTime"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "max",
+              "type": {
+                "kind": "SCALAR",
+                "name": "DateTime"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "count",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "countDistinct",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "DateTimeStats"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "key",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Json"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "count",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "UserGroup"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "eq",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Boolean"
+              }
+            },
+            {
+              "name": "in",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "SCALAR",
+                    "name": "Boolean"
+                  }
+                }
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "BooleanFilter"
+        },
+        {
+          "fields": [
+            {
+              "args": [
+                {
+                  "name": "id",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "SCALAR",
+                      "name": "ID"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "area",
+              "type": {
+                "kind": "OBJECT",
+                "name": "Area"
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "filter",
+                  "type": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "AreaFilter"
+                  }
+                },
+                {
+                  "name": "sort",
+                  "type": {
+                    "kind": "LIST",
+                    "ofType": {
+                      "kind": "NON_NULL",
+                      "ofType": {
+                        "kind": "INPUT_OBJECT",
+                        "name": "AreaSort"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "limit",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "offset",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "first",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "last",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "after",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Cursor"
+                  }
+                },
+                {
+                  "name": "before",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Cursor"
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "areas",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "AreaPage"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "filter",
+                  "type": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "AreaFilter"
+                  }
+                },
+                {
+                  "name": "groupBy",
+                  "type": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "GroupBy"
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "areaStats",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "AreaStats"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "id",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "SCALAR",
+                      "name": "ID"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "team",
+              "type": {
+                "kind": "OBJECT",
+                "name": "Team"
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "filter",
+                  "type": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "TeamFilter"
+                  }
+                },
+                {
+                  "name": "sort",
+                  "type": {
+                    "kind": "LIST",
+                    "ofType": {
+                      "kind": "NON_NULL",
+                      "ofType": {
+                        "kind": "INPUT_OBJECT",
+                        "name": "TeamSort"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "limit",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "offset",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "first",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "last",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "after",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Cursor"
+                  }
+                },
+                {
+                  "name": "before",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Cursor"
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "teams",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "TeamPage"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "filter",
+                  "type": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "TeamFilter"
+                  }
+                },
+                {
+                  "name": "groupBy",
+                  "type": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "GroupBy"
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "teamStats",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "TeamStats"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "id",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "SCALAR",
+                      "name": "ID"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "user",
+              "type": {
+                "kind": "OBJECT",
+                "name": "User"
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "filter",
+                  "type": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "UserFilter"
+                  }
+                },
+                {
+                  "name": "sort",
+                  "type": {
+                    "kind": "LIST",
+                    "ofType": {
+                      "kind": "NON_NULL",
+                      "ofType": {
+                        "kind": "INPUT_OBJECT",
+                        "name": "UserSort"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "limit",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "offset",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "first",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "last",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Int"
+                  }
+                },
+                {
+                  "name": "after",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Cursor"
+                  }
+                },
+                {
+                  "name": "before",
+                  "type": {
+                    "kind": "SCALAR",
+                    "name": "Cursor"
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "users",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "UserPage"
+                }
+              }
+            },
+            {
+              "args": [
+                {
+                  "name": "filter",
+                  "type": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "UserFilter"
+                  }
+                },
+                {
+                  "name": "groupBy",
+                  "type": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "GroupBy"
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "userStats",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "UserStats"
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "Query"
+        },
+        {
+          "description": "The `Int` scalar type represents non-fractional signed whole numeric values. Int can represent values between -(2^31) and 2^31 - 1.",
+          "kind": "SCALAR",
+          "name": "Int"
+        },
+        {
+          "description": "The `Float` scalar type represents signed double-precision fractional values as specified by [IEEE 754](http://en.wikipedia.org/wiki/IEEE_floating_point).",
+          "kind": "SCALAR",
+          "name": "Float"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "is",
+              "type": {
+                "kind": "ENUM",
+                "name": "IsInput"
+              }
+            },
+            {
+              "name": "eq",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Json"
+              }
+            },
+            {
+              "name": "in",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "SCALAR",
+                    "name": "Json"
+                  }
+                }
+              }
+            },
+            {
+              "name": "hasKey",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAny",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAll",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "JsonFilter"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "id",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "ID"
+                }
+              }
+            },
+            {
+              "name": "name",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "pid",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            },
+            {
+              "name": "weight",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "AreaCreateInput"
+        },
+        {
+          "kind": "SCALAR",
+          "name": "Cursor"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "is",
+              "type": {
+                "kind": "ENUM",
+                "name": "IsInput"
+              }
+            },
+            {
+              "name": "eq",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "in",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "SCALAR",
+                    "name": "String"
+                  }
+                }
+              }
+            },
+            {
+              "name": "hasKey",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAny",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAll",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "le",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "ne",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "like",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "iLike",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "regex",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "iRegex",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "StringFilter"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "id",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "ID"
+                }
+              }
+            },
+            {
+              "name": "name",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "TeamCreateInput"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "id",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "ID"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "name",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "users",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "LIST",
+                  "ofType": {
+                    "kind": "OBJECT",
+                    "name": "User"
+                  }
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "Team"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "id",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "ID"
+                }
+              }
+            },
+            {
+              "name": "connect",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "SCALAR",
+                    "name": "ID"
+                  }
+                }
+              }
+            },
+            {
+              "name": "disconnect",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "SCALAR",
+                    "name": "ID"
+                  }
+                }
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "RelationInput"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "is",
+              "type": {
+                "kind": "ENUM",
+                "name": "IsInput"
+              }
+            },
+            {
+              "name": "eq",
+              "type": {
+                "kind": "SCALAR",
+                "name": "DateTime"
+              }
+            },
+            {
+              "name": "in",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "SCALAR",
+                    "name": "DateTime"
+                  }
+                }
+              }
+            },
+            {
+              "name": "hasKey",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAny",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "hasKeyAll",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "name": "le",
+              "type": {
+                "kind": "SCALAR",
+                "name": "DateTime"
+              }
+            },
+            {
+              "name": "ne",
+              "type": {
+                "kind": "SCALAR",
+                "name": "DateTime"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "DateTimeFilter"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "id",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            },
+            {
+              "name": "name",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            },
+            {
+              "name": "pid",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            },
+            {
+              "name": "users",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            },
+            {
+              "name": "weight",
+              "type": {
+                "kind": "ENUM",
+                "name": "SortDirection"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "AreaSort"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "items",
               "type": {
                 "kind": "NON_NULL",
                 "ofType": {
@@ -60,14 +2084,352 @@
                   }
                 }
               }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "pageInfo",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "OBJECT",
+                  "name": "PageInfo"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "total",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
             }
           ],
           "interfaces": [],
           "kind": "OBJECT",
-          "name": "Query"
+          "name": "UserPage"
         },
         {
-          "description": "The `String` scalar type represents textual data, represented as UTF-8 character sequences. The String type is most often used by GraphQL to represent free-form human-readable text.",
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "count",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "id",
+              "type": {
+                "kind": "OBJECT",
+                "name": "NumberStats"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "name",
+              "type": {
+                "kind": "OBJECT",
+                "name": "StringStats"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "pid",
+              "type": {
+                "kind": "OBJECT",
+                "name": "NumberStats"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "weight",
+              "type": {
+                "kind": "OBJECT",
+                "name": "NumberStats"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "groupBy",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "OBJECT",
+                    "name": "AreaGroup"
+                  }
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "AreaStats"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "id",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "IDFilter"
+              }
+            },
+            {
+              "name": "name",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "StringFilter"
+              }
+            },
+            {
+              "name": "pid",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "IntFilter"
+              }
+            },
+            {
+              "name": "weight",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "IntFilter"
+              }
+            },
+            {
+              "name": "and",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "AreaFilter"
+                  }
+                }
+              }
+            },
+            {
+              "name": "or",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "AreaFilter"
+                  }
+                }
+              }
+            },
+            {
+              "name": "not",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "AreaFilter"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "AreaFilter"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "id",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "ID"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "name",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "pid",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "users",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "LIST",
+                  "ofType": {
+                    "kind": "OBJECT",
+                    "name": "User"
+                  }
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "weight",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "Area"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "sum",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Float"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "avg",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Float"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "min",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Float"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "max",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Float"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "count",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "countDistinct",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "NumberStats"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "min",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "max",
+              "type": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "count",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "countDistinct",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "StringStats"
+        },
+        {
+          "description": "The `String`scalar type represents textual data, represented as UTF-8 character sequences. The String type is most often used by GraphQL to represent free-form human-readable text.",
           "kind": "SCALAR",
           "name": "String"
         },
@@ -76,23 +2438,242 @@
             {
               "args": [],
               "isDeprecated": false,
-              "name": "username",
+              "name": "key",
               "type": {
                 "kind": "NON_NULL",
                 "ofType": {
-                  "name": "String"
+                  "kind": "SCALAR",
+                  "name": "Json"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "count",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
                 }
               }
             }
           ],
           "interfaces": [],
-          "kind": "INTERFACE",
-          "name": "Character",
-          "possibleTypes": [
+          "kind": "OBJECT",
+          "name": "TeamGroup"
+        },
+        {
+          "inputFields": [
             {
-              "name": "User"
+              "name": "id",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "IDFilter"
+              }
+            },
+            {
+              "name": "name",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "StringFilter"
+              }
+            },
+            {
+              "name": "and",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "TeamFilter"
+                  }
+                }
+              }
+            },
+            {
+              "name": "or",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "INPUT_OBJECT",
+                    "name": "TeamFilter"
+                  }
+                }
+              }
+            },
+            {
+              "name": "not",
+              "type": {
+                "kind": "INPUT_OBJECT",
+                "name": "TeamFilter"
+              }
             }
-          ]
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "TeamFilter"
+        },
+        {
+          "inputFields": [
+            {
+              "name": "fields",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "SCALAR",
+                    "name": "String"
+                  }
+                }
+              }
+            },
+            {
+              "name": "having",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Json"
+              }
+            },
+            {
+              "name": "limit",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Int"
+              }
+            },
+            {
+              "name": "sort",
+              "type": {
+                "kind": "SCALAR",
+                "name": "Json"
+              }
+            }
+          ],
+          "kind": "INPUT_OBJECT",
+          "name": "GroupBy"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "count",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "id",
+              "type": {
+                "kind": "OBJECT",
+                "name": "NumberStats"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "name",
+              "type": {
+                "kind": "OBJECT",
+                "name": "StringStats"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "groupBy",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "OBJECT",
+                    "name": "TeamGroup"
+                  }
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "TeamStats"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "count",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "Int"
+                }
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "areaId",
+              "type": {
+                "kind": "OBJECT",
+                "name": "NumberStats"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "id",
+              "type": {
+                "kind": "OBJECT",
+                "name": "NumberStats"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "name",
+              "type": {
+                "kind": "OBJECT",
+                "name": "StringStats"
+              }
+            },
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "groupBy",
+              "type": {
+                "kind": "LIST",
+                "ofType": {
+                  "kind": "NON_NULL",
+                  "ofType": {
+                    "kind": "OBJECT",
+                    "name": "UserGroup"
+                  }
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "UserStats"
+        },
+        {
+          "description": "The `Boolean` scalar type represents `true` or `false`.",
+          "kind": "SCALAR",
+          "name": "Boolean"
         }
       ]
     }
