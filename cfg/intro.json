@@ -1,0 +1,100 @@
+{
+  "data": {
+    "__schema": {
+      "queryType": {
+        "name": "Query"
+      },
+      "types": [
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "username",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "String"
+                }
+              }
+            }
+          ],
+          "interfaces": [
+            {
+              "kind": "INTERFACE",
+              "name": "Character"
+            }
+          ],
+          "kind": "OBJECT",
+          "name": "User"
+        },
+        {
+          "fields": [
+            {
+              "args": [
+                {
+                  "description": "",
+                  "name": "id",
+                  "type": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "SCALAR",
+                      "name": "String"
+                    }
+                  }
+                }
+              ],
+              "isDeprecated": false,
+              "name": "users",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "kind": "LIST",
+                  "ofType": {
+                    "kind": "NON_NULL",
+                    "ofType": {
+                      "kind": "OBJECT",
+                      "name": "User"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "OBJECT",
+          "name": "Query"
+        },
+        {
+          "description": "The `String` scalar type represents textual data, represented as UTF-8 character sequences. The String type is most often used by GraphQL to represent free-form human-readable text.",
+          "kind": "SCALAR",
+          "name": "String"
+        },
+        {
+          "fields": [
+            {
+              "args": [],
+              "isDeprecated": false,
+              "name": "username",
+              "type": {
+                "kind": "NON_NULL",
+                "ofType": {
+                  "name": "String"
+                }
+              }
+            }
+          ],
+          "interfaces": [],
+          "kind": "INTERFACE",
+          "name": "Character",
+          "possibleTypes": [
+            {
+              "name": "User"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
