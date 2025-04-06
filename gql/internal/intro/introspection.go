@@ -19,8 +19,7 @@ func New(schema *ast.Schema) *Handler {
 }
 
 // Introspect 处理自省查询
-func (my *Handler) Introspect(ctx context.Context, query string, variables map[string]interface{}) (interface{}, error) {
-	// 检查是否是自省查询
+func (my *Handler) Introspect(ctx context.Context, query string, variables map[string]interface{}) (map[string]interface{}, error) {
 	if strings.Contains(query, "__schema") {
 		return my.handleSchemaQuery(variables)
 	} else if strings.Contains(query, "__type") {
@@ -35,7 +34,7 @@ func (my *Handler) Introspect(ctx context.Context, query string, variables map[s
 }
 
 // handleSchemaQuery 处理__schema查询
-func (my *Handler) handleSchemaQuery(variables map[string]interface{}) (interface{}, error) {
+func (my *Handler) handleSchemaQuery(variables map[string]interface{}) (map[string]interface{}, error) {
 	result := map[string]interface{}{
 		"__schema": my.getSchemaInfo(),
 	}
@@ -44,7 +43,7 @@ func (my *Handler) handleSchemaQuery(variables map[string]interface{}) (interfac
 }
 
 // handleTypeQuery 处理__type查询
-func (my *Handler) handleTypeQuery(typeName string) (interface{}, error) {
+func (my *Handler) handleTypeQuery(typeName string) (map[string]interface{}, error) {
 	typeDef := my.schema.Types[typeName]
 	if typeDef == nil {
 		return map[string]interface{}{

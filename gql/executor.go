@@ -117,16 +117,7 @@ func (my *Executor) Execute(ctx context.Context, query string, variables RawMess
 			return
 		}
 
-		// 将结果转换为map
-		dataJson, err := json.Marshal(data)
-		if err != nil {
-			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
-			return
-		}
-
-		if err := json.Unmarshal(dataJson, &r.Data); err != nil {
-			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
-		}
+		r.Data = data
 		return
 	}
 
