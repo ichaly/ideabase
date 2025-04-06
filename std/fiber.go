@@ -73,14 +73,16 @@ func NewFiber(c *Config) *fiber.App {
 	}))
 
 	// CSRF保护中间件 - 防止跨站请求伪造
-	app.Use(csrf.New(csrf.Config{
-		KeyLookup:      fiberConf.CSRFKeyLookup,
-		CookieName:     fiberConf.CSRFCookieName,
-		CookieSameSite: fiberConf.CSRFCookieSameSite,
-		Expiration:     fiberConf.CSRFExpiration,
-		// 调试模式下可以关闭
-		CookieSecure: !c.IsDebug(),
-	}))
+	if !c.IsDebug() {
+		app.Use(csrf.New(csrf.Config{
+			KeyLookup:      fiberConf.CSRFKeyLookup,
+			CookieName:     fiberConf.CSRFCookieName,
+			CookieSameSite: fiberConf.CSRFCookieSameSite,
+			Expiration:     fiberConf.CSRFExpiration,
+			// 调试模式下可以关闭
+			CookieSecure: !c.IsDebug(),
+		}))
+	}
 
 	// 请求限制中间件 - 防止DoS攻击
 	app.Use(limiter.New(limiter.Config{
