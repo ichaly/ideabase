@@ -127,7 +127,7 @@ func (my *Handler) getFullType(def *ast.Definition) map[string]interface{} {
 	}
 
 	// 处理接口
-	if (def.Kind == ast.Object || def.Kind == ast.Interface) && len(def.Interfaces) > 0 {
+	if def.Kind == ast.Object || def.Kind == ast.Interface {
 		interfaces := make([]map[string]interface{}, 0, len(def.Interfaces))
 		for _, iface := range def.Interfaces {
 			ifaceDef := my.schema.Types[iface]
