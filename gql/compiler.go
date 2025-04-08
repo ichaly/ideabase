@@ -8,6 +8,30 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
+// Dialect 定义SQL方言接口
+type Dialect interface {
+	// QuoteIdentifier 为标识符添加引号
+	QuoteIdentifier(identifier string) string
+
+	// ParamPlaceholder 获取参数占位符 (如: PostgreSQL的$1,$2..., MySQL的?)
+	ParamPlaceholder(index int) string
+
+	// FormatLimit 格式化LIMIT子句
+	FormatLimit(limit, offset int) string
+
+	// BuildQuery 构建查询语句
+	BuildQuery(ctx *Context, set ast.SelectionSet) error
+
+	// BuildMutation 构建变更语句
+	BuildMutation(ctx *Context, set ast.SelectionSet) error
+
+	// SupportsReturning 是否支持RETURNING子句
+	SupportsReturning() bool
+
+	// SupportsWithCTE 是否支持WITH CTE
+	SupportsWithCTE() bool
+}
+
 // Compiler GraphQL编译器
 type Compiler struct {
 	meta *Metadata
@@ -20,13 +44,13 @@ func NewCompiler(m *Metadata) *Compiler {
 
 // Compile 编译GraphQL操作为SQL
 func (my *Compiler) Compile(operation *ast.OperationDefinition, variables RawMessage) (string, []any) {
-	c := newContext(my.meta)
+	c := NewContext(my.meta)
 	c.Render(operation, variables)
 	return c.String(), c.params
 }
 
-// compilerContext 编译上下文
-type compilerContext struct {
+// Context 编译上下文
+type Context struct {
 	buf        *bytes.Buffer
 	meta       *Metadata
 	params     []any
@@ -34,9 +58,9 @@ type compilerContext struct {
 	dictionary map[int]int
 }
 
-// newContext 创建新的编译上下文
-func newContext(m *Metadata) *compilerContext {
-	return &compilerContext{
+// NewContext 创建新的编译上下文
+func NewContext(m *Metadata) *Context {
+	return &Context{
 		meta:       m,
 		buf:        bytes.NewBuffer([]byte{}),
 		dictionary: make(map[int]int),
@@ -45,7 +69,7 @@ func newContext(m *Metadata) *compilerContext {
 }
 
 // Wrap 包装内容
-func (my *compilerContext) Wrap(with string, list ...any) *compilerContext {
+func (my *Context) Wrap(with string, list ...any) *Context {
 	my.Write(with)
 	my.Write(list...)
 	my.Write(with)
@@ -53,7 +77,7 @@ func (my *compilerContext) Wrap(with string, list ...any) *compilerContext {
 }
 
 // Write 写入内容
-func (my *compilerContext) Write(list ...any) *compilerContext {
+func (my *Context) Write(list ...any) *Context {
 	for _, e := range list {
 		my.buf.WriteString(fmt.Sprint(e))
 	}
@@ -61,24 +85,24 @@ func (my *compilerContext) Write(list ...any) *compilerContext {
 }
 
 // Space 添加空格
-func (my *compilerContext) Space(list ...any) *compilerContext {
+func (my *Context) Space(list ...any) *Context {
 	my.Wrap(` `, list...)
 	return my
 }
 
 // Quoted 添加引号
-func (my *compilerContext) Quoted(list ...any) *compilerContext {
+func (my *Context) Quoted(list ...any) *Context {
 	my.Wrap(`"`, list...)
 	return my
 }
 
 // String 获取字符串结果
-func (my *compilerContext) String() string {
+func (my *Context) String() string {
 	return strings.TrimSpace(my.buf.String())
 }
 
 // Render 渲染操作
-func (my *compilerContext) Render(operation *ast.OperationDefinition, variables RawMessage) {
+func (my *Context) Render(operation *ast.OperationDefinition, variables RawMessage) {
 	_ = json.Unmarshal(variables, &my.variables)
 	switch operation.Operation {
 	case ast.Query, ast.Subscription:
@@ -89,13 +113,13 @@ func (my *compilerContext) Render(operation *ast.OperationDefinition, variables 
 }
 
 // fieldId 获取字段ID
-func (my *compilerContext) fieldId(field *ast.Field) int {
+func (my *Context) fieldId(field *ast.Field) int {
 	p := field.GetPosition()
 	return p.Line<<32 | p.Column
 }
 
 // renderParam 渲染参数
-func (my *compilerContext) renderParam(value *ast.Value) {
+func (my *Context) renderParam(value *ast.Value) {
 	val, err := value.Value(my.variables)
 	if err != nil {
 		my.params = append(my.params, nil)
@@ -106,11 +130,11 @@ func (my *compilerContext) renderParam(value *ast.Value) {
 }
 
 // renderQuery 渲染查询
-func (my *compilerContext) renderQuery(selectionSet ast.SelectionSet) {
+func (my *Context) renderQuery(selectionSet ast.SelectionSet) {
 	// TODO: 实现查询渲染
 }
 
 // renderMutation 渲染变更
-func (my *compilerContext) renderMutation(selectionSet ast.SelectionSet) {
+func (my *Context) renderMutation(selectionSet ast.SelectionSet) {
 	// TODO: 实现变更渲染
 }
