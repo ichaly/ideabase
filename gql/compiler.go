@@ -8,6 +8,23 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
+// Compiler GraphQL编译器
+type Compiler struct {
+	meta *Metadata
+}
+
+// NewCompiler 创建一个新的编译器
+func NewCompiler(m *Metadata) *Compiler {
+	return &Compiler{meta: m}
+}
+
+// Compile 编译GraphQL操作为SQL
+func (my *Compiler) Compile(operation *ast.OperationDefinition, variables RawMessage) string {
+	c := NewContext(my.meta)
+	c.Render(operation, variables)
+	return c.String()
+}
+
 // Dialect 定义SQL方言接口
 type Dialect interface {
 	// QuoteIdentifier 为标识符添加引号
@@ -30,23 +47,6 @@ type Dialect interface {
 
 	// SupportsWithCTE 是否支持WITH CTE
 	SupportsWithCTE() bool
-}
-
-// Compiler GraphQL编译器
-type Compiler struct {
-	meta *Metadata
-}
-
-// NewCompiler 创建一个新的编译器
-func NewCompiler(m *Metadata) *Compiler {
-	return &Compiler{meta: m}
-}
-
-// Compile 编译GraphQL操作为SQL
-func (my *Compiler) Compile(operation *ast.OperationDefinition, variables RawMessage) (string, []any) {
-	c := NewContext(my.meta)
-	c.Render(operation, variables)
-	return c.String(), c.params
 }
 
 // Context 编译上下文
@@ -130,11 +130,11 @@ func (my *Context) renderParam(value *ast.Value) {
 }
 
 // renderQuery 渲染查询
-func (my *Context) renderQuery(selectionSet ast.SelectionSet) {
+func (my *Context) renderQuery(set ast.SelectionSet) {
 	// TODO: 实现查询渲染
 }
 
 // renderMutation 渲染变更
-func (my *Context) renderMutation(selectionSet ast.SelectionSet) {
+func (my *Context) renderMutation(set ast.SelectionSet) {
 	// TODO: 实现变更渲染
 }
