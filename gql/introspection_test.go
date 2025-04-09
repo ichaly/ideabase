@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ichaly/ideabase/utl"
@@ -12,6 +13,68 @@ import (
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
+
+// mockPgsqlDialect 测试用的PostgreSQL方言实现
+type mockPgsqlDialect struct{}
+
+// QuoteIdentifier 为标识符添加引号
+func (my *mockPgsqlDialect) QuoteIdentifier(identifier string) string {
+	parts := strings.Split(identifier, ".")
+	for i, part := range parts {
+		if part != "*" {
+			parts[i] = "\"" + part + "\""
+		}
+	}
+	return strings.Join(parts, ".")
+}
+
+// ParamPlaceholder 获取参数占位符 (PostgreSQL使用$1,$2...)
+func (my *mockPgsqlDialect) ParamPlaceholder(index int) string {
+	return fmt.Sprintf("$%d", index)
+}
+
+// FormatLimit 格式化LIMIT子句
+func (my *mockPgsqlDialect) FormatLimit(limit, offset int) string {
+	if limit <= 0 && offset <= 0 {
+		return ""
+	}
+
+	var result string
+	if limit > 0 {
+		result = fmt.Sprintf("LIMIT %d", limit)
+	}
+
+	if offset > 0 {
+		if len(result) > 0 {
+			result += " "
+		}
+		result += fmt.Sprintf("OFFSET %d", offset)
+	}
+
+	return result
+}
+
+// BuildQuery 构建查询语句
+func (my *mockPgsqlDialect) BuildQuery(ctx *Context, selectionSet ast.SelectionSet) error {
+	ctx.Write("SELECT * FROM ")
+	return nil
+}
+
+// BuildMutation 构建变更语句
+func (my *mockPgsqlDialect) BuildMutation(ctx *Context, selectionSet ast.SelectionSet) error {
+	ctx.Write("-- PostgreSQL mutation placeholder")
+	return nil
+}
+
+// SupportsReturning 是否支持RETURNING子句
+func (my *mockPgsqlDialect) SupportsReturning() bool {
+	return true
+}
+
+// SupportsWithCTE 是否支持WITH CTE
+func (my *mockPgsqlDialect) SupportsWithCTE() bool {
+	return true
+}
 
 func TestGqlParserSchema(t *testing.T) {
 	// 从cfg/schema.graphql文件中读取数据
@@ -29,6 +92,9 @@ func TestGqlParserSchema(t *testing.T) {
 
 // TestIntrospection 测试自省功能
 func TestIntrospection(t *testing.T) {
+	// 注册测试用的PostgreSQL方言
+	RegisterDialect("postgresql", &mockPgsqlDialect{})
+	
 	// 从数据库或模拟数据获取元数据
 	meta, err := getTestMetadata(t)
 	if err != nil {
@@ -37,11 +103,8 @@ func TestIntrospection(t *testing.T) {
 	// 创建渲染器
 	renderer := NewRenderer(meta)
 
-	// 注册一个简单的测试方言实现
-	RegisterTestDialect()
-	
 	// 创建测试执行器
-	compiler, err := NewCompiler(nil) // 这里不需要元数据
+	compiler, err := NewCompiler(meta) // 使用元数据初始化编译器
 	assert.NoError(t, err)
 	executor, err := NewExecutor(nil, renderer, compiler)
 	assert.NoError(t, err)
@@ -115,35 +178,4 @@ func TestIntrospection(t *testing.T) {
 		assert.True(t, ok, "结果中应包含fields")
 		assert.NotEmpty(t, fields)
 	})
-}
-
-// RegisterTestDialect 注册一个简单的测试用SQL方言实现
-func RegisterTestDialect() {
-	// 如果尚未注册任何方言，则注册一个简单的测试方言
-	if len(dialects) == 0 {
-		// 注册一个最小化的测试方言
-		RegisterDialect("test", &testDialect{})
-	}
-}
-
-// testDialect 是一个简单的测试用SQL方言实现
-type testDialect struct{}
-
-func (d *testDialect) Name() string { return "test" }
-
-func (d *testDialect) CompileQuery(meta *Metadata, query *ast.QueryDocument, vars map[string]interface{}) (*CompileResult, error) {
-	// 返回一个最小化的编译结果，仅用于测试
-	return &CompileResult{
-		SQL:    "SELECT 1",
-		Args:   []interface{}{},
-		Fields: []*ResultField{},
-	}, nil
-}
-
-func (d *testDialect) CompileSubscription(meta *Metadata, query *ast.QueryDocument, vars map[string]interface{}) (*CompileResult, error) {
-	return d.CompileQuery(meta, query, vars)
-}
-
-func (d *testDialect) CompileMutation(meta *Metadata, query *ast.QueryDocument, vars map[string]interface{}) (*CompileResult, error) {
-	return d.CompileQuery(meta, query, vars)
 }
