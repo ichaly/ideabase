@@ -17,9 +17,9 @@ const (
 
 // Symbol 表示操作符号
 type Symbol struct {
-	Name  string
-	Value string
-	Desc  string
+	Name        string
+	Value       string
+	Description string
 }
 
 // Class 表示一个数据类/表的完整定义

@@ -187,21 +187,21 @@ var dataTypes = map[string]string{
 
 // 顺序不要调整这个会影响内置标量的可用操作符
 var operators = []*internal.Symbol{
-	{IS, "is", descIs},
-	{EQ, "=", descEqual},
-	{IN, "in", descIn},
-	{GT, ">", descGreaterThan},
-	{GE, ">=", descGreaterThanOrEqual},
-	{LT, "<", descLessThan},
-	{LE, "<=", descLessThanOrEqual},
-	{NE, "!=", descNotEqual},
-	{LIKE, "like", descLike},
-	{I_LIKE, "ilike", descILike},
-	{REGEX, "~", descRegex},
-	{I_REGEX, "~*", descIRegex},
-	{HAS_KEY, "hasKey", descHasKey},
-	{HAS_KEY_ANY, "hasKeyAny", descHasKeyAny},
-	{HAS_KEY_ALL, "hasKeyAll", descHasKeyAll},
+	{Name: IS, Value: "is", Description: descIs},
+	{Name: EQ, Value: "=", Description: descEqual},
+	{Name: IN, Value: "in", Description: descIn},
+	{Name: GT, Value: ">", Description: descGreaterThan},
+	{Name: GE, Value: ">=", Description: descGreaterThanOrEqual},
+	{Name: LT, Value: "<", Description: descLessThan},
+	{Name: LE, Value: "<=", Description: descLessThanOrEqual},
+	{Name: NE, Value: "!=", Description: descNotEqual},
+	{Name: LIKE, Value: "like", Description: descLike},
+	{Name: I_LIKE, Value: "ilike", Description: descILike},
+	{Name: REGEX, Value: "~", Description: descRegex},
+	{Name: I_REGEX, Value: "~*", Description: descIRegex},
+	{Name: HAS_KEY, Value: "hasKey", Description: descHasKey},
+	{Name: HAS_KEY_ANY, Value: "hasKeyAny", Description: descHasKeyAny},
+	{Name: HAS_KEY_ALL, Value: "hasKeyAll", Description: descHasKeyAll},
 }
 
 // 构建操作符和内置标量的关系

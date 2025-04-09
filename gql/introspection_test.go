@@ -37,8 +37,12 @@ func TestIntrospection(t *testing.T) {
 	// 创建渲染器
 	renderer := NewRenderer(meta)
 
+	// 注册一个简单的测试方言实现
+	RegisterTestDialect()
+	
 	// 创建测试执行器
-	compiler := NewCompiler(nil) // 这里不需要元数据
+	compiler, err := NewCompiler(nil) // 这里不需要元数据
+	assert.NoError(t, err)
 	executor, err := NewExecutor(nil, renderer, compiler)
 	assert.NoError(t, err)
 
@@ -111,4 +115,35 @@ func TestIntrospection(t *testing.T) {
 		assert.True(t, ok, "结果中应包含fields")
 		assert.NotEmpty(t, fields)
 	})
+}
+
+// RegisterTestDialect 注册一个简单的测试用SQL方言实现
+func RegisterTestDialect() {
+	// 如果尚未注册任何方言，则注册一个简单的测试方言
+	if len(dialects) == 0 {
+		// 注册一个最小化的测试方言
+		RegisterDialect("test", &testDialect{})
+	}
+}
+
+// testDialect 是一个简单的测试用SQL方言实现
+type testDialect struct{}
+
+func (d *testDialect) Name() string { return "test" }
+
+func (d *testDialect) CompileQuery(meta *Metadata, query *ast.QueryDocument, vars map[string]interface{}) (*CompileResult, error) {
+	// 返回一个最小化的编译结果，仅用于测试
+	return &CompileResult{
+		SQL:    "SELECT 1",
+		Args:   []interface{}{},
+		Fields: []*ResultField{},
+	}, nil
+}
+
+func (d *testDialect) CompileSubscription(meta *Metadata, query *ast.QueryDocument, vars map[string]interface{}) (*CompileResult, error) {
+	return d.CompileQuery(meta, query, vars)
+}
+
+func (d *testDialect) CompileMutation(meta *Metadata, query *ast.QueryDocument, vars map[string]interface{}) (*CompileResult, error) {
+	return d.CompileQuery(meta, query, vars)
 }

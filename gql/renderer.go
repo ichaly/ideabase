@@ -501,13 +501,13 @@ func (my *Renderer) renderFilter() error {
 			renderedOps[op.Name] = true
 
 			if op.Name == HAS_KEY || op.Name == HAS_KEY_ANY || op.Name == HAS_KEY_ALL {
-				my.writeField(op.Name, SCALAR_STRING, field.WithComment(op.Desc))
+				my.writeField(op.Name, SCALAR_STRING, field.WithComment(op.Description))
 			} else if op.Name == IN || op.Name == NI {
-				my.writeField(op.Name, scalarType, field.ListNonNull(), field.WithComment(op.Desc))
+				my.writeField(op.Name, scalarType, field.ListNonNull(), field.WithComment(op.Description))
 			} else if op.Name == IS {
-				my.writeField(op.Name, "IsInput", field.WithComment(op.Desc))
+				my.writeField(op.Name, ENUM_IS_INPUT, field.WithComment(op.Description))
 			} else {
-				my.writeField(op.Name, scalarType, field.WithComment(op.Desc))
+				my.writeField(op.Name, scalarType, field.WithComment(op.Description))
 			}
 		}
 
