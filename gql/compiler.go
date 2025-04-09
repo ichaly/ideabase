@@ -32,7 +32,7 @@ func NewCompiler(m *Metadata) (*Compiler, error) {
 	// 1. 首先尝试根据数据库类型选择方言
 	if m != nil && m.db != nil {
 		dbName := m.db.Name()
-		
+
 		// 根据数据库驱动名称匹配方言
 		switch {
 		case strings.Contains(dbName, "postgres"):
@@ -45,7 +45,7 @@ func NewCompiler(m *Metadata) (*Compiler, error) {
 			}
 		}
 	}
-	
+
 	// 2. 如果未找到匹配方言，尝试使用PostgreSQL方言（如果存在）
 	if compiler.dialect == nil && len(dialects) > 0 {
 		if dialect, ok := dialects["postgresql"]; ok {
@@ -58,7 +58,7 @@ func NewCompiler(m *Metadata) (*Compiler, error) {
 			}
 		}
 	}
-	
+
 	// 4. 如果仍未找到方言，返回错误
 	if compiler.dialect == nil {
 		return nil, fmt.Errorf("没有可用的SQL方言实现，请确保导入了相应的dialect包")
@@ -102,12 +102,11 @@ type Dialect interface {
 
 // Context 编译上下文
 type Context struct {
-	buf        *strings.Builder
-	meta       *Metadata // 元数据引用
-	dialect    Dialect   // 方言实现引用，避免重复查询
-	params     []any
-	variables  map[string]interface{}
-	dictionary map[int]int
+	buf       *strings.Builder
+	meta      *Metadata // 元数据引用
+	dialect   Dialect   // 方言实现引用，避免重复查询
+	params    []any
+	variables map[string]interface{}
 }
 
 // 上下文对象池，用于减少GC压力
@@ -117,10 +116,9 @@ var contextPool = sync.Pool{
 		sb := &strings.Builder{}
 		sb.Grow(1024) // 预分配1KB初始容量
 		return &Context{
-			buf:        sb,
-			dictionary: make(map[int]int, 8),
-			variables:  make(map[string]interface{}, 8),
-			params:     make([]any, 0, 8),
+			buf:       sb,
+			params:    make([]any, 0, 8),
+			variables: make(map[string]interface{}, 8),
 		}
 	},
 }
@@ -131,9 +129,6 @@ func NewContext(m *Metadata) *Context {
 	// 重置缓冲区而不是创建新的
 	ctx.buf.Reset()
 	// 清空但重用现有map和slice以避免内存分配
-	for k := range ctx.dictionary {
-		delete(ctx.dictionary, k)
-	}
 	for k := range ctx.variables {
 		delete(ctx.variables, k)
 	}
@@ -197,23 +192,6 @@ func (my *Context) Build(operation *ast.OperationDefinition, variables RawMessag
 	case ast.Mutation:
 		my.renderMutation(operation.SelectionSet)
 	}
-}
-
-// fieldId 获取字段ID
-func (my *Context) fieldId(field *ast.Field) int {
-	p := field.GetPosition()
-	return p.Line<<32 | p.Column
-}
-
-// renderParam 渲染参数
-func (my *Context) renderParam(value *ast.Value) {
-	val, err := value.Value(my.variables)
-	if err != nil {
-		my.params = append(my.params, nil)
-	} else {
-		my.params = append(my.params, val)
-	}
-	my.Write(`?`)
 }
 
 // renderQuery 渲染查询
