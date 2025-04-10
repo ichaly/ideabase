@@ -24,12 +24,12 @@ func RegisterDialect(name string, dialect Dialect) {
 
 // 请求和结果类型定义
 type (
-	gqlRequest struct {
+	gqlQuery struct {
 		Query         string                 `json:"query"`
 		OperationName string                 `json:"operationName"`
 		Variables     map[string]interface{} `json:"variables"`
 	}
-	gqlResult struct {
+	gqlReply struct {
 		sql    string
 		args   []any
 		Data   map[string]interface{} `json:"data,omitempty"`
@@ -139,7 +139,7 @@ func (my *Executor) Init(r fiber.Router) {
 // Handler 处理GraphQL请求
 func (my *Executor) Handler(c *fiber.Ctx) error {
 	// 解析请求
-	var req gqlRequest
+	var req gqlQuery
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"errors": []gqlerror.Error{*gqlerror.Wrap(err)},
@@ -154,8 +154,8 @@ func (my *Executor) Handler(c *fiber.Ctx) error {
 }
 
 // Execute 执行GraphQL查询
-func (my *Executor) Execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlResult {
-	var r gqlResult
+func (my *Executor) Execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
+	var r gqlReply
 
 	// 处理自省查询
 	if strutil.ContainsAny(query, []string{"__schema", "__type"}) {
@@ -207,8 +207,8 @@ func getOperation(operations ast.OperationList, operationName string) (*ast.Oper
 }
 
 // runOperation 执行单个GraphQL操作
-func (my *Executor) runOperation(op *ast.OperationDefinition, variables map[string]interface{}) gqlResult {
-	var r gqlResult
+func (my *Executor) runOperation(op *ast.OperationDefinition, variables map[string]interface{}) gqlReply {
+	var r gqlReply
 
 	// 编译并执行SQL查询
 	r.sql, r.args = my.compile(op, variables)
