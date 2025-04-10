@@ -36,7 +36,7 @@ IdeaBase/
 - `gtw`：网关模块，依赖`std`和`utl`，聚合多个`svc`
 
 ### 技术栈
-- **工具库**：github.com/duke-git/lancet/v2, github.com/samber/lo
+- **工具库**：github.com/samber/lo, github.com/duke-git/lancet/v2
 - **Web框架**：github.com/gofiber/fiber
 - **配置管理**：github.com/knadh/koanf
 - **GraphQL解析**：github.com/vektah/gqlparser/v2

@@ -118,7 +118,7 @@ func TestIntrospection(t *testing.T) {
 		}
 		`
 
-		result := executor.Execute(context.Background(), query, nil)
+		result := executor.Execute(context.Background(), query, nil, "")
 		assert.Empty(t, result.Errors)
 		assert.NotNil(t, result.Data)
 
@@ -164,7 +164,7 @@ func TestIntrospection(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		result := executor.Execute(context.Background(), query, vars)
+		result := executor.Execute(context.Background(), query, vars, "")
 		assert.Empty(t, result.Errors)
 		assert.NotNil(t, result.Data)
 

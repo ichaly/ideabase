@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/gofiber/fiber/v2"
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/vektah/gqlparser/v2"
@@ -158,14 +159,14 @@ func (my *Executor) Handler(c *fiber.Ctx) error {
 	}
 
 	// 执行GraphQL查询
-	result := my.Execute(c.Context(), req.Query, variables)
+	result := my.Execute(c.Context(), req.Query, variables, req.OperationName)
 
 	// 返回结果
 	return c.JSON(result)
 }
 
 // Execute 执行GraphQL查询
-func (my *Executor) Execute(ctx context.Context, query string, variables RawMessage) gqlResult {
+func (my *Executor) Execute(ctx context.Context, query string, variables RawMessage, operationName string) gqlResult {
 	var r gqlResult
 
 	// 解析变量
@@ -178,8 +179,7 @@ func (my *Executor) Execute(ctx context.Context, query string, variables RawMess
 	}
 
 	// 处理自省查询
-	if isIntrospectionQuery(query) {
-		// 处理自省查询
+	if strutil.ContainsAny(query, []string{"__schema", "__type"}) {
 		data, err := my.intro.Introspect(ctx, query, vars)
 		if err != nil {
 			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
@@ -197,67 +197,55 @@ func (my *Executor) Execute(ctx context.Context, query string, variables RawMess
 		return r
 	}
 
-	// 执行所有操作
-	r = my.executeOperations(doc.Operations, variables)
+	// 按照GraphQL规范处理操作
+	operation, opErr := getOperation(doc.Operations, operationName)
+	if opErr != nil {
+		r.Errors = gqlerror.List{gqlerror.Wrap(opErr)}
+		return r
+	}
+
+	// 执行选定的操作
+	r = my.runOperation(operation, variables)
 	return r
 }
 
-// executeOperations 执行给定的操作列表（支持并发）
-func (my *Executor) executeOperations(ops []*ast.OperationDefinition, variables RawMessage) gqlResult {
+// getOperation 根据GraphQL标准确定要执行的操作
+func getOperation(operations ast.OperationList, operationName string) (*ast.OperationDefinition, error) {
+	// 单操作直接返回，多操作需要操作名
+	if len(operations) == 1 {
+		return operations[0], nil
+	} else if operationName == "" {
+		return nil, fmt.Errorf("必须提供operationName，因为该查询包含多个操作")
+	}
+
+	// 查找指定操作
+	for _, op := range operations {
+		if op.Name == operationName {
+			return op, nil
+		}
+	}
+	return nil, fmt.Errorf("未找到名为'%s'的操作", operationName)
+}
+
+// runOperation 执行单个GraphQL操作
+func (my *Executor) runOperation(op *ast.OperationDefinition, variables RawMessage) gqlResult {
 	var r gqlResult
-	r.Data = make(map[string]interface{})
 
-	// 创建结果通道
-	type opResult struct {
-		name string
-		data map[string]interface{}
-		err  error
-	}
-	results := make(chan opResult, len(ops))
+	// 编译并执行SQL查询
+	r.sql, r.args = my.compile(op, variables)
 
-	// 并行执行所有操作
-	for _, op := range ops {
-		go func(operation *ast.OperationDefinition) {
-			// 编译并执行
-			sql, args := my.compile(operation, variables)
-			data := make(map[string]interface{})
-			err := my.db.Raw(sql, args...).Scan(&data).Error
-
-			// 发送结果
-			results <- opResult{
-				name: operation.Name,
-				data: data,
-				err:  err,
-			}
-		}(op)
+	result := make(map[string]interface{})
+	if err := my.db.Raw(r.sql, r.args...).Scan(&result).Error; err != nil {
+		r.Errors = append(r.Errors, gqlerror.Wrap(err))
+		return r
 	}
 
-	// 收集结果
-	for range ops {
-		result := <-results
-
-		// 处理错误
-		if result.err != nil {
-			r.Errors = append(r.Errors, gqlerror.Wrap(result.err))
-		}
-
-		// 按GraphQL规范组织结果
-		if result.name != "" {
-			// 命名操作使用操作名作为键
-			r.Data[result.name] = result.data
-		} else {
-			// 未命名操作直接合并到顶层
-			for k, v := range result.data {
-				r.Data[k] = v
-			}
-		}
+	// 按GraphQL规范组织结果
+	if op.Name != "" {
+		r.Data = map[string]interface{}{op.Name: result}
+	} else {
+		r.Data = result
 	}
 
 	return r
-}
-
-// isIntrospectionQuery 判断是否是自省查询
-func isIntrospectionQuery(query string) bool {
-	// 检查是否包含__schema或__type查询
-	return strings.Contains(query, "__schema") || strings.Contains(query, "__type")
 }

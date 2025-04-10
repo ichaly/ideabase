@@ -18,7 +18,7 @@ func NewResolver(e *Executor, s *ast.Schema) *Resolver {
 }
 
 // Resolve 解析GraphQL查询
-func (my *Resolver) Resolve(ctx context.Context, query string, variables map[string]interface{}) (map[string]interface{}, error) {
+func (my *Resolver) Resolve(ctx context.Context, query string, variables map[string]interface{}, operationName string) (map[string]interface{}, error) {
 	// 将变量转换为JSON
 	vars, err := json.Marshal(variables)
 	if err != nil {
@@ -26,7 +26,7 @@ func (my *Resolver) Resolve(ctx context.Context, query string, variables map[str
 	}
 
 	// 执行查询
-	result := my.executor.Execute(ctx, query, vars)
+	result := my.executor.Execute(ctx, query, vars, operationName)
 
 	// 处理错误
 	if len(result.Errors) > 0 {
