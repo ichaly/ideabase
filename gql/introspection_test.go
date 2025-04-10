@@ -104,9 +104,7 @@ func TestIntrospection(t *testing.T) {
 	renderer := NewRenderer(meta)
 
 	// 创建测试执行器
-	compiler, err := NewCompiler(meta) // 使用元数据初始化编译器
-	assert.NoError(t, err)
-	executor, err := NewExecutor(nil, renderer, compiler)
+	executor, err := NewExecutor(nil, renderer, meta) // 直接使用元数据初始化执行器
 	assert.NoError(t, err)
 
 	// 测试__schema查询

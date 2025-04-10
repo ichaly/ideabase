@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -11,6 +12,14 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"gorm.io/gorm"
 )
+
+// 方言注册表
+var dialects = make(map[string]Dialect)
+
+// RegisterDialect 全局注册方法，用于各个方言包在init函数中调用
+func RegisterDialect(name string, dialect Dialect) {
+	dialects[name] = dialect
+}
 
 // 请求和结果类型定义
 type (
@@ -29,14 +38,26 @@ type (
 
 // Executor GraphQL执行器
 type Executor struct {
-	db       *gorm.DB
-	intro    *intro.Handler
-	schema   *ast.Schema
-	compiler *Compiler
+	db      *gorm.DB
+	meta    *Metadata
+	intro   *intro.Handler
+	schema  *ast.Schema
+	dialect Dialect
 }
 
 // NewExecutor 创建一个新的执行器
-func NewExecutor(d *gorm.DB, r *Renderer, c *Compiler) (*Executor, error) {
+func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata) (*Executor, error) {
+	executor := &Executor{
+		db:   d,
+		meta: m,
+	}
+
+	// 选择SQL方言
+	if err := executor.selectDialect(); err != nil {
+		return nil, err
+	}
+
+	// 生成并加载GraphQL模式
 	data, err := r.Generate()
 	if err != nil {
 		return nil, err
@@ -48,13 +69,59 @@ func NewExecutor(d *gorm.DB, r *Renderer, c *Compiler) (*Executor, error) {
 	if err != nil {
 		return nil, err
 	}
-	i := intro.New(s)
-	return &Executor{
-		db:       d,
-		intro:    i,
-		schema:   s,
-		compiler: c,
-	}, nil
+
+	executor.schema = s
+	executor.intro = intro.New(s)
+	return executor, nil
+}
+
+// selectDialect 选择适合的SQL方言
+func (my *Executor) selectDialect() error {
+	// 1. 首先尝试根据数据库类型选择方言
+	if my.meta != nil && my.meta.db != nil {
+		dbName := my.meta.db.Name()
+
+		// 根据数据库驱动名称匹配方言
+		switch {
+		case strings.Contains(dbName, "postgres"):
+			if dialect, ok := dialects["postgresql"]; ok {
+				my.dialect = dialect
+			}
+		case strings.Contains(dbName, "mysql"):
+			if dialect, ok := dialects["mysql"]; ok {
+				my.dialect = dialect
+			}
+		}
+	}
+
+	// 2. 如果未找到匹配方言，尝试使用PostgreSQL方言（如果存在）
+	if my.dialect == nil && len(dialects) > 0 {
+		if dialect, ok := dialects["postgresql"]; ok {
+			my.dialect = dialect
+		} else {
+			// 3. 否则使用第一个可用的方言
+			for _, dialect := range dialects {
+				my.dialect = dialect
+				break
+			}
+		}
+	}
+
+	// 4. 如果仍未找到方言，返回错误
+	if my.dialect == nil {
+		return fmt.Errorf("没有可用的SQL方言实现，请确保导入了相应的dialect包")
+	}
+
+	return nil
+}
+
+// compile 编译GraphQL操作为SQL (内部方法)
+func (my *Executor) compile(operation *ast.OperationDefinition, variables RawMessage) (string, []interface{}) {
+	c := NewContext(my.meta)
+	defer c.Release()      // 使用完毕后释放回对象池
+	c.dialect = my.dialect // 设置共享的方言实现
+	c.Build(operation, variables)
+	return c.String(), c.Args()
 }
 
 // Base 实现Plugin接口的Base方法，返回插件的基础路径
@@ -131,7 +198,7 @@ func (my *Executor) Execute(ctx context.Context, query string, variables RawMess
 	// 执行所有操作
 	for _, operation := range doc.Operations {
 		// 编译为SQL
-		r.sql, r.args = my.compiler.Compile(operation, variables)
+		r.sql, r.args = my.compile(operation, variables)
 
 		// 执行SQL查询
 		e := my.db.Raw(r.sql, r.args...).Scan(&r.Data).Error

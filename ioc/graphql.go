@@ -15,7 +15,6 @@ func init() {
 		fx.Provide(
 			gql.NewMetadata,
 			gql.NewRenderer,
-			gql.NewCompiler,
 			fx.Annotate(
 				gql.NewExecutor,
 				fx.As(new(std.Plugin)),
