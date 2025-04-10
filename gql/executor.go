@@ -159,18 +159,18 @@ func (my *Executor) selectDialect() error {
 
 // 接口实现方法
 
-// Base 实现Plugin接口的Base方法，返回插件的基础路径
+// Path 实现Plugin接口的Path方法，返回插件的基础路径
 // 返回: GraphQL API的基础路径 ("/graphql")
 // 此方法使Executor能够作为Fiber的插件集成
-func (my *Executor) Base() string {
+func (my *Executor) Path() string {
 	return "/graphql"
 }
 
-// 初始化插件
-// Init 实现Plugin接口的Init方法，注册GraphQL HTTP处理路由
+// 绑定插件路由
+// Bind 实现Plugin接口的Bind方法，注册GraphQL HTTP处理路由
 // 参数:
 //   - r: Fiber路由器，用于注册路由
-func (my *Executor) Init(r fiber.Router) {
+func (my *Executor) Bind(r fiber.Router) {
 	// 注册GraphQL请求处理路由
 	r.Post("/", my.Handler)
 }

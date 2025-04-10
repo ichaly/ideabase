@@ -19,12 +19,12 @@ type MockPlugin struct {
 	mock.Mock
 }
 
-func (m *MockPlugin) Base() string {
+func (m *MockPlugin) Path() string {
 	args := m.Called()
 	return args.String(0)
 }
 
-func (m *MockPlugin) Init(router fiber.Router) {
+func (m *MockPlugin) Bind(router fiber.Router) {
 	m.Called(router)
 }
 
@@ -76,17 +76,17 @@ func TestBootstrap(t *testing.T) {
 	plugin.On("Init", mock.Anything).Return()
 
 	// 创建mock中间件
-	middleware := &MockPlugin{}
-	middleware.On("Base").Return("/")
-	middleware.On("Init", mock.Anything).Return()
+	filter := &MockPlugin{}
+	filter.On("Base").Return("/")
+	filter.On("Init", mock.Anything).Return()
 
 	// 设置生命周期期望
 	lifecycle.On("Append", mock.Anything).Return()
 
 	// 创建符合fx.In嵌入的PluginGroup
 	pluginGroup := PluginGroup{
-		Plugins:     []Plugin{plugin},
-		Middlewares: []Plugin{middleware},
+		Plugins: []Plugin{plugin},
+		Filters: []Plugin{filter},
 	}
 
 	// 调用被测函数
@@ -106,7 +106,7 @@ func TestBootstrap(t *testing.T) {
 
 	// 验证mock对象
 	plugin.AssertExpectations(t)
-	middleware.AssertExpectations(t)
+	filter.AssertExpectations(t)
 	lifecycle.AssertExpectations(t)
 
 	// 测试生命周期钩子
@@ -122,34 +122,34 @@ func TestBootstrap_ComplexRoutes(t *testing.T) {
 
 	// 创建多个具有不同基础路径的插件
 	apiPlugin := &MockPlugin{}
-	apiPlugin.On("Base").Return("/api")
-	apiPlugin.On("Init", mock.Anything).Return()
+	apiPlugin.On("Path").Return("/api")
+	apiPlugin.On("Bind", mock.Anything).Return()
 
 	userPlugin := &MockPlugin{}
-	userPlugin.On("Base").Return("/api/users")
-	userPlugin.On("Init", mock.Anything).Return()
+	userPlugin.On("Path").Return("/api/users")
+	userPlugin.On("Bind", mock.Anything).Return()
 
 	// 具有重复基础路径的插件（测试缓存）
 	authPlugin := &MockPlugin{}
-	authPlugin.On("Base").Return("/api/auth")
-	authPlugin.On("Init", mock.Anything).Return()
+	authPlugin.On("Path").Return("/api/auth")
+	authPlugin.On("Bind", mock.Anything).Return()
 
 	authPlugin2 := &MockPlugin{}
-	authPlugin2.On("Base").Return("/api/auth")
-	authPlugin2.On("Init", mock.Anything).Return()
+	authPlugin2.On("Path").Return("/api/auth")
+	authPlugin2.On("Bind", mock.Anything).Return()
 
 	// 创建中间件
-	logMiddleware := &MockPlugin{}
-	logMiddleware.On("Base").Return("/")
-	logMiddleware.On("Init", mock.Anything).Return()
+	logFilter := &MockPlugin{}
+	logFilter.On("Path").Return("/")
+	logFilter.On("Bind", mock.Anything).Return()
 
 	// 设置生命周期期望
 	lifecycle.On("Append", mock.Anything).Return()
 
 	// 创建符合fx.In嵌入的PluginGroup
 	pluginGroup := PluginGroup{
-		Plugins:     []Plugin{apiPlugin, userPlugin, authPlugin, authPlugin2},
-		Middlewares: []Plugin{logMiddleware},
+		Plugins: []Plugin{apiPlugin, userPlugin, authPlugin, authPlugin2},
+		Filters: []Plugin{logFilter},
 	}
 
 	// 调用被测函数
@@ -160,7 +160,7 @@ func TestBootstrap_ComplexRoutes(t *testing.T) {
 	userPlugin.AssertExpectations(t)
 	authPlugin.AssertExpectations(t)
 	authPlugin2.AssertExpectations(t)
-	logMiddleware.AssertExpectations(t)
+	logFilter.AssertExpectations(t)
 	lifecycle.AssertExpectations(t)
 }
 
@@ -172,8 +172,8 @@ func TestBootstrap_EmptyBasePath(t *testing.T) {
 
 	// 创建基础路径为空的插件
 	emptyPlugin := &MockPlugin{}
-	emptyPlugin.On("Base").Return("")
-	emptyPlugin.On("Init", mock.Anything).Return()
+	emptyPlugin.On("Path").Return("")
+	emptyPlugin.On("Bind", mock.Anything).Return()
 
 	// 设置生命周期期望
 	lifecycle.On("Append", mock.Anything).Return()
