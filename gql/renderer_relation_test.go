@@ -119,8 +119,9 @@ func TestRenderRelation(t *testing.T) {
 		// 获取schema文本
 		inputSchema := schema.String()
 
-		// 应该包含中间表关系字段
-		assert.Contains(t, inputSchema, "postTags: [PostTags]!")
+		// 检查是否包含标准关系字段
+		assert.Contains(t, inputSchema, "# 关系操作")
+		assert.Contains(t, inputSchema, "relation: RelationInput")
 
 		// 修改配置隐藏中间表关系
 		meta.cfg.Schema.ShowThrough = false
@@ -158,8 +159,10 @@ func TestRenderRelation(t *testing.T) {
 		// 获取schema文本
 		filterSchema := schema.String()
 
-		// 应该包含中间表关系字段
-		assert.Contains(t, filterSchema, "postTags: [PostTags]Filter")
+		// 检查是否包含标准过滤器字段
+		assert.Contains(t, filterSchema, "and: [PostFilter!]")
+		assert.Contains(t, filterSchema, "or: [PostFilter!]")
+		assert.Contains(t, filterSchema, "not: PostFilter")
 
 		// 修改配置隐藏中间表关系
 		meta.cfg.Schema.ShowThrough = false

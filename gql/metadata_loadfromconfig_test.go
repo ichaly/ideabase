@@ -531,6 +531,7 @@ func TestLoadFromConfig(t *testing.T) {
 		assert.False(t, product.Virtual, "Product不应该是虚拟类")
 		assert.Equal(t, "产品信息", product.Description, "描述应该正确")
 		assert.Equal(t, "items", product.Table, "表名应该正确")
+		// 类别名包含原始类的所有字段：id, name, price, categoryId
 		assert.Len(t, product.Fields, 4, "应该有4个字段")
 		assert.Same(t, itemClass.Fields["id"], product.Fields["id"], "应该复用原字段对象")
 
