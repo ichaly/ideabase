@@ -72,13 +72,13 @@ func TestBootstrap(t *testing.T) {
 
 	// 创建mock插件
 	plugin := &MockPlugin{}
-	plugin.On("Base").Return("/api")
-	plugin.On("Init", mock.Anything).Return()
+	plugin.On("Path").Return("/api")
+	plugin.On("Bind", mock.Anything).Return()
 
 	// 创建mock中间件
 	filter := &MockPlugin{}
-	filter.On("Base").Return("/")
-	filter.On("Init", mock.Anything).Return()
+	filter.On("Path").Return("/")
+	filter.On("Bind", mock.Anything).Return()
 
 	// 设置生命周期期望
 	lifecycle.On("Append", mock.Anything).Return()
