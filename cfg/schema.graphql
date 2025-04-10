@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20250326114858
+# 版本: 20250410172712
 
 # 自定义标量类型
 scalar Json
@@ -43,21 +43,29 @@ input GroupBy {
 # 评论表
 type Comment {
   # 子Comment列表
+  # 子Comment列表
   children: [Comment]!
+  # 评论内容
   # 评论内容
   content: String!
   createdAt: DateTime!
   id: ID!
   # 父Comment对象
+  # 父Comment对象
   parent: Comment
+  # 父评论ID
   # 父评论ID
   parentId: Int
   # 关联的Post
+  # 关联的Post
   post: Post!
+  # 评论文章
   # 评论文章
   postId: Int!
   # 关联的User
+  # 关联的User
   user: User!
+  # 评论者
   # 评论者
   userId: Int!
 }
@@ -65,13 +73,17 @@ type Comment {
 # 组织表
 type Organization {
   # 子Organization列表
+  # 子Organization列表
   children: [Organization]!
   createdAt: DateTime!
   id: ID!
   # 组织名称
+  # 组织名称
   name: String!
   # 父Organization对象
+  # 父Organization对象
   parent: Organization
+  # 父组织ID
   # 父组织ID
   parentId: Int
 }
@@ -79,34 +91,25 @@ type Organization {
 # 文章表
 type Post {
   # 关联的Comment列表
+  # 关联的Comment列表
   comments: [Comment]!
+  # 内容
   # 内容
   content: String
   createdAt: DateTime!
   id: ID!
-  # 关联的PostTag列表
-  postTags: [PostTag]!
+  # 关联的Tag列表
   # 关联的Tag列表
   tags: [Tag]!
   # 标题
+  # 标题
   title: String!
+  # 关联的User
   # 关联的User
   user: User!
   # 作者ID
+  # 作者ID
   userId: Int!
-}
-
-# 文章标签关联表
-type PostTag {
-  createdAt: DateTime!
-  # 关联的Post
-  post: Post!
-  # 文章ID
-  postId: ID!
-  # 关联的Tag
-  tag: Tag!
-  # 标签ID
-  tagId: ID!
 }
 
 # 标签表
@@ -114,9 +117,9 @@ type Tag {
   createdAt: DateTime!
   id: ID!
   # 标签名称
+  # 标签名称
   name: String!
-  # 关联的PostTag列表
-  postTags: [PostTag]!
+  # 关联的Post列表
   # 关联的Post列表
   posts: [Post]!
 }
@@ -124,13 +127,17 @@ type Tag {
 # 用户表
 type User {
   # 关联的Comment列表
+  # 关联的Comment列表
   comments: [Comment]!
   createdAt: DateTime!
+  # 邮箱
   # 邮箱
   email: String!
   id: ID!
   # 用户名
+  # 用户名
   name: String!
+  # 关联的Post列表
   # 关联的Post列表
   posts: [Post]!
   updatedAt: DateTime
@@ -155,13 +162,6 @@ type OrganizationPage {
 # Post分页结果
 type PostPage {
   items: [Post!]!  # 直接返回Post对象数组
-  pageInfo: PageInfo!
-  total: Int!
-}
-
-# PostTag分页结果
-type PostTagPage {
-  items: [PostTag!]!  # 直接返回PostTag对象数组
   pageInfo: PageInfo!
   total: Int!
 }
@@ -260,23 +260,6 @@ type PostStats {
 
 # Post分组结果
 type PostGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
-}
-
-# PostTag聚合
-type PostTagStats {
-  count: Int!
-  createdAt: DateTimeStats
-  postId: NumberStats
-  tagId: NumberStats
-  # 分组聚合
-  groupBy: [PostTagGroup!]
-}
-
-# PostTag分组结果
-type PostTagGroup {
   key: Json!  # 分组键
   count: Int!  # 计数
   # 可以包含其他聚合字段
@@ -434,16 +417,6 @@ input PostFilter {
   not: PostFilter
 }
 
-# PostTag查询条件
-input PostTagFilter {
-  createdAt: DateTimeFilter
-  postId: IDFilter
-  tagId: IDFilter
-  and: [PostTagFilter!]
-  or: [PostTagFilter!]
-  not: PostTagFilter
-}
-
 # Tag查询条件
 input TagFilter {
   createdAt: DateTimeFilter
@@ -496,20 +469,10 @@ input PostSort {
   content: SortDirection
   createdAt: SortDirection
   id: SortDirection
-  postTags: SortDirection
   tags: SortDirection
   title: SortDirection
   user: SortDirection
   userId: SortDirection
-}
-
-# PostTag排序
-input PostTagSort {
-  createdAt: SortDirection
-  post: SortDirection
-  postId: SortDirection
-  tag: SortDirection
-  tagId: SortDirection
 }
 
 # Tag排序
@@ -517,7 +480,6 @@ input TagSort {
   createdAt: SortDirection
   id: SortDirection
   name: SortDirection
-  postTags: SortDirection
   posts: SortDirection
 }
 
@@ -582,21 +544,6 @@ input PostUpdateInput {
   content: String
   title: String
   userId: Int
-  # 关系操作
-  relation: RelationInput
-}
-
-# PostTag创建输入
-input PostTagCreateInput {
-  createdAt: DateTime!
-  postId: ID!
-  tagId: ID!
-}
-
-# PostTag更新输入
-input PostTagUpdateInput {
-  postId: ID
-  tagId: ID
   # 关系操作
   relation: RelationInput
 }
@@ -694,23 +641,6 @@ type Query {
 
   # Post统计查询
   postStats(filter: PostFilter, groupBy: GroupBy): PostStats!
-  # 单个PostTag查询
-  postTag(id: ID!): PostTag
-
-  # PostTag列表查询
-  postTags(
-    filter: PostTagFilter
-    sort: [PostTagSort!]
-    limit: Int
-    offset: Int
-    first: Int
-    last: Int
-    after: Cursor
-    before: Cursor
-  ): PostTagPage!
-
-  # PostTag统计查询
-  postTagStats(filter: PostTagFilter, groupBy: GroupBy): PostTagStats!
   # 单个Tag查询
   tag(id: ID!): Tag
 
@@ -782,17 +712,6 @@ type Mutation {
 
   # Post批量删除
   batchDeletePost(filter: PostFilter!): Int!
-  # PostTag创建
-  createPostTag(data: PostTagCreateInput!): PostTag!
-
-  # PostTag更新
-  updatePostTag(id: ID!, data: PostTagUpdateInput!): PostTag!
-
-  # PostTag删除
-  deletePostTag(id: ID!): Boolean!
-
-  # PostTag批量删除
-  batchDeletePostTag(filter: PostTagFilter!): Int!
   # Tag创建
   createTag(data: TagCreateInput!): Tag!
 
