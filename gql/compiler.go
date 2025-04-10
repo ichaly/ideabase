@@ -116,8 +116,8 @@ func (my *Compiler) Args() []interface{} {
 }
 
 // Build 渲染操作
-func (my *Compiler) Build(operation *ast.OperationDefinition, variables RawMessage) {
-	_ = json.Unmarshal(variables, &my.variables)
+func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[string]interface{}) {
+	my.variables = variables
 	switch operation.Operation {
 	case ast.Query, ast.Subscription:
 		my.renderQuery(operation.SelectionSet)

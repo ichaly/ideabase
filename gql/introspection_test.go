@@ -159,12 +159,11 @@ func TestIntrospection(t *testing.T) {
 		`
 
 		// 构造带有name参数的变量
-		vars, err := json.Marshal(map[string]interface{}{
+		variables := map[string]interface{}{
 			"name": "User",
-		})
-		assert.NoError(t, err)
+		}
 
-		result := executor.Execute(context.Background(), query, vars, "")
+		result := executor.Execute(context.Background(), query, variables, "")
 		assert.Empty(t, result.Errors)
 		assert.NotNil(t, result.Data)
 

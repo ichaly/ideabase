@@ -117,7 +117,7 @@ func (my *Executor) selectDialect() error {
 }
 
 // compile 编译GraphQL操作为SQL (内部方法)
-func (my *Executor) compile(operation *ast.OperationDefinition, variables RawMessage) (string, []interface{}) {
+func (my *Executor) compile(operation *ast.OperationDefinition, variables map[string]interface{}) (string, []interface{}) {
 	cpl := NewCompiler(my.meta)
 	defer cpl.Release()      // 使用完毕后释放回对象池
 	cpl.dialect = my.dialect // 设置共享的方言实现
@@ -146,41 +146,20 @@ func (my *Executor) Handler(c *fiber.Ctx) error {
 		})
 	}
 
-	// 将变量转换为RawMessage
-	var variables RawMessage
-	if len(req.Variables) > 0 {
-		var err error
-		variables, err = json.Marshal(req.Variables)
-		if err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"errors": []gqlerror.Error{*gqlerror.Wrap(err)},
-			})
-		}
-	}
-
-	// 执行GraphQL查询
-	result := my.Execute(c.Context(), req.Query, variables, req.OperationName)
+	// 直接使用map类型的变量
+	result := my.Execute(c.Context(), req.Query, req.Variables, req.OperationName)
 
 	// 返回结果
 	return c.JSON(result)
 }
 
 // Execute 执行GraphQL查询
-func (my *Executor) Execute(ctx context.Context, query string, variables RawMessage, operationName string) gqlResult {
+func (my *Executor) Execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlResult {
 	var r gqlResult
-
-	// 解析变量
-	var vars map[string]interface{}
-	if len(variables) > 0 {
-		if err := json.Unmarshal(variables, &vars); err != nil {
-			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
-			return r
-		}
-	}
 
 	// 处理自省查询
 	if strutil.ContainsAny(query, []string{"__schema", "__type"}) {
-		data, err := my.intro.Introspect(ctx, query, vars)
+		data, err := my.intro.Introspect(ctx, query, variables)
 		if err != nil {
 			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 			return r
@@ -228,7 +207,7 @@ func getOperation(operations ast.OperationList, operationName string) (*ast.Oper
 }
 
 // runOperation 执行单个GraphQL操作
-func (my *Executor) runOperation(op *ast.OperationDefinition, variables RawMessage) gqlResult {
+func (my *Executor) runOperation(op *ast.OperationDefinition, variables map[string]interface{}) gqlResult {
 	var r gqlResult
 
 	// 编译并执行SQL查询
