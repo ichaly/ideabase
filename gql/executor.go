@@ -165,49 +165,95 @@ func (my *Executor) Handler(c *fiber.Ctx) error {
 }
 
 // Execute 执行GraphQL查询
-func (my *Executor) Execute(ctx context.Context, query string, variables RawMessage) (r gqlResult) {
+func (my *Executor) Execute(ctx context.Context, query string, variables RawMessage) gqlResult {
+	var r gqlResult
+
 	// 解析变量
 	var vars map[string]interface{}
 	if len(variables) > 0 {
 		if err := json.Unmarshal(variables, &vars); err != nil {
 			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
-			return
+			return r
 		}
 	}
 
-	// 检查是否是自省查询
+	// 处理自省查询
 	if isIntrospectionQuery(query) {
 		// 处理自省查询
 		data, err := my.intro.Introspect(ctx, query, vars)
 		if err != nil {
 			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
-			return
+			return r
 		}
 
 		r.Data = data
-		return
+		return r
 	}
 
-	// 常规GraphQL查询处理
+	// 解析查询
 	doc, err := gqlparser.LoadQuery(my.schema, query)
 	if err != nil {
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
-		return
+		return r
 	}
 
 	// 执行所有操作
-	for _, operation := range doc.Operations {
-		// 编译为SQL
-		r.sql, r.args = my.compile(operation, variables)
+	r = my.executeOperations(doc.Operations, variables)
+	return r
+}
 
-		// 执行SQL查询
-		e := my.db.Raw(r.sql, r.args...).Scan(&r.Data).Error
-		if e != nil {
-			r.Errors = append(r.Errors, gqlerror.Wrap(e))
+// executeOperations 执行给定的操作列表（支持并发）
+func (my *Executor) executeOperations(ops []*ast.OperationDefinition, variables RawMessage) gqlResult {
+	var r gqlResult
+	r.Data = make(map[string]interface{})
+
+	// 创建结果通道
+	type opResult struct {
+		name string
+		data map[string]interface{}
+		err  error
+	}
+	results := make(chan opResult, len(ops))
+
+	// 并行执行所有操作
+	for _, op := range ops {
+		go func(operation *ast.OperationDefinition) {
+			// 编译并执行
+			sql, args := my.compile(operation, variables)
+			data := make(map[string]interface{})
+			err := my.db.Raw(sql, args...).Scan(&data).Error
+
+			// 发送结果
+			results <- opResult{
+				name: operation.Name,
+				data: data,
+				err:  err,
+			}
+		}(op)
+	}
+
+	// 收集结果
+	for range ops {
+		result := <-results
+
+		// 处理错误
+		if result.err != nil {
+			r.Errors = append(r.Errors, gqlerror.Wrap(result.err))
+		}
+
+		// 按GraphQL规范组织结果
+		if result.name != "" {
+			// 命名操作使用操作名作为键
+			r.Data[result.name] = result.data
+		} else {
+			// 未命名操作直接合并到顶层
+			for k, v := range result.data {
+				r.Data[k] = v
+			}
 		}
 	}
 
-	return
+	return r
 }
 
 // isIntrospectionQuery 判断是否是自省查询

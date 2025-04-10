@@ -123,16 +123,19 @@ func TestIntrospection(t *testing.T) {
 		assert.NotNil(t, result.Data)
 
 		// 验证结果
-		schemaData, ok := result.Data["__schema"].(map[string]interface{})
-		assert.True(t, ok, "结果中应包含__schema")
+		schemaData, ok := result.Data["__schema"]
+		assert.NotNil(t, schemaData, "结果中应包含__schema")
+
+		schemaDataMap, ok := schemaData.(map[string]interface{})
+		assert.True(t, ok, "schemaData应为map[string]interface{}")
 
 		// 验证queryType
-		queryType, ok := schemaData["queryType"].(map[string]string)
+		queryType, ok := schemaDataMap["queryType"].(map[string]string)
 		assert.True(t, ok, "结果中应包含queryType")
 		assert.Equal(t, "Query", queryType["name"])
 
 		// 验证types
-		types, ok := schemaData["types"].([]map[string]interface{})
+		types, ok := schemaDataMap["types"].([]map[string]interface{})
 		assert.True(t, ok, "结果中应包含types")
 		assert.NotEmpty(t, types)
 	})
@@ -166,13 +169,17 @@ func TestIntrospection(t *testing.T) {
 		assert.NotNil(t, result.Data)
 
 		// 验证结果
-		typeData, ok := result.Data["__type"].(map[string]interface{})
-		assert.True(t, ok, "结果中应包含__type")
-		assert.Equal(t, "User", typeData["name"])
-		assert.Equal(t, "OBJECT", fmt.Sprintf("%s", typeData["kind"]))
+		typeData, ok := result.Data["__type"]
+		assert.NotNil(t, typeData, "结果中应包含__type")
+
+		typeDataMap, ok := typeData.(map[string]interface{})
+		assert.True(t, ok, "__type应为map[string]interface{}")
+
+		assert.Equal(t, "User", typeDataMap["name"])
+		assert.Equal(t, "OBJECT", fmt.Sprintf("%s", typeDataMap["kind"]))
 
 		// 验证字段
-		fields, ok := typeData["fields"].([]map[string]interface{})
+		fields, ok := typeDataMap["fields"].([]map[string]interface{})
 		assert.True(t, ok, "结果中应包含fields")
 		assert.NotEmpty(t, fields)
 	})
