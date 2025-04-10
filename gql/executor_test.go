@@ -108,7 +108,7 @@ func TestExecutorSelectDialect(t *testing.T) {
 // mockDialect 模拟SQL方言
 type mockDialect struct {
 	name      string
-	buildFunc func(*Context)
+	buildFunc func(*Compiler)
 }
 
 func (m *mockDialect) Name() string {
@@ -127,14 +127,14 @@ func (m *mockDialect) FormatLimit(limit, offset int) string {
 	return "LIMIT ? OFFSET ?"
 }
 
-func (m *mockDialect) BuildQuery(ctx *Context, set ast.SelectionSet) error {
+func (m *mockDialect) BuildQuery(ctx *Compiler, set ast.SelectionSet) error {
 	if m.buildFunc != nil {
 		m.buildFunc(ctx)
 	}
 	return nil
 }
 
-func (m *mockDialect) BuildMutation(ctx *Context, set ast.SelectionSet) error {
+func (m *mockDialect) BuildMutation(ctx *Compiler, set ast.SelectionSet) error {
 	if m.buildFunc != nil {
 		m.buildFunc(ctx)
 	}

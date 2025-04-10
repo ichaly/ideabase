@@ -55,13 +55,13 @@ func (my *mockPgsqlDialect) FormatLimit(limit, offset int) string {
 }
 
 // BuildQuery 构建查询语句
-func (my *mockPgsqlDialect) BuildQuery(ctx *Context, selectionSet ast.SelectionSet) error {
+func (my *mockPgsqlDialect) BuildQuery(ctx *Compiler, selectionSet ast.SelectionSet) error {
 	ctx.Write("SELECT * FROM ")
 	return nil
 }
 
 // BuildMutation 构建变更语句
-func (my *mockPgsqlDialect) BuildMutation(ctx *Context, selectionSet ast.SelectionSet) error {
+func (my *mockPgsqlDialect) BuildMutation(ctx *Compiler, selectionSet ast.SelectionSet) error {
 	ctx.Write("-- PostgreSQL mutation placeholder")
 	return nil
 }
@@ -94,7 +94,7 @@ func TestGqlParserSchema(t *testing.T) {
 func TestIntrospection(t *testing.T) {
 	// 注册测试用的PostgreSQL方言
 	RegisterDialect("postgresql", &mockPgsqlDialect{})
-	
+
 	// 从数据库或模拟数据获取元数据
 	meta, err := getTestMetadata(t)
 	if err != nil {

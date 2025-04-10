@@ -56,14 +56,14 @@ func (my *Dialect) FormatLimit(limit, offset int) string {
 }
 
 // BuildQuery 构建查询语句
-func (my *Dialect) BuildQuery(ctx *gql.Context, selectionSet ast.SelectionSet) error {
-	ctx.Write("SELECT * FROM ")
+func (my *Dialect) BuildQuery(cpl *gql.Compiler, selectionSet ast.SelectionSet) error {
+	cpl.Write("SELECT * FROM ")
 	return nil
 }
 
 // BuildMutation 构建变更语句
-func (my *Dialect) BuildMutation(ctx *gql.Context, selectionSet ast.SelectionSet) error {
-	ctx.Write("-- PostgreSQL mutation placeholder")
+func (my *Dialect) BuildMutation(cpl *gql.Compiler, selectionSet ast.SelectionSet) error {
+	cpl.Write("-- PostgreSQL mutation placeholder")
 	return nil
 }
 

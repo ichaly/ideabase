@@ -20,10 +20,10 @@ type Dialect interface {
 	FormatLimit(limit, offset int) string
 
 	// BuildQuery 构建查询语句
-	BuildQuery(ctx *Context, set ast.SelectionSet) error
+	BuildQuery(cpl *Compiler, set ast.SelectionSet) error
 
 	// BuildMutation 构建变更语句
-	BuildMutation(ctx *Context, set ast.SelectionSet) error
+	BuildMutation(cpl *Compiler, set ast.SelectionSet) error
 
 	// SupportsReturning 是否支持RETURNING子句
 	SupportsReturning() bool
@@ -32,8 +32,8 @@ type Dialect interface {
 	SupportsWithCTE() bool
 }
 
-// Context 编译上下文
-type Context struct {
+// Compiler 编译上下文
+type Compiler struct {
 	buf       *strings.Builder
 	meta      *Metadata // 元数据引用
 	dialect   Dialect   // 方言实现引用，避免重复查询
@@ -42,12 +42,12 @@ type Context struct {
 }
 
 // 上下文对象池，用于减少GC压力
-var contextPool = sync.Pool{
+var compilerPool = sync.Pool{
 	New: func() interface{} {
 		// 预分配合理容量的Builder和集合，减少动态扩容
 		sb := &strings.Builder{}
 		sb.Grow(1024) // 预分配1KB初始容量
-		return &Context{
+		return &Compiler{
 			buf:       sb,
 			params:    make([]any, 0, 8),
 			variables: make(map[string]interface{}, 8),
@@ -55,30 +55,30 @@ var contextPool = sync.Pool{
 	},
 }
 
-// NewContext 创建新的编译上下文
-func NewContext(m *Metadata) *Context {
-	ctx := contextPool.Get().(*Context)
+// NewCompiler 创建新的编译上下文
+func NewCompiler(m *Metadata) *Compiler {
+	cpl := compilerPool.Get().(*Compiler)
 	// 重置缓冲区而不是创建新的
-	ctx.buf.Reset()
+	cpl.buf.Reset()
 	// 清空但重用现有map和slice以避免内存分配
-	for k := range ctx.variables {
-		delete(ctx.variables, k)
+	for k := range cpl.variables {
+		delete(cpl.variables, k)
 	}
-	ctx.params = ctx.params[:0]
-	ctx.meta = m
+	cpl.params = cpl.params[:0]
+	cpl.meta = m
 	// 预留初始容量以减少重新分配
-	ctx.buf.Grow(1024)
-	return ctx
+	cpl.buf.Grow(1024)
+	return cpl
 }
 
 // Release 释放上下文回到对象池
-func (my *Context) Release() {
+func (my *Compiler) Release() {
 	// 将对象放回池中以便重用
-	contextPool.Put(my)
+	compilerPool.Put(my)
 }
 
 // Wrap 包装内容
-func (my *Context) Wrap(with string, list ...any) *Context {
+func (my *Compiler) Wrap(with string, list ...any) *Compiler {
 	my.Write(with)
 	my.Write(list...)
 	my.Write(with)
@@ -86,7 +86,7 @@ func (my *Context) Wrap(with string, list ...any) *Context {
 }
 
 // Write 写入内容
-func (my *Context) Write(list ...any) *Context {
+func (my *Compiler) Write(list ...any) *Compiler {
 	for _, e := range list {
 		my.buf.WriteString(fmt.Sprint(e))
 	}
@@ -94,29 +94,29 @@ func (my *Context) Write(list ...any) *Context {
 }
 
 // Space 添加空格
-func (my *Context) Space(list ...any) *Context {
+func (my *Compiler) Space(list ...any) *Compiler {
 	my.Wrap(` `, list...)
 	return my
 }
 
 // Quoted 添加引号
-func (my *Context) Quoted(list ...any) *Context {
+func (my *Compiler) Quoted(list ...any) *Compiler {
 	my.Wrap(`"`, list...)
 	return my
 }
 
 // String 获取字符串结果
-func (my *Context) String() string {
+func (my *Compiler) String() string {
 	return strings.TrimSpace(my.buf.String())
 }
 
 // Args 获取参数列表
-func (my *Context) Args() []interface{} {
+func (my *Compiler) Args() []interface{} {
 	return my.params
 }
 
 // Build 渲染操作
-func (my *Context) Build(operation *ast.OperationDefinition, variables RawMessage) {
+func (my *Compiler) Build(operation *ast.OperationDefinition, variables RawMessage) {
 	_ = json.Unmarshal(variables, &my.variables)
 	switch operation.Operation {
 	case ast.Query, ast.Subscription:
@@ -127,11 +127,11 @@ func (my *Context) Build(operation *ast.OperationDefinition, variables RawMessag
 }
 
 // renderQuery 渲染查询
-func (my *Context) renderQuery(set ast.SelectionSet) {
+func (my *Compiler) renderQuery(set ast.SelectionSet) {
 	// TODO: 实现查询渲染
 }
 
 // renderMutation 渲染变更
-func (my *Context) renderMutation(set ast.SelectionSet) {
+func (my *Compiler) renderMutation(set ast.SelectionSet) {
 	// TODO: 实现变更渲染
 }

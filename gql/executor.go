@@ -117,11 +117,11 @@ func (my *Executor) selectDialect() error {
 
 // compile 编译GraphQL操作为SQL (内部方法)
 func (my *Executor) compile(operation *ast.OperationDefinition, variables RawMessage) (string, []interface{}) {
-	c := NewContext(my.meta)
-	defer c.Release()      // 使用完毕后释放回对象池
-	c.dialect = my.dialect // 设置共享的方言实现
-	c.Build(operation, variables)
-	return c.String(), c.Args()
+	cpl := NewCompiler(my.meta)
+	defer cpl.Release()      // 使用完毕后释放回对象池
+	cpl.dialect = my.dialect // 设置共享的方言实现
+	cpl.Build(operation, variables)
+	return cpl.String(), cpl.Args()
 }
 
 // Base 实现Plugin接口的Base方法，返回插件的基础路径
