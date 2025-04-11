@@ -115,11 +115,7 @@ func (m *mockDialect) Name() string {
 	return m.name
 }
 
-func (m *mockDialect) QuoteIdentifier(identifier string) string {
-	return "\"" + identifier + "\""
-}
-
-func (m *mockDialect) ParamPlaceholder(index int) string {
+func (m *mockDialect) Placeholder(index int) string {
 	return "?"
 }
 

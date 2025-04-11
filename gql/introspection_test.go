@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/ichaly/ideabase/utl"
@@ -17,19 +16,8 @@ import (
 // mockPgsqlDialect 测试用的PostgreSQL方言实现
 type mockPgsqlDialect struct{}
 
-// QuoteIdentifier 为标识符添加引号
-func (my *mockPgsqlDialect) QuoteIdentifier(identifier string) string {
-	parts := strings.Split(identifier, ".")
-	for i, part := range parts {
-		if part != "*" {
-			parts[i] = "\"" + part + "\""
-		}
-	}
-	return strings.Join(parts, ".")
-}
-
-// ParamPlaceholder 获取参数占位符 (PostgreSQL使用$1,$2...)
-func (my *mockPgsqlDialect) ParamPlaceholder(index int) string {
+// Placeholder 获取参数占位符 (PostgreSQL使用$1,$2...)
+func (my *mockPgsqlDialect) Placeholder(index int) string {
 	return fmt.Sprintf("$%d", index)
 }
 

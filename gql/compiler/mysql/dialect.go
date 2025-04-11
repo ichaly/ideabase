@@ -3,7 +3,6 @@ package mysql
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/ichaly/ideabase/gql"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -18,19 +17,13 @@ func init() {
 // Dialect MySQL方言实现
 type Dialect struct{}
 
-// QuoteIdentifier 为标识符添加引号
-func (my *Dialect) QuoteIdentifier(identifier string) string {
-	parts := strings.Split(identifier, ".")
-	for i, part := range parts {
-		if part != "*" {
-			parts[i] = "`" + part + "`"
-		}
-	}
-	return strings.Join(parts, ".")
+// NewDialect 创建MySQL方言实例
+func NewDialect() gql.Dialect {
+	return &Dialect{}
 }
 
-// ParamPlaceholder 获取参数占位符 (MySQL使用?)
-func (my *Dialect) ParamPlaceholder(index int) string {
+// Placeholder 获取参数占位符 (MySQL使用?)
+func (my *Dialect) Placeholder(index int) string {
 	return "?"
 }
 
@@ -57,19 +50,4 @@ func (my *Dialect) BuildQuery(cpl *gql.Compiler, selectionSet ast.SelectionSet) 
 func (my *Dialect) BuildMutation(cpl *gql.Compiler, selectionSet ast.SelectionSet) error {
 	cpl.Write("-- MySQL mutation placeholder")
 	return nil
-}
-
-// SupportsReturning 是否支持RETURNING子句(MySQL 8.0.21+支持)
-func (my *Dialect) SupportsReturning() bool {
-	return false // MySQL 8.0.21以上才支持
-}
-
-// SupportsWithCTE 是否支持WITH CTE
-func (my *Dialect) SupportsWithCTE() bool {
-	return true // MySQL 8.0+支持CTE
-}
-
-// NewDialect 创建MySQL方言实例
-func NewDialect() gql.Dialect {
-	return &Dialect{}
 }

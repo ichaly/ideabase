@@ -10,11 +10,8 @@ import (
 
 // Dialect 定义SQL方言接口
 type Dialect interface {
-	// QuoteIdentifier 为标识符添加引号
-	QuoteIdentifier(identifier string) string
-
-	// ParamPlaceholder 获取参数占位符 (如: PostgreSQL的$1,$2..., MySQL的?)
-	ParamPlaceholder(index int) string
+	// Placeholder 获取参数占位符 (如: PostgreSQL的$1,$2..., MySQL的?)
+	Placeholder(index int) string
 
 	// FormatLimit 格式化LIMIT子句
 	FormatLimit(limit, offset int) string
@@ -24,12 +21,6 @@ type Dialect interface {
 
 	// BuildMutation 构建变更语句
 	BuildMutation(cpl *Compiler, set ast.SelectionSet) error
-
-	// SupportsReturning 是否支持RETURNING子句
-	SupportsReturning() bool
-
-	// SupportsWithCTE 是否支持WITH CTE
-	SupportsWithCTE() bool
 }
 
 // Compiler 编译上下文
