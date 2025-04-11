@@ -56,7 +56,7 @@ var compilerPool = sync.Pool{
 }
 
 // NewCompiler 创建新的编译上下文
-func NewCompiler(m *Metadata) *Compiler {
+func NewCompiler(m *Metadata, d Dialect) *Compiler {
 	cpl := compilerPool.Get().(*Compiler)
 	// 重置缓冲区而不是创建新的
 	cpl.buf.Reset()
@@ -64,8 +64,9 @@ func NewCompiler(m *Metadata) *Compiler {
 	for k := range cpl.variables {
 		delete(cpl.variables, k)
 	}
-	cpl.params = cpl.params[:0]
 	cpl.meta = m
+	cpl.dialect = d
+	cpl.params = cpl.params[:0]
 	// 预留初始容量以减少重新分配
 	cpl.buf.Grow(1024)
 	return cpl

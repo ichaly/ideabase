@@ -263,9 +263,8 @@ func (my *Executor) Handler(c *fiber.Ctx) error {
 // 返回:
 //   - 编译后的SQL语句和参数列表
 func (my *Executor) compile(operation *ast.OperationDefinition, variables map[string]interface{}) (string, []interface{}) {
-	cpl := NewCompiler(my.meta)
-	defer cpl.Release()      // 使用完毕后释放回对象池
-	cpl.dialect = my.dialect // 设置共享的方言实现
+	cpl := NewCompiler(my.meta, my.dialect)
+	defer cpl.Release() // 使用完毕后释放回对象池
 	cpl.Build(operation, variables)
 	return cpl.String(), cpl.Args()
 }
