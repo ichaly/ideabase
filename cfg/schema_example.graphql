@@ -43,29 +43,21 @@ input GroupBy {
 # 评论表
 type Comment {
   # 子Comment列表
-  # 子Comment列表
   children: [Comment]!
-  # 评论内容
   # 评论内容
   content: String!
   createdAt: DateTime!
   id: ID!
   # 父Comment对象
-  # 父Comment对象
   parent: Comment
-  # 父评论ID
   # 父评论ID
   parentId: Int
   # 关联的Post
-  # 关联的Post
   post: Post!
-  # 评论文章
   # 评论文章
   postId: Int!
   # 关联的User
-  # 关联的User
   user: User!
-  # 评论者
   # 评论者
   userId: Int!
 }
