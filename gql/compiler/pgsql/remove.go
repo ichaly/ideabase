@@ -16,7 +16,7 @@ func (my *Dialect) buildDelete(cpl *gql.Compiler, field *ast.Field) error {
 	}
 
 	// 开始构建DELETE语句
-	cpl.SpaceAfter("DELETE FROM").Quoted(field.Name)
+	cpl.SpaceAfter("DELETE FROM").Quote(field.Name)
 
 	// 处理WHERE条件
 	if err := my.buildWhere(cpl, field.Arguments); err != nil {
@@ -37,7 +37,7 @@ func (my *Dialect) buildDelete(cpl *gql.Compiler, field *ast.Field) error {
 			if i > 0 {
 				cpl.Write(", ")
 			}
-			cpl.Quoted(f.Name)
+			cpl.Quote(f.Name)
 		}
 	}
 

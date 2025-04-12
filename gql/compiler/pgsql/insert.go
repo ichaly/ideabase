@@ -8,7 +8,7 @@ import (
 // buildInsert 构建INSERT语句
 func (my *Dialect) buildInsert(cpl *gql.Compiler, field *ast.Field) error {
 	cpl.SpaceAfter("INSERT INTO").
-		Quoted(field.Name).
+		Quote(field.Name).
 		SpaceBefore("(")
 
 	// 构建字段列表
@@ -33,7 +33,7 @@ func (my *Dialect) buildInsert(cpl *gql.Compiler, field *ast.Field) error {
 				if i > 0 {
 					cpl.Write(", ")
 				}
-				cpl.Quoted(f.Name)
+				cpl.Quote(f.Name)
 			}
 		}
 	}

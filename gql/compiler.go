@@ -116,15 +116,15 @@ func (my *Compiler) SpaceAfter(content ...any) *Compiler {
 	return my
 }
 
-// Quoted 添加引号
-func (my *Compiler) Quoted(list ...any) *Compiler {
+// Quote 添加引号
+func (my *Compiler) Quote(list ...any) *Compiler {
 	my.Wrap(my.dialect.QuoteIdentifier(), list...)
 	return my
 }
 
 // QuotedWithSpace 添加引号和空格
 func (my *Compiler) QuotedWithSpace(content any) *Compiler {
-	return my.SpaceBefore().Quoted(content).SpaceAfter()
+	return my.SpaceBefore().Quote(content).SpaceAfter()
 }
 
 // String 获取字符串结果

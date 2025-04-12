@@ -15,7 +15,7 @@ func (my *Dialect) BuildQuery(cpl *gql.Compiler, set ast.SelectionSet) error {
 	}
 
 	// 统一使用WITH语句
-	cpl.Space("WITH", gql.After())
+	cpl.SpaceAfter("WITH")
 
 	// 构建每个查询的CTE
 	for i, selection := range set {
@@ -38,7 +38,7 @@ func (my *Dialect) BuildQuery(cpl *gql.Compiler, set ast.SelectionSet) error {
 	}
 
 	// 构建最终的结果集
-	cpl.Space("SELECT", gql.After())
+	cpl.SpaceAfter("SELECT")
 	if len(set) > 1 {
 		// 多表查询返回JSON对象
 		cpl.Write("json_build_object(")
@@ -74,7 +74,7 @@ func (my *Dialect) buildSingleQuery(cpl *gql.Compiler, field *ast.Field) error {
 		return fmt.Errorf("table name is required")
 	}
 
-	cpl.Space("SELECT", gql.After())
+	cpl.SpaceAfter("SELECT")
 
 	// 处理字段选择
 	if len(field.SelectionSet) == 0 {
@@ -91,11 +91,11 @@ func (my *Dialect) buildSingleQuery(cpl *gql.Compiler, field *ast.Field) error {
 			if i > 0 {
 				cpl.Write(", ")
 			}
-			cpl.Quoted(f.Name)
+			cpl.Quote(f.Name)
 		}
 	}
 
-	cpl.Space("FROM", gql.After()).Quoted(field.Name)
+	cpl.SpaceAfter("FROM").Quote(field.Name)
 
 	// 处理WHERE条件
 	if err := my.buildWhere(cpl, field.Arguments); err != nil {

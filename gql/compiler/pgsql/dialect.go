@@ -105,7 +105,7 @@ func (my *Dialect) buildWhere(cpl *gql.Compiler, args ast.ArgumentList) error {
 				return fmt.Errorf("empty field name in WHERE condition at index %d", i)
 			}
 
-			cpl.Quoted(child.Name).Space("=")
+			cpl.Quote(child.Name).Space("=")
 
 			value, err := child.Value.Value(nil)
 			if err != nil {
@@ -172,7 +172,7 @@ func (my *Dialect) buildOrderBy(cpl *gql.Compiler, args ast.ArgumentList) error 
 				return fmt.Errorf("empty field name in ORDER BY at index %d", i)
 			}
 
-			cpl.Space("").Quoted(child.Name)
+			cpl.Space("").Quote(child.Name)
 
 			value, err := child.Value.Value(nil)
 			if err != nil {

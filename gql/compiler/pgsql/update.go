@@ -23,7 +23,7 @@ func (my *Dialect) buildUpdate(cpl *gql.Compiler, field *ast.Field) error {
 
 	// 开始构建UPDATE语句
 	cpl.SpaceAfter("UPDATE").
-		Quoted(field.Name).
+		Quote(field.Name).
 		SpaceAfter("SET")
 
 	// 处理更新字段
@@ -39,7 +39,7 @@ func (my *Dialect) buildUpdate(cpl *gql.Compiler, field *ast.Field) error {
 			return fmt.Errorf("empty field name in update at index %d", i)
 		}
 		cpl.SpaceAfter("").
-			Quoted(child.Name).
+			Quote(child.Name).
 			Write(" = ")
 
 		// 添加参数占位符
@@ -70,7 +70,7 @@ func (my *Dialect) buildUpdate(cpl *gql.Compiler, field *ast.Field) error {
 			if i > 0 {
 				cpl.Write(", ")
 			}
-			cpl.Quoted(f.Name)
+			cpl.Quote(f.Name)
 		}
 	}
 
