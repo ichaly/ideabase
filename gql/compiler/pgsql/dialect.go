@@ -3,6 +3,7 @@ package pgsql
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ichaly/ideabase/gql"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -53,186 +54,6 @@ func (my *Dialect) FormatLimit(limit, offset int) string {
 	return result
 }
 
-// BuildQuery 构建查询语句
-func (my *Dialect) BuildQuery(cpl *gql.Compiler, set ast.SelectionSet) error {
-	if len(set) == 0 {
-		return fmt.Errorf("empty selection set")
-	}
-
-	// 统一使用WITH语句
-	cpl.Space("WITH", gql.After())
-
-	// 构建每个查询的CTE
-	for i, selection := range set {
-		field, ok := selection.(*ast.Field)
-		if !ok {
-			return fmt.Errorf("selection must be a field")
-		}
-
-		if i > 0 {
-			cpl.Write(", ")
-		}
-
-		// 创建CTE
-		cpl.Write(field.Name).Space("AS").Write("(")
-
-		if err := my.buildSingleQuery(cpl, field); err != nil {
-			return err
-		}
-		cpl.Write(")")
-	}
-
-	// 构建最终的结果集
-	cpl.Space("SELECT", gql.After())
-	if len(set) > 1 {
-		// 多表查询返回JSON对象
-		cpl.Write("json_build_object(")
-		for i, selection := range set {
-			field := selection.(*ast.Field)
-			if i > 0 {
-				cpl.Write(", ")
-			}
-			cpl.Write("'").
-				Write(field.Name).
-				Write("', (SELECT row_to_json(").
-				Write(field.Name).
-				Write(".*) FROM ").
-				Write(field.Name).
-				Write(")")
-		}
-		cpl.Write(")")
-	} else {
-		// 单表查询直接返回结果
-		field := set[0].(*ast.Field)
-		cpl.Write("row_to_json(").
-			Write(field.Name).
-			Write(".*) FROM ").
-			Write(field.Name)
-	}
-
-	return nil
-}
-
-// buildSingleQuery 构建单个表的查询
-func (my *Dialect) buildSingleQuery(cpl *gql.Compiler, field *ast.Field) error {
-	cpl.Space("SELECT", gql.After())
-
-	// 处理字段选择
-	if len(field.SelectionSet) == 0 {
-		cpl.Write("*")
-	} else {
-		for i, selection := range field.SelectionSet {
-			if f, ok := selection.(*ast.Field); ok {
-				if i > 0 {
-					cpl.Write(", ")
-				}
-				cpl.Quoted(f.Name)
-			}
-		}
-	}
-
-	cpl.Space("FROM", gql.After()).Quoted(field.Name)
-
-	// 处理WHERE条件
-	if err := my.buildWhere(cpl, field.Arguments); err != nil {
-		return err
-	}
-
-	// 处理排序
-	if err := my.buildOrderBy(cpl, field.Arguments); err != nil {
-		return err
-	}
-
-	// 处理分页
-	if err := my.buildPagination(cpl, field.Arguments); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// buildWhere 构建WHERE子句
-func (my *Dialect) buildWhere(cpl *gql.Compiler, args ast.ArgumentList) error {
-	if len(args) == 0 {
-		return nil
-	}
-
-	hasWhere := false
-	for _, arg := range args {
-		if hasWhere {
-			cpl.Space("AND", gql.After())
-		} else {
-			cpl.Space("WHERE", gql.After())
-			hasWhere = true
-		}
-
-		switch arg.Name {
-		case "id":
-			val, err := arg.Value.Value(nil)
-			if err != nil {
-				return err
-			}
-			cpl.Write("id").
-				Space("=", gql.After()).
-				Write(my.Placeholder(cpl.AddParam(val)))
-		case "where":
-			// TODO: 处理复杂的where条件
-			return nil
-		default:
-			// 处理其他简单条件
-			val, err := arg.Value.Value(nil)
-			if err != nil {
-				return err
-			}
-			cpl.Write(arg.Name).
-				Space("=", gql.After()).
-				Write(my.Placeholder(cpl.AddParam(val)))
-		}
-	}
-	return nil
-}
-
-// buildOrderBy 构建ORDER BY子句
-func (my *Dialect) buildOrderBy(cpl *gql.Compiler, args ast.ArgumentList) error {
-	for _, arg := range args {
-		if arg.Name == "order_by" {
-			cpl.Space("ORDER BY", gql.After())
-			// TODO: 实现排序构建
-			return nil
-		}
-	}
-	return nil
-}
-
-// buildPagination 构建分页
-func (my *Dialect) buildPagination(cpl *gql.Compiler, args ast.ArgumentList) error {
-	var limit, offset int
-
-	for _, arg := range args {
-		switch arg.Name {
-		case "limit":
-			// 获取limit参数值
-			if val, err := arg.Value.Value(nil); err == nil {
-				if intVal, ok := val.(int64); ok {
-					limit = int(intVal)
-				}
-			}
-		case "offset":
-			// 获取offset参数值
-			if val, err := arg.Value.Value(nil); err == nil {
-				if intVal, ok := val.(int64); ok {
-					offset = int(intVal)
-				}
-			}
-		}
-	}
-
-	if limitClause := my.FormatLimit(limit, offset); limitClause != "" {
-		cpl.Write(" " + limitClause)
-	}
-	return nil
-}
-
 // BuildMutation 构建变更语句
 func (my *Dialect) BuildMutation(cpl *gql.Compiler, set ast.SelectionSet) error {
 	if len(set) == 0 {
@@ -258,33 +79,119 @@ func (my *Dialect) BuildMutation(cpl *gql.Compiler, set ast.SelectionSet) error 
 	}
 }
 
-// buildInsert 构建INSERT语句
-func (my *Dialect) buildInsert(cpl *gql.Compiler, field *ast.Field) error {
-	cpl.Space("INSERT INTO", gql.After()).
-		Quoted(field.Name).
-		Space("(", gql.Before())
+// buildWhere 构建WHERE子句
+func (my *Dialect) buildWhere(cpl *gql.Compiler, args ast.ArgumentList) error {
+	if len(args) == 0 {
+		return nil
+	}
 
-	// TODO: 实现字段和值的构建
+	for _, arg := range args {
+		if arg.Name != "where" {
+			continue
+		}
 
-	cpl.Write(")")
+		if arg.Value == nil || len(arg.Value.Children) == 0 {
+			continue
+		}
+
+		cpl.Space("WHERE")
+
+		for i, child := range arg.Value.Children {
+			if i > 0 {
+				cpl.Space("AND")
+			}
+
+			if child.Name == "" {
+				return fmt.Errorf("empty field name in WHERE condition at index %d", i)
+			}
+
+			cpl.Quoted(child.Name).Space("=")
+
+			value, err := child.Value.Value(nil)
+			if err != nil {
+				return fmt.Errorf("failed to get value for where condition %s: %w", child.Name, err)
+			}
+			cpl.Write(my.Placeholder(len(cpl.Args()) + 1))
+			cpl.AddParam(value)
+		}
+	}
+
 	return nil
 }
 
-// buildUpdate 构建UPDATE语句
-func (my *Dialect) buildUpdate(cpl *gql.Compiler, field *ast.Field) error {
-	cpl.Space("UPDATE", gql.After()).
-		Quoted(field.Name).
-		Space("SET", gql.After())
+// buildPagination 构建分页子句
+func (my *Dialect) buildPagination(cpl *gql.Compiler, args ast.ArgumentList) error {
+	var limit, offset int
 
-	// TODO: 实现SET和WHERE子句
+	for _, arg := range args {
+		switch arg.Name {
+		case "limit":
+			if val, err := arg.Value.Value(nil); err == nil {
+				if intVal, ok := val.(int64); ok {
+					limit = int(intVal)
+				}
+			}
+		case "offset":
+			if val, err := arg.Value.Value(nil); err == nil {
+				if intVal, ok := val.(int64); ok {
+					offset = int(intVal)
+				}
+			}
+		}
+	}
+
+	if limitClause := my.FormatLimit(limit, offset); limitClause != "" {
+		cpl.Space(limitClause)
+	}
 	return nil
 }
 
-// buildDelete 构建DELETE语句
-func (my *Dialect) buildDelete(cpl *gql.Compiler, field *ast.Field) error {
-	cpl.Space("DELETE FROM", gql.After()).
-		Quoted(field.Name)
+// buildOrderBy 构建ORDER BY子句
+func (my *Dialect) buildOrderBy(cpl *gql.Compiler, args ast.ArgumentList) error {
+	if len(args) == 0 {
+		return nil
+	}
 
-	// TODO: 实现WHERE子句
+	for _, arg := range args {
+		if arg.Name != "orderBy" {
+			continue
+		}
+
+		if arg.Value == nil || len(arg.Value.Children) == 0 {
+			continue
+		}
+
+		cpl.Space("ORDER BY")
+
+		for i, child := range arg.Value.Children {
+			if i > 0 {
+				cpl.Write(",")
+			}
+
+			if child.Name == "" {
+				return fmt.Errorf("empty field name in ORDER BY at index %d", i)
+			}
+
+			cpl.Space("").Quoted(child.Name)
+
+			value, err := child.Value.Value(nil)
+			if err != nil {
+				return fmt.Errorf("failed to get value for order by field %s: %w", child.Name, err)
+			}
+
+			direction, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("order by value must be a string, got %T", value)
+			}
+
+			switch strings.ToUpper(direction) {
+			case "ASC", "DESC":
+				cpl.Space(strings.ToUpper(direction))
+			default:
+				return fmt.Errorf("invalid order by direction %q, must be ASC or DESC", direction)
+			}
+		}
+	}
+
 	return nil
 }

@@ -72,17 +72,16 @@ func (my *Compiler) Release() {
 	compilerPool.Put(my)
 }
 
+// Args 获取参数列表
+func (my *Compiler) Args() []interface{} {
+	return my.params
+}
+
 // Wrap 包装内容
 func (my *Compiler) Wrap(with string, list ...any) *Compiler {
 	my.Write(with)
 	my.Write(list...)
 	my.Write(with)
-	return my
-}
-
-// Quoted 添加引号
-func (my *Compiler) Quoted(list ...any) *Compiler {
-	my.Wrap(my.dialect.QuoteIdentifier(), list...)
 	return my
 }
 
@@ -94,55 +93,38 @@ func (my *Compiler) Write(list ...any) *Compiler {
 	return my
 }
 
-// SpaceOption 定义空格选项函数类型
-type SpaceOption func(*spaceOptions)
-
-// spaceOptions 空格配置选项
-type spaceOptions struct {
-	before bool
-	after  bool
+// Space 添加空格并写入内容(可选)
+func (my *Compiler) Space(content ...any) *Compiler {
+	return my.SpaceBefore(content...).SpaceAfter()
 }
 
-// Before 只在前面加空格
-func Before() SpaceOption {
-	return func(o *spaceOptions) {
-		o.before = true
-		o.after = false
+// SpaceBefore 在前面添加空格，内容可选
+func (my *Compiler) SpaceBefore(content ...any) *Compiler {
+	my.buf.WriteString(" ")
+	if len(content) > 0 {
+		my.Write(content...)
 	}
-}
-
-// After 只在后面加空格
-func After() SpaceOption {
-	return func(o *spaceOptions) {
-		o.before = false
-		o.after = true
-	}
-}
-
-// Space 添加空格并写入内容
-// 默认前后都加空格，可通过选项控制
-func (my *Compiler) Space(content any, opts ...SpaceOption) *Compiler {
-	// 默认配置：前后都加空格
-	options := &spaceOptions{
-		before: true,
-		after:  true,
-	}
-
-	// 应用自定义选项
-	for _, opt := range opts {
-		opt(options)
-	}
-
-	// 添加空格和内容
-	if options.before {
-		my.buf.WriteString(" ")
-	}
-	my.Write(content)
-	if options.after {
-		my.buf.WriteString(" ")
-	}
-
 	return my
+}
+
+// SpaceAfter 在后面添加空格，内容可选
+func (my *Compiler) SpaceAfter(content ...any) *Compiler {
+	if len(content) > 0 {
+		my.Write(content...)
+	}
+	my.buf.WriteString(" ")
+	return my
+}
+
+// Quoted 添加引号
+func (my *Compiler) Quoted(list ...any) *Compiler {
+	my.Wrap(my.dialect.QuoteIdentifier(), list...)
+	return my
+}
+
+// QuotedWithSpace 添加引号和空格
+func (my *Compiler) QuotedWithSpace(content any) *Compiler {
+	return my.SpaceBefore().Quoted(content).SpaceAfter()
 }
 
 // String 获取字符串结果
@@ -150,30 +132,14 @@ func (my *Compiler) String() string {
 	return strings.TrimSpace(my.buf.String())
 }
 
-// Args 获取参数列表
-func (my *Compiler) Args() []interface{} {
-	return my.params
-}
-
-// Build 渲染操作
 func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[string]interface{}) {
 	my.variables = variables
 	switch operation.Operation {
 	case ast.Query, ast.Subscription:
-		my.renderQuery(operation.SelectionSet)
+		my.dialect.BuildQuery(my, operation.SelectionSet)
 	case ast.Mutation:
-		my.renderMutation(operation.SelectionSet)
+		my.dialect.BuildMutation(my, operation.SelectionSet)
 	}
-}
-
-// renderQuery 渲染查询
-func (my *Compiler) renderQuery(set ast.SelectionSet) {
-	// TODO: 实现查询渲染
-}
-
-// renderMutation 渲染变更
-func (my *Compiler) renderMutation(set ast.SelectionSet) {
-	// TODO: 实现变更渲染
 }
 
 // AddParam 添加参数并返回参数索引

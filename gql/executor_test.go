@@ -72,8 +72,8 @@ func TestExecutorSelectDialect(t *testing.T) {
 
 	// 注册测试方言
 	dialects = map[string]Dialect{
-		"postgresql": &mockDialect{name: "postgresql"},
-		"mysql":      &mockDialect{name: "mysql"},
+		"postgresql": &mockDialect{name: "postgresql", buildFunc: nil},
+		"mysql":      &mockDialect{name: "mysql", buildFunc: nil},
 	}
 
 	defer func() {
@@ -113,6 +113,10 @@ type mockDialect struct {
 
 func (m *mockDialect) Name() string {
 	return m.name
+}
+
+func (m *mockDialect) QuoteIdentifier() string {
+	return "`"
 }
 
 func (m *mockDialect) Placeholder(index int) string {

@@ -16,6 +16,10 @@ import (
 // mockPgsqlDialect 测试用的PostgreSQL方言实现
 type mockPgsqlDialect struct{}
 
+func (m *mockPgsqlDialect) QuoteIdentifier() string {
+	return "`"
+}
+
 // Placeholder 获取参数占位符 (PostgreSQL使用$1,$2...)
 func (my *mockPgsqlDialect) Placeholder(index int) string {
 	return fmt.Sprintf("$%d", index)
