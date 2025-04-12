@@ -17,6 +17,11 @@ func init() {
 // Dialect MySQL方言实现
 type Dialect struct{}
 
+// QuoteIdentifier 为标识符添加引号
+func (my *Dialect) QuoteIdentifier() string {
+	return "`"
+}
+
 // NewDialect 创建MySQL方言实例
 func NewDialect() gql.Dialect {
 	return &Dialect{}

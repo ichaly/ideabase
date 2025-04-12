@@ -10,6 +10,9 @@ import (
 
 // Dialect 定义SQL方言接口
 type Dialect interface {
+	// QuoteIdentifier 为标识符添加引号
+	QuoteIdentifier() string
+
 	// Placeholder 获取参数占位符 (如: PostgreSQL的$1,$2..., MySQL的?)
 	Placeholder(index int) string
 
@@ -77,6 +80,12 @@ func (my *Compiler) Wrap(with string, list ...any) *Compiler {
 	return my
 }
 
+// Quoted 添加引号
+func (my *Compiler) Quoted(list ...any) *Compiler {
+	my.Wrap(my.dialect.QuoteIdentifier(), list...)
+	return my
+}
+
 // Write 写入内容
 func (my *Compiler) Write(list ...any) *Compiler {
 	for _, e := range list {
@@ -85,15 +94,54 @@ func (my *Compiler) Write(list ...any) *Compiler {
 	return my
 }
 
-// Space 添加空格
-func (my *Compiler) Space(list ...any) *Compiler {
-	my.Wrap(` `, list...)
-	return my
+// SpaceOption 定义空格选项函数类型
+type SpaceOption func(*spaceOptions)
+
+// spaceOptions 空格配置选项
+type spaceOptions struct {
+	before bool
+	after  bool
 }
 
-// Quoted 添加引号
-func (my *Compiler) Quoted(list ...any) *Compiler {
-	my.Wrap(`"`, list...)
+// Before 只在前面加空格
+func Before() SpaceOption {
+	return func(o *spaceOptions) {
+		o.before = true
+		o.after = false
+	}
+}
+
+// After 只在后面加空格
+func After() SpaceOption {
+	return func(o *spaceOptions) {
+		o.before = false
+		o.after = true
+	}
+}
+
+// Space 添加空格并写入内容
+// 默认前后都加空格，可通过选项控制
+func (my *Compiler) Space(content any, opts ...SpaceOption) *Compiler {
+	// 默认配置：前后都加空格
+	options := &spaceOptions{
+		before: true,
+		after:  true,
+	}
+
+	// 应用自定义选项
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	// 添加空格和内容
+	if options.before {
+		my.buf.WriteString(" ")
+	}
+	my.Write(content)
+	if options.after {
+		my.buf.WriteString(" ")
+	}
+
 	return my
 }
 
@@ -126,4 +174,10 @@ func (my *Compiler) renderQuery(set ast.SelectionSet) {
 // renderMutation 渲染变更
 func (my *Compiler) renderMutation(set ast.SelectionSet) {
 	// TODO: 实现变更渲染
+}
+
+// AddParam 添加参数并返回参数索引
+func (my *Compiler) AddParam(value any) int {
+	my.params = append(my.params, value)
+	return len(my.params)
 }
