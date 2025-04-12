@@ -25,7 +25,7 @@ func (my *Dialect) BuildQuery(cpl *gql.Compiler, set ast.SelectionSet) error {
 		}
 
 		if i > 0 {
-			cpl.Write(", ")
+			cpl.SpaceAfter(",")
 		}
 
 		// 创建CTE
@@ -45,11 +45,10 @@ func (my *Dialect) BuildQuery(cpl *gql.Compiler, set ast.SelectionSet) error {
 		for i, selection := range set {
 			field := selection.(*ast.Field)
 			if i > 0 {
-				cpl.Write(", ")
+				cpl.SpaceAfter(",")
 			}
-			cpl.Write("'").
-				Write(field.Name).
-				Write("', (SELECT row_to_json(").
+			cpl.Quote(field.Name).
+				Write(", (SELECT row_to_json(").
 				Write(field.Name).
 				Write(".*) FROM ").
 				Write(field.Name).
