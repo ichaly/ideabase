@@ -7,6 +7,8 @@ import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/suite"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 type Case struct {
@@ -17,7 +19,9 @@ type Case struct {
 
 type _SelectSuite struct {
 	suite.Suite
-	meta *gql.Metadata
+	meta    *gql.Metadata
+	schema  *ast.Schema
+	dialect *Dialect
 }
 
 func TestSelect(t *testing.T) {
@@ -289,10 +293,49 @@ func (my *_SelectSuite) SetupSuite() {
 	meta, err := gql.NewMetadata(k, nil)
 	my.Require().NoError(err, "创建元数据失败")
 	my.meta = meta
+
+	// 创建PostgreSQL方言
+	my.dialect = &Dialect{}
+
+	// 创建渲染器
+	renderer := gql.NewRenderer(meta)
+
+	// 生成并加载GraphQL schema
+	schemaStr, err := renderer.Generate()
+	my.Require().NoError(err, "生成GraphQL schema失败")
+
+	schema, err := gqlparser.LoadSchema(&ast.Source{
+		Name:  "schema.graphql",
+		Input: schemaStr,
+	})
+	my.Require().NoError(err, "加载GraphQL schema失败")
+	my.schema = schema
 }
 
 func (my *_SelectSuite) doCase(query string, expected string) {
-	// TODO: 实现测试用例执行逻辑
+	// 解析GraphQL查询
+	doc, err := gqlparser.LoadQuery(my.schema, query)
+	my.Require().NoError(err, "解析GraphQL查询失败")
+	my.Require().NotNil(doc, "解析结果不能为空")
+	my.Require().NotEmpty(doc.Operations, "GraphQL查询必须包含操作")
+
+	// 创建编译器
+	compiler := gql.NewCompiler(my.meta, my.dialect)
+	defer compiler.Release() // 记得释放编译器资源
+
+	// 编译GraphQL查询
+	compiler.Build(doc.Operations[0], nil)
+	sql, args := compiler.String(), compiler.Args()
+
+	// 验证SQL与预期一致
+	my.Assert().Equal(expected, sql, "生成的SQL与预期不符")
+
+	// 输出详细信息用于调试
+	if expected != sql {
+		my.T().Logf("预期SQL: %s", expected)
+		my.T().Logf("实际SQL: %s", sql)
+		my.T().Logf("SQL参数: %v", args)
+	}
 }
 
 func (my *_SelectSuite) runCases(cases []Case) {
