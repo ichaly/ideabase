@@ -22,7 +22,7 @@
 ```sql
 -- 完整的通用SQL模板
 WITH RECURSIVE
--- [可选] 递归CTE定义，用于树形结构查询
+-- [可选] 递归CTE定义
 "__rcte_表名" AS (
     -- 基础查询
     SELECT [字段列表]
@@ -32,38 +32,47 @@ WITH RECURSIVE
 
     UNION ALL
 
-    -- 递归部分(根据场景二选一)
-    -- 向上递归(查父节点)
-    SELECT child.[字段列表]
-    FROM [表名] child, "__rcte_表名" parent
+    -- 递归部分，支持以下几种模式：
+    -- 1. 简单递归
+    SELECT [字段列表]
+    FROM [表名], "__rcte_表名"
+    WHERE [表名].[pid/id] = "__rcte_表名".[id/pid]
+
+    -- 2. 安全递归（防止循环）
+    SELECT [字段列表]
+    FROM [表名], "__rcte_表名"
     WHERE (
-        child.id = parent.pid AND
-        parent.pid IS NOT NULL AND
-        parent.pid != parent.id
-        [AND 其他过滤条件]
+        [表名].[pid/id] = "__rcte_表名".[id/pid] AND
+        [表名].[pid] IS NOT NULL AND
+        [表名].[pid] != [表名].[id]
     )
-    -- 或 向下递归(查子节点)
-    SELECT parent.[字段列表]
-    FROM [表名] parent, "__rcte_表名" child
+
+    -- 3. 条件递归
+    SELECT [字段列表]
+    FROM [表名], "__rcte_表名"
     WHERE (
-        parent.pid = child.id AND
-        parent.pid IS NOT NULL AND
-        parent.pid != parent.id
-        [AND 其他过滤条件]
+        [表名].[pid/id] = "__rcte_表名".[id/pid] AND
+        [其他过滤条件]
     )
 ),
 
--- [可选] 数据变更CTE，用于增删改操作
+-- [可选] 数据变更CTE
 "表名" AS (
     -- INSERT
     INSERT INTO [表名] ([字段列表])
-    SELECT [值列表]
-    [ON CONFLICT 处理]
+    SELECT
+        [值]::[类型], -- 例如 '重庆'::character varying
+        ...
+    [ON CONFLICT DO UPDATE SET [字段] = EXCLUDED.[字段]]
+    [ON CONFLICT DO NOTHING]
     RETURNING *
 
     -- 或 UPDATE
     UPDATE [表名]
-    SET [字段] = [值], ...
+    SET
+        [字段] = [值]::[类型],
+        [字段] = [表达式],
+        ([字段列表]) = (SELECT [值列表])
     WHERE [条件]
     RETURNING *
 
@@ -84,28 +93,55 @@ FROM (SELECT true) AS __root_x
 -- 查询体
 LEFT OUTER JOIN LATERAL (
     -- JSON数组聚合
-    SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json
+    SELECT COALESCE(jsonb_agg(
+        CASE WHEN [去重条件]
+        THEN DISTINCT ON ([去重字段]) __sj_0.json
+        ELSE __sj_0.json END
+    ), '[]') AS json
     FROM (
         -- 转换为JSON对象
         SELECT to_jsonb(__sr_0.*) AS json
         FROM (
             -- 字段选择和关联
             SELECT
-                [表别名].[字段1] AS [别名1],
-                [表别名].[字段2] AS [别名2]
+                [表别名].[字段1]::[类型] AS [别名1],
+                [表别名].[字段2]::[类型] AS [别名2]
                 [,"__sj_1"."json" AS [关联字段]]  -- 有关联查询时添加
             FROM (
                 -- 基础查询
                 SELECT [字段列表]
                 FROM [表名或CTE]
-                [WHERE (  -- 条件子句，根据需要组合
+                [WHERE (  -- 条件子句，支持多种组合
+                    -- 1. 基础条件
+                    ([字段] [操作符] [值]::[类型]) OR
                     ([字段] [操作符] [值])
-                    [AND/OR (其他条件)]
-                    [AND [外键] = [主键]]  -- 关联条件
+
+                    -- 2. 复合条件
+                    AND/OR (
+                        [条件1] AND/OR [条件2]
+                    )
+
+                    -- 3. 关联条件
+                    AND [外键] = [主键]
+
+                    -- 4. 空值条件
+                    AND [字段] IS [NOT] NULL
+
+                    -- 5. 范围条件
+                    AND [字段] BETWEEN [值1] AND [值2]
+
+                    -- 6. IN条件
+                    AND [字段] IN ([值列表])
+
+                    -- 7. 模糊匹配
+                    AND [字段] LIKE [模式]
                 )]
                 [GROUP BY [字段列表]]
                 [HAVING [条件]]
-                [ORDER BY [字段] [ASC|DESC] [NULLS FIRST|NULLS LAST]]
+                [ORDER BY
+                    [字段] [ASC|DESC] [NULLS FIRST|NULLS LAST],
+                    ...
+                ]
                 [LIMIT ?]
                 [OFFSET ?]
             ) AS [表别名]
@@ -147,7 +183,10 @@ LEFT OUTER JOIN LATERAL (
                     FROM (
                         SELECT [字段列表]
                         FROM [关联表]
-                        INNER JOIN [中间表] ON ([关联条件])
+                        INNER JOIN [中间表] ON (
+                            [中间表].[外键1] = [主表].[主键] AND
+                            [中间表].[外键2] = [关联表].[主键]
+                        )
                         WHERE [其他条件]
                         [LIMIT ?]
                     ) AS "__sr_N"
@@ -184,12 +223,17 @@ LEFT OUTER JOIN LATERAL (
    - NOT 条件
    - 关联条件
    - 排序和分页
+   - 类型转换
+   - NULL 值处理
 
 4. 特殊处理：
    - NULL 值使用 COALESCE 确保返回 `[]`
    - 去重使用 DISTINCT ON
    - 递归查询注意限制深度
    - 关联查询控制数据量
+   - 类型转换使用 `::`
+   - 多表关联使用适当的 JOIN 类型
+   - 条件组合注意优先级
 
 ## 注意事项
 
@@ -201,3 +245,5 @@ LEFT OUTER JOIN LATERAL (
 6. 处理好 NULL 值
 7. 控制返回数据量
 8. 考虑并发场景
+9. 注意类型转换
+10. 关注数据一致性
