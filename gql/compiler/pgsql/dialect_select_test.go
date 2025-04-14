@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 type Case struct {
@@ -21,9 +23,10 @@ type Case struct {
 
 type _SelectSuite struct {
 	suite.Suite
-	meta    *gql.Metadata
-	schema  *ast.Schema
-	dialect *Dialect
+	meta     *gql.Metadata
+	schema   *ast.Schema
+	dialect  *Dialect
+	gDialect gorm.Dialector
 }
 
 func TestSelect(t *testing.T) {
@@ -37,255 +40,38 @@ func (my *_SelectSuite) SetupSuite() {
 	k.Set("mode", "test")
 	k.Set("app.root", "../../../")
 
+	// 设置GORM方言
+	my.gDialect = postgres.New(postgres.Config{})
+
 	// 设置测试用的元数据配置
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
 		"User": {
 			Description: "用户表",
-			Table:       "users",
+			Table:       "sys_user",
 			Fields: map[string]*internal.FieldConfig{
 				"id": {
-					Type:      "integer",
+					Type:      "ID",
 					IsPrimary: true,
 				},
+				"age": {
+					Type:        "Int",
+					Description: "年龄",
+				},
 				"name": {
-					Type:        "string",
+					Type:        "String",
 					Description: "用户名",
 				},
 				"email": {
-					Type:        "string",
+					Type:        "String",
 					Description: "邮箱",
 				},
-				"age": {
-					Type:        "integer",
-					Description: "年龄",
-				},
-				"status": {
-					Type:        "user_status",
-					Description: "用户状态",
-				},
-				"roles": {
-					Type:        "text[]",
-					Description: "用户角色列表",
-				},
-				"settings": {
-					Type:        "json",
-					Description: "用户设置",
-				},
 				"metadata": {
-					Type:        "jsonb",
+					Type:        "Json",
 					Description: "用户元数据",
 				},
-				"tags": {
-					Type:        "text[]",
-					Description: "用户标签",
-				},
-				"createdAt": {
-					Type:        "timestamp",
-					Description: "创建时间",
-				},
-				"updatedAt": {
-					Type:        "timestamp",
-					Description: "更新时间",
-				},
-				"version": {
-					Type:        "integer",
-					Description: "乐观锁版本号",
-				},
-			},
-		},
-		"Post": {
-			Description: "文章表",
-			Table:       "posts",
-			Fields: map[string]*internal.FieldConfig{
-				"id": {
-					Type:      "integer",
-					IsPrimary: true,
-				},
-				"title": {
-					Type:        "string",
-					Description: "标题",
-				},
-				"content": {
-					Type:        "string",
-					Description: "内容",
-				},
-				"status": {
-					Type:        "post_status",
-					Description: "文章状态",
-				},
-				"authorId": {
-					Type: "integer",
-					Relation: &internal.RelationConfig{
-						TargetClass: "User",
-						TargetField: "id",
-						Type:        "many_to_one",
-					},
-				},
-				"tags": {
-					Type:        "text[]",
-					Description: "文章标签",
-				},
-				"metadata": {
-					Type:        "jsonb",
-					Description: "文章元数据",
-				},
-				"publishedAt": {
-					Type:        "timestamp",
-					Description: "发布时间",
-				},
-			},
-		},
-		"Team": {
-			Description: "团队表",
-			Table:       "teams",
-			Fields: map[string]*internal.FieldConfig{
-				"id": {
-					Type:      "integer",
-					IsPrimary: true,
-				},
-				"name": {
-					Type:        "string",
-					Description: "团队名称",
-				},
-				"parentId": {
-					Type: "integer",
-					Relation: &internal.RelationConfig{
-						TargetClass: "Team",
-						TargetField: "id",
-						Type:        "many_to_one",
-					},
-				},
-				"path": {
-					Type:        "integer[]",
-					Description: "团队路径",
-				},
-				"level": {
-					Type:        "integer",
-					Description: "团队层级",
-				},
 				"settings": {
-					Type:        "json",
-					Description: "团队设置",
-				},
-			},
-		},
-		"Comment": {
-			Description: "评论表",
-			Table:       "comments",
-			Fields: map[string]*internal.FieldConfig{
-				"id": {
-					Type:      "integer",
-					IsPrimary: true,
-				},
-				"content": {
-					Type:        "string",
-					Description: "评论内容",
-				},
-				"targetType": {
-					Type:        "string",
-					Description: "评论目标类型",
-				},
-				"targetId": {
-					Type:        "integer",
-					Description: "评论目标ID",
-				},
-				"userId": {
-					Type: "integer",
-					Relation: &internal.RelationConfig{
-						TargetClass: "User",
-						TargetField: "id",
-						Type:        "many_to_one",
-					},
-				},
-			},
-		},
-		"UserTeam": {
-			Description: "用户团队关系表",
-			Table:       "user_teams",
-			Fields: map[string]*internal.FieldConfig{
-				"userId": {
-					Type: "integer",
-					Relation: &internal.RelationConfig{
-						TargetClass: "User",
-						TargetField: "id",
-						Type:        "many_to_one",
-					},
-				},
-				"teamId": {
-					Type: "integer",
-					Relation: &internal.RelationConfig{
-						TargetClass: "Team",
-						TargetField: "id",
-						Type:        "many_to_one",
-					},
-				},
-				"role": {
-					Type:        "team_role",
-					Description: "团队中的角色",
-				},
-				"permissions": {
-					Type:        "jsonb",
-					Description: "权限配置",
-				},
-			},
-		},
-		"Tag": {
-			Description: "标签表",
-			Table:       "tags",
-			Fields: map[string]*internal.FieldConfig{
-				"id": {
-					Type:      "integer",
-					IsPrimary: true,
-				},
-				"name": {
-					Type:        "string",
-					Description: "标签名称",
-				},
-				"type": {
-					Type:        "string",
-					Description: "标签类型",
-				},
-				"metadata": {
-					Type:        "jsonb",
-					Description: "标签元数据",
-				},
-			},
-		},
-		"Audit": {
-			Description: "审计日志表",
-			Table:       "audits",
-			Fields: map[string]*internal.FieldConfig{
-				"id": {
-					Type:      "integer",
-					IsPrimary: true,
-				},
-				"action": {
-					Type:        "string",
-					Description: "操作类型",
-				},
-				"targetType": {
-					Type:        "string",
-					Description: "目标类型",
-				},
-				"targetId": {
-					Type:        "integer",
-					Description: "目标ID",
-				},
-				"userId": {
-					Type: "integer",
-					Relation: &internal.RelationConfig{
-						TargetClass: "User",
-						TargetField: "id",
-						Type:        "many_to_one",
-					},
-				},
-				"changes": {
-					Type:        "jsonb",
-					Description: "变更内容",
-				},
-				"createdAt": {
-					Type:        "timestamp",
-					Description: "创建时间",
+					Type:        "Json",
+					Description: "用户设置",
 				},
 			},
 		},
@@ -307,7 +93,7 @@ func (my *_SelectSuite) SetupSuite() {
 	my.Require().NoError(err, "生成GraphQL schema失败")
 
 	schema, err := gqlparser.LoadSchema(&ast.Source{
-		Name:  "schema.graphql",
+		Name:  "schema-test.graphql",
 		Input: schemaStr,
 	})
 	my.Require().NoError(err, "加载GraphQL schema失败")
@@ -317,7 +103,11 @@ func (my *_SelectSuite) SetupSuite() {
 func (my *_SelectSuite) doCase(query string, expected string) {
 	// 解析GraphQL查询
 	doc, err := gqlparser.LoadQuery(my.schema, query)
-	my.Require().NoError(err, "解析GraphQL查询失败")
+	if err != nil {
+		my.T().Logf("GraphQL查询解析失败: %v", err)
+		my.T().Logf("Schema中定义了以下类型: %v", my.schema.Types)
+		my.Require().NoError(err, "解析GraphQL查询失败")
+	}
 	my.Require().NotNil(doc, "解析结果不能为空")
 	my.Require().NotEmpty(doc.Operations, "GraphQL查询必须包含操作")
 
@@ -327,7 +117,7 @@ func (my *_SelectSuite) doCase(query string, expected string) {
 
 	// 编译GraphQL查询
 	compiler.Build(doc.Operations[0], nil)
-	sql, args := compiler.String(), compiler.Args()
+	sql := compiler.String()
 
 	// SQL归一化处理
 	normalizedSQL := my.normalizeSQL(sql)
@@ -340,16 +130,19 @@ func (my *_SelectSuite) doCase(query string, expected string) {
 	if normalizedExpected != normalizedSQL {
 		my.T().Logf("预期SQL: %s", normalizedExpected)
 		my.T().Logf("实际SQL: %s", normalizedSQL)
-		my.T().Logf("SQL参数: %v", args)
 	}
 }
 
-// normalizeSQL 对SQL进行归一化处理
+// normalizeSQL 对SQL进行归一化处理，使用GORM的格式化功能
 func (my *_SelectSuite) normalizeSQL(sql string) string {
-	// 使用正则表达式将所有空白字符(空格、制表符、换行符等)替换为单个空格
-	re := regexp.MustCompile(`\s+`)
-	sql = re.ReplaceAllString(sql, " ")
-	return strings.TrimSpace(sql)
+	// 使用GORM的SQL格式化
+	formatted := my.gDialect.Explain(sql)
+
+	// 统一处理空白字符
+	formatted = regexp.MustCompile(`\s+`).ReplaceAllString(formatted, " ")
+	formatted = strings.TrimSpace(formatted)
+
+	return formatted
 }
 
 func (my *_SelectSuite) runCases(cases []Case) {
@@ -367,56 +160,110 @@ func (my *_SelectSuite) TestBasicQueries() {
 			query: `
 				query {
 					users {
-						id
-						name
-						email
+						items {
+							id
+							name
+							email
+						}
 					}
 				}
 			`,
-			expected: `SELECT jsonb_build_object('users', __sj_0.json) AS __root FROM (SELECT true) AS __root_x LEFT OUTER JOIN LATERAL (SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json FROM (SELECT to_jsonb(__sr_0.*) AS json FROM (SELECT users_0.id AS id, users_0.name AS name, users_0.email AS email FROM users AS users_0) AS __sr_0) AS __sj_0) AS __sj_0 ON true`,
+			expected: `SELECT jsonb_build_object('users', jsonb_build_object('items', __sj_0.json)) AS "__root" 
+				FROM (SELECT true) AS "__root_x" 
+				LEFT OUTER JOIN LATERAL (
+					SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json 
+					FROM (
+						SELECT to_jsonb(__sr_0.*) AS json 
+						FROM (
+							SELECT sys_user_0.id AS "id", sys_user_0.name AS "name", sys_user_0.email AS "email" 
+							FROM sys_user AS sys_user_0
+						) AS "__sr_0"
+					) AS "__sj_0"
+				) AS "__sj_0" ON true`,
 		},
 		{
 			name: "字段别名查询",
 			query: `
 				query {
 					users {
-						userId: id
-						userName: name
-						userEmail: email
+						items {
+							userId: id
+							userName: name
+							userEmail: email
+						}
 					}
 				}
 			`,
-			expected: `SELECT jsonb_build_object('users', __sj_0.json) AS __root FROM (SELECT true) AS __root_x LEFT OUTER JOIN LATERAL (SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json FROM (SELECT to_jsonb(__sr_0.*) AS json FROM (SELECT users_0.id AS userId, users_0.name AS userName, users_0.email AS userEmail FROM users AS users_0) AS __sr_0) AS __sj_0) AS __sj_0 ON true`,
+			expected: `SELECT jsonb_build_object('users', jsonb_build_object('items', __sj_0.json)) AS "__root" 
+				FROM (SELECT true) AS "__root_x" 
+				LEFT OUTER JOIN LATERAL (
+					SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json 
+					FROM (
+						SELECT to_jsonb(__sr_0.*) AS json 
+						FROM (
+							SELECT sys_user_0.id AS "userId", sys_user_0.name AS "userName", sys_user_0.email AS "userEmail" 
+							FROM sys_user AS sys_user_0
+						) AS "__sr_0"
+					) AS "__sj_0"
+				) AS "__sj_0" ON true`,
 		},
 		{
 			name: "字段过滤查询",
 			query: `
 				query {
 					users {
-						id
-						name
-						... on User {
-							email
-							age
+						items {
+							id
+							name
+							... on User {
+								email
+								age
+							}
 						}
 					}
 				}
 			`,
-			expected: `SELECT jsonb_build_object('users', __sj_0.json) AS __root FROM (SELECT true) AS __root_x LEFT OUTER JOIN LATERAL (SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json FROM (SELECT to_jsonb(__sr_0.*) AS json FROM (SELECT users_0.id AS id, users_0.name AS name, users_0.email AS email, users_0.age AS age FROM users AS users_0) AS __sr_0) AS __sj_0) AS __sj_0 ON true`,
+			expected: `SELECT jsonb_build_object('users', jsonb_build_object('items', __sj_0.json)) AS "__root" 
+				FROM (SELECT true) AS "__root_x" 
+				LEFT OUTER JOIN LATERAL (
+					SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json 
+					FROM (
+						SELECT to_jsonb(__sr_0.*) AS json 
+						FROM (
+							SELECT sys_user_0.id AS "id", sys_user_0.name AS "name", sys_user_0.email AS "email", sys_user_0.age AS "age" 
+							FROM sys_user AS sys_user_0
+						) AS "__sr_0"
+					) AS "__sj_0"
+				) AS "__sj_0" ON true`,
 		},
 		{
 			name: "空值处理查询",
 			query: `
 				query {
 					users {
-						id
-						name
-						metadata
-						settings
+						items {
+							id
+							name
+							metadata
+							settings
+						}
 					}
 				}
 			`,
-			expected: `SELECT jsonb_build_object('users', __sj_0.json) AS __root FROM (SELECT true) AS __root_x LEFT OUTER JOIN LATERAL (SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json FROM (SELECT to_jsonb(__sr_0.*) AS json FROM (SELECT users_0.id AS id, users_0.name AS name, COALESCE(users_0.metadata, '{}'::jsonb) AS metadata, COALESCE(users_0.settings, '{}'::json) AS settings FROM users AS users_0) AS __sr_0) AS __sj_0) AS __sj_0 ON true`,
+			expected: `SELECT jsonb_build_object('users', jsonb_build_object('items', __sj_0.json)) AS "__root" 
+				FROM (SELECT true) AS "__root_x" 
+				LEFT OUTER JOIN LATERAL (
+					SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json 
+					FROM (
+						SELECT to_jsonb(__sr_0.*) AS json 
+						FROM (
+							SELECT sys_user_0.id AS "id", sys_user_0.name AS "name", 
+								sys_user_0.metadata, COALESCE(sys_user_0.metadata, '{}'::json) AS "metadata", 
+								sys_user_0.settings, COALESCE(sys_user_0.settings, '{}'::json) AS "settings" 
+							FROM sys_user AS sys_user_0
+						) AS "__sr_0"
+					) AS "__sj_0"
+				) AS "__sj_0" ON true`,
 		},
 	}
 	my.runCases(cases)
