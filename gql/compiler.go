@@ -2,6 +2,8 @@ package gql
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -49,6 +51,27 @@ var compilerPool = sync.Pool{
 	},
 }
 
+// 预计算的数字字符串，避免频繁转换
+var (
+	digits [100]string // 0-99的字符串缓存
+)
+
+func init() {
+	// 初始化数字字符串缓存
+	for i := 0; i < 100; i++ {
+		digits[i] = strconv.Itoa(i)
+	}
+}
+
+// fastIntToString 快速将整数转换为字符串
+func fastIntToString(n int) string {
+	// 对于常见的小数字，直接使用预计算的值
+	if n >= 0 && n < 100 {
+		return digits[n]
+	}
+	return strconv.Itoa(n)
+}
+
 // NewCompiler 创建新的编译上下文
 func NewCompiler(m *Metadata, d Dialect) *Compiler {
 	cpl := compilerPool.Get().(*Compiler)
@@ -85,10 +108,40 @@ func (my *Compiler) Wrap(with string, list ...any) *Compiler {
 	return my
 }
 
-// Write 写入内容
+// Write 优化后的写入方法
 func (my *Compiler) Write(list ...any) *Compiler {
 	for _, e := range list {
-		my.buf.WriteString(fmt.Sprint(e))
+		switch v := e.(type) {
+		case string:
+			my.buf.WriteString(v)
+		case int:
+			my.buf.WriteString(fastIntToString(v))
+		case int64:
+			if v >= math.MinInt && v <= math.MaxInt {
+				my.buf.WriteString(fastIntToString(int(v)))
+			} else {
+				my.buf.WriteString(strconv.FormatInt(v, 10))
+			}
+		case float64:
+			// 对于整数值的float64，转为整数处理
+			if v == float64(int64(v)) {
+				my.buf.WriteString(fastIntToString(int(v)))
+			} else {
+				my.buf.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+			}
+		case bool:
+			if v {
+				my.buf.WriteString("true")
+			} else {
+				my.buf.WriteString("false")
+			}
+		case []byte:
+			my.buf.Write(v)
+		case fmt.Stringer:
+			my.buf.WriteString(v.String())
+		default:
+			my.buf.WriteString(fmt.Sprint(v))
+		}
 	}
 	return my
 }
