@@ -1,6 +1,8 @@
 package pgsql
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql"
@@ -327,15 +329,27 @@ func (my *_SelectSuite) doCase(query string, expected string) {
 	compiler.Build(doc.Operations[0], nil)
 	sql, args := compiler.String(), compiler.Args()
 
+	// SQL归一化处理
+	normalizedSQL := my.normalizeSQL(sql)
+	normalizedExpected := my.normalizeSQL(expected)
+
 	// 验证SQL与预期一致
-	my.Assert().Equal(expected, sql, "生成的SQL与预期不符")
+	my.Assert().Equal(normalizedExpected, normalizedSQL, "生成的SQL与预期不符")
 
 	// 输出详细信息用于调试
-	if expected != sql {
-		my.T().Logf("预期SQL: %s", expected)
-		my.T().Logf("实际SQL: %s", sql)
+	if normalizedExpected != normalizedSQL {
+		my.T().Logf("预期SQL: %s", normalizedExpected)
+		my.T().Logf("实际SQL: %s", normalizedSQL)
 		my.T().Logf("SQL参数: %v", args)
 	}
+}
+
+// normalizeSQL 对SQL进行归一化处理
+func (my *_SelectSuite) normalizeSQL(sql string) string {
+	// 使用正则表达式将所有空白字符(空格、制表符、换行符等)替换为单个空格
+	re := regexp.MustCompile(`\s+`)
+	sql = re.ReplaceAllString(sql, " ")
+	return strings.TrimSpace(sql)
 }
 
 func (my *_SelectSuite) runCases(cases []Case) {
@@ -350,19 +364,59 @@ func (my *_SelectSuite) TestBasicQueries() {
 	cases := []Case{
 		{
 			name: "基础字段查询",
-			// 测试基本字段的查询能力
+			query: `
+				query {
+					users {
+						id
+						name
+						email
+					}
+				}
+			`,
+			expected: `SELECT jsonb_build_object('users', __sj_0.json) AS __root FROM (SELECT true) AS __root_x LEFT OUTER JOIN LATERAL (SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json FROM (SELECT to_jsonb(__sr_0.*) AS json FROM (SELECT users_0.id AS id, users_0.name AS name, users_0.email AS email FROM users AS users_0) AS __sr_0) AS __sj_0) AS __sj_0 ON true`,
 		},
 		{
 			name: "字段别名查询",
-			// 测试字段重命名能力
+			query: `
+				query {
+					users {
+						userId: id
+						userName: name
+						userEmail: email
+					}
+				}
+			`,
+			expected: `SELECT jsonb_build_object('users', __sj_0.json) AS __root FROM (SELECT true) AS __root_x LEFT OUTER JOIN LATERAL (SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json FROM (SELECT to_jsonb(__sr_0.*) AS json FROM (SELECT users_0.id AS userId, users_0.name AS userName, users_0.email AS userEmail FROM users AS users_0) AS __sr_0) AS __sj_0) AS __sj_0 ON true`,
 		},
 		{
 			name: "字段过滤查询",
-			// 测试字段选择性返回
+			query: `
+				query {
+					users {
+						id
+						name
+						... on User {
+							email
+							age
+						}
+					}
+				}
+			`,
+			expected: `SELECT jsonb_build_object('users', __sj_0.json) AS __root FROM (SELECT true) AS __root_x LEFT OUTER JOIN LATERAL (SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json FROM (SELECT to_jsonb(__sr_0.*) AS json FROM (SELECT users_0.id AS id, users_0.name AS name, users_0.email AS email, users_0.age AS age FROM users AS users_0) AS __sr_0) AS __sj_0) AS __sj_0 ON true`,
 		},
 		{
 			name: "空值处理查询",
-			// 测试NULL值的处理
+			query: `
+				query {
+					users {
+						id
+						name
+						metadata
+						settings
+					}
+				}
+			`,
+			expected: `SELECT jsonb_build_object('users', __sj_0.json) AS __root FROM (SELECT true) AS __root_x LEFT OUTER JOIN LATERAL (SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json FROM (SELECT to_jsonb(__sr_0.*) AS json FROM (SELECT users_0.id AS id, users_0.name AS name, COALESCE(users_0.metadata, '{}'::jsonb) AS metadata, COALESCE(users_0.settings, '{}'::json) AS settings FROM users AS users_0) AS __sr_0) AS __sj_0) AS __sj_0 ON true`,
 		},
 	}
 	my.runCases(cases)
