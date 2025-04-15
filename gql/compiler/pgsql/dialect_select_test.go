@@ -1,6 +1,7 @@
 package pgsql
 
 import (
+	sqlf "github.com/ichaly/ideabase/gql/compiler"
 	"regexp"
 	"strings"
 	"testing"
@@ -120,8 +121,8 @@ func (my *_SelectSuite) doCase(query string, expected string) {
 	sql := compiler.String()
 
 	// SQL归一化处理
-	normalizedSQL := my.normalizeSQL(sql)
-	normalizedExpected := my.normalizeSQL(expected)
+	normalizedSQL := sqlf.Format(sql)
+	normalizedExpected := sqlf.Format(expected)
 
 	// 验证SQL与预期一致
 	my.Assert().Equal(normalizedExpected, normalizedSQL, "生成的SQL与预期不符")

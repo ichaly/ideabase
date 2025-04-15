@@ -49,7 +49,7 @@ func TestMySQLFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := Format(tt.input, "mysql")
+			result := Format(tt.input)
 			if result != tt.expected {
 				t.Errorf("Format() = %v, want %v", result, tt.expected)
 			}
@@ -156,7 +156,7 @@ func TestPostgreSQLFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := Format(tt.input, "postgres")
+			result := Format(tt.input)
 			if result != tt.expected {
 				t.Errorf("Format() = %v, want %v", result, tt.expected)
 			}
@@ -243,7 +243,7 @@ func TestInvalidSQL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name+" Format", func(t *testing.T) {
-			result := Format(tt.input, tt.dbType)
+			result := Format(tt.input)
 			if result != "" {
 				t.Errorf("Format() with invalid SQL should return empty string, got %v", result)
 			}

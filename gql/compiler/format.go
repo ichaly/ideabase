@@ -12,9 +12,8 @@ import (
 
 // Format 格式化SQL语句
 // 使用sqlparser将SQL语句格式化为标准格式
-// dbType参数用于兼容旧版接口，实际上不再区分数据库类型
 // 如果解析失败，返回空字符串
-func Format(sql string, dbType string) string {
+func Format(sql string) string {
 	// 解析SQL语句
 	stmt, err := sqlparser.Parse(sql)
 	if err != nil {
