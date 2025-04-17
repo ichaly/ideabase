@@ -18,9 +18,6 @@ type Dialect interface {
 	// Placeholder 获取参数占位符 (如: PostgreSQL的$1,$2..., MySQL的?)
 	Placeholder(index int) string
 
-	// FormatLimit 格式化LIMIT子句
-	FormatLimit(limit, offset int) string
-
 	// BuildQuery 构建查询语句
 	BuildQuery(cpl *Compiler, set ast.SelectionSet) error
 
