@@ -1,7 +1,6 @@
 package pgsql
 
 import (
-	sqlf "github.com/ichaly/ideabase/gql/compiler"
 	"regexp"
 	"strings"
 	"testing"
@@ -12,8 +11,6 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 type Case struct {
@@ -24,10 +21,9 @@ type Case struct {
 
 type _SelectSuite struct {
 	suite.Suite
-	meta     *gql.Metadata
-	schema   *ast.Schema
-	dialect  *Dialect
-	gDialect gorm.Dialector
+	meta    *gql.Metadata
+	schema  *ast.Schema
+	dialect *Dialect
 }
 
 func TestSelect(t *testing.T) {
@@ -40,9 +36,6 @@ func (my *_SelectSuite) SetupSuite() {
 	my.Require().NoError(err, "创建配置失败")
 	k.Set("mode", "test")
 	k.Set("app.root", "../../../")
-
-	// 设置GORM方言
-	my.gDialect = postgres.New(postgres.Config{})
 
 	// 设置测试用的元数据配置
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
@@ -121,8 +114,8 @@ func (my *_SelectSuite) doCase(query string, expected string) {
 	sql := compiler.String()
 
 	// SQL归一化处理
-	normalizedSQL := sqlf.Format(sql)
-	normalizedExpected := sqlf.Format(expected)
+	normalizedSQL := formatSQL(sql)
+	normalizedExpected := formatSQL(expected)
 
 	// 验证SQL与预期一致
 	my.Assert().Equal(normalizedExpected, normalizedSQL, "生成的SQL与预期不符")
@@ -134,13 +127,10 @@ func (my *_SelectSuite) doCase(query string, expected string) {
 	}
 }
 
-// normalizeSQL 对SQL进行归一化处理，使用GORM的格式化功能
-func (my *_SelectSuite) normalizeSQL(sql string) string {
-	// 使用GORM的SQL格式化
-	formatted := my.gDialect.Explain(sql)
-
+// formatSQL 对SQL进行归一化处理
+func formatSQL(sql string) string {
 	// 统一处理空白字符
-	formatted = regexp.MustCompile(`\s+`).ReplaceAllString(formatted, " ")
+	formatted := regexp.MustCompile(`\s+`).ReplaceAllString(sql, " ")
 	formatted = strings.TrimSpace(formatted)
 
 	return formatted
