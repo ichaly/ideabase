@@ -29,8 +29,8 @@ type Dialect interface {
 type Compiler struct {
 	buf       *strings.Builder
 	meta      *Metadata // 元数据引用
-	dialect   Dialect   // 方言实现引用，避免重复查询
 	params    []any
+	dialect   Dialect // 方言实现引用，避免重复查询
 	variables map[string]interface{}
 }
 
@@ -46,27 +46,6 @@ var compilerPool = sync.Pool{
 			variables: make(map[string]interface{}, 8),
 		}
 	},
-}
-
-// 预计算的数字字符串，避免频繁转换
-var (
-	digits [100]string // 0-99的字符串缓存
-)
-
-func init() {
-	// 初始化数字字符串缓存
-	for i := 0; i < 100; i++ {
-		digits[i] = strconv.Itoa(i)
-	}
-}
-
-// fastIntToString 快速将整数转换为字符串
-func fastIntToString(n int) string {
-	// 对于常见的小数字，直接使用预计算的值
-	if n >= 0 && n < 100 {
-		return digits[n]
-	}
-	return strconv.Itoa(n)
 }
 
 // NewCompiler 创建新的编译上下文
@@ -112,17 +91,17 @@ func (my *Compiler) Write(list ...any) *Compiler {
 		case string:
 			my.buf.WriteString(v)
 		case int:
-			my.buf.WriteString(fastIntToString(v))
+			my.buf.WriteString(strconv.Itoa(v))
 		case int64:
 			if v >= math.MinInt && v <= math.MaxInt {
-				my.buf.WriteString(fastIntToString(int(v)))
+				my.buf.WriteString(strconv.Itoa(int(v)))
 			} else {
 				my.buf.WriteString(strconv.FormatInt(v, 10))
 			}
 		case float64:
 			// 对于整数值的float64，转为整数处理
 			if v == float64(int64(v)) {
-				my.buf.WriteString(fastIntToString(int(v)))
+				my.buf.WriteString(strconv.Itoa(int(v)))
 			} else {
 				my.buf.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
 			}
