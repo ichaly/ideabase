@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -69,6 +70,14 @@ func NewCompiler(m *Metadata, d Dialect) *Compiler {
 func (my *Compiler) Release() {
 	// 将对象放回池中以便重用
 	compilerPool.Put(my)
+}
+
+func (my *Compiler) FindField(className, fieldName string) (*internal.Field, bool) {
+	return my.meta.FindField(className, fieldName, false)
+}
+
+func (my *Compiler) TableName(param string) (string, bool) {
+	return my.meta.TableName(param, false)
 }
 
 // Args 获取参数列表

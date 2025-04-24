@@ -3,6 +3,8 @@ package pgsql
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/ichaly/ideabase/gql"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -14,102 +16,85 @@ func (my *Dialect) BuildQuery(cpl *gql.Compiler, set ast.SelectionSet) error {
 		return fmt.Errorf("empty selection set")
 	}
 
-	// 统一使用WITH语句
-	cpl.SpaceAfter("WITH")
-
-	// 构建每个查询的CTE
-	for i, selection := range set {
-		field, ok := selection.(*ast.Field)
-		if !ok {
-			return fmt.Errorf("selection must be a field")
-		}
-
-		if i > 0 {
-			cpl.SpaceAfter(",")
-		}
-
-		// 创建CTE
-		cpl.Write(field.Name).Space("AS").Write("(")
-
-		if err := my.buildSingleQuery(cpl, field); err != nil {
-			return err
-		}
-		cpl.Write(")")
+	if err := my.buildRoot(cpl, set); err != nil {
+		return err
 	}
 
-	// 构建最终的结果集
-	cpl.SpaceAfter("SELECT")
-	if len(set) > 1 {
-		// 多表查询返回JSON对象
-		cpl.Write("json_build_object(")
-		for i, selection := range set {
-			field := selection.(*ast.Field)
-			if i > 0 {
-				cpl.SpaceAfter(",")
-			}
-			cpl.Quote(field.Name).
-				Write(", (SELECT row_to_json(").
-				Write(field.Name).
-				Write(".*) FROM ").
-				Write(field.Name).
-				Write(")")
-		}
-		cpl.Write(")")
-	} else {
-		// 单表查询直接返回结果
-		field := set[0].(*ast.Field)
-		cpl.Write("row_to_json(").
-			Write(field.Name).
-			Write(".*) FROM ").
-			Write(field.Name)
-	}
-
+	my.buildJson(cpl, set)
 	return nil
 }
 
-// buildSingleQuery 构建单个表的查询
-func (my *Dialect) buildSingleQuery(cpl *gql.Compiler, field *ast.Field) error {
-	if field.Name == "" {
-		return fmt.Errorf("table name is required")
+func (my *Dialect) buildRoot(cpl *gql.Compiler, set ast.SelectionSet) error {
+	cpl.Write(`SELECT JSONB_BUILD_OBJECT(`)
+	for i, s := range set {
+		field, ok := s.(*ast.Field)
+		if !ok {
+			return fmt.Errorf("selection must be a field")
+		}
+		if i != 0 {
+			cpl.SpaceAfter(`,`)
+		}
+		cpl.Write(`'`, field.Name, `', __sj_`, i, `.json`)
 	}
+	cpl.Write(`) AS "__root" FROM (SELECT TRUE) AS "__root_x"`)
+	return nil
+}
 
-	cpl.SpaceAfter("SELECT")
+func (my *Dialect) buildJson(cpl *gql.Compiler, set ast.SelectionSet) {
+	for i, s := range set {
+		field := s.(*ast.Field)
+		cpl.SpaceBefore(`LEFT OUTER JOIN LATERAL (`)
+		cpl.Write(`SELECT COALESCE(JSONB_AGG(__sj_`, i, `.json), '[]') AS "json" FROM (`)
+		cpl.Write(`SELECT TO_JSONB(__sr_`, i, `.*) AS "json" FROM (`)
 
-	// 处理字段选择
-	if len(field.SelectionSet) == 0 {
-		cpl.Write("*")
-	} else {
-		for i, selection := range field.SelectionSet {
-			f, ok := selection.(*ast.Field)
+		my.buildSelect(cpl, field, i, "0")
+		if len(field.SelectionSet) > 0 {
+			my.buildJson(cpl, field.SelectionSet)
+		}
+
+		cpl.SpaceAfter(`) AS`).Quote(`__sr_`, i)
+		cpl.SpaceAfter(`) AS`).Quote(`__sj_`, i)
+		cpl.SpaceAfter(`) AS`).Quote(`__sj_`, i).Write(` ON TRUE`)
+	}
+}
+
+func (my *Dialect) buildSelect(cpl *gql.Compiler, field *ast.Field, index int, parent string) {
+	table, ok := cpl.TableName(field.Definition.Type.Name())
+	if !ok {
+		return
+	}
+	alias := strings.Join([]string{table, parent, strconv.Itoa(index)}, "_")
+	// 外层别名查询
+	cpl.SpaceAfter(`SELECT`)
+	for i, s := range field.SelectionSet {
+		switch f := s.(type) {
+		case *ast.Field:
+			field, ok := cpl.FindField(f.ObjectDefinition.Name, f.Name)
 			if !ok {
-				return fmt.Errorf("invalid selection type at index %d", i)
+				continue
 			}
-			if f.Name == "" {
-				return fmt.Errorf("empty field name in selection at index %d", i)
+			if i != 0 {
+				cpl.SpaceAfter(`,`)
 			}
-			if i > 0 {
-				cpl.Write(", ")
-			}
-			cpl.Quote(f.Name)
+			cpl.Quote(alias).Write(".").Quote(field.Column)
+			cpl.Space(`AS`).Quote(f.Alias)
 		}
 	}
-
-	cpl.SpaceAfter("FROM").Quote(field.Name)
-
-	// 处理WHERE条件
-	if err := my.buildWhere(cpl, field.Arguments); err != nil {
-		return fmt.Errorf("failed to build WHERE clause: %w", err)
+	cpl.Space(`FROM (SELECT`)
+	// 内层原生查询
+	for i, s := range field.SelectionSet {
+		switch f := s.(type) {
+		case *ast.Field:
+			field, ok := cpl.FindField(f.ObjectDefinition.Name, f.Name)
+			if !ok {
+				continue
+			}
+			if i != 0 {
+				cpl.SpaceAfter(`,`)
+			}
+			cpl.Quote(table).Write(".").Quote(field.Column)
+			cpl.Space(`AS`).Quote(f.Alias)
+		}
 	}
-
-	// 处理排序
-	if err := my.buildOrderBy(cpl, field.Arguments); err != nil {
-		return fmt.Errorf("failed to build ORDER BY clause: %w", err)
-	}
-
-	// 处理分页
-	if err := my.buildPagination(cpl, field.Arguments); err != nil {
-		return fmt.Errorf("failed to build pagination: %w", err)
-	}
-
-	return nil
+	cpl.Space("FROM").Write(table).Space(`) AS`).Quote(alias)
 }
