@@ -19,7 +19,7 @@ type Case struct {
 	expected string
 }
 
-type _SelectSuite struct {
+type _DialectSuite struct {
 	suite.Suite
 	meta    *gql.Metadata
 	schema  *ast.Schema
@@ -27,10 +27,10 @@ type _SelectSuite struct {
 }
 
 func TestSelect(t *testing.T) {
-	suite.Run(t, new(_SelectSuite))
+	suite.Run(t, new(_DialectSuite))
 }
 
-func (my *_SelectSuite) SetupSuite() {
+func (my *_DialectSuite) SetupSuite() {
 	// 初始化配置
 	k, err := std.NewKonfig()
 	my.Require().NoError(err, "创建配置失败")
@@ -94,7 +94,7 @@ func (my *_SelectSuite) SetupSuite() {
 	my.schema = schema
 }
 
-func (my *_SelectSuite) doCase(query string, expected string) {
+func (my *_DialectSuite) doCase(query string, expected string) {
 	// 解析GraphQL查询
 	doc, err := gqlparser.LoadQuery(my.schema, query)
 	if err != nil {
@@ -136,7 +136,7 @@ func formatSQL(sql string) string {
 	return formatted
 }
 
-func (my *_SelectSuite) runCases(cases []Case) {
+func (my *_DialectSuite) runCases(cases []Case) {
 	for _, c := range cases {
 		my.Run(c.name, func() {
 			my.doCase(c.query, c.expected)
@@ -144,7 +144,7 @@ func (my *_SelectSuite) runCases(cases []Case) {
 	}
 }
 
-func (my *_SelectSuite) TestBasicQueries() {
+func (my *_DialectSuite) TestBasicQueries() {
 	cases := []Case{
 		{
 			name: "基础字段查询",
@@ -260,7 +260,7 @@ func (my *_SelectSuite) TestBasicQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestFilterQueries() {
+func (my *_DialectSuite) TestFilterQueries() {
 	cases := []Case{
 		{
 			name: "等值过滤",
@@ -290,7 +290,7 @@ func (my *_SelectSuite) TestFilterQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestRelationQueries() {
+func (my *_DialectSuite) TestRelationQueries() {
 	cases := []Case{
 		{
 			name: "一对一关系",
@@ -320,7 +320,7 @@ func (my *_SelectSuite) TestRelationQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestAggregateQueries() {
+func (my *_DialectSuite) TestAggregateQueries() {
 	cases := []Case{
 		{
 			name: "计数统计",
@@ -346,7 +346,7 @@ func (my *_SelectSuite) TestAggregateQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestPaginationQueries() {
+func (my *_DialectSuite) TestPaginationQueries() {
 	cases := []Case{
 		{
 			name: "偏移分页",
@@ -364,7 +364,7 @@ func (my *_SelectSuite) TestPaginationQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestSortingQueries() {
+func (my *_DialectSuite) TestSortingQueries() {
 	cases := []Case{
 		{
 			name: "单字段排序",
@@ -386,7 +386,7 @@ func (my *_SelectSuite) TestSortingQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestEdgeCaseQueries() {
+func (my *_DialectSuite) TestEdgeCaseQueries() {
 	cases := []Case{
 		{
 			name: "空结果处理",
@@ -412,7 +412,7 @@ func (my *_SelectSuite) TestEdgeCaseQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestTypeQueries() {
+func (my *_DialectSuite) TestTypeQueries() {
 	cases := []Case{
 		{
 			name: "JSON类型查询",
@@ -442,7 +442,7 @@ func (my *_SelectSuite) TestTypeQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestAdvancedQueries() {
+func (my *_DialectSuite) TestAdvancedQueries() {
 	cases := []Case{
 		{
 			name: "窗口函数-ROW_NUMBER",
@@ -476,7 +476,7 @@ func (my *_SelectSuite) TestAdvancedQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestSecurityQueries() {
+func (my *_DialectSuite) TestSecurityQueries() {
 	cases := []Case{
 		{
 			name: "行级权限过滤",
@@ -502,7 +502,7 @@ func (my *_SelectSuite) TestSecurityQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestPerformanceQueries() {
+func (my *_DialectSuite) TestPerformanceQueries() {
 	cases := []Case{
 		{
 			name: "查询缓存测试",
@@ -528,7 +528,7 @@ func (my *_SelectSuite) TestPerformanceQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestConcurrencyQueries() {
+func (my *_DialectSuite) TestConcurrencyQueries() {
 	cases := []Case{
 		{
 			name: "并发读取测试",
@@ -550,7 +550,7 @@ func (my *_SelectSuite) TestConcurrencyQueries() {
 	my.runCases(cases)
 }
 
-func (my *_SelectSuite) TestErrorHandlingQueries() {
+func (my *_DialectSuite) TestErrorHandlingQueries() {
 	cases := []Case{
 		{
 			name: "语法错误处理",
