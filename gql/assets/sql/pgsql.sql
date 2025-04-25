@@ -39,21 +39,12 @@ CREATE TABLE post_tags (
     PRIMARY KEY (post_id, tag_id)
 );
 
-CREATE TABLE organizations (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    parent_id INTEGER REFERENCES organizations(id),
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
 -- 设置表注释
 COMMENT ON TABLE users IS '用户表';
 COMMENT ON TABLE posts IS '文章表';
 COMMENT ON TABLE tags IS '标签表';
 COMMENT ON TABLE comments IS '评论表';
 COMMENT ON TABLE post_tags IS '文章标签关联表';
-COMMENT ON TABLE organizations IS '组织表';
-
 -- 设置字段注释
 COMMENT ON COLUMN users.name IS '用户名';
 COMMENT ON COLUMN users.email IS '邮箱';
@@ -65,8 +56,5 @@ COMMENT ON COLUMN comments.content IS '评论内容';
 COMMENT ON COLUMN comments.user_id IS '评论者';
 COMMENT ON COLUMN comments.post_id IS '评论文章';
 COMMENT ON COLUMN comments.parent_id IS '父评论ID';
-COMMENT ON COLUMN organizations.name IS '组织名称';
-COMMENT ON COLUMN organizations.parent_id IS '父组织ID';
-
 COMMENT ON COLUMN post_tags.post_id IS '文章ID';
 COMMENT ON COLUMN post_tags.tag_id IS '标签ID';

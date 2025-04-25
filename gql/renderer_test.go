@@ -231,7 +231,7 @@ func TestRenderer_Generate(t *testing.T) {
 	// 验证基本类型是否存在
 	if len(meta.Nodes) > 0 {
 		// 使用固定的类名进行验证，避免随机性
-		className := "Organization"
+		className := "User"
 		t.Logf("验证生成的schema中包含%s类型", className)
 		assert.Contains(t, schema, "type "+className+" {")
 	}

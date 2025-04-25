@@ -44,11 +44,3 @@ CREATE TABLE post_tags (
     FOREIGN KEY (post_id) REFERENCES posts(id),
     FOREIGN KEY (tag_id) REFERENCES tags(id)
 ) COMMENT='文章标签关联表';
-
-CREATE TABLE organizations (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(255) NOT NULL COMMENT '组织名称',
-    parent_id BIGINT COMMENT '父组织ID',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (parent_id) REFERENCES organizations(id)
-) COMMENT='组织表';

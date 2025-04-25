@@ -163,7 +163,7 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 
 	// 验证类信息
 	t.Run("验证类信息", func(t *testing.T) {
-		require.Len(t, classes, 6) // 现在应该有6个类：users, posts, comments, tags, post_tags, organizations
+		require.Len(t, classes, 5) // 现在应该有5个类：users, posts, comments, tags, post_tags
 
 		// 验证users表
 		users, ok := classes["users"]

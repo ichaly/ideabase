@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20250410172712
+# 版本: 20250425094548
 
 # 自定义标量类型
 scalar Json
@@ -70,24 +70,6 @@ type Comment {
   userId: Int!
 }
 
-# 组织表
-type Organization {
-  # 子Organization列表
-  # 子Organization列表
-  children: [Organization]!
-  createdAt: DateTime!
-  id: ID!
-  # 组织名称
-  # 组织名称
-  name: String!
-  # 父Organization对象
-  # 父Organization对象
-  parent: Organization
-  # 父组织ID
-  # 父组织ID
-  parentId: Int
-}
-
 # 文章表
 type Post {
   # 关联的Comment列表
@@ -148,13 +130,6 @@ type User {
 # Comment分页结果
 type CommentPage {
   items: [Comment!]!  # 直接返回Comment对象数组
-  pageInfo: PageInfo!
-  total: Int!
-}
-
-# Organization分页结果
-type OrganizationPage {
-  items: [Organization!]!  # 直接返回Organization对象数组
   pageInfo: PageInfo!
   total: Int!
 }
@@ -223,24 +198,6 @@ type CommentStats {
 
 # Comment分组结果
 type CommentGroup {
-  key: Json!  # 分组键
-  count: Int!  # 计数
-  # 可以包含其他聚合字段
-}
-
-# Organization聚合
-type OrganizationStats {
-  count: Int!
-  createdAt: DateTimeStats
-  id: NumberStats
-  name: StringStats
-  parentId: NumberStats
-  # 分组聚合
-  groupBy: [OrganizationGroup!]
-}
-
-# Organization分组结果
-type OrganizationGroup {
   key: Json!  # 分组键
   count: Int!  # 计数
   # 可以包含其他聚合字段
@@ -394,17 +351,6 @@ input CommentFilter {
   not: CommentFilter
 }
 
-# Organization查询条件
-input OrganizationFilter {
-  createdAt: DateTimeFilter
-  id: IDFilter
-  name: StringFilter
-  parentId: IntFilter
-  and: [OrganizationFilter!]
-  or: [OrganizationFilter!]
-  not: OrganizationFilter
-}
-
 # Post查询条件
 input PostFilter {
   content: StringFilter
@@ -451,16 +397,6 @@ input CommentSort {
   postId: SortDirection
   user: SortDirection
   userId: SortDirection
-}
-
-# Organization排序
-input OrganizationSort {
-  children: SortDirection
-  createdAt: SortDirection
-  id: SortDirection
-  name: SortDirection
-  parent: SortDirection
-  parentId: SortDirection
 }
 
 # Post排序
@@ -510,22 +446,6 @@ input CommentUpdateInput {
   parentId: Int
   postId: Int
   userId: Int
-  # 关系操作
-  relation: RelationInput
-}
-
-# Organization创建输入
-input OrganizationCreateInput {
-  createdAt: DateTime!
-  id: ID!
-  name: String!
-  parentId: Int
-}
-
-# Organization更新输入
-input OrganizationUpdateInput {
-  name: String
-  parentId: Int
   # 关系操作
   relation: RelationInput
 }
@@ -607,23 +527,6 @@ type Query {
 
   # Comment统计查询
   commentStats(filter: CommentFilter, groupBy: GroupBy): CommentStats!
-  # 单个Organization查询
-  organization(id: ID!): Organization
-
-  # Organization列表查询
-  organizations(
-    filter: OrganizationFilter
-    sort: [OrganizationSort!]
-    limit: Int
-    offset: Int
-    first: Int
-    last: Int
-    after: Cursor
-    before: Cursor
-  ): OrganizationPage!
-
-  # Organization统计查询
-  organizationStats(filter: OrganizationFilter, groupBy: GroupBy): OrganizationStats!
   # 单个Post查询
   post(id: ID!): Post
 
@@ -690,17 +593,6 @@ type Mutation {
 
   # Comment批量删除
   batchDeleteComment(filter: CommentFilter!): Int!
-  # Organization创建
-  createOrganization(data: OrganizationCreateInput!): Organization!
-
-  # Organization更新
-  updateOrganization(id: ID!, data: OrganizationUpdateInput!): Organization!
-
-  # Organization删除
-  deleteOrganization(id: ID!): Boolean!
-
-  # Organization批量删除
-  batchDeleteOrganization(filter: OrganizationFilter!): Int!
   # Post创建
   createPost(data: PostCreateInput!): Post!
 

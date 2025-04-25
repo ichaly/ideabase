@@ -68,13 +68,13 @@ func TestRenderRelation(t *testing.T) {
 
 	// 验证递归关系
 	t.Run("递归关系", func(t *testing.T) {
-		// Organization表中应该有parent字段，指向Organization
-		assert.Contains(t, generatedSchema, "parent: Organization")
-		// Organization表中应该有children字段，是Organization的列表
-		assert.Contains(t, generatedSchema, "children: [Organization]!")
+		// Comment表中应该有parent字段，指向Comment
+		assert.Contains(t, generatedSchema, "parent: Comment")
+		// Comment表中应该有children字段，是Comment的列表
+		assert.Contains(t, generatedSchema, "children: [Comment]!")
 		// 应该包含注释
-		assert.Contains(t, generatedSchema, "# 父Organization对象")
-		assert.Contains(t, generatedSchema, "# 子Organization列表")
+		assert.Contains(t, generatedSchema, "# 父Comment对象")
+		assert.Contains(t, generatedSchema, "# 子Comment列表")
 	})
 
 	// 验证字段冲突处理
@@ -275,21 +275,6 @@ func TestRenderRelation(t *testing.T) {
 		// 而不需关注具体渲染的内容
 		assert.NotContains(t, statsSchemaWithoutThrough, "postTags:")
 	})
-}
-
-// getTypeSection 从schema中提取指定类型的部分
-func getTypeSection(schema, typeHeader string) string {
-	start := strings.Index(schema, typeHeader)
-	if start == -1 {
-		return ""
-	}
-
-	end := strings.Index(schema[start:], "}\n\n")
-	if end == -1 {
-		return schema[start:]
-	}
-
-	return schema[start : start+end+3]
 }
 
 // createRelationTestMetadata 创建用于测试关系的元数据
@@ -529,49 +514,6 @@ func createRelationTestMetadata() *Metadata {
 		IsList:      false,
 	}
 
-	// 创建Organization类（自关联）
-	orgClass := &internal.Class{
-		Name:   "Organization",
-		Table:  "organizations",
-		Fields: make(map[string]*internal.Field),
-	}
-	orgClass.Fields["id"] = &internal.Field{
-		Name:      "id",
-		Column:    "id",
-		Type:      "integer",
-		IsPrimary: true,
-	}
-	orgClass.Fields["name"] = &internal.Field{
-		Name:   "name",
-		Column: "name",
-		Type:   "string",
-	}
-	orgClass.Fields["parentId"] = &internal.Field{
-		Name:     "parentId",
-		Column:   "parent_id",
-		Type:     "integer",
-		Nullable: true,
-	}
-
-	// 添加递归关系字段 - 父组织
-	orgClass.Fields["parent"] = &internal.Field{
-		Name:        "parent",
-		Type:        "Organization",
-		Description: "父Organization对象",
-		Virtual:     true,
-		Nullable:    true,
-		IsList:      false,
-	}
-
-	// 添加递归关系字段 - 子组织
-	orgClass.Fields["children"] = &internal.Field{
-		Name:        "children",
-		Type:        "Organization",
-		Description: "子Organization列表",
-		Virtual:     true,
-		IsList:      true,
-	}
-
 	// 添加所有类到元数据
 	meta.Nodes["User"] = userClass
 	meta.Nodes["Department"] = deptClass
@@ -579,7 +521,6 @@ func createRelationTestMetadata() *Metadata {
 	meta.Nodes["Post"] = postClass
 	meta.Nodes["Tag"] = tagClass
 	meta.Nodes["PostTags"] = postTagsClass
-	meta.Nodes["Organization"] = orgClass
 
 	return meta
 }

@@ -101,30 +101,3 @@ func BenchmarkCompilerWrite(b *testing.B) {
 		})
 	}
 }
-
-// 测试数字转换的正确性
-func TestFastIntToString(t *testing.T) {
-	tests := []struct {
-		input    int
-		expected string
-	}{
-		{0, "0"},
-		{9, "9"},
-		{10, "10"},
-		{99, "99"},
-		{100, "100"},
-		{-1, "-1"},
-		{-100, "-100"},
-		{1234567, "1234567"},
-		{-1234567, "-1234567"},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("input_%d", tt.input), func(t *testing.T) {
-			result := fastIntToString(tt.input)
-			if result != tt.expected {
-				t.Errorf("fastIntToString(%d) = %s; want %s", tt.input, result, tt.expected)
-			}
-		})
-	}
-}

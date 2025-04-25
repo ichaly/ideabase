@@ -160,23 +160,23 @@ func TestMetadataLoadingModes(t *testing.T) {
 		}
 
 		// 验证自关联关系
-		organizations, exists := meta.Nodes["Organization"]
-		assert.True(t, exists, "应该存在Organization表")
+		comments, exists := meta.Nodes["Comment"]
+		assert.True(t, exists, "应该存在Comment表")
 		if exists {
 			// 验证parentId字段
-			parentId := organizations.Fields["parentId"]
+			parentId := comments.Fields["parentId"]
 			assert.NotNil(t, parentId, "应该有parentId字段")
 			if parentId != nil {
 				assert.NotNil(t, parentId.Relation, "parentId应该有关系定义")
 				assert.Equal(t, internal.RECURSIVE, parentId.Relation.Type, "应该是recursive关系")
-				assert.Equal(t, "Organization", parentId.Relation.TargetClass, "关系目标类应该是Organization")
+				assert.Equal(t, "Comment", parentId.Relation.TargetClass, "关系目标类应该是Comment")
 				assert.Equal(t, "id", parentId.Relation.TargetField, "关系目标字段应该是id")
 
 				// 验证反向关系
 				assert.NotNil(t, parentId.Relation.Reverse, "应该有反向关系")
 				if parentId.Relation.Reverse != nil {
 					assert.Equal(t, internal.RECURSIVE, parentId.Relation.Reverse.Type, "反向关系也应该是recursive")
-					assert.Equal(t, "Organization", parentId.Relation.Reverse.TargetClass, "反向关系目标类应该是Organization")
+					assert.Equal(t, "Comment", parentId.Relation.Reverse.TargetClass, "反向关系目标类应该是Comment")
 				}
 			}
 		}
