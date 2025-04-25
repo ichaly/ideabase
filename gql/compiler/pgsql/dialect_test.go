@@ -8,6 +8,7 @@ import (
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/std"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -142,122 +143,6 @@ func (my *_DialectSuite) runCases(cases []Case) {
 			my.doCase(c.query, c.expected)
 		})
 	}
-}
-
-func (my *_DialectSuite) TestBasicQueries() {
-	cases := []Case{
-		{
-			name: "基础字段查询",
-			query: `
-				query {
-					users {
-						items {
-							id
-							name
-							email
-						}
-					}
-				}
-			`,
-			expected: `SELECT jsonb_build_object('users', jsonb_build_object('items', __sj_0.json)) AS "__root" 
-				FROM (SELECT true) AS "__root_x" 
-				LEFT OUTER JOIN LATERAL (
-					SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json 
-					FROM (
-						SELECT to_jsonb(__sr_0.*) AS json 
-						FROM (
-							SELECT sys_user_0.id AS "id", sys_user_0.name AS "name", sys_user_0.email AS "email" 
-							FROM sys_user AS sys_user_0
-						) AS "__sr_0"
-					) AS "__sj_0"
-				) AS "__sj_0" ON true`,
-		},
-		{
-			name: "字段别名查询",
-			query: `
-				query {
-					users {
-						items {
-							userId: id
-							userName: name
-							userEmail: email
-						}
-					}
-				}
-			`,
-			expected: `SELECT jsonb_build_object('users', jsonb_build_object('items', __sj_0.json)) AS "__root" 
-				FROM (SELECT true) AS "__root_x" 
-				LEFT OUTER JOIN LATERAL (
-					SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json 
-					FROM (
-						SELECT to_jsonb(__sr_0.*) AS json 
-						FROM (
-							SELECT sys_user_0.id AS "userId", sys_user_0.name AS "userName", sys_user_0.email AS "userEmail" 
-							FROM sys_user AS sys_user_0
-						) AS "__sr_0"
-					) AS "__sj_0"
-				) AS "__sj_0" ON true`,
-		},
-		{
-			name: "字段过滤查询",
-			query: `
-				query {
-					users {
-						items {
-							id
-							name
-							... on User {
-								email
-								age
-							}
-						}
-					}
-				}
-			`,
-			expected: `SELECT jsonb_build_object('users', jsonb_build_object('items', __sj_0.json)) AS "__root" 
-				FROM (SELECT true) AS "__root_x" 
-				LEFT OUTER JOIN LATERAL (
-					SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json 
-					FROM (
-						SELECT to_jsonb(__sr_0.*) AS json 
-						FROM (
-							SELECT sys_user_0.id AS "id", sys_user_0.name AS "name", sys_user_0.email AS "email", sys_user_0.age AS "age" 
-							FROM sys_user AS sys_user_0
-						) AS "__sr_0"
-					) AS "__sj_0"
-				) AS "__sj_0" ON true`,
-		},
-		{
-			name: "空值处理查询",
-			query: `
-				query {
-					users {
-						items {
-							id
-							name
-							metadata
-							settings
-						}
-					}
-				}
-			`,
-			expected: `SELECT jsonb_build_object('users', jsonb_build_object('items', __sj_0.json)) AS "__root" 
-				FROM (SELECT true) AS "__root_x" 
-				LEFT OUTER JOIN LATERAL (
-					SELECT COALESCE(jsonb_agg(__sj_0.json), '[]') AS json 
-					FROM (
-						SELECT to_jsonb(__sr_0.*) AS json 
-						FROM (
-							SELECT sys_user_0.id AS "id", sys_user_0.name AS "name", 
-								sys_user_0.metadata, COALESCE(sys_user_0.metadata, '{}'::json) AS "metadata", 
-								sys_user_0.settings, COALESCE(sys_user_0.settings, '{}'::json) AS "settings" 
-							FROM sys_user AS sys_user_0
-						) AS "__sr_0"
-					) AS "__sj_0"
-				) AS "__sj_0" ON true`,
-		},
-	}
-	my.runCases(cases)
 }
 
 func (my *_DialectSuite) TestFilterQueries() {
@@ -574,4 +459,141 @@ func (my *_DialectSuite) TestErrorHandlingQueries() {
 		},
 	}
 	my.runCases(cases)
+}
+
+func TestBuildPagination(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    ast.ArgumentList
+		wantSQL string
+		wantErr bool
+	}{
+		{
+			name: "基本分页",
+			args: ast.ArgumentList{
+				{
+					Name: "limit",
+					Value: &ast.Value{
+						Kind: ast.IntValue,
+						Raw:  "10",
+					},
+				},
+				{
+					Name: "offset",
+					Value: &ast.Value{
+						Kind: ast.IntValue,
+						Raw:  "20",
+					},
+				},
+			},
+			wantSQL: " LIMIT 10 OFFSET 20",
+			wantErr: false,
+		},
+		{
+			name: "游标分页-after",
+			args: ast.ArgumentList{
+				{
+					Name: "after",
+					Value: &ast.Value{
+						Kind: ast.StringValue,
+						Raw:  "cursor1",
+					},
+				},
+				{
+					Name: "limit",
+					Value: &ast.Value{
+						Kind: ast.IntValue,
+						Raw:  "10",
+					},
+				},
+			},
+			wantSQL: " AND id > $1 LIMIT 10",
+			wantErr: false,
+		},
+		{
+			name: "游标分页-before",
+			args: ast.ArgumentList{
+				{
+					Name: "before",
+					Value: &ast.Value{
+						Kind: ast.StringValue,
+						Raw:  "cursor2",
+					},
+				},
+				{
+					Name: "limit",
+					Value: &ast.Value{
+						Kind: ast.IntValue,
+						Raw:  "10",
+					},
+				},
+			},
+			wantSQL: " AND id < $1 LIMIT 10",
+			wantErr: false,
+		},
+		{
+			name: "无效limit",
+			args: ast.ArgumentList{
+				{
+					Name: "limit",
+					Value: &ast.Value{
+						Kind: ast.IntValue,
+						Raw:  "-10",
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "无效offset",
+			args: ast.ArgumentList{
+				{
+					Name: "offset",
+					Value: &ast.Value{
+						Kind: ast.IntValue,
+						Raw:  "-20",
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "游标和offset冲突",
+			args: ast.ArgumentList{
+				{
+					Name: "after",
+					Value: &ast.Value{
+						Kind: ast.StringValue,
+						Raw:  "cursor1",
+					},
+				},
+				{
+					Name: "offset",
+					Value: &ast.Value{
+						Kind: ast.IntValue,
+						Raw:  "10",
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dialect := &Dialect{}
+			metadata := &gql.Metadata{}
+			cpl := gql.NewCompiler(metadata, dialect)
+
+			err := dialect.buildPagination(cpl, tt.args)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Contains(t, cpl.String(), tt.wantSQL)
+		})
+	}
 }

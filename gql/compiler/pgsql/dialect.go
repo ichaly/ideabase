@@ -121,28 +121,73 @@ func (my *Dialect) buildWhere(cpl *gql.Compiler, args ast.ArgumentList) error {
 
 // buildPagination 构建分页子句
 func (my *Dialect) buildPagination(cpl *gql.Compiler, args ast.ArgumentList) error {
-	var limit, offset int
+	// 处理排序
+	if err := my.buildOrderBy(cpl, args); err != nil {
+		return fmt.Errorf("failed to build order by: %w", err)
+	}
 
+	var (
+		limit  int
+		offset int
+		after  interface{}
+		before interface{}
+	)
+
+	// 处理分页参数
 	for _, arg := range args {
+		val, err := arg.Value.Value(nil)
+		if err != nil {
+			return fmt.Errorf("failed to get value for pagination argument %s: %w", arg.Name, err)
+		}
+
 		switch arg.Name {
 		case "limit":
-			if val, err := arg.Value.Value(nil); err == nil {
-				if intVal, ok := val.(int64); ok {
-					limit = int(intVal)
+			if intVal, ok := val.(int64); ok {
+				if intVal < 0 {
+					return fmt.Errorf("limit must be non-negative, got %d", intVal)
 				}
+				limit = int(intVal)
+			} else {
+				return fmt.Errorf("limit must be an integer, got %T", val)
 			}
 		case "offset":
-			if val, err := arg.Value.Value(nil); err == nil {
-				if intVal, ok := val.(int64); ok {
-					offset = int(intVal)
+			if intVal, ok := val.(int64); ok {
+				if intVal < 0 {
+					return fmt.Errorf("offset must be non-negative, got %d", intVal)
 				}
+				offset = int(intVal)
+			} else {
+				return fmt.Errorf("offset must be an integer, got %T", val)
 			}
+		case "after":
+			after = val
+		case "before":
+			before = val
 		}
 	}
 
+	// 处理游标分页
+	if after != nil || before != nil {
+		if offset > 0 {
+			return fmt.Errorf("cannot use offset with cursor-based pagination")
+		}
+
+		if after != nil {
+			cpl.Space("AND id >").Write(my.Placeholder(len(cpl.Args()) + 1))
+			cpl.AddParam(after)
+		}
+
+		if before != nil {
+			cpl.Space("AND id <").Write(my.Placeholder(len(cpl.Args()) + 1))
+			cpl.AddParam(before)
+		}
+	}
+
+	// 添加LIMIT/OFFSET子句
 	if limitClause := my.FormatLimit(limit, offset); limitClause != "" {
 		cpl.Space(limitClause)
 	}
+
 	return nil
 }
 
