@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20250425094548
+# 版本: 20250425101641
 
 # 自定义标量类型
 scalar Json
@@ -43,29 +43,21 @@ input GroupBy {
 # 评论表
 type Comment {
   # 子Comment列表
-  # 子Comment列表
   children: [Comment]!
-  # 评论内容
   # 评论内容
   content: String!
   createdAt: DateTime!
   id: ID!
   # 父Comment对象
-  # 父Comment对象
   parent: Comment
-  # 父评论ID
   # 父评论ID
   parentId: Int
   # 关联的Post
-  # 关联的Post
   post: Post!
-  # 评论文章
   # 评论文章
   postId: Int!
   # 关联的User
-  # 关联的User
   user: User!
-  # 评论者
   # 评论者
   userId: Int!
 }
@@ -73,23 +65,17 @@ type Comment {
 # 文章表
 type Post {
   # 关联的Comment列表
-  # 关联的Comment列表
   comments: [Comment]!
-  # 内容
   # 内容
   content: String
   createdAt: DateTime!
   id: ID!
   # 关联的Tag列表
-  # 关联的Tag列表
   tags: [Tag]!
-  # 标题
   # 标题
   title: String!
   # 关联的User
-  # 关联的User
   user: User!
-  # 作者ID
   # 作者ID
   userId: Int!
 }
@@ -99,9 +85,7 @@ type Tag {
   createdAt: DateTime!
   id: ID!
   # 标签名称
-  # 标签名称
   name: String!
-  # 关联的Post列表
   # 关联的Post列表
   posts: [Post]!
 }
@@ -109,17 +93,13 @@ type Tag {
 # 用户表
 type User {
   # 关联的Comment列表
-  # 关联的Comment列表
   comments: [Comment]!
   createdAt: DateTime!
-  # 邮箱
   # 邮箱
   email: String!
   id: ID!
   # 用户名
-  # 用户名
   name: String!
-  # 关联的Post列表
   # 关联的Post列表
   posts: [Post]!
   updatedAt: DateTime

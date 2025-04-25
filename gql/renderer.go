@@ -293,11 +293,6 @@ func (my *Renderer) renderTypes() error {
 				typeName += "!"
 			}
 
-			// 添加描述作为注释
-			if field.Description != "" {
-				my.writeLine("  # ", field.Description)
-			}
-
 			// 输出字段定义
 			my.writeLine("  ", fieldName, ": ", typeName)
 		}
