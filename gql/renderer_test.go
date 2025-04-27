@@ -818,3 +818,99 @@ func TestRenderer_WriteField(t *testing.T) {
 	renderer.writeField("tags", "String", field.ListNonNull(), field.NonNull())
 	require.Equal(t, "  tags: [String!]!\n", buf.String())
 }
+
+// 纯配置驱动schema生成测试
+func TestRenderer_GenerateWithConfig(t *testing.T) {
+	// 1. 构造配置
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", "./assets")
+	// k.Set("app.root", t.TempDir())
+
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+		"User": {
+			Description: "用户表",
+			Table:       "sys_user",
+			Fields: map[string]*internal.FieldConfig{
+				"id": {
+					Type:      "ID",
+					IsPrimary: true,
+				},
+				"name": {
+					Type:        "String",
+					Description: "用户名",
+				},
+				"email": {
+					Type:        "String",
+					Description: "邮箱",
+				},
+				"age": {
+					Type:        "Int",
+					Description: "年龄",
+				},
+			},
+		},
+		"Post": {
+			Description: "文章表",
+			Table:       "sys_post",
+			Fields: map[string]*internal.FieldConfig{
+				"id": {
+					Type:      "ID",
+					IsPrimary: true,
+				},
+				"title": {
+					Type:        "String",
+					Description: "标题",
+				},
+				"content": {
+					Type:        "String",
+					Description: "内容",
+				},
+				"userId": {
+					Type:        "Int",
+					Description: "作者ID",
+					Relation: &internal.RelationConfig{
+						TargetClass: "User",
+						TargetField: "id",
+						Type:        "many_to_one",
+					},
+				},
+			},
+		},
+	})
+
+	// 2. 生成元数据
+	meta, err := NewMetadata(k, nil)
+	require.NoError(t, err, "通过配置生成元数据失败")
+
+	// 3. 生成schema
+	renderer := NewRenderer(meta)
+	schema, err := renderer.Generate()
+	assert.NoError(t, err)
+	assert.NotEmpty(t, schema)
+
+	// 输出schema内容，便于调试
+	t.Logf("Generated schema:\n%s", schema)
+
+	// 4. 验证schema内容
+	assert.Contains(t, schema, "type User {")
+	assert.Contains(t, schema, "type Post {")
+	assert.Contains(t, schema, "id: ID!")
+	assert.Contains(t, schema, "name: String!")
+	assert.Contains(t, schema, "email: String!")
+	assert.Contains(t, schema, "age: Int!")
+	assert.Contains(t, schema, "title: String!")
+	assert.Contains(t, schema, "content: String!")
+	assert.Contains(t, schema, "userId: Int!")
+	// 验证注释
+	assert.Contains(t, schema, "# 用户名")
+	assert.Contains(t, schema, "# 邮箱")
+	assert.Contains(t, schema, "# 年龄")
+	assert.Contains(t, schema, "# 标题")
+	assert.Contains(t, schema, "# 内容")
+	assert.Contains(t, schema, "# 作者ID")
+	// 验证根类型
+	assert.Contains(t, schema, "type Query {")
+	assert.Contains(t, schema, "type Mutation {")
+}
