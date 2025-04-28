@@ -6,11 +6,11 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
-	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-func TestMySQLDialect_GetMetadataQuery(t *testing.T) {
+func TestDialectPostgres_GetMetadataQuery(t *testing.T) {
 	// 创建模拟的数据库连接
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -19,21 +19,21 @@ func TestMySQLDialect_GetMetadataQuery(t *testing.T) {
 	defer db.Close()
 
 	// 设置版本检查的预期
-	mock.ExpectQuery("SELECT VERSION()").WillReturnRows(
-		sqlmock.NewRows([]string{"VERSION()"}).AddRow("8.0.28"),
+	mock.ExpectQuery("SELECT version()").WillReturnRows(
+		sqlmock.NewRows([]string{"version"}).AddRow("PostgreSQL 14.5 on x86_64-pc-linux-gnu"),
 	)
 
 	// 创建GORM数据库连接
-	gormDB, err := gorm.Open(mysql.New(mysql.Config{
-		Conn:                      db,
-		SkipInitializeWithVersion: true,
+	gormDB, err := gorm.Open(postgres.New(postgres.Config{
+		Conn:                 db,
+		PreferSimpleProtocol: true,
 	}), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("创建GORM连接失败: %v", err)
 	}
 
-	// 创建MySQL方言实例
-	dialect, err := NewMySQLDialect(gormDB, "test_db")
+	// 创建PostgreSQL方言实例
+	dialect, err := NewDialectPostgres(gormDB, "public")
 	assert.NoError(t, err)
 
 	// 模拟元数据查询结果
@@ -48,10 +48,10 @@ func TestMySQLDialect_GetMetadataQuery(t *testing.T) {
 					{
 						"table_name": "users",
 						"column_name": "id",
-						"data_type": "int",
+						"data_type": "integer",
 						"is_nullable": false,
 						"character_maximum_length": null,
-						"numeric_precision": 10,
+						"numeric_precision": 32,
 						"numeric_scale": 0,
 						"column_description": "用户ID"
 					}
@@ -101,10 +101,7 @@ func TestMySQLDialect_GetMetadataQuery(t *testing.T) {
 	// 验证没有系统表
 	for _, table := range result.Tables {
 		assert.NotContains(t, table["table_name"], "information_schema")
-		assert.NotContains(t, table["table_name"], "mysql")
-		assert.NotContains(t, table["table_name"], "performance_schema")
-		assert.NotContains(t, table["table_name"], "sys")
-		assert.NotContains(t, table["table_name"], "innodb")
+		assert.NotContains(t, table["table_name"], "pg_")
 	}
 
 	// 验证外键关系

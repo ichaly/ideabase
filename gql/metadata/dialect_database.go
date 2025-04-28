@@ -38,8 +38,8 @@ func (my *NullableType) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// DatabaseDialect 数据库方言接口，提供不同数据库的元数据加载实现
-type DatabaseDialect interface {
+// DialectDatabase 数据库方言接口，提供不同数据库的元数据加载实现
+type DialectDatabase interface {
 	// GetMetadataQuery 获取元数据查询SQL
 	GetMetadataQuery() (string, []interface{})
 }
@@ -80,7 +80,7 @@ type foreignKeyInfo struct {
 type DatabaseLoader struct {
 	db      *gorm.DB
 	schema  string // 数据库schema名称
-	dialect DatabaseDialect
+	dialect DialectDatabase
 }
 
 // NewDatabaseLoader 创建新的数据库加载器
@@ -91,17 +91,17 @@ func NewDatabaseLoader(db *gorm.DB, schema string) (*DatabaseLoader, error) {
 
 	// 检测数据库类型并创建对应的方言实现
 	dialectName := db.Dialector.Name()
-	var dialect DatabaseDialect
+	var dialect DialectDatabase
 	var err error
 
 	if strings.ToLower(dialectName) == "mysql" {
-		dialect, err = NewMySQLDialect(db, schema)
+		dialect, err = NewDialectMySQL(db, schema)
 		if err != nil {
 			return nil, fmt.Errorf("MySQL方言初始化失败: %w", err)
 		}
 	} else {
 		// PostgreSQL或其他数据库使用PostgreSQL方言
-		dialect, err = NewPostgresDialect(db, schema)
+		dialect, err = NewDialectPostgres(db, schema)
 		if err != nil {
 			return nil, fmt.Errorf("PostgreSQL方言初始化失败: %w", err)
 		}

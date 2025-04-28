@@ -58,13 +58,13 @@ func parseFloat(s string) (float64, error) {
 	return result, err
 }
 
-// PostgresDialect PostgreSQL 9.6+数据库方言
-type PostgresDialect struct {
+// DialectPostgres PostgreSQL 9.6+数据库方言
+type DialectPostgres struct {
 	schema string
 }
 
-// NewPostgresDialect 创建PostgreSQL方言实例
-func NewPostgresDialect(db *gorm.DB, schema string) (DatabaseDialect, error) {
+// NewDialectPostgres 创建PostgreSQL方言实例
+func NewDialectPostgres(db *gorm.DB, schema string) (DialectDatabase, error) {
 	isSupported, err := isPostgresVersionSupported(db)
 	if err != nil {
 		return nil, fmt.Errorf("PostgreSQL版本检测失败: %w", err)
@@ -76,7 +76,7 @@ func NewPostgresDialect(db *gorm.DB, schema string) (DatabaseDialect, error) {
 
 	log.Debug().Msg("检测到PostgreSQL 9.6+版本，使用现代方言")
 
-	return &PostgresDialect{
+	return &DialectPostgres{
 		schema: schema,
 	}, nil
 }
@@ -167,6 +167,6 @@ SELECT
 `
 
 // GetMetadataQuery 获取PostgreSQL元数据查询SQL和参数
-func (my *PostgresDialect) GetMetadataQuery() (string, []interface{}) {
+func (my *DialectPostgres) GetMetadataQuery() (string, []interface{}) {
 	return postgresMetadataQuery, []interface{}{my.schema}
 }

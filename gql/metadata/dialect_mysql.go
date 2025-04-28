@@ -33,13 +33,13 @@ func isMySQLVersionSupported(db *gorm.DB) (bool, error) {
 	return mainVersion >= 8, nil
 }
 
-// MySQLDialect MySQL 8.0+方言实现
-type MySQLDialect struct {
+// DialectMySQL MySQL 8.0+方言实现
+type DialectMySQL struct {
 	schema string
 }
 
-// NewMySQLDialect 创建MySQL方言实例
-func NewMySQLDialect(db *gorm.DB, schema string) (DatabaseDialect, error) {
+// NewDialectMySQL 创建MySQL方言实例
+func NewDialectMySQL(db *gorm.DB, schema string) (DialectDatabase, error) {
 	isModern, err := isMySQLVersionSupported(db)
 	if err != nil {
 		return nil, fmt.Errorf("MySQL版本检测失败: %w", err)
@@ -51,7 +51,7 @@ func NewMySQLDialect(db *gorm.DB, schema string) (DatabaseDialect, error) {
 
 	log.Debug().Msg("检测到MySQL 8.0+版本，使用现代方言")
 
-	return &MySQLDialect{
+	return &DialectMySQL{
 		schema: schema,
 	}, nil
 }
@@ -148,6 +148,6 @@ SELECT
 `
 
 // GetMetadataQuery 获取MySQL元数据查询SQL和参数
-func (my *MySQLDialect) GetMetadataQuery() (string, []interface{}) {
+func (my *DialectMySQL) GetMetadataQuery() (string, []interface{}) {
 	return mysqlMetadataQuery, []interface{}{my.schema, my.schema, my.schema, my.schema}
 }
