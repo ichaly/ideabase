@@ -6,7 +6,7 @@ alwaysApply: false
 # metadata 策略模式重构规则
 
 1. 元数据加载来源分为三种：数据库、文件、配置。
-2. 每种加载策略单独成文件，文件名统一前缀（如 strategy_xxx.go）。
+2. 每种加载策略单独成文件，文件名统一前缀（如 loader_xxx.go）。
 3. 策略需实现统一接口（如 MetadataLoader）。
 4. 策略需支持优先级，优先级高的策略优先尝试加载。
 5. 策略实现的逻辑存储到metadata文件夹下。
