@@ -154,7 +154,7 @@ func runDatabaseTests(t *testing.T, db *gorm.DB) {
 		schema = "public"
 	}
 
-	loader, err := NewDatabaseLoader(db, schema)
+	loader, err := NewSchemaInspector(db, schema)
 	require.NoError(t, err)
 
 	// 加载元数据
@@ -335,7 +335,7 @@ func TestDetectManyToManyRelations(t *testing.T) {
 	}
 
 	// 创建加载器并检测多对多关系
-	loader := &DatabaseLoader{}
+	loader := &SchemaInspector{}
 	loader.detectManyToManyRelations(classes, foreignKeys, primaryKeys)
 
 	// 在新的实现中，我们不再创建虚拟字段，而是将关系信息添加到现有字段中

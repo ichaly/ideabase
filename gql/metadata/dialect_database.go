@@ -76,21 +76,22 @@ type foreignKeyInfo struct {
 	TargetColumn string `json:"target_column" gorm:"column:target_column"`
 }
 
-// DatabaseLoader 数据库元数据加载器
-type DatabaseLoader struct {
+// SchemaInspector 数据库Schema检查器
+type SchemaInspector struct {
 	db      *gorm.DB
 	schema  string // 数据库schema名称
 	dialect DialectDatabase
 }
 
-// NewDatabaseLoader 创建新的数据库加载器
-func NewDatabaseLoader(db *gorm.DB, schema string) (*DatabaseLoader, error) {
+// NewSchemaInspector 创建数据库Schema检查器实例
+func NewSchemaInspector(db *gorm.DB, schema string) (*SchemaInspector, error) {
 	if schema == "" {
 		schema = "public" // 默认使用public schema
 	}
 
-	// 检测数据库类型并创建对应的方言实现
+	// 获取数据库类型
 	dialectName := db.Dialector.Name()
+	// 根据数据库类型创建对应的方言实现
 	var dialect DialectDatabase
 	var err error
 
@@ -107,7 +108,7 @@ func NewDatabaseLoader(db *gorm.DB, schema string) (*DatabaseLoader, error) {
 		}
 	}
 
-	return &DatabaseLoader{
+	return &SchemaInspector{
 		db:      db,
 		schema:  schema,
 		dialect: dialect,
@@ -115,7 +116,7 @@ func NewDatabaseLoader(db *gorm.DB, schema string) (*DatabaseLoader, error) {
 }
 
 // loadMetadataFromDB 从数据库加载元数据
-func (my *DatabaseLoader) loadMetadataFromDB() ([]tableInfo, []columnInfo, []primaryKeyInfo, []foreignKeyInfo, error) {
+func (my *SchemaInspector) loadMetadataFromDB() ([]tableInfo, []columnInfo, []primaryKeyInfo, []foreignKeyInfo, error) {
 	// 获取方言特定的查询和参数
 	query, args := my.dialect.GetMetadataQuery()
 
@@ -157,7 +158,7 @@ func (my *DatabaseLoader) loadMetadataFromDB() ([]tableInfo, []columnInfo, []pri
 }
 
 // LoadMetadata 加载数据库元数据
-func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, error) {
+func (my *SchemaInspector) LoadMetadata() (map[string]*internal.Class, error) {
 	// 创建结果容器
 	classes := make(map[string]*internal.Class)
 
@@ -293,7 +294,7 @@ func (my *DatabaseLoader) LoadMetadata() (map[string]*internal.Class, error) {
 }
 
 // detectManyToManyRelations 检测并处理多对多关系
-func (my *DatabaseLoader) detectManyToManyRelations(classes map[string]*internal.Class, foreignKeys []foreignKeyInfo, primaryKeys []primaryKeyInfo) {
+func (my *SchemaInspector) detectManyToManyRelations(classes map[string]*internal.Class, foreignKeys []foreignKeyInfo, primaryKeys []primaryKeyInfo) {
 	// 1. 收集每个表的外键信息
 	tableToFKs := make(map[string][]foreignKeyInfo)
 	for _, fk := range foreignKeys {
