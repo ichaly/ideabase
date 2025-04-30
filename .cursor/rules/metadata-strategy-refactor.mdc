@@ -9,17 +9,15 @@ alwaysApply: false
 2. 每种加载策略单独成文件，文件名统一前缀（如 loader_xxx.go）。
 3. 策略需实现统一接口（如 MetadataLoader）。
 4. 策略需支持优先级，优先级高的策略优先尝试加载。
+5. 每种策略需要有个是否支持的判断
 5. 策略实现的逻辑存储到metadata文件夹下。
-6. NewMetadata 构造函数支持可选参数，允许指定加载策略及优先级。
+6. NewMetadata 构造函数使用选项模式的可选参数来设置加载策略。
 7. 主文件（如 metadata.go）只保留对外 API，内部通过策略模式委托加载。
 8. 保证重构后对外 API 和输出结果与现有实现完全一致。
 9. 重构后需同步修改相关单元测试，确保测试全部通过。
 10. 策略实现、主文件、测试文件均需遵循项目命名、注释、结构规范。
 
 涉及文件：
-- [dialect_database.go](mdc:gql/metadata/dialect_database.go)
-- [dialect_mysql.go](mdc:gql/metadata/dialect_mysql.go)
-- [dialect_postgres.go](mdc:gql/metadata/dialect_postgres.go)
 - [README.md](mdc:gql/metadata/README.md)
 - 相关 *_test.go 测试文件
 
