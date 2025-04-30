@@ -1,21 +1,312 @@
 ---
 description: 
 globs: 
-alwaysApply: false
+alwaysApply: true
 ---
 # metadata 策略模式重构规则
 
-1. 元数据加载来源分为三种：数据库、文件、配置。
-2. 每种加载策略单独成文件，文件名统一前缀（如 loader_xxx.go）。
-3. 策略需实现统一接口（如 MetadataLoader）。
-4. 策略需支持优先级，优先级高的策略优先尝试加载。
+## 重构目标
+将元数据加载逻辑重构为策略模式，实现加载逻辑的模块化和可扩展性。
+
+## 核心原则
+1. 元数据加载来源分为三种：数据库、文件、配置
+2. 每种加载策略单独成文件，文件名统一前缀（如 loader_xxx.go）
+3. 策略需实现统一接口
+4. 策略需支持优先级，优先级高的策略最后加载会覆盖之前的
 5. 每种策略需要有个是否支持的判断
-5. 策略实现的逻辑存储到metadata文件夹下。
-6. NewMetadata 构造函数使用选项模式的可选参数来设置加载策略。
-7. 主文件（如 metadata.go）只保留对外 API，内部通过策略模式委托加载。
-8. 保证重构后对外 API 和输出结果与现有实现完全一致。
-9. 重构后需同步修改相关单元测试，确保测试全部通过。
-10. 策略实现、主文件、测试文件均需遵循项目命名、注释、结构规范。
+6. 策略实现的逻辑存储到metadata文件夹下
+7. NewMetadata 构造函数使用选项模式的可选参数来设置加载策略
+8. 主文件只保留对外 API，内部通过策略模式委托加载
+9. 保证重构后对外 API 和输出结果与现有实现完全一致
+10. 重构后需同步修改相关单元测试，确保测试全部通过
+
+## 目录结构
+```
+gql/
+├── internal/           # 基础数据结构
+│   └── class.go        # Class等核心类型定义,这个是已存在的定义不要修改
+├── metadata/           # 元数据加载相关
+│   ├── types.go        # Loader/Hoster接口与常量
+│   ├── loader_pgsql.go # PostgreSQL加载器
+│   ├── loader_mysql.go # MySQL加载器
+│   ├── loader_file.go  # 文件加载器
+│   └── loader_config.go# 配置加载器
+└── metadata.go         # 主类与选项模式
+```
+
+## 错误处理策略
+1. Loader加载失败不应影响其他Loader执行
+2. 需要区分致命错误和非致命错误
+3. 错误日志需要包含足够的上下文信息
+4. 建议使用自定义错误类型区分不同错误场景
+5. 提供错误恢复机制
+
+## 优先级策略
+默认优先级建议：
+- 数据库Loader (PostgreSQL/MySQL): 60
+- 文件Loader: 80
+- 配置Loader: 100
+自定义Loader建议使用0-120范围的优先级
+
+## 并发安全
+1. Metadata实例需要保证并发安全
+2. Loader的Load方法需要保证幂等性
+3. 考虑使用sync.Map或加锁保护Nodes map
+4. 确保配置读取的线程安全
+5. 考虑Loader并行加载的可能性
+
+## 性能优化
+1. 合理使用内存预分配
+2. 避免不必要的数据库查询
+3. 考虑使用缓存机制
+4. 大量数据时考虑分批加载
+5. 优化Loader的Support判断逻辑
+6. 考虑使用对象池
+
+## 核心接口与类型
+
+### 1. internal/class.go - 基础数据结构,现有定义不要修改
+```go
+package internal
+
+// Class 表示元数据中的一个类定义
+type Class struct {
+    Name        string
+    Table       string
+    Fields      map[string]*Field
+    // ...其他元数据字段
+}
+
+type Field struct {
+    Name string
+    // ...其他字段定义
+}
+```
+
+### 2. metadata/types.go - 核心接口定义
+```go
+package metadata
+
+import "github.com/xxx/gql/internal"
+
+// Loader名称常量
+const (
+    LoaderFile   = "file"
+    LoaderPgsql  = "pgsql"
+    LoaderMysql  = "mysql"
+    LoaderConfig = "config"
+)
+
+// Hoster 定义元数据承载者接口
+type Hoster interface {
+    // AddNode 添加一个类型节点
+    AddNode(name string, node *internal.Class) error
+    // GetNode 获取一个类型节点
+    GetNode(name string) (*internal.Class, bool)
+}
+
+// Loader 定义加载器接口
+type Loader interface {
+    // Name 返回加载器唯一标识
+    Name() strings
+    // Load 将元数据加载到Hoster中
+    Load(h Hoster) error
+    // Support 判断是否支持当前环境
+    Support(cfg *internal.Config, db *gorm.DB) bool
+    // Priority 返回加载器优先级，数值越大优先级越高
+    Priority() int
+}
+
+// metadataOptions 元数据选项
+type metadataOptions struct {
+    loaders map[string]MetadataLoader
+}
+
+// WithLoader 添加或替换Loader
+func WithLoader(loader MetadataLoader) MetadataOption {
+    return func(opts *metadataOptions) {
+        if loader == nil {
+            return
+        }
+        opts.loaders[loader.Name()] = loader
+    }
+}
+
+// WithoutLoader 移除指定名称的Loader
+func WithoutLoader(names ...string) MetadataOption {
+    return func(opts *metadataOptions) {
+        for _, name := range names {
+            delete(opts.loaders, name)
+        }
+    }
+}
+
+// NewMetadata Metadata构造函数
+func NewMetadata(cfg *internal.Config, db *gorm.DB, opts ...MetadataOption) (*Metadata, error) {
+    options := &metadataOptions{
+        loaders: make(map[string]MetadataLoader, 4), // 预分配4个容量
+    }
+    
+    // 应用默认loader
+    WithLoader(metadata.NewPgsqlLoader(cfg, db))(options)
+    WithLoader(metadata.NewMysqlLoader(cfg, db))(options)
+    WithLoader(metadata.NewFileLoader(cfg))(options)
+    WithLoader(metadata.NewConfigLoader(cfg))(options)
+    
+    // 应用自定义选项
+    for _, opt := range opts {
+        opt(options)
+    }
+    
+    // 创建实例
+    meta := &Metadata{
+        db:    db,
+        cfg:   cfg,
+        Nodes: make(map[string]*internal.Class),
+    }
+    
+    // 获取所有loader并按优先级排序
+    loaders := make([]MetadataLoader, 0, len(options.loaders))
+    for _, loader := range options.loaders {
+        loaders = append(loaders, loader)
+    }
+    sort.Slice(loaders, func(i, j int) bool {
+        return loaders[i].Priority() > loaders[j].Priority()
+    })
+    
+    // 按优先级执行loader
+    for _, loader := range loaders {
+        if loader.Support(cfg, db) {
+            if err := loader.Load(meta); err != nil {
+                log.Warn().Err(err).Str("loader", loader.Name()).Msg("加载器执行失败")
+            }
+        }
+    }
+    
+    return meta, nil
+}
+```
+
+### 3. metadata/loader_pgsql.go - PostgreSQL加载器示例
+```go
+package metadata
+
+import (
+    "github.com/xxx/gql/internal"
+    "gorm.io/gorm"
+)
+
+// PgsqlLoader PostgreSQL元数据加载器
+type PgsqlLoader struct {
+    db  *gorm.DB
+    cfg *internal.Config
+}
+
+// NewPgsqlLoader 创建PostgreSQL加载器
+func NewPgsqlLoader(cfg *internal.Config, db *gorm.DB) *PgsqlLoader {
+    return &PgsqlLoader{cfg: cfg, db: db}
+}
+
+func (my *PgsqlLoader) Name() string  { return LoaderPgsql }
+func (my *PgsqlLoader) Priority() int { return 60 }
+
+// Support 判断是否为PostgreSQL数据库
+func (my *PgsqlLoader) Support(cfg *internal.Config, db *gorm.DB) bool {
+    return db != nil && db.Dialector.Name() == "postgres"
+}
+
+// Load 从PostgreSQL加载元数据
+func (my *PgsqlLoader) Load(h Hoster) error {
+    // 实现PostgreSQL元数据加载逻辑
+    return nil
+}
+```
+
+### 4. metadata.go - 主类实现
+```go
+package gql
+
+import (
+    "github.com/xxx/gql/internal"
+    "github.com/xxx/gql/metadata"
+    "gorm.io/gorm"
+)
+
+// Metadata 主类
+type Metadata struct {
+    k      *std.Konfig
+    db     *gorm.DB
+    cfg    *internal.Config
+    Nodes  map[string]*internal.Class
+}
+
+// 实现Hoster接口
+func (my *Metadata) AddNode(name string, node *internal.Class) error {
+    my.Nodes[name] = node
+    return nil
+}
+
+func (my *Metadata) GetNode(name string) (*internal.Class, bool) {
+    n, ok := my.Nodes[name]
+    return n, ok
+}
+
+// 选项模式
+type MetadataOption func(*metadataOptions)
+```
+
+## 使用示例
+```go
+// 使用默认加载器
+meta, err := NewMetadata(cfg, db)
+
+// 替换默认的PostgreSQL加载器
+meta, err := NewMetadata(cfg, db,
+    WithoutLoader(metadata.LoaderPgsql),
+    WithLoader(NewCustomLoader(...)),
+)
+
+// 移除多个加载器
+meta, err := NewMetadata(cfg, db,
+    WithoutLoader(metadata.LoaderPgsql, metadata.LoaderMysql),
+)
+```
+
+## 扩展建议
+1. 考虑添加Loader生命周期钩子（初始化、清理等）
+2. 支持Loader之间的数据共享机制
+3. 提供Loader的启用/禁用配置
+4. 支持动态重载机制
+5. 考虑添加Loader的健康检查机制
+6. 提供Loader的监控指标收集
+
+## 设计要点
+1. **类型安全**：所有节点操作使用具体类型，避免interface{}
+2. **依赖单向**：internal为底层，metadata依赖internal，主包依赖metadata
+3. **职责分离**：Hoster负责节点管理(可按照实际需要调整)，Loader负责加载逻辑
+4. **灵活扩展**：支持自定义Loader，优先级可控
+5. **易于测试**：接口清晰，易于Mock和单元测试
+
+## 测试建议
+1. 为每个Loader编写单元测试
+2. Mock Hoster接口测试Load方法
+3. 测试选项模式的增删逻辑
+4. 验证优先级排序
+5. 测试Support方法判断逻辑
+6. 压力测试和性能基准测试
+7. 并发安全测试
+8. 错误处理测试
+9. 集成测试验证多个Loader协同工作
+
+## 注意事项
+1. 保持向后兼容性
+2. 注意错误处理和日志记录
+3. 遵循项目命名规范
+4. 添加必要的注释
+5. 确保线程安全
+6. 考虑性能影响
+7. 注意资源释放
+8. 保持代码简洁性
 
 涉及文件：
 - [README.md](mdc:gql/metadata/README.md)
