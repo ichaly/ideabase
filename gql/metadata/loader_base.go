@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/samber/lo"
@@ -160,6 +161,8 @@ func (my *baseLoader) loadMeta(h Hoster, query string, args []interface{}) error
 			return fmt.Errorf("注入Hoster失败: %w", err)
 		}
 	}
+	// 使用当前时间作为版本号
+	h.SetVersion(time.Now().Format("20060102150405"))
 	return nil
 }
 

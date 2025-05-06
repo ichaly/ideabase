@@ -18,6 +18,7 @@ const (
 type Hoster interface {
 	PutNode(node *internal.Class) error
 	GetNode(name string) (*internal.Class, bool)
+	SetVersion(version string)
 }
 
 // Loader 定义加载器接口
