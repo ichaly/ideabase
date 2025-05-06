@@ -99,7 +99,7 @@ const (
 
 // Hoster 定义元数据承载者接口
 type Hoster interface {
-    // AddNode 添加一个类型节点
+    // PutNode 添加或者合并一个类型节点
     PutNode(node *internal.Class) error
     // GetNode 获取一个类型节点
     GetNode(name string) (*internal.Class, bool)
