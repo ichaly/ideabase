@@ -155,8 +155,8 @@ func (my *baseLoader) loadMeta(h Hoster, query string, args []interface{}) error
 	// 处理多对多关系
 	detectManyToManyRelations(classMap, foreignKeys, primaryKeys)
 	// 注入Hoster，供后续GraphQL编译等使用
-	for name, class := range classMap {
-		if err := h.AddNode(name, class); err != nil {
+	for _, class := range classMap {
+		if err := h.PutNode(class); err != nil {
 			return fmt.Errorf("注入Hoster失败: %w", err)
 		}
 	}
