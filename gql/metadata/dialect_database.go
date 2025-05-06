@@ -3,8 +3,6 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
-	"sort"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/internal"
@@ -13,67 +11,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// NullableType 自定义类型，用于处理MySQL和PostgreSQL的可空字段
-type NullableType bool
-
-func (my NullableType) Bool() bool {
-	return bool(my)
-}
-
-func (my *NullableType) UnmarshalJSON(data []byte) error {
-	var v interface{}
-	if err := json.Unmarshal(data, &v); err != nil {
-		return err
-	}
-	switch value := v.(type) {
-	case bool:
-		*my = NullableType(value)
-	case float64:
-		*my = value != 0
-	case string:
-		*my = value == "1" || value == "true"
-	default:
-		return fmt.Errorf("unexpected type for nullable: %T", v)
-	}
-	return nil
-}
-
 // DialectDatabase 数据库方言接口，提供不同数据库的元数据加载实现
 type DialectDatabase interface {
-	// GetMetadataQuery 获取元数据查询SQL
 	GetMetadataQuery() (string, []interface{})
-}
-
-// tableInfo 表信息结构
-type tableInfo struct {
-	TableName        string `json:"table_name" gorm:"column:table_name"`
-	TableDescription string `json:"table_description" gorm:"column:table_description"`
-}
-
-// columnInfo 列信息结构
-type columnInfo struct {
-	TableName         string       `json:"table_name" gorm:"column:table_name"`
-	ColumnName        string       `json:"column_name" gorm:"column:column_name"`
-	DataType          string       `json:"data_type" gorm:"column:data_type"`
-	IsNullable        NullableType `json:"is_nullable" gorm:"column:is_nullable"`
-	CharMaxLength     *int64       `json:"character_maximum_length" gorm:"column:character_maximum_length"`
-	NumericPrecision  *int64       `json:"numeric_precision" gorm:"column:numeric_precision"`
-	NumericScale      *int64       `json:"numeric_scale" gorm:"column:numeric_scale"`
-	ColumnDescription string       `json:"column_description" gorm:"column:column_description"`
-}
-
-// primaryKeyInfo 主键信息结构
-type primaryKeyInfo struct {
-	TableName  string `json:"table_name" gorm:"column:table_name"`
-	ColumnName string `json:"column_name" gorm:"column:column_name"`
-}
-
-// foreignKeyInfo 外键信息结构
-type foreignKeyInfo struct {
-	SourceTable  string `json:"source_table" gorm:"column:source_table"`
-	SourceColumn string `json:"source_column" gorm:"column:source_column"`
-	TargetTable  string `json:"target_table" gorm:"column:target_table"`
-	TargetColumn string `json:"target_column" gorm:"column:target_column"`
 }
 
 // SchemaInspector 数据库Schema检查器
@@ -331,73 +271,5 @@ func (my *SchemaInspector) detectManyToManyRelations(classes map[string]*interna
 
 		// 识别为多对多关系表，创建多对多关系
 		createManyToManyRelation(classes, tableName, fks[0], fks[1])
-	}
-}
-
-// containsSameElements 检查两个字符串切片是否包含相同的元素(不考虑顺序)
-func containsSameElements(a, b []string) bool {
-	// 创建副本避免污染原始数据
-	aCopy := append([]string(nil), a...)
-	bCopy := append([]string(nil), b...)
-
-	sort.Strings(aCopy)
-	sort.Strings(bCopy)
-
-	return reflect.DeepEqual(aCopy, bCopy)
-}
-
-// isThroughTableByName 通过表名检查是否是中间表
-func isThroughTableByName(tableName, table1, table2 string) bool {
-	// 检查表名是否符合 table1_table2 或 table2_table1 格式
-	expectedName1 := table1 + "_" + table2
-	expectedName2 := table2 + "_" + table1
-
-	return tableName == expectedName1 || tableName == expectedName2
-}
-
-// createManyToManyRelation 修改 createManyToManyRelation 方法，使其不创建重复的字段，而是设置 Relation 字段
-func createManyToManyRelation(classes map[string]*internal.Class, throughTable string, fk1, fk2 foreignKeyInfo) {
-	class1, class2 := classes[fk1.TargetTable], classes[fk2.TargetTable]
-	if class1 == nil || class2 == nil {
-		return
-	}
-
-	// 标记中间表
-	if throughClass, exists := classes[throughTable]; exists {
-		throughClass.IsThrough = true
-	}
-
-	// 创建关系对象的辅助函数
-	createRelation := func(
-		sourceTable, targetTable, sourceColumn, targetColumn, sourceKey, targetKey string, reverse *internal.Relation,
-	) internal.Relation {
-		return internal.Relation{
-			SourceClass: sourceTable,
-			SourceField: sourceColumn,
-			TargetClass: targetTable,
-			TargetField: targetColumn,
-			Type:        internal.MANY_TO_MANY,
-			Through: &internal.Through{
-				Table:     throughTable,
-				SourceKey: sourceKey,
-				TargetKey: targetKey,
-			},
-			Reverse: reverse,
-		}
-	}
-
-	// 预先创建关系对象以便相互引用
-	r1, r2 := &internal.Relation{}, &internal.Relation{}
-
-	// 创建双向关系
-	*r1 = createRelation(fk1.TargetTable, fk2.TargetTable, fk1.TargetColumn, fk2.TargetColumn, fk1.SourceColumn, fk2.SourceColumn, r2)
-	*r2 = createRelation(fk2.TargetTable, fk1.TargetTable, fk2.TargetColumn, fk1.TargetColumn, fk2.SourceColumn, fk1.SourceColumn, r1)
-
-	// 设置字段关系
-	if f1 := class1.Fields[fk1.TargetColumn]; f1 != nil && f1.IsPrimary {
-		f1.Relation = r1
-	}
-	if f2 := class2.Fields[fk2.TargetColumn]; f2 != nil && f2.IsPrimary {
-		f2.Relation = r2
 	}
 }
