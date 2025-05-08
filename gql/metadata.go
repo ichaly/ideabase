@@ -165,27 +165,37 @@ func (my *Metadata) PutNode(node *internal.Class) error {
 
 	// 1. 处理驼峰命名
 	if my.cfg != nil && my.cfg.Schema.EnableCamelCase {
+		tableName := node.Table
+
+		// 处理表名前缀
+		for _, prefix := range my.cfg.Schema.TablePrefix {
+			if prefix != "" && strings.HasPrefix(tableName, prefix) {
+				tableName = strings.TrimPrefix(tableName, prefix)
+				break // 一旦找到匹配的前缀就停止,否则可能会导致多次处理
+			}
+		}
+
 		// 处理类名大驼峰（复数转单数）
-		if camelName := strcase.ToCamel(inflection.Singular(node.Table)); camelName != node.Name {
+		if camelName := strcase.ToCamel(inflection.Singular(tableName)); camelName != node.Name {
 			node.Name = camelName
 		}
 
 		// 处理字段小驼峰
 		fields := make(map[string]*internal.Field, len(node.Fields))
-		for fname, f := range node.Fields {
-			if lowerCamel := strcase.ToLowerCamel(f.Column); lowerCamel != fname {
-				f.Name = lowerCamel
-				fields[lowerCamel] = f
+		for _, field := range node.Fields {
+			if lowerCamel := strcase.ToLowerCamel(field.Column); lowerCamel != field.Name {
+				field.Name = lowerCamel
+				fields[lowerCamel] = field
 			}
-			fields[fname] = f
+			fields[field.Column] = field
 		}
 		node.Fields = fields
 	}
 
 	// 2. 处理索引
-	my.Nodes[node.Name] = node
-	if node.Table != "" && node.Table != node.Name {
-		my.Nodes[node.Table] = node
+	my.Nodes[node.Table] = node
+	if node.Name != "" && node.Table != node.Name {
+		my.Nodes[node.Name] = node
 	}
 
 	return nil
