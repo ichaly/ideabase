@@ -144,17 +144,45 @@ func WithoutLoader(names ...string) MetadataOption {
     }
 }
 
+type HookedLoader struct {
+    Loader
+    afterLoad func(h Hoster) error // 加载后钩子
+}
+
+func (my *HookedLoader) Load(h Hoster) error {
+    err := my.Loader.Load(h)
+    if err != nil {
+        return err
+    }
+    if my.afterLoad != nil {
+        return my.afterLoad(h)
+    }
+    return nil
+}
+
 // NewMetadata Metadata构造函数
 func NewMetadata(cfg *internal.Config, db *gorm.DB, opts ...MetadataOption) (*Metadata, error) {
     options := &metadataOptions{
-        loaders: make(map[string]Loader, 4), // 预分配4个容量
+        // 应用默认loader
+        loaders := []Loader{
+            NewHookedLoader(NewPgsqlLoader(cfg, db), func(h Hoster) error {
+                if cfg.Mode == "dev" {
+                    path := filepath.Join(cfg.Root, "cfg", "metadata.dev.json")
+                    return SaveToFile(h, path)
+                }
+                return nil
+            }),
+            NewHookedLoader(NewMysqlLoader(cfg, db), func(h Hoster) error {
+                if cfg.Mode == "dev" {
+                    path := filepath.Join(cfg.Root, "cfg", "metadata.dev.json")
+                    return SaveToFile(h, path)
+                }
+                return nil
+            }),
+            NewFileLoader(cfg),    // 不需要钩子
+            NewConfigLoader(cfg),  // 不需要钩子
+        }
     }
-    
-    // 应用默认loader
-    WithLoader(metadata.NewPgsqlLoader(cfg, db))(options)
-    WithLoader(metadata.NewMysqlLoader(cfg, db))(options)
-    WithLoader(metadata.NewFileLoader(cfg))(options)
-    WithLoader(metadata.NewConfigLoader(cfg))(options)
     
     // 应用自定义选项
     for _, opt := range opts {
