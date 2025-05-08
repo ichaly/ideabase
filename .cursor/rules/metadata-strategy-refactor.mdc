@@ -122,11 +122,11 @@ type Loader interface {
 
 // metadataOptions 元数据选项
 type metadataOptions struct {
-    loaders map[string]MetadataLoader
+    loaders map[string]Loader
 }
 
 // WithLoader 添加或替换Loader
-func WithLoader(loader MetadataLoader) MetadataOption {
+func WithLoader(loader Loader) MetadataOption {
     return func(opts *metadataOptions) {
         if loader == nil {
             return
@@ -147,7 +147,7 @@ func WithoutLoader(names ...string) MetadataOption {
 // NewMetadata Metadata构造函数
 func NewMetadata(cfg *internal.Config, db *gorm.DB, opts ...MetadataOption) (*Metadata, error) {
     options := &metadataOptions{
-        loaders: make(map[string]MetadataLoader, 4), // 预分配4个容量
+        loaders: make(map[string]Loader, 4), // 预分配4个容量
     }
     
     // 应用默认loader
@@ -169,7 +169,7 @@ func NewMetadata(cfg *internal.Config, db *gorm.DB, opts ...MetadataOption) (*Me
     }
     
     // 获取所有loader并按优先级排序
-    loaders := make([]MetadataLoader, 0, len(options.loaders))
+    loaders := make([]Loader, 0, len(options.loaders))
     for _, loader := range options.loaders {
         loaders = append(loaders, loader)
     }
