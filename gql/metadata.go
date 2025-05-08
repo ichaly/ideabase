@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
@@ -34,9 +33,65 @@ type Metadata struct {
 	Version string                     `json:"version"`
 }
 
-// NewMetadata 创建一个新的元数据处理器
-func NewMetadata(k *std.Konfig, d *gorm.DB) (*Metadata, error) {
-	//初始化配置
+// MetadataOption 用于自定义Loader注册与移除
+type MetadataOption func(*metadataOptions)
+
+type metadataOptions struct {
+	loaders []metadata.Loader
+}
+
+// WithLoader 添加或替换Loader
+func WithLoader(loader metadata.Loader) MetadataOption {
+	return func(opts *metadataOptions) {
+		if loader == nil {
+			return
+		}
+		// 替换同名Loader
+		for i, l := range opts.loaders {
+			if l.Name() == loader.Name() {
+				opts.loaders[i] = loader
+				return
+			}
+		}
+		opts.loaders = append(opts.loaders, loader)
+	}
+}
+
+// WithoutLoader 移除指定名称的Loader
+func WithoutLoader(names ...string) MetadataOption {
+	return func(opts *metadataOptions) {
+		for _, name := range names {
+			for i := 0; i < len(opts.loaders); {
+				if opts.loaders[i].Name() == name {
+					opts.loaders = append(opts.loaders[:i], opts.loaders[i+1:]...)
+				} else {
+					i++
+				}
+			}
+		}
+	}
+}
+
+// HookedLoader 装饰器，支持afterLoad钩子
+// 用于Loader加载后自动执行额外操作（如保存文件）
+type HookedLoader struct {
+	metadata.Loader
+	afterLoad func(h metadata.Hoster) error
+}
+
+func (my *HookedLoader) Load(h metadata.Hoster) error {
+	err := my.Loader.Load(h)
+	if err != nil {
+		return err
+	}
+	if my.afterLoad != nil {
+		return my.afterLoad(h)
+	}
+	return nil
+}
+
+// NewMetadata 策略模式重构，支持Loader注册与优先级排序
+func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, error) {
 	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: dataTypes}}
 	k.SetDefault("schema.schema", "public")
 	k.SetDefault("schema.default-limit", 10)
@@ -49,713 +104,110 @@ func NewMetadata(k *std.Konfig, d *gorm.DB) (*Metadata, error) {
 	}
 
 	my := &Metadata{
-		k:     k,
-		db:    d,
-		cfg:   cfg,
-		Nodes: make(map[string]*internal.Class),
-		//使用当前时间戳初始化版本
+		k:       k,
+		db:      d,
+		cfg:     cfg,
+		Nodes:   make(map[string]*internal.Class),
 		Version: time.Now().Format("20060102150405"),
 	}
 
-	// 加载元数据
-	if err := my.loadMetadata(); err != nil {
-		return nil, err
+	// 默认Loader注册，Pgsql和Mysql用HookedLoader包装，dev模式下自动保存
+	afterLoad := func(h metadata.Hoster) error {
+		if cfg.Mode == "dev" {
+			path := filepath.Join(cfg.Root, "cfg", "metadata.json")
+			if meta, ok := h.(*Metadata); ok {
+				return meta.saveToFile(path)
+			}
+		}
+		return nil
 	}
-
+	defaultLoaders := []metadata.Loader{
+		&HookedLoader{metadata.NewPgsqlLoader(cfg, d), afterLoad},
+		&HookedLoader{metadata.NewMysqlLoader(cfg, d), afterLoad},
+		metadata.NewFileLoader(cfg),
+		metadata.NewConfigLoader(cfg),
+	}
+	options := &metadataOptions{loaders: defaultLoaders}
+	// 应用自定义选项
+	for _, opt := range opts {
+		opt(options)
+	}
+	// 按优先级排序
+	loaders := options.loaders
+	if len(loaders) > 1 {
+		// 降序，优先级高的后加载
+		for i := 0; i < len(loaders)-1; i++ {
+			for j := i + 1; j < len(loaders); j++ {
+				if loaders[i].Priority() > loaders[j].Priority() {
+					loaders[i], loaders[j] = loaders[j], loaders[i]
+				}
+			}
+		}
+	}
+	// 依次执行Loader
+	for _, loader := range loaders {
+		if loader.Support(cfg, d) {
+			if err := loader.Load(my); err != nil {
+				log.Warn().Err(err).Str("loader", loader.Name()).Msg("加载器执行失败")
+			}
+		}
+	}
+	// 统一关系处理
+	my.processRelations()
 	return my, nil
 }
 
-// loadMetadata 加载元数据
-func (my *Metadata) loadMetadata() error {
-	log.Info().Msg("开始加载元数据")
-
-	mode := my.cfg.Mode
-	name := fmt.Sprintf("metadata.%s.json", mode)
-	path := filepath.Join(my.cfg.Root, "cfg", name)
-
-	if mode == "dev" {
-		log.Info().Msg("从数据库加载元数据")
-		if err := my.loadDatabase(); err != nil {
-			log.Error().Err(err).Msg("从数据库加载元数据失败")
-			return fmt.Errorf("加载数据库元数据失败: %w", err)
-		}
-
-		log.Info().Str("path", path).Msg("保存元数据到预设文件")
-		if err := my.saveToFile(path); err != nil {
-			log.Error().Err(err).Str("path", path).Msg("保存元数据到预设文件失败")
-			return fmt.Errorf("保存元数据缓存失败: %w", err)
-		}
-	} else {
-		log.Info().Msg("从预设文件加载元数据")
-		if err := my.loadFromFile(path); err != nil {
-			log.Error().Err(err).Msg("从预设文件加载元数据失败")
-			return fmt.Errorf("从预设文件加载元数据失败: %w", err)
-		}
-	}
-
-	log.Info().Msg("使用配置中的元数据定义并合并")
-	if err := my.loadFromConfig(); err != nil {
-		log.Error().Err(err).Msg("加载配置元数据失败")
-		return fmt.Errorf("加载配置元数据失败: %w", err)
-	}
-
-	// 处理完配置加载后，处理所有关系
-	log.Info().Msg("处理所有关系信息")
-	my.processRelations()
-
-	log.Info().
-		Int("classes", len(my.Nodes)).
-		Msg("元数据加载完成")
-	return nil
-}
-
-// loadFromConfig 从配置加载元数据
-func (my *Metadata) loadFromConfig() error {
-	// 获取配置中的元数据定义
-	classes := my.cfg.Metadata.Classes
-	if len(classes) == 0 {
-		log.Info().Msg("配置中没有定义元数据")
+// Metadata 实现Hoster接口
+func (my *Metadata) PutNode(node *internal.Class) error {
+	if node == nil || node.Name == "" {
 		return nil
 	}
-
-	log.Info().Msg("开始从配置加载元数据")
-
-	// 遍历配置中的类定义
-	for className, classConfig := range classes {
-		log.Info().Str("class", className).Msg("处理类配置")
-
-		// 确定表名，用于查找基类
-		tableName := classConfig.Table
-		baseClass, isFound := my.Nodes[tableName]
-
-		var newClass *internal.Class
-
-		// 确定类的状态如果基类不存在(虚拟类)或者基类名称与类名不一致(类别名)，则创建新类
-		if !isFound || baseClass.Name != className {
-			// 创建新类的情况
-			log.Info().
-				Str("class", className).
-				Str("table", tableName).
-				Bool("virtual", !isFound).
-				Msg("创建新类")
-
-			// 创建新类对象
-			newClass = &internal.Class{
-				Name:    className,
-				Table:   tableName,
-				Virtual: !isFound,
-				Fields:  make(map[string]*internal.Field),
-			}
-
-			// 如果是类别名而非虚拟类，复制基类字段
-			if isFound {
-				if len(classConfig.Fields) > 0 {
-					// 对原字段有改动则需要深度复制字段,避免有副作用
-					my.copyClassFields(newClass, baseClass)
-				} else {
-					// 尽可能复用原类字段对象
-					for fieldName, field := range baseClass.Fields {
-						newClass.Fields[fieldName] = field
-					}
+	// 添加主类名索引
+	my.Nodes[node.Name] = node
+	// 根据配置决定是否添加驼峰命名索引
+	if my.cfg != nil && my.cfg.Schema.EnableCamelCase {
+		camelName := strcase.ToCamel(node.Name)
+		if camelName != node.Name {
+			my.Nodes[camelName] = node
+		}
+		// 字段小驼峰索引
+		for fname, f := range node.Fields {
+			lowerCamel := strcase.ToLowerCamel(fname)
+			if lowerCamel != fname {
+				if _, exists := node.Fields[lowerCamel]; !exists {
+					node.Fields[lowerCamel] = f
 				}
 			}
-
-			// 添加类到元数据
-			my.Nodes[className] = newClass
-			// 如果是类别名并且有表名，添加表名索引
-			if isFound && tableName != className {
-				my.Nodes[tableName] = newClass
-			}
-		} else {
-			// 更新现有类的情况
-			log.Info().
-				Str("class", className).
-				Msg("更新现有类")
-			newClass = baseClass
 		}
-
-		// 统一处理字段过滤和字段配置，无论是新类还是现有类
-		// 1. 更新类属性
-		if classConfig.Description != "" {
-			newClass.Description = classConfig.Description
-		}
-		if classConfig.Resolver != "" {
-			newClass.Resolver = classConfig.Resolver
-		}
-		if len(classConfig.PrimaryKeys) > 0 {
-			newClass.PrimaryKeys = classConfig.PrimaryKeys
-		}
-		// 2. 先应用字段过滤
-		my.applyFieldFilter(newClass, classConfig)
-		// 3. 再处理配置的字段（覆盖或添加）
-		my.applyFieldConfig(newClass, classConfig.Fields)
 	}
-
-	log.Info().Int("classes", len(my.Nodes)).Msg("配置元数据加载完成")
+	// 仅当表名和类名都非空且不同且未存在时，才添加表名索引
+	if node.Table != "" && node.Table != node.Name {
+		if _, exists := my.Nodes[node.Table]; !exists {
+			my.Nodes[node.Table] = node
+		}
+	}
+	// 字段合并：如已存在同名类，合并字段（新节点优先覆盖）
+	if old, ok := my.Nodes[node.Name]; ok && old != node {
+		for fname, f := range node.Fields {
+			old.Fields[fname] = f
+		}
+	}
 	return nil
 }
 
-// 复制类字段 - 从基类到目标类
-func (my *Metadata) copyClassFields(targetClass, sourceClass *internal.Class) {
-	for fieldName, field := range sourceClass.Fields {
-		// 只复制原始字段，非索引字段
-		if field.Name == fieldName {
-			// 深度复制字段
-			newField := convertor.DeepClone(field)
-
-			// 更新关系中的源类引用
-			if newField.Relation != nil {
-				newField.Relation.SourceClass = targetClass.Name
-			}
-
-			targetClass.AddField(newField)
-		}
-	}
+func (my *Metadata) GetNode(name string) (*internal.Class, bool) {
+	n, ok := my.Nodes[name]
+	return n, ok
 }
 
-// 应用字段过滤
-func (my *Metadata) applyFieldFilter(class *internal.Class, config *internal.ClassConfig) {
-	// 如果指定了包含字段，则将所有不在包含列表中的字段移除
-	if len(config.IncludeFields) > 0 {
-		includeSet := make(map[string]bool)
-		for _, fieldName := range config.IncludeFields {
-			includeSet[fieldName] = true
-		}
-
-		// 找出并移除所有不在包含列表中的字段
-		for fieldName, field := range class.Fields {
-			if field.Name == fieldName && !includeSet[fieldName] {
-				class.RemoveField(field)
-			}
-		}
-	}
-
-	// 移除配置中指定要排除的字段
-	for _, fieldName := range config.ExcludeFields {
-		if field := class.Fields[fieldName]; field != nil {
-			class.RemoveField(field)
-		}
-	}
-}
-
-// 处理类字段
-func (my *Metadata) applyFieldConfig(class *internal.Class, fieldConfigs map[string]*internal.FieldConfig) {
-	if fieldConfigs == nil {
-		return
-	}
-
-	for fieldName, fieldConfig := range fieldConfigs {
-		// 检查是否已存在此字段
-		existingField := class.Fields[fieldName]
-
-		if existingField != nil {
-			// 更新现有字段
-			my.updateField(existingField, fieldConfig)
-		} else {
-			// 添加新字段
-			field := my.createField(class.Name, fieldName, fieldConfig)
-			class.AddField(field)
-		}
-	}
-}
-
-// 更新字段
-func (my *Metadata) updateField(field *internal.Field, config *internal.FieldConfig) {
-	// 更新非空值
-	if config.Description != "" {
-		field.Description = config.Description
-	}
-
-	if config.Type != "" {
-		field.Type = config.Type
-	}
-
-	if config.Column != "" {
-		field.Column = config.Column
-	}
-
-	// 更新Resolver
-	if config.Resolver != "" {
-		field.Resolver = config.Resolver
-	}
-
-	// 覆盖布尔属性
-	field.IsPrimary = config.IsPrimary
-	field.IsUnique = config.IsUnique
-	field.Nullable = config.IsNullable
-
-	// 处理关系配置
-	if config.Relation != nil {
-		// 如果字段没有关系，则创建一个
-		if field.Relation == nil {
-			field.Relation = &internal.Relation{
-				SourceField: field.Name,
-			}
-		}
-
-		rel := field.Relation
-		relConfig := config.Relation
-
-		// 更新关系属性
-		if relConfig.TargetClass != "" {
-			rel.TargetClass = relConfig.TargetClass
-		}
-
-		if relConfig.TargetField != "" {
-			rel.TargetField = relConfig.TargetField
-		}
-
-		if relConfig.Type != "" {
-			rel.Type = internal.RelationType(relConfig.Type)
-		}
-
-		// 处理Through配置
-		if relConfig.Through != nil {
-			if rel.Through == nil {
-				rel.Through = &internal.Through{}
-			}
-
-			through := rel.Through
-			throughConfig := relConfig.Through
-
-			if throughConfig.Table != "" {
-				through.Table = throughConfig.Table
-			}
-
-			if throughConfig.SourceKey != "" {
-				through.SourceKey = throughConfig.SourceKey
-			}
-
-			if throughConfig.TargetKey != "" {
-				through.TargetKey = throughConfig.TargetKey
-			}
-
-			if throughConfig.ClassName != "" {
-				through.Name = throughConfig.ClassName
-			}
-
-			// 确保中间表类名存在
-			if through.Name == "" && through.Table != "" {
-				// 使用表名转换规则生成类名
-				through.Name = my.convertTableName(through.Table)
-				log.Debug().
-					Str("table", through.Table).
-					Str("className", through.Name).
-					Msg("从表名自动推导中间表类名")
-			}
-
-			// 处理中间表字段
-			if len(throughConfig.Fields) > 0 {
-				if through.Fields == nil {
-					through.Fields = make(map[string]*internal.Field)
-				}
-
-				for thrFieldName, thrFieldConfig := range throughConfig.Fields {
-					// 检查是否存在
-					existingThrField := through.Fields[thrFieldName]
-
-					if existingThrField != nil {
-						// 更新现有字段
-						my.updateField(existingThrField, thrFieldConfig)
-					} else {
-						// 创建新字段
-						thrField := my.createField(through.Name, thrFieldName, thrFieldConfig)
-						through.Fields[thrFieldName] = thrField
-					}
-				}
-			}
-		}
-	}
-}
-
-// 创建新字段
-func (my *Metadata) createField(className, fieldName string, config *internal.FieldConfig) *internal.Field {
-	// 如果没有指定列名，使用字段名
-	column := config.Column
-	if column == "" {
-		column = fieldName
-	}
-
-	field := &internal.Field{
-		Name:        fieldName,
-		Column:      column,
-		Type:        config.Type,
-		Description: config.Description,
-		Nullable:    config.IsNullable,
-		IsPrimary:   config.IsPrimary,
-		IsUnique:    config.IsUnique,
-		Resolver:    config.Resolver,
-	}
-
-	// 处理关系配置
-	if config.Relation != nil {
-		field.Relation = &internal.Relation{
-			SourceClass: className,
-			SourceField: fieldName,
-			TargetClass: config.Relation.TargetClass,
-			TargetField: config.Relation.TargetField,
-			Type:        internal.RelationType(config.Relation.Type),
-		}
-
-		// 根据关系类型设置IsList字段
-		switch field.Relation.Type {
-		case internal.MANY_TO_MANY, internal.ONE_TO_MANY:
-			field.IsList = true
-		case internal.MANY_TO_ONE, internal.RECURSIVE:
-			field.IsList = false
-		}
-
-		// 处理Through配置
-		if config.Relation.Through != nil {
-			field.Relation.Through = &internal.Through{
-				Table:     config.Relation.Through.Table,
-				SourceKey: config.Relation.Through.SourceKey,
-				TargetKey: config.Relation.Through.TargetKey,
-				Name:      config.Relation.Through.ClassName,
-			}
-
-			// 确保中间表类名存在
-			if field.Relation.Through.Name == "" && field.Relation.Through.Table != "" {
-				// 使用表名转换规则生成类名
-				field.Relation.Through.Name = my.convertTableName(field.Relation.Through.Table)
-				log.Debug().
-					Str("table", field.Relation.Through.Table).
-					Str("className", field.Relation.Through.Name).
-					Msg("从表名自动推导中间表类名")
-			}
-
-			// 处理中间表字段
-			if len(config.Relation.Through.Fields) > 0 {
-				field.Relation.Through.Fields = make(map[string]*internal.Field)
-
-				for thrFieldName, thrFieldConfig := range config.Relation.Through.Fields {
-					thrField := my.createField(field.Relation.Through.Name, thrFieldName, thrFieldConfig)
-					field.Relation.Through.Fields[thrFieldName] = thrField
-				}
-			}
-		}
-	}
-
-	return field
-}
-
-// loadDatabase 从数据库加载元数据
-func (my *Metadata) loadDatabase() error {
-	log.Info().Msg("开始从数据库加载元数据")
-
-	// 创建数据库加载器
-	loader, err := metadata.NewSchemaInspector(my.db, my.cfg.Schema.Schema)
-	if err != nil {
-		log.Error().Err(err).Msg("创建数据库加载器失败")
-		return err
-	}
-	log.Debug().Str("schema", my.cfg.Schema.Schema).Msg("创建数据库加载器")
-
-	// 加载元数据
-	log.Debug().Msg("开始从数据库加载元数据")
-	classes, err := loader.LoadMetadata()
-	if err != nil {
-		log.Error().Err(err).Msg("数据库加载元数据失败")
-		return err
-	}
-	log.Debug().Int("tables", len(classes)).Msg("数据库元数据加载完成")
-
-	// 初始化Nodes
-	my.Nodes = make(map[string]*internal.Class)
-
-	// 处理命名转换和过滤
-	log.Debug().Msg("开始处理元数据命名转换和过滤")
-	for tableName, class := range classes {
-		// 检查是否应包含此表
-		if !my.shouldIncludeTable(tableName) {
-			log.Debug().Str("table", tableName).Msg("排除表")
-			continue
-		}
-
-		// 转换类名
-		className := my.convertTableName(tableName)
-		if className != tableName {
-			log.Debug().Str("table", tableName).Str("class", className).Msg("表名转换")
-		}
-
-		// 更新类名和表名
-		class.Name = className
-		class.Table = tableName
-
-		// 处理字段
-		filteredFields := 0
-		renamedFields := 0
-		for columnName, field := range class.Fields {
-			// 检查是否应包含此字段
-			if !my.shouldIncludeField(columnName) {
-				delete(class.Fields, columnName)
-				filteredFields++
-				continue
-			}
-
-			// 转换字段名
-			fieldName := my.convertFieldName(tableName, columnName)
-
-			// 如果字段名发生了变化，需要更新
-			if fieldName != columnName {
-				// 创建新的条目
-				class.Fields[fieldName] = field
-				field.Name = fieldName
-				renamedFields++
-			}
-		}
-
-		if filteredFields > 0 || renamedFields > 0 {
-			log.Debug().
-				Str("table", tableName).
-				Int("filtered", filteredFields).
-				Int("renamed", renamedFields).
-				Msg("字段处理")
-		}
-
-		// 更新主键列表（转换字段名）
-		for i, pkName := range class.PrimaryKeys {
-			class.PrimaryKeys[i] = my.convertFieldName(tableName, pkName)
-		}
-
-		// 添加到Nodes集合(支持通过类名和表名查找)
-		my.Nodes[className] = class
-		if className != tableName {
-			my.Nodes[tableName] = class
-		}
-	}
-
-	// 处理关系的类名和字段名转换
-	log.Debug().Msg("开始处理关系的名称转换")
-	for _, class := range my.Nodes {
-		for _, field := range class.Fields {
-			if field.Relation != nil {
-				// 转换原始表名和字段名为转换后的名称
-				sourceClassName := my.convertTableName(field.Relation.SourceClass)
-				sourceFieldName := my.convertFieldName(field.Relation.SourceClass, field.Relation.SourceField)
-				targetClassName := my.convertTableName(field.Relation.TargetClass)
-				targetFieldName := my.convertFieldName(field.Relation.TargetClass, field.Relation.TargetField)
-
-				// 更新关系字段
-				field.Relation.SourceClass = sourceClassName
-				field.Relation.SourceField = sourceFieldName
-				field.Relation.TargetClass = targetClassName
-				field.Relation.TargetField = targetFieldName
-			}
-		}
-	}
-
-	return nil
-}
-
-// loadFromFile 从文件加载元数据
-func (my *Metadata) loadFromFile(path string) error {
-	log.Info().Str("file", path).Msg("开始从文件加载元数据")
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		log.Error().Err(err).Str("file", path).Msg("读取文件失败")
-		return fmt.Errorf("读取文件失败: %w", err)
-	}
-
-	// 创建一个临时结构来存储文件内容
-	var mate Metadata
-
-	// 解析JSON数据
-	if err = json.Unmarshal(data, &mate); err != nil {
-		log.Error().Err(err).Str("file", path).Msg("解析JSON失败")
-		return fmt.Errorf("解析JSON失败: %w", err)
-	}
-
-	// 更新元数据
-	my.Version = mate.Version
-	my.Nodes = make(map[string]*internal.Class)
-
-	// 处理所有类
-	for className, class := range mate.Nodes {
-		// 只添加大写开头的类名（主类名）
-		if className == class.Name {
-			// 初始化字段映射
-			fields := make(map[string]*internal.Field)
-
-			// 处理每个字段
-			for fieldName, field := range class.Fields {
-				// 添加字段名索引
-				fields[fieldName] = field
-
-				// 如果列名与字段名不同，添加列名索引
-				if field.Column != "" && field.Column != fieldName {
-					fields[field.Column] = field
-				}
-			}
-
-			// 更新类的字段映射
-			class.Fields = fields
-
-			// 添加类到Nodes映射
-			my.Nodes[className] = class
-
-			// 添加表名索引，指向同一个实例
-			if class.Table != class.Name {
-				my.Nodes[class.Table] = class
-			}
-		}
-	}
-
-	// 不再需要专门的反向引用重建循环，因为这些引用已经在JSON中被正确序列化和反序列化
-
-	log.Info().Int("classes", len(my.Nodes)).Msg("从文件加载元数据完成")
-	return nil
-}
-
-// saveMetadataToFile 保存元数据到文件
-func (my *Metadata) saveToFile(filePath string) error {
-	log.Info().Str("file", filePath).Msg("开始保存元数据到文件")
-
-	// 确保目录存在
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Error().Err(err).Str("dir", dir).Msg("创建目录失败")
-		return fmt.Errorf("创建目录失败: %w", err)
-	}
-
-	// 使用自定义序列化为JSON
-	data, err := json.MarshalIndent(my, "", "  ")
-	if err != nil {
-		log.Error().Err(err).Str("file", filePath).Msg("序列化元数据失败")
-		return fmt.Errorf("序列化元数据失败: %w", err)
-	}
-
-	// 写入文件
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		log.Error().Err(err).Str("file", filePath).Msg("写入元数据文件失败")
-		return fmt.Errorf("写入元数据文件失败: %w", err)
-	}
-
-	log.Info().Int("classes", len(my.Nodes)).Msg("保存元数据到文件完成")
-	return nil
-}
-
-// convertTableName 转换表名
-func (my *Metadata) convertTableName(rawName string) string {
-	// 去除前缀
-	name := rawName
-
-	// 检查所有前缀
-	for _, prefix := range my.cfg.Schema.TablePrefix {
-		if prefix != "" && strings.HasPrefix(name, prefix) {
-			name = name[len(prefix):]
-			break // 一旦找到匹配的前缀就停止
-		}
-	}
-
-	// 应用自定义映射
-	if mappedName, ok := my.cfg.Schema.TableMapping[name]; ok {
-		return mappedName
-	}
-
-	// 根据配置决定是否将表名转换为单数形式
-	if my.cfg.Schema.EnableSingular {
-		//为了支持users_roles类似的表名，按照下划线分割后在转换
-		if strings.Contains(name, "_") {
-			parts := strings.Split(name, "_")
-			for i, part := range parts {
-				parts[i] = inflection.Singular(part)
-			}
-			name = strings.Join(parts, "_")
-		} else {
-			name = inflection.Singular(name)
-		}
-	}
-
-	// 转换为驼峰命名
-	if my.cfg.Schema.EnableCamelCase {
-		name = strcase.ToCamel(name)
-	}
-
-	return name
-}
-
-// convertFieldName 转换字段名
-func (my *Metadata) convertFieldName(tableName, rawName string) string {
-	// 应用自定义映射
-	key := tableName + "." + rawName
-	if mappedName, ok := my.cfg.Schema.FieldMapping[key]; ok {
-		return mappedName
-	}
-	if mappedName, ok := my.cfg.Schema.FieldMapping[rawName]; ok {
-		return mappedName
-	}
-
-	// 转换为驼峰命名
-	if my.cfg.Schema.EnableCamelCase {
-		return strcase.ToLowerCamel(rawName)
-	}
-
-	return rawName
-}
-
-// shouldIncludeTable 检查是否应该包含表
-func (my *Metadata) shouldIncludeTable(tableName string) bool {
-	// 检查排除列表
-	for _, excluded := range my.cfg.Schema.ExcludeTables {
-		if excluded == tableName {
-			return false
-		}
-	}
-
-	// 检查包含列表
-	if len(my.cfg.Schema.IncludeTables) > 0 {
-		for _, included := range my.cfg.Schema.IncludeTables {
-			if included == tableName {
-				return true
-			}
-		}
-		return false
-	}
-
-	return true
-}
-
-// shouldIncludeField 检查是否应该包含字段
-func (my *Metadata) shouldIncludeField(fieldName string) bool {
-	// 检查排除列表
-	for _, excluded := range my.cfg.Schema.ExcludeFields {
-		if excluded == fieldName {
-			return false
-		}
-	}
-
-	return true
-}
-
-// MarshalJSON 自定义JSON序列化
-func (my *Metadata) MarshalJSON() ([]byte, error) {
-	// 仅导出key和类名相同的节点
-	nodes := make(map[string]*internal.Class)
-	for key, class := range my.Nodes {
-		if key == class.Name {
-			// 直接使用原始对象，减少字段复制
-			nodes[key] = class
-		}
-	}
-	return json.Marshal(Metadata{
-		Nodes:   nodes,
-		Version: my.Version,
-	})
+func (my *Metadata) SetVersion(version string) {
+	my.Version = version
 }
 
 // FindClass 根据类名查找类
 func (my *Metadata) FindClass(className string, virtual bool) (*internal.Class, bool) {
 	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
-		return &internal.Class{
-			Name:        node.Name,
-			Table:       node.Table,
-			Virtual:     node.Virtual,
-			Fields:      node.Fields,
-			PrimaryKeys: node.PrimaryKeys,
-			Description: node.Description,
-		}, true
+		return node, true
 	}
 	return nil, false
 }
@@ -796,6 +248,22 @@ func (my *Metadata) ColumnName(className, fieldName string, virtual bool) (strin
 		}
 	}
 	return "", false
+}
+
+// MarshalJSON 自定义JSON序列化
+func (my *Metadata) MarshalJSON() ([]byte, error) {
+	// 仅导出key和类名相同的节点
+	nodes := make(map[string]*internal.Class)
+	for key, class := range my.Nodes {
+		if key == class.Name {
+			// 直接使用原始对象，减少字段复制
+			nodes[key] = class
+		}
+	}
+	return json.Marshal(Metadata{
+		Nodes:   nodes,
+		Version: my.Version,
+	})
 }
 
 // processRelations 处理关系图并创建关系字段
@@ -914,7 +382,7 @@ func (my *Metadata) processRelations() {
 					// 确保中间表类名和字段信息正确
 					if relation.Through.Name == "" {
 						if relation.Through.Table != "" {
-							relation.Through.Name = my.convertTableName(relation.Through.Table)
+							relation.Through.Name = relation.Through.Table
 							log.Debug().Str("table", relation.Through.Table).Str("className", relation.Through.Name).
 								Msg("从表名自动推导中间表类名")
 						} else {
@@ -1015,4 +483,32 @@ func (my *Metadata) uniqueFieldName(class *internal.Class, baseName string) stri
 	}
 
 	return fieldName
+}
+
+// saveToFile 保存元数据到文件
+func (my *Metadata) saveToFile(filePath string) error {
+	log.Info().Str("file", filePath).Msg("开始保存元数据到文件")
+
+	// 确保目录存在
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Error().Err(err).Str("dir", dir).Msg("创建目录失败")
+		return fmt.Errorf("创建目录失败: %w", err)
+	}
+
+	// 使用自定义序列化为JSON
+	data, err := json.MarshalIndent(my, "", "  ")
+	if err != nil {
+		log.Error().Err(err).Str("file", filePath).Msg("序列化元数据失败")
+		return fmt.Errorf("序列化元数据失败: %w", err)
+	}
+
+	// 写入文件
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		log.Error().Err(err).Str("file", filePath).Msg("写入元数据文件失败")
+		return fmt.Errorf("写入元数据文件失败: %w", err)
+	}
+
+	log.Info().Int("classes", len(my.Nodes)).Msg("保存元数据到文件完成")
+	return nil
 }

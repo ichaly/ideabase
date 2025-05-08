@@ -309,8 +309,6 @@ func TestMetadataLoadingModes(t *testing.T) {
 		// 创建元数据加载器
 		loader, err := NewMetadata(k, nil)
 		require.NoError(t, err, "创建元数据加载器失败")
-		err = loader.loadMetadata()
-		require.NoError(t, err, "加载元数据失败")
 
 		// 验证元数据
 		user, exists := loader.Nodes["User"]
