@@ -60,13 +60,6 @@ func (my *ConfigLoader) Load(h Hoster) error {
 					}
 				}
 			}
-
-			// 添加类到元数据
-			h.PutNode(newClass)
-			// 如果是类别名并且有表名，添加表名索引
-			if isFound && tableName != className {
-				h.PutNode(newClass)
-			}
 		} else {
 			// 更新现有类的情况
 			newClass = baseClass
@@ -82,10 +75,14 @@ func (my *ConfigLoader) Load(h Hoster) error {
 		if len(classConfig.PrimaryKeys) > 0 {
 			newClass.PrimaryKeys = classConfig.PrimaryKeys
 		}
+
 		// 2. 先应用字段过滤
 		applyFieldFilter(newClass, classConfig)
 		// 3. 再处理配置的字段（覆盖或添加）
 		applyFieldConfig(newClass, classConfig.Fields)
+
+		// 4. 最后添加到元数据
+		h.PutNode(newClass)
 	}
 
 	return nil

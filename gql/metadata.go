@@ -185,9 +185,11 @@ func (my *Metadata) PutNode(node *internal.Class) error {
 		for _, field := range node.Fields {
 			if lowerCamel := strcase.ToLowerCamel(field.Column); lowerCamel != field.Name {
 				field.Name = lowerCamel
-				fields[lowerCamel] = field
 			}
 			fields[field.Column] = field
+			if field.Name != field.Column {
+				fields[field.Name] = field
+			}
 		}
 		node.Fields = fields
 	}
