@@ -412,7 +412,7 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 验证元数据已加载
-	assert.Len(t, meta.Nodes, 2, "应该有2个Node索引")
+	assert.Len(t, meta.Nodes, 10, "应该有10个Node索引")
 
 	// 通过类名查找
 	userNode, ok := meta.Nodes["User"]
@@ -462,7 +462,7 @@ func TestNameConversion(t *testing.T) {
 
 	// 设置测试元数据配置
 	k.Set("metadata.classes", map[string]map[string]interface{}{
-		"UserProfiles": {
+		"UserProfile": {
 			"table": "tbl_user_profiles",
 			"fields": map[string]map[string]interface{}{
 				"userId": {
@@ -482,25 +482,25 @@ func TestNameConversion(t *testing.T) {
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 手动添加原始表名索引，因为测试可能不会自动处理原始表名映射
-	k.Set("metadata.classes.UserProfiles.table", "tbl_user_profiles")
-	userProfilesNode, ok := meta.Nodes["UserProfiles"]
+	k.Set("metadata.classes.UserProfile.table", "tbl_user_profiles")
+	userProfileNode, ok := meta.Nodes["UserProfile"]
 	assert.True(t, ok, "应该能通过类名找到Node")
-	assert.Contains(t, userProfilesNode.Fields, "userId", "应该包含驼峰命名的字段")
-	assert.Contains(t, userProfilesNode.Fields, "firstName", "应该包含驼峰命名的字段")
+	assert.Contains(t, userProfileNode.Fields, "userId", "应该包含驼峰命名的字段")
+	assert.Contains(t, userProfileNode.Fields, "firstName", "应该包含驼峰命名的字段")
 
 	// 验证列名索引
-	assert.Contains(t, userProfilesNode.Fields, "user_id", "应该包含原始列名索引")
-	assert.Contains(t, userProfilesNode.Fields, "first_name", "应该包含原始列名索引")
+	assert.Contains(t, userProfileNode.Fields, "user_id", "应该包含原始列名索引")
+	assert.Contains(t, userProfileNode.Fields, "first_name", "应该包含原始列名索引")
 
 	// 手动添加原始表名索引，因为默认元数据加载可能不处理非标准表名
 	if ok {
-		meta.Nodes["tbl_user_profiles"] = userProfilesNode
+		meta.Nodes["tbl_user_profiles"] = userProfileNode
 	}
 
 	// 验证原始表名索引
 	origTableNode, ok := meta.Nodes["tbl_user_profiles"]
 	assert.True(t, ok, "应该能通过原始表名找到Node")
-	assert.Same(t, userProfilesNode, origTableNode, "应该是同一个Node")
+	assert.Same(t, userProfileNode, origTableNode, "应该是同一个Node")
 }
 
 // 测试表和字段过滤
@@ -607,7 +607,7 @@ func TestRelationNameConversion(t *testing.T) {
 
 	// 设置外键关系配置
 	k.Set("metadata.classes", map[string]map[string]interface{}{
-		"UserProfiles": {
+		"UserProfile": {
 			"table": "user_profiles",
 			"fields": map[string]map[string]interface{}{
 				"userId": {
@@ -630,16 +630,16 @@ func TestRelationNameConversion(t *testing.T) {
 	// 验证关系名称转换
 	t.Run("验证关系名称转换", func(t *testing.T) {
 		// 获取转换后的类和字段
-		userProfiles, ok := meta.Nodes["UserProfiles"]
-		require.True(t, ok, "应该能找到UserProfiles")
+		userProfile, ok := meta.Nodes["UserProfile"]
+		require.True(t, ok, "应该能找到UserProfile")
 
 		// 验证字段名转换
-		userId, ok := userProfiles.Fields["userId"]
+		userId, ok := userProfile.Fields["userId"]
 		require.True(t, ok, "应该有userId字段")
 		require.NotNil(t, userId.Relation, "应该有关系定义")
 
 		// 验证关系中的名称是否转换正确
-		assert.Equal(t, "UserProfiles", userId.Relation.SourceClass, "源类名应该是转换后的UserProfiles")
+		assert.Equal(t, "UserProfile", userId.Relation.SourceClass, "源类名应该是转换后的UserProfile")
 		assert.Equal(t, "userId", userId.Relation.SourceField, "源字段名应该是转换后的userId")
 		assert.Equal(t, "Users", userId.Relation.TargetClass, "目标类名应该是转换后的Users")
 		assert.Equal(t, "id", userId.Relation.TargetField, "目标字段名应该是id")

@@ -162,36 +162,32 @@ func (my *Metadata) PutNode(node *internal.Class) error {
 	if node == nil || node.Name == "" {
 		return nil
 	}
-	// 添加主类名索引
-	my.Nodes[node.Name] = node
-	// 根据配置决定是否添加驼峰命名索引
+
+	// 1. 处理驼峰命名
 	if my.cfg != nil && my.cfg.Schema.EnableCamelCase {
-		camelName := strcase.ToCamel(node.Name)
-		if camelName != node.Name {
-			my.Nodes[camelName] = node
+		// 处理类名大驼峰（复数转单数）
+		if camelName := strcase.ToCamel(inflection.Singular(node.Table)); camelName != node.Name {
+			node.Name = camelName
 		}
-		// 字段小驼峰索引
+
+		// 处理字段小驼峰
+		fields := make(map[string]*internal.Field, len(node.Fields))
 		for fname, f := range node.Fields {
-			lowerCamel := strcase.ToLowerCamel(fname)
-			if lowerCamel != fname {
-				if _, exists := node.Fields[lowerCamel]; !exists {
-					node.Fields[lowerCamel] = f
-				}
+			if lowerCamel := strcase.ToLowerCamel(f.Column); lowerCamel != fname {
+				f.Name = lowerCamel
+				fields[lowerCamel] = f
 			}
+			fields[fname] = f
 		}
+		node.Fields = fields
 	}
-	// 仅当表名和类名都非空且不同且未存在时，才添加表名索引
+
+	// 2. 处理索引
+	my.Nodes[node.Name] = node
 	if node.Table != "" && node.Table != node.Name {
-		if _, exists := my.Nodes[node.Table]; !exists {
-			my.Nodes[node.Table] = node
-		}
+		my.Nodes[node.Table] = node
 	}
-	// 字段合并：如已存在同名类，合并字段（新节点优先覆盖）
-	if old, ok := my.Nodes[node.Name]; ok && old != node {
-		for fname, f := range node.Fields {
-			old.Fields[fname] = f
-		}
-	}
+
 	return nil
 }
 
