@@ -481,8 +481,6 @@ func TestNameConversion(t *testing.T) {
 	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "创建元数据加载器失败")
 
-	// 手动添加原始表名索引，因为测试可能不会自动处理原始表名映射
-	k.Set("metadata.classes.UserProfiles.table", "tbl_user_profiles")
 	userProfileNode, ok := meta.Nodes["UserProfiles"]
 	assert.True(t, ok, "应该能通过类名找到Node")
 	assert.Contains(t, userProfileNode.Fields, "userId", "应该包含驼峰命名的字段")
