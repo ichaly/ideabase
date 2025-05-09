@@ -23,9 +23,6 @@ type SchemaConfig struct {
 	// 表名前缀（将被去除）
 	TablePrefix []string `mapstructure:"table-prefix"`
 
-	// 要包含的表（空表示包含所有）
-	IncludeTables []string `mapstructure:"include-tables"`
-
 	// 要排除的表
 	ExcludeTables []string `mapstructure:"exclude-tables"`
 
@@ -34,12 +31,6 @@ type SchemaConfig struct {
 
 	// 默认分页限制
 	DefaultLimit int `mapstructure:"default-limit"`
-
-	// 字段名映射（用于自定义命名）
-	FieldMapping map[string]string `mapstructure:"field-mapping"`
-
-	// 表名映射（用于自定义命名）
-	TableMapping map[string]string `mapstructure:"table-mapping"`
 
 	// 数据类型映射
 	TypeMapping map[string]string `mapstructure:"type-mapping"`
