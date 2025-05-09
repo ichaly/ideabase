@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
 	"github.com/jinzhu/inflection"
+	"github.com/samber/lo"
 	"gorm.io/gorm"
 )
 
@@ -72,16 +74,19 @@ func WithoutLoader(names ...string) MetadataOption {
 	}
 }
 
-// HookedLoader 装饰器，支持afterLoad钩子
-// 用于Loader加载后自动执行额外操作（如保存文件）
+// HookedLoader 装饰器，支持beforeLoad,afterLoad钩子
 type HookedLoader struct {
 	metadata.Loader
-	afterLoad func(h metadata.Hoster) error
+	afterLoad, beforeLoad func(h metadata.Hoster) error
 }
 
 func (my *HookedLoader) Load(h metadata.Hoster) error {
-	err := my.Loader.Load(h)
-	if err != nil {
+	if my.beforeLoad != nil {
+		if err := my.beforeLoad(h); err != nil {
+			return err
+		}
+	}
+	if err := my.Loader.Load(h); err != nil {
 		return err
 	}
 	if my.afterLoad != nil {
@@ -112,20 +117,22 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	}
 
 	// 默认Loader注册，Pgsql和Mysql用HookedLoader包装，dev模式下自动保存
-	afterLoad := func(h metadata.Hoster) error {
+	after := func(h metadata.Hoster) error {
 		if cfg.Mode == "dev" {
 			path := filepath.Join(cfg.Root, "cfg", "metadata.json")
-			if meta, ok := h.(*Metadata); ok {
-				return meta.saveToFile(path)
-			}
+			return my.saveToFile(path)
 		}
 		return nil
 	}
+	// 在配置加载之前执行进行驼峰命名和过滤处理
+	before := func(h metadata.Hoster) error {
+		return my.processNodes()
+	}
 	defaultLoaders := []metadata.Loader{
-		&HookedLoader{metadata.NewPgsqlLoader(cfg, d), afterLoad},
-		&HookedLoader{metadata.NewMysqlLoader(cfg, d), afterLoad},
+		&HookedLoader{Loader: metadata.NewPgsqlLoader(cfg, d), afterLoad: after},
+		&HookedLoader{Loader: metadata.NewMysqlLoader(cfg, d), afterLoad: after},
 		metadata.NewFileLoader(cfg),
-		metadata.NewConfigLoader(cfg),
+		&HookedLoader{Loader: metadata.NewConfigLoader(cfg), beforeLoad: before},
 	}
 	options := &metadataOptions{loaders: defaultLoaders}
 	// 应用自定义选项
@@ -135,15 +142,11 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	// 按优先级排序
 	loaders := options.loaders
 	if len(loaders) > 1 {
-		// 降序，优先级高的后加载
-		for i := 0; i < len(loaders)-1; i++ {
-			for j := i + 1; j < len(loaders); j++ {
-				if loaders[i].Priority() > loaders[j].Priority() {
-					loaders[i], loaders[j] = loaders[j], loaders[i]
-				}
-			}
-		}
+		sort.Slice(loaders, func(i, j int) bool {
+			return loaders[i].Priority() < loaders[j].Priority()
+		})
 	}
+
 	// 依次执行Loader
 	for _, loader := range loaders {
 		if loader.Support(cfg, d) {
@@ -159,47 +162,13 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 
 // Metadata 实现Hoster接口
 func (my *Metadata) PutNode(node *internal.Class) error {
-	if node == nil || node.Name == "" {
+	if node == nil || node.Name == "" || node.Table == "" {
 		return nil
 	}
-
-	// 1. 处理驼峰命名
-	if my.cfg != nil && my.cfg.Schema.EnableCamelCase {
-		tableName := node.Table
-
-		// 处理表名前缀
-		for _, prefix := range my.cfg.Schema.TablePrefix {
-			if prefix != "" && strings.HasPrefix(tableName, prefix) {
-				tableName = strings.TrimPrefix(tableName, prefix)
-				break // 一旦找到匹配的前缀就停止,否则可能会导致多次处理
-			}
-		}
-
-		// 处理类名大驼峰（复数转单数）
-		if node.Name == node.Table {
-			node.Name = strcase.ToCamel(inflection.Singular(tableName))
-		}
-
-		// 处理字段小驼峰
-		fields := make(map[string]*internal.Field, len(node.Fields))
-		for _, field := range node.Fields {
-			if field.Name == field.Column {
-				field.Name = strcase.ToLowerCamel(field.Column)
-			}
-			fields[field.Column] = field
-			if field.Name != field.Column {
-				fields[field.Name] = field
-			}
-		}
-		node.Fields = fields
-	}
-
-	// 2. 处理索引
 	my.Nodes[node.Table] = node
 	if node.Table != node.Name {
 		my.Nodes[node.Name] = node
 	}
-
 	return nil
 }
 
@@ -518,5 +487,66 @@ func (my *Metadata) saveToFile(filePath string) error {
 	}
 
 	log.Info().Int("classes", len(my.Nodes)).Msg("保存元数据到文件完成")
+	return nil
+}
+
+// processNodes 处理所有节点的命名和过滤逻辑
+func (my *Metadata) processNodes() error {
+	if my.cfg == nil {
+		return nil
+	}
+	schema := my.cfg.Schema
+	nodes := make(map[string]*internal.Class)
+
+	for _, node := range my.Nodes {
+		if node == nil || node.Name == "" || node.Table == "" {
+			continue
+		}
+
+		// 1. 过滤表
+		if lo.IndexOf(schema.ExcludeTables, node.Table) > -1 {
+			continue
+		}
+
+		// 2. 表名处理
+		tableName := node.Table
+		for _, prefix := range schema.TablePrefix {
+			if prefix != "" && strings.HasPrefix(tableName, prefix) {
+				tableName = strings.TrimPrefix(tableName, prefix)
+				break
+			}
+		}
+		if schema.EnableSingular {
+			tableName = inflection.Singular(tableName)
+		}
+		if schema.EnableCamelCase {
+			node.Name = strcase.ToCamel(tableName)
+		}
+
+		// 3. 字段处理
+		fields := make(map[string]*internal.Field, len(node.Fields))
+		for _, field := range node.Fields {
+			if lo.IndexOf(schema.ExcludeFields, field.Column) > -1 {
+				continue
+			}
+			if schema.EnableCamelCase && field.Name == field.Column {
+				field.Name = strcase.ToLowerCamel(field.Column)
+			}
+			fields[field.Column] = field
+			if field.Name != field.Column {
+				fields[field.Name] = field
+			}
+		}
+		node.Fields = fields
+
+		// 4. 更新索引
+		nodes[node.Table] = node
+		if node.Table != node.Name {
+			nodes[node.Name] = node
+		}
+	}
+
+	// 5. 替换原 Nodes
+	my.Nodes = nodes
 	return nil
 }
