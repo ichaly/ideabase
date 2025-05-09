@@ -161,7 +161,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 }
 
 // Metadata 实现Hoster接口
-func (my *Metadata) PutNode(node *internal.Class) error {
+func (my *Metadata) PutClass(node *internal.Class) error {
 	if node == nil || node.Name == "" || node.Table == "" {
 		return nil
 	}
@@ -172,7 +172,7 @@ func (my *Metadata) PutNode(node *internal.Class) error {
 	return nil
 }
 
-func (my *Metadata) GetNode(name string) (*internal.Class, bool) {
+func (my *Metadata) GetClass(name string) (*internal.Class, bool) {
 	n, ok := my.Nodes[name]
 	return n, ok
 }

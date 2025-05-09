@@ -77,7 +77,7 @@ func (my *FileLoader) Load(h Hoster) error {
 			}
 			class.Fields = fields
 			// 添加类名索引
-			_ = h.PutNode(class)
+			_ = h.PutClass(class)
 		}
 	}
 	log.Info().Int("classes", len(meta.Nodes)).Msg("从文件加载元数据完成")

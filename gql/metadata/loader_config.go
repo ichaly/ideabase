@@ -36,7 +36,7 @@ func (my *ConfigLoader) Load(h Hoster) error {
 	for className, classConfig := range classes {
 		// 确定表名，用于查找基类
 		tableName := classConfig.Table
-		baseClass, isFound := h.GetNode(tableName)
+		baseClass, isFound := h.GetClass(tableName)
 
 		var newClass *internal.Class
 
@@ -82,7 +82,7 @@ func (my *ConfigLoader) Load(h Hoster) error {
 		applyFieldConfig(newClass, classConfig.Fields)
 
 		// 4. 最后添加到元数据
-		h.PutNode(newClass)
+		h.PutClass(newClass)
 	}
 
 	return nil
