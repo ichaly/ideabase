@@ -27,7 +27,7 @@ func (my *FileLoader) Priority() int { return 80 }
 
 // Support 判断是否支持文件加载（通常总是支持）
 func (my *FileLoader) Support(cfg *internal.Config, db *gorm.DB) bool {
-	return true
+	return cfg != nil && !cfg.IsDebug()
 }
 
 // Load 从文件加载元数据
@@ -38,9 +38,7 @@ func (my *FileLoader) Support(cfg *internal.Config, db *gorm.DB) bool {
 // 5. 注入Hoster并设置版本号
 func (my *FileLoader) Load(h Hoster) error {
 	// 1. 计算文件路径，格式为 metadata.{mode}.json
-	mode := my.cfg.Mode
-	name := fmt.Sprintf("metadata.%s.json", mode)
-	path := filepath.Join(my.cfg.Root, "cfg", name)
+	path := filepath.Join(my.cfg.Root, "cfg", "metadata.json")
 
 	log.Info().Str("file", path).Msg("开始从文件加载元数据")
 

@@ -113,7 +113,7 @@ func (my *MysqlLoader) Priority() int { return 60 }
 
 // Support 判断是否为MySQL数据库
 func (my *MysqlLoader) Support(cfg *internal.Config, db *gorm.DB) bool {
-	return db != nil && db.Dialector.Name() == "mysql"
+	return cfg != nil && cfg.IsDebug() && db != nil && db.Dialector.Name() == "mysql"
 }
 
 // Load 从MySQL加载元数据
