@@ -462,7 +462,7 @@ func TestNameConversion(t *testing.T) {
 
 	// 设置测试元数据配置
 	k.Set("metadata.classes", map[string]map[string]interface{}{
-		"UserProfile": {
+		"UserProfiles": {
 			"table": "tbl_user_profiles",
 			"fields": map[string]map[string]interface{}{
 				"userId": {
@@ -482,8 +482,8 @@ func TestNameConversion(t *testing.T) {
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 手动添加原始表名索引，因为测试可能不会自动处理原始表名映射
-	k.Set("metadata.classes.UserProfile.table", "tbl_user_profiles")
-	userProfileNode, ok := meta.Nodes["UserProfile"]
+	k.Set("metadata.classes.UserProfiles.table", "tbl_user_profiles")
+	userProfileNode, ok := meta.Nodes["UserProfiles"]
 	assert.True(t, ok, "应该能通过类名找到Node")
 	assert.Contains(t, userProfileNode.Fields, "userId", "应该包含驼峰命名的字段")
 	assert.Contains(t, userProfileNode.Fields, "firstName", "应该包含驼峰命名的字段")
@@ -607,7 +607,7 @@ func TestRelationNameConversion(t *testing.T) {
 
 	// 设置外键关系配置
 	k.Set("metadata.classes", map[string]map[string]interface{}{
-		"UserProfile": {
+		"UserProfiles": {
 			"table": "user_profiles",
 			"fields": map[string]map[string]interface{}{
 				"userId": {
@@ -630,8 +630,8 @@ func TestRelationNameConversion(t *testing.T) {
 	// 验证关系名称转换
 	t.Run("验证关系名称转换", func(t *testing.T) {
 		// 获取转换后的类和字段
-		userProfile, ok := meta.Nodes["UserProfile"]
-		require.True(t, ok, "应该能找到UserProfile")
+		userProfile, ok := meta.Nodes["UserProfiles"]
+		require.True(t, ok, "应该能找到UserProfiles")
 
 		// 验证字段名转换
 		userId, ok := userProfile.Fields["userId"]
@@ -639,7 +639,7 @@ func TestRelationNameConversion(t *testing.T) {
 		require.NotNil(t, userId.Relation, "应该有关系定义")
 
 		// 验证关系中的名称是否转换正确
-		assert.Equal(t, "UserProfile", userId.Relation.SourceClass, "源类名应该是转换后的UserProfile")
+		assert.Equal(t, "UserProfiles", userId.Relation.SourceClass, "源类名应该是转换后的UserProfiles")
 		assert.Equal(t, "userId", userId.Relation.SourceField, "源字段名应该是转换后的userId")
 		assert.Equal(t, "Users", userId.Relation.TargetClass, "目标类名应该是转换后的Users")
 		assert.Equal(t, "id", userId.Relation.TargetField, "目标字段名应该是id")

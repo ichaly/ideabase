@@ -176,15 +176,15 @@ func (my *Metadata) PutNode(node *internal.Class) error {
 		}
 
 		// 处理类名大驼峰（复数转单数）
-		if camelName := strcase.ToCamel(inflection.Singular(tableName)); camelName != node.Name {
-			node.Name = camelName
+		if node.Name == node.Table {
+			node.Name = strcase.ToCamel(inflection.Singular(tableName))
 		}
 
 		// 处理字段小驼峰
 		fields := make(map[string]*internal.Field, len(node.Fields))
 		for _, field := range node.Fields {
-			if lowerCamel := strcase.ToLowerCamel(field.Column); lowerCamel != field.Name {
-				field.Name = lowerCamel
+			if field.Name == field.Column {
+				field.Name = strcase.ToLowerCamel(field.Column)
 			}
 			fields[field.Column] = field
 			if field.Name != field.Column {
@@ -196,7 +196,7 @@ func (my *Metadata) PutNode(node *internal.Class) error {
 
 	// 2. 处理索引
 	my.Nodes[node.Table] = node
-	if node.Name != "" && node.Table != node.Name {
+	if node.Table != node.Name {
 		my.Nodes[node.Name] = node
 	}
 
