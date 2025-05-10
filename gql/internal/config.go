@@ -14,11 +14,11 @@ type SchemaConfig struct {
 	// 数据库schema
 	Schema string `mapstructure:"schema"`
 
-	// 是否启用驼峰命名
-	EnableCamelCase bool `mapstructure:"enable-camel-case"`
+	// 默认分页限制
+	DefaultLimit int `mapstructure:"default-limit"`
 
-	// 是否启用表名单数转换（将复数表名转为单数）
-	EnableSingular bool `mapstructure:"enable-singular"`
+	// 数据类型映射
+	TypeMapping map[string]string `mapstructure:"mapping"`
 
 	// 表名前缀（将被去除）
 	TablePrefix []string `mapstructure:"table-prefix"`
@@ -28,21 +28,22 @@ type SchemaConfig struct {
 
 	// 要排除的字段
 	ExcludeFields []string `mapstructure:"exclude-fields"`
-
-	// 默认分页限制
-	DefaultLimit int `mapstructure:"default-limit"`
-
-	// 数据类型映射
-	TypeMapping map[string]string `mapstructure:"type-mapping"`
-
-	// 是否显示中间表关系
-	ShowThrough bool `mapstructure:"show-through"`
 }
 
 // MetadataConfig 表示元数据配置
 type MetadataConfig struct {
 	// 类定义映射(key: 类名)
 	Classes map[string]*ClassConfig `mapstructure:"classes"`
+
+	// 文件配置
+	File string `mapstructure:"file"` // 支持 {mode} 占位符
+
+	// 命名规范
+	UseCamel    bool `mapstructure:"use-camel"`
+	UseSingular bool `mapstructure:"use-singular"`
+
+	// 关系配置
+	ShowThrough bool `mapstructure:"show-through"`
 }
 
 // ClassConfig 表示类配置

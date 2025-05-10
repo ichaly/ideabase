@@ -240,7 +240,7 @@ func (my *Renderer) renderTypes() error {
 		}
 
 		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 			continue
 		}
 
@@ -262,12 +262,12 @@ func (my *Renderer) renderTypes() error {
 			}
 
 			// 判断是否应该跳过中间表字段
-			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+			if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 				continue
 			}
 
 			// 判断字段类型是否引用了中间表类型
-			if !my.meta.cfg.Schema.ShowThrough {
+			if !my.meta.cfg.Metadata.ShowThrough {
 				// 检查字段是否引用了中间表类型
 				refType := field.Type
 				if field.Relation != nil && field.Relation.TargetClass != "" {
@@ -383,7 +383,7 @@ func (my *Renderer) renderInput() error {
 		}
 
 		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 			continue
 		}
 
@@ -400,7 +400,7 @@ func (my *Renderer) renderInput() error {
 			}
 
 			// 判断是否应该跳过中间表字段
-			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+			if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 				continue
 			}
 
@@ -439,7 +439,7 @@ func (my *Renderer) renderInput() error {
 			}
 
 			// 判断是否应该跳过中间表字段
-			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+			if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 				continue
 			}
 
@@ -524,7 +524,7 @@ func (my *Renderer) renderEntity() error {
 		}
 
 		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 			continue
 		}
 
@@ -542,7 +542,7 @@ func (my *Renderer) renderEntity() error {
 			}
 
 			// 判断是否应该跳过中间表字段
-			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+			if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 				continue
 			}
 
@@ -552,7 +552,7 @@ func (my *Renderer) renderEntity() error {
 			}
 
 			// 判断字段类型是否引用了中间表类型
-			if !my.meta.cfg.Schema.ShowThrough {
+			if !my.meta.cfg.Metadata.ShowThrough {
 				// 检查字段是否引用了中间表类型
 				refType := field.Type
 				if field.Relation != nil && field.Relation.TargetClass != "" {
@@ -594,7 +594,7 @@ func (my *Renderer) renderSort() error {
 		}
 
 		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 			continue
 		}
 
@@ -612,12 +612,12 @@ func (my *Renderer) renderSort() error {
 			}
 
 			// 判断是否应该跳过中间表字段
-			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+			if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 				continue
 			}
 
 			// 判断字段类型是否引用了中间表类型
-			if !my.meta.cfg.Schema.ShowThrough {
+			if !my.meta.cfg.Metadata.ShowThrough {
 				// 检查字段是否引用了中间表类型
 				refType := field.Type
 				if field.Relation != nil && field.Relation.TargetClass != "" {
@@ -657,7 +657,7 @@ func (my *Renderer) renderQuery() error {
 		}
 
 		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 			continue
 		}
 
@@ -718,7 +718,7 @@ func (my *Renderer) renderMutation() error {
 			continue
 		}
 		// 跳过中间表类（除非配置了显示中间表）
-		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 			continue
 		}
 
@@ -790,7 +790,7 @@ func (my *Renderer) renderStats() error {
 		}
 
 		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 			continue
 		}
 
@@ -809,12 +809,12 @@ func (my *Renderer) renderStats() error {
 			}
 
 			// 判断是否应该跳过中间表字段
-			if field.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+			if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 				continue
 			}
 
 			// 判断字段类型是否引用了中间表类型
-			if !my.meta.cfg.Schema.ShowThrough {
+			if !my.meta.cfg.Metadata.ShowThrough {
 				// 检查字段是否引用了中间表类型
 				refType := field.Type
 				if field.Relation != nil && field.Relation.TargetClass != "" {
@@ -874,7 +874,7 @@ func (my *Renderer) renderPaging() error {
 		}
 
 		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Schema.ShowThrough {
+		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 			continue
 		}
 

@@ -352,7 +352,7 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
 	k.Set("schema.schema", "public")
-	k.Set("schema.enable-camel-case", true)
+	k.Set("metadata.use-camel", true)
 
 	// 创建元数据加载器
 	meta, err := NewMetadata(k, db)
@@ -458,7 +458,7 @@ func TestNameConversion(t *testing.T) {
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
-	k.Set("schema.enable-camel-case", true)
+	k.Set("metadata.use-camel", true)
 	k.Set("schema.table-prefix", []string{"tbl_"})
 
 	// 设置测试元数据配置

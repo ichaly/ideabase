@@ -206,7 +206,7 @@ func TestRenderer_Generate(t *testing.T) {
 	}
 
 	// 确认配置状态
-	t.Logf("ShowThrough配置: %v", meta.cfg.Schema.ShowThrough)
+	t.Logf("ShowThrough配置: %v", meta.cfg.Metadata.ShowThrough)
 
 	// 创建渲染器
 	renderer := NewRenderer(meta)
@@ -224,7 +224,7 @@ func TestRenderer_Generate(t *testing.T) {
 	assert.Contains(t, schema, "scalar DateTime")
 
 	// 检查中间表是否被渲染
-	if !meta.cfg.Schema.ShowThrough {
+	if !meta.cfg.Metadata.ShowThrough {
 		assert.NotContains(t, schema, "type PostTag {")
 	}
 

@@ -98,11 +98,19 @@ func (my *HookedLoader) Load(h metadata.Hoster) error {
 // NewMetadata 策略模式重构，支持Loader注册与优先级排序
 func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, error) {
 	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: dataTypes}}
+
+	// 设置默认配置
 	k.SetDefault("schema.schema", "public")
 	k.SetDefault("schema.default-limit", 10)
-	k.SetDefault("schema.enable-singular", true)
-	k.SetDefault("schema.enable-camel-case", true)
 	k.SetDefault("schema.table-prefix", []string{})
+	k.SetDefault("schema.exclude-tables", []string{})
+	k.SetDefault("schema.exclude-fields", []string{})
+
+	// 设置元数据默认配置
+	k.SetDefault("metadata.file", "cfg/metadata.{mode}.json")
+	k.SetDefault("metadata.use-camel", true)
+	k.SetDefault("metadata.use-singular", true)
+	k.SetDefault("metadata.show-through", true)
 
 	if err := k.Unmarshal(cfg); err != nil {
 		return nil, err
@@ -537,10 +545,10 @@ func (my *Metadata) normalize() error {
 					break
 				}
 			}
-			if schema.EnableSingular {
+			if my.cfg.Metadata.UseSingular {
 				tableName = inflection.Singular(tableName)
 			}
-			if schema.EnableCamelCase {
+			if my.cfg.Metadata.UseCamel {
 				node.Name = strcase.ToCamel(tableName)
 			}
 		}
@@ -551,7 +559,7 @@ func (my *Metadata) normalize() error {
 			if lo.IndexOf(schema.ExcludeFields, field.Column) > -1 {
 				continue
 			}
-			if schema.EnableCamelCase && field.Name == field.Column {
+			if my.cfg.Metadata.UseCamel && field.Name == field.Column {
 				field.Name = strcase.ToLowerCamel(field.Column)
 			}
 			fields[field.Column] = field

@@ -17,8 +17,10 @@ func TestRenderRelation(t *testing.T) {
 	// 创建配置
 	meta.cfg = &internal.Config{
 		Schema: internal.SchemaConfig{
-			ShowThrough: false, // 默认隐藏中间表关系
 			TypeMapping: map[string]string{},
+		},
+		Metadata: internal.MetadataConfig{
+			ShowThrough: false, // 默认隐藏中间表关系
 		},
 	}
 
@@ -87,7 +89,7 @@ func TestRenderRelation(t *testing.T) {
 	// 验证中间表关系显示
 	t.Run("中间表关系显示", func(t *testing.T) {
 		// 修改配置显示中间表关系
-		meta.cfg.Schema.ShowThrough = true
+		meta.cfg.Metadata.ShowThrough = true
 
 		// 重新处理关系并创建渲染器
 		renderer = NewRenderer(meta)
@@ -124,7 +126,7 @@ func TestRenderRelation(t *testing.T) {
 		assert.Contains(t, inputSchema, "relation: RelationInput")
 
 		// 修改配置隐藏中间表关系
-		meta.cfg.Schema.ShowThrough = false
+		meta.cfg.Metadata.ShowThrough = false
 
 		// 重新创建渲染器
 		renderer = NewRenderer(meta)
@@ -145,7 +147,7 @@ func TestRenderRelation(t *testing.T) {
 	// 验证中间表关系在过滤器中的显示
 	t.Run("中间表关系在过滤器中的显示", func(t *testing.T) {
 		// 设置ShowThrough为true
-		meta.cfg.Schema.ShowThrough = true
+		meta.cfg.Metadata.ShowThrough = true
 
 		// 创建新的渲染器
 		renderer = NewRenderer(meta)
@@ -165,7 +167,7 @@ func TestRenderRelation(t *testing.T) {
 		assert.Contains(t, filterSchema, "not: PostFilter")
 
 		// 修改配置隐藏中间表关系
-		meta.cfg.Schema.ShowThrough = false
+		meta.cfg.Metadata.ShowThrough = false
 
 		// 重新创建渲染器
 		renderer = NewRenderer(meta)
@@ -186,7 +188,7 @@ func TestRenderRelation(t *testing.T) {
 	// 验证中间表关系在排序中的显示
 	t.Run("中间表关系在排序中的显示", func(t *testing.T) {
 		// 设置ShowThrough为true
-		meta.cfg.Schema.ShowThrough = true
+		meta.cfg.Metadata.ShowThrough = true
 
 		// 创建新的渲染器
 		renderer = NewRenderer(meta)
@@ -204,7 +206,7 @@ func TestRenderRelation(t *testing.T) {
 		assert.Contains(t, sortSchema, "postTags: SortDirection")
 
 		// 修改配置隐藏中间表关系
-		meta.cfg.Schema.ShowThrough = false
+		meta.cfg.Metadata.ShowThrough = false
 
 		// 重新创建渲染器
 		renderer = NewRenderer(meta)
@@ -225,7 +227,7 @@ func TestRenderRelation(t *testing.T) {
 	// 验证中间表关系在统计中的显示
 	t.Run("中间表关系在统计中的显示", func(t *testing.T) {
 		// 设置ShowThrough为true
-		meta.cfg.Schema.ShowThrough = true
+		meta.cfg.Metadata.ShowThrough = true
 
 		// 创建新的渲染器
 		renderer = NewRenderer(meta)
@@ -244,14 +246,16 @@ func TestRenderRelation(t *testing.T) {
 		assert.Contains(t, statsSchema, postTagsStatsType)
 
 		// 修改配置隐藏中间表关系
-		meta.cfg.Schema.ShowThrough = false
+		meta.cfg.Metadata.ShowThrough = false
 
 		// 创建一个新的元数据对象，确保中间表关系字段被正确标记
 		newMeta := createRelationTestMetadata()
 		newMeta.cfg = &internal.Config{
 			Schema: internal.SchemaConfig{
-				ShowThrough: false,
 				TypeMapping: map[string]string{},
+			},
+			Metadata: internal.MetadataConfig{
+				ShowThrough: false,
 			},
 		}
 

@@ -1,15 +1,20 @@
 package metadata
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/log"
+	"github.com/ichaly/ideabase/utl"
 	"gorm.io/gorm"
 )
+
+// 正则表达式常量
+var modeRegex = regexp.MustCompile(`{\s*mode\s*}`)
 
 // FileLoader 文件元数据加载器
 // 实现Loader接口
@@ -25,9 +30,34 @@ func NewFileLoader(cfg *internal.Config) *FileLoader {
 func (my *FileLoader) Name() string  { return LoaderFile }
 func (my *FileLoader) Priority() int { return 80 }
 
-// Support 判断是否支持文件加载（通常总是支持）
+// Support 判断是否支持文件加载
 func (my *FileLoader) Support(cfg *internal.Config, db *gorm.DB) bool {
-	return cfg != nil && !cfg.IsDebug()
+	return cfg != nil
+}
+
+// resolveFilePath 解析文件路径
+func (my *FileLoader) resolveFilePath() string {
+	// 获取基础路径
+	filePath := my.cfg.Metadata.File
+
+	// 如果未配置文件路径，则使用默认路径
+	if filePath == "" {
+		parts := []string{filepath.Join("cfg", "metadata")}
+		if my.cfg.Mode != "" {
+			parts = append(parts, my.cfg.Mode)
+		}
+		parts = append(parts, "json")
+		filePath = strings.Join(parts, ".")
+	} else {
+		// 处理占位符
+		filePath = modeRegex.ReplaceAllString(filePath, my.cfg.Mode)
+	}
+
+	// 处理路径拼接
+	if filepath.IsAbs(filePath) {
+		return filePath
+	}
+	return filepath.Join(my.cfg.Root, filePath)
 }
 
 // Load 从文件加载元数据
@@ -37,15 +67,14 @@ func (my *FileLoader) Support(cfg *internal.Config, db *gorm.DB) bool {
 // 4. 遍历meta.Nodes，处理字段索引和多key索引
 // 5. 注入Hoster并设置版本号
 func (my *FileLoader) Load(h Hoster) error {
-	// 1. 计算文件路径，格式为 metadata.{mode}.json
-	path := filepath.Join(my.cfg.Root, "cfg", "metadata.json")
-
-	log.Info().Str("file", path).Msg("开始从文件加载元数据")
+	// 1. 计算文件路径
+	filePath := my.resolveFilePath()
+	log.Info().Str("file", filePath).Msg("开始从文件加载元数据")
 
 	// 2. 读取文件内容
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
-		log.Error().Err(err).Str("file", path).Msg("读取文件失败")
+		log.Error().Err(err).Str("file", filePath).Msg("读取文件失败")
 		return fmt.Errorf("读取文件失败: %w", err)
 	}
 
@@ -54,8 +83,9 @@ func (my *FileLoader) Load(h Hoster) error {
 		Nodes   map[string]*internal.Class `json:"nodes"`
 		Version string                     `json:"version"`
 	}
-	if err := json.Unmarshal(data, &meta); err != nil {
-		log.Error().Err(err).Str("file", path).Msg("解析JSON失败")
+
+	if err := utl.UnmarshalJSON(data, &meta); err != nil {
+		log.Error().Err(err).Str("file", filePath).Msg("解析JSON失败")
 		return fmt.Errorf("解析JSON失败: %w", err)
 	}
 
