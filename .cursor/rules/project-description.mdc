@@ -43,7 +43,7 @@ IdeaBase/
 - **ORM框架**：gorm.io/gorm
 - **依赖注入**：Google Wire或Uber Dig/Fx
 - **日志库**：使用log模块封装的zerolog
-- **Json序列化**：使用jsoniter,使用时在同包下检查是否已经定义了var json = jsoniter.ConfigCompatibleWithStandardLibrary重复利用
+- **Json序列化**：尽量使用utl包中基于jsoniter封装好的UnmarshalJSON/MarshalJSON/MarshalIndentJSON等方法
 
 ## 代码规范
 
