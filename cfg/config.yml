@@ -21,18 +21,53 @@ captcha:
   expired: 10m
 
 schema:
-  use-camel: true
+  schema: public
+  default-limit: 100
+  type-mapping:
+    text: String
+    varchar: String
+    char: String
+    int: Int
+    bigint: Int
+    float: Float
+    double: Float
+    decimal: Float
+    boolean: Boolean
+    date: Date
+    time: Time
+    timestamp: DateTime
+    json: JSON
+    jsonb: JSON
   table-prefix:
-    - sys_
-    - cms_
+    - t_
+    - tb_
+  exclude-tables:
+    - migrations
+    - schema_migrations
   exclude-fields:
-    - secret
-    - password
-    - encrypted
-    - token
-    - casbin
-  mapping:
-    - json: String
+    - created_at
+    - updated_at
+    - deleted_at
+
+metadata:
+  classes:
+    - name: User
+      table: users
+      fields:
+        - name: id
+          column: id
+          type: Int
+          primary: true
+        - name: name
+          column: name
+          type: String
+        - name: email
+          column: email
+          type: String
+  file: cfg/metadata.{mode}.json
+  use-camel: true
+  use-singular: true
+  show-through: true
 
 email:
   port: 587
