@@ -336,6 +336,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 		require.True(t, exists, "应该存在VirtualTable类")
 		require.Equal(t, "虚拟表", vt.Description, "虚拟表描述应该正确")
 		require.True(t, vt.Virtual, "VirtualTable应该是虚拟类")
+		require.Empty(t, vt.Table, "虚拟表不应该有表名")
 	})
 }
 

@@ -162,13 +162,11 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 
 // Metadata 实现Hoster接口
 func (my *Metadata) PutClass(node *internal.Class) error {
-	if node == nil || node.Name == "" || node.Table == "" {
+	if node == nil || node.Name == "" {
 		return nil
 	}
-	my.Nodes[node.Table] = node
-	if node.Table != node.Name {
-		my.Nodes[node.Name] = node
-	}
+	// 直接添加到Nodes中,双索引处理交给normalize
+	my.Nodes[node.Name] = node
 	return nil
 }
 
@@ -521,28 +519,30 @@ func (my *Metadata) normalize() error {
 	relationsToUpdate := make([]*internal.Field, 0)
 
 	for _, node := range my.Nodes {
-		if node == nil || node.Name == "" || node.Table == "" {
+		if node == nil || node.Name == "" {
 			continue
 		}
 
-		// 1. 过滤表
-		if lo.IndexOf(schema.ExcludeTables, node.Table) > -1 {
+		// 1. 过滤表(只处理非虚拟类)
+		if !node.Virtual && lo.IndexOf(schema.ExcludeTables, node.Table) > -1 {
 			continue
 		}
 
-		// 2. 表名处理
-		tableName := node.Table
-		for _, prefix := range schema.TablePrefix {
-			if prefix != "" && strings.HasPrefix(tableName, prefix) {
-				tableName = strings.TrimPrefix(tableName, prefix)
-				break
+		// 2. 表名处理(只处理非虚拟类)
+		if !node.Virtual {
+			tableName := node.Table
+			for _, prefix := range schema.TablePrefix {
+				if prefix != "" && strings.HasPrefix(tableName, prefix) {
+					tableName = strings.TrimPrefix(tableName, prefix)
+					break
+				}
 			}
-		}
-		if schema.EnableSingular {
-			tableName = inflection.Singular(tableName)
-		}
-		if schema.EnableCamelCase {
-			node.Name = strcase.ToCamel(tableName)
+			if schema.EnableSingular {
+				tableName = inflection.Singular(tableName)
+			}
+			if schema.EnableCamelCase {
+				node.Name = strcase.ToCamel(tableName)
+			}
 		}
 
 		// 3. 字段处理
@@ -567,9 +567,11 @@ func (my *Metadata) normalize() error {
 		node.Fields = fields
 
 		// 4. 更新索引
-		nodes[node.Table] = node
-		if node.Table != node.Name {
-			nodes[node.Name] = node
+		// 所有类都使用类名索引
+		nodes[node.Name] = node
+		// 非虚拟类额外使用表名索引
+		if !node.Virtual && node.Table != "" {
+			nodes[node.Table] = node
 		}
 	}
 
