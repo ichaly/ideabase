@@ -1,0 +1,106 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# 配置元数据加载规则
+
+## 核心原则
+
+### 1. 配置独立性
+- 配置系统可以完全基于配置文件，不依赖数据库和JSON文件
+- 所有配置信息应通过配置文件进行管理
+- 配置加载过程应支持热重载
+
+### 2. 命名映射规则
+- 支持表和字段的重命名功能
+- 重命名必须明确指定源表名(table)和目标列名(column)
+- 命名映射应支持双向查询
+
+### 3. 虚拟对象支持
+- 支持虚拟类定义（不映射到实际表）
+- 支持虚拟字段定义（不映射到实际列）
+- 虚拟对象应支持完整的元数据定义
+
+### 4. 索引管理
+- 类别名索引应包含三个维度：
+  - 表名索引
+  - 驼峰类名索引
+  - 别名索引
+- 别名索引应维护独立的类指针
+- 表名和驼峰类名应共享同一个类指针
+- 字段索引也要保持相同逻辑
+
+### 5. 别名处理模式
+支持两种别名处理模式：
+
+#### 替换模式
+- 当启用替换模式时：
+  - 原始表名(users) -> 类指针1
+  - 别名(Member) -> 类指针1
+- 结果：仅保留两个索引，指向同一个类指针
+
+#### 附加模式
+- 当启用附加模式时：
+  - 原始表名(users) -> 类指针1
+  - 驼峰类名(User) -> 类指针1
+  - 别名(Member) -> 类指针2
+- 结果：保留三个索引，其中表名和驼峰类名共享指针，别名使用独立指针
+
+## 配置示例
+
+```yaml
+# 类配置使用Map结构，key为类名或别名
+classes:
+  User:  # 驼峰类名作为key
+    table: users
+    aliasMode: append  # 附加模式
+    fields:
+      - name: id
+        column: user_id
+      - name: virtualField
+        virtual: true
+  
+  Member:  # 别名作为key
+    table: users
+    aliasMode: replace  # 替换模式
+    fields:
+      - name: id
+        column: user_id
+      - name: virtualField
+        virtual: true
+
+  # 虚拟类示例
+  VirtualClass:
+    virtual: true
+    aliasMode: append
+    fields:
+      - name: virtualField1
+        virtual: true
+      - name: virtualField2
+        virtual: true
+```
+
+## 实现注意事项
+
+1. 配置加载器应实现以下接口：
+   - 配置验证
+   - 配置解析
+   - 索引构建
+   - 指针管理
+
+2. 性能考虑：
+   - 使用高效的数据结构存储索引
+   - 实现缓存机制
+   - 支持增量更新
+
+3. 错误处理：
+   - 配置验证错误
+   - 命名冲突检测
+   - 循环依赖检查
+
+4. 配置验证规则：
+   - 检查aliasMode字段是否合法（只能是append或replace）
+   - 验证表名和字段名的唯一性
+   - 确保虚拟类不包含非虚拟字段
+   - 验证别名引用的正确性
