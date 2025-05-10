@@ -126,7 +126,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	}
 	// 在配置加载之前执行进行驼峰命名和过滤处理
 	before := func(h metadata.Hoster) error {
-		return my.processNodes()
+		return my.normalize()
 	}
 	defaultLoaders := []metadata.Loader{
 		&HookedLoader{Loader: metadata.NewPgsqlLoader(cfg, d), afterLoad: after},
@@ -243,7 +243,16 @@ func (my *Metadata) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// processRelations 处理关系图并创建关系字段
+// processRelations 处理实体间的关系，包含两个阶段：
+// 1. 收集阶段：遍历所有节点，收集需要处理的关系信息
+//   - 处理各种关系类型（一对多、多对一、多对多、递归关系）
+//   - 处理双向关系引用
+//   - 处理中间表关系
+//
+// 2. 创建阶段：根据收集的信息创建关系字段
+//   - 创建虚拟字段作为关系的载体
+//   - 确保字段名唯一性
+//   - 维护双向关系引用
 func (my *Metadata) processRelations() {
 	log.Debug().Msg("处理所有关系信息")
 
@@ -490,13 +499,26 @@ func (my *Metadata) saveToFile(filePath string) error {
 	return nil
 }
 
-// processNodes 处理所有节点的命名和过滤逻辑
-func (my *Metadata) processNodes() error {
+// normalize 标准化元数据，包含两个核心功能：
+// 1. 命名规范化：
+//   - 根据配置决定是否启用驼峰命名
+//   - 表名转换为大驼峰（如：users -> User）
+//   - 字段名转换为小驼峰（如：user_name -> userName）
+//   - 支持表名前缀过滤和单数化处理
+//
+// 2. 索引建立：
+//   - 创建表名和类名的双向映射
+//   - 确保可以通过表名或类名快速查找
+//   - 同时维护字段名和列名的映射关系
+func (my *Metadata) normalize() error {
 	if my.cfg == nil {
 		return nil
 	}
 	schema := my.cfg.Schema
 	nodes := make(map[string]*internal.Class)
+
+	// 第一阶段：处理基本命名和收集关系信息
+	relationsToUpdate := make([]*internal.Field, 0)
 
 	for _, node := range my.Nodes {
 		if node == nil || node.Name == "" || node.Table == "" {
@@ -536,6 +558,11 @@ func (my *Metadata) processNodes() error {
 			if field.Name != field.Column {
 				fields[field.Name] = field
 			}
+
+			// 收集需要更新的关系信息
+			if field.Relation != nil {
+				relationsToUpdate = append(relationsToUpdate, field)
+			}
 		}
 		node.Fields = fields
 
@@ -543,6 +570,17 @@ func (my *Metadata) processNodes() error {
 		nodes[node.Table] = node
 		if node.Table != node.Name {
 			nodes[node.Name] = node
+		}
+	}
+
+	// 第二阶段：更新关系名称
+	for _, field := range relationsToUpdate {
+		// 直接使用 Nodes 中的映射
+		if sourceNode, ok := nodes[field.Relation.SourceClass]; ok {
+			field.Relation.SourceClass = sourceNode.Name
+		}
+		if targetNode, ok := nodes[field.Relation.TargetClass]; ok {
+			field.Relation.TargetClass = targetNode.Name
 		}
 	}
 
