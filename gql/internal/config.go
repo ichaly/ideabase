@@ -69,6 +69,9 @@ type ClassConfig struct {
 	// 字段过滤配置
 	ExcludeFields []string `mapstructure:"exclude_fields"` // 排除这些字段
 	IncludeFields []string `mapstructure:"include_fields"` // 仅包含这些字段
+
+	// override: true 表示别名覆盖主类指针，false（默认）为附加模式
+	Override bool `mapstructure:"override"`
 }
 
 // FieldConfig 表示字段配置
@@ -95,6 +98,9 @@ type FieldConfig struct {
 
 	// 关系配置
 	Relation *RelationConfig `mapstructure:"relation"`
+
+	// override: true 表示字段别名覆盖主字段指针，false（默认）为附加模式
+	Override bool `mapstructure:"override"`
 }
 
 // RelationConfig 表示关系配置
