@@ -183,6 +183,30 @@ func (my *Metadata) GetClass(name string) (*internal.Class, bool) {
 	return n, ok
 }
 
+func (my *Metadata) DelClass(name string) {
+	delete(my.Nodes, name)
+}
+
+func (my *Metadata) PutField(className string, field *internal.Field) error {
+	if field == nil || field.Name == "" {
+		return nil
+	}
+	my.Nodes[className].Fields[field.Name] = field
+	return nil
+}
+
+func (my *Metadata) GetField(className, fieldName string) (*internal.Field, bool) {
+	if node, ok := my.Nodes[className]; ok {
+		field, ok := node.Fields[fieldName]
+		return field, ok
+	}
+	return nil, false
+}
+
+func (my *Metadata) DelField(className, fieldName string) {
+	delete(my.Nodes[className].Fields, fieldName)
+}
+
 func (my *Metadata) SetVersion(version string) {
 	my.Version = version
 }
