@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"github.com/ichaly/ideabase/gql/internal"
-	"gorm.io/gorm"
 )
 
 // Loader名称常量
@@ -35,6 +34,6 @@ type Hoster interface {
 type Loader interface {
 	Name() string
 	Load(h Hoster) error
-	Support(cfg *internal.Config, db *gorm.DB) bool
+	Support() bool
 	Priority() int
 }

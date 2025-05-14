@@ -157,7 +157,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 
 	// 依次执行Loader
 	for _, loader := range loaders {
-		if loader.Support(cfg, d) {
+		if loader.Support() {
 			if err := loader.Load(my); err != nil {
 				log.Warn().Err(err).Str("loader", loader.Name()).Msg("加载器执行失败")
 			}

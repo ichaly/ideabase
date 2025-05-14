@@ -104,8 +104,8 @@ func NewPgsqlLoader(cfg *internal.Config, db *gorm.DB) *PgsqlLoader {
 
 func (my *PgsqlLoader) Name() string  { return LoaderPgsql }
 func (my *PgsqlLoader) Priority() int { return 60 }
-func (my *PgsqlLoader) Support(cfg *internal.Config, db *gorm.DB) bool {
-	return cfg != nil && cfg.IsDebug() && db != nil && db.Dialector.Name() == "postgres"
+func (my *PgsqlLoader) Support() bool {
+	return my.cfg != nil && my.cfg.IsDebug() && my.db != nil && my.db.Dialector.Name() == "postgres"
 }
 
 // Load 从PostgreSQL加载元数据

@@ -10,7 +10,6 @@ import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/utl"
-	"gorm.io/gorm"
 )
 
 // 正则表达式常量
@@ -31,8 +30,8 @@ func (my *FileLoader) Name() string  { return LoaderFile }
 func (my *FileLoader) Priority() int { return 80 }
 
 // Support 判断是否支持文件加载
-func (my *FileLoader) Support(cfg *internal.Config, db *gorm.DB) bool {
-	return cfg != nil
+func (my *FileLoader) Support() bool {
+	return my.cfg != nil
 }
 
 // resolveFilePath 解析文件路径
