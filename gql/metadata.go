@@ -183,8 +183,12 @@ func (my *Metadata) GetClass(name string) (*internal.Class, bool) {
 	return n, ok
 }
 
-func (my *Metadata) DelClass(name string) {
-	delete(my.Nodes, name)
+func (my *Metadata) DelClass(name string) (*internal.Class, bool) {
+	n, ok := my.Nodes[name]
+	if ok {
+		delete(my.Nodes, name)
+	}
+	return n, ok
 }
 
 func (my *Metadata) PutField(className string, field *internal.Field) error {
@@ -203,8 +207,14 @@ func (my *Metadata) GetField(className, fieldName string) (*internal.Field, bool
 	return nil, false
 }
 
-func (my *Metadata) DelField(className, fieldName string) {
-	delete(my.Nodes[className].Fields, fieldName)
+func (my *Metadata) DelField(className, fieldName string) (*internal.Field, bool) {
+	if node, ok := my.Nodes[className]; ok {
+		if field, ok := node.Fields[fieldName]; ok {
+			delete(node.Fields, fieldName)
+			return field, true
+		}
+	}
+	return nil, false
 }
 
 func (my *Metadata) SetVersion(version string) {

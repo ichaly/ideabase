@@ -20,13 +20,13 @@ type Hoster interface {
 	// GetClass 获取一个类节点
 	GetClass(className string) (*internal.Class, bool)
 	// DelClass 删除一个类节点
-	DelClass(className string)
+	DelClass(className string) (*internal.Class, bool)
 	// PutField 为类添加或者合并一个字段
 	PutField(className string, field *internal.Field) error
 	// GetField 获取一个类的字段
 	GetField(className, fieldName string) (*internal.Field, bool)
 	// DelField 删除一个类的字段
-	DelField(className, fieldName string)
+	DelField(className, fieldName string) (*internal.Field, bool)
 	// 设置版本号
 	SetVersion(version string)
 }
