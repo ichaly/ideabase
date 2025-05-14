@@ -25,43 +25,37 @@ func (my *ConfigLoader) Support() bool {
 
 // Load 从配置加载元数据
 func (my *ConfigLoader) Load(h Hoster) error {
-	// 获取配置中的元数据定义
-	classes := my.cfg.Metadata.Classes
-	if len(classes) == 0 {
-		return nil
-	}
-
 	// 遍历配置中的类定义
-	for className, classConfig := range classes {
-		// 确定表名，用于查找基类
-		tableName := classConfig.Table
-		baseClass, isFound := h.GetClass(tableName)
+	for className, classConfig := range my.cfg.Metadata.Classes {
+		isVirtual := classConfig.Table == ""
+		isOverride := classConfig.Override
 
+		var ok bool
 		var newClass *internal.Class
-
-		// 确定类的状态如果基类不存在(虚拟类)或者基类名称与类名不一致(类别名)，则创建新类
-		if !isFound || baseClass.Name != className {
-			// 创建新类对象
+		if isVirtual {
+			// 虚拟类
 			newClass = &internal.Class{
 				Name:    className,
-				Table:   tableName,
-				Virtual: !isFound,
+				Virtual: true,
 				Fields:  make(map[string]*internal.Field),
 			}
-
-			// 如果是类别名而非虚拟类，复制基类字段
-			if isFound {
-				if len(classConfig.Fields) > 0 {
-					copyClassFields(newClass, baseClass)
-				} else {
-					for fieldName, field := range baseClass.Fields {
-						newClass.Fields[fieldName] = field
-					}
-				}
+		} else if isOverride {
+			// 覆盖类
+			if newClass, ok = h.GetClass(classConfig.Table); ok {
+				newClass.Name = className
 			}
 		} else {
-			// 更新现有类的情况
-			newClass = baseClass
+			// 别名类
+			newClass = &internal.Class{
+				Name:   className,
+				Table:  classConfig.Table,
+				Fields: make(map[string]*internal.Field),
+			}
+			// 复制基类字段
+			if oldClass, exists := h.GetClass(classConfig.Table); exists {
+				newClass.PrimaryKeys = oldClass.PrimaryKeys
+				copyClassFields(newClass, oldClass)
+			}
 		}
 
 		// 1. 更新类属性
@@ -107,8 +101,8 @@ func applyFieldFilter(class *internal.Class, config *internal.ClassConfig) {
 		for _, fieldName := range config.IncludeFields {
 			includeSet[fieldName] = true
 		}
-		for fieldName, field := range class.Fields {
-			if field.Name == fieldName && !includeSet[fieldName] {
+		for fieldName := range class.Fields {
+			if !includeSet[fieldName] {
 				delete(class.Fields, fieldName)
 			}
 		}
