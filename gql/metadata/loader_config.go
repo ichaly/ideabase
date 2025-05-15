@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/mohae/deepcopy"
 )
 
 // ConfigLoader 配置元数据加载器
@@ -118,13 +119,30 @@ func applyFieldConfig(class *internal.Class, fieldConfigs map[string]*internal.F
 		return
 	}
 	for fieldName, fieldConfig := range fieldConfigs {
-		existingField := class.Fields[fieldName]
-		if existingField != nil {
-			updateField(existingField, fieldConfig)
-		} else {
-			field := createField(class.Name, fieldName, fieldConfig)
-			class.Fields[fieldName] = field
+		var field *internal.Field = nil
+
+		if fieldConfig.Override && fieldConfig.Column != "" {
+			// 覆盖模式
+			if baseField, ok := class.Fields[fieldConfig.Column]; ok {
+				baseField.Name = fieldName
+				updateField(baseField, fieldConfig)
+				field = baseField
+			}
+		} else if fieldConfig.Column != "" && fieldName != fieldConfig.Column {
+			// 追加模式，使用deepcopy
+			if baseField, ok := class.Fields[fieldConfig.Column]; ok {
+				copied := deepcopy.Copy(baseField).(*internal.Field)
+				copied.Name = fieldName
+				updateField(copied, fieldConfig)
+				field = copied
+			}
 		}
+
+		// 其余情况（虚拟字段、普通字段、找不到原字段等）统一新建
+		if field == nil {
+			field = createField(class.Name, fieldName, fieldConfig)
+		}
+		class.Fields[fieldName] = field
 	}
 }
 

@@ -5,7 +5,6 @@ go 1.24
 toolchain go1.24.1
 
 require (
-	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/duke-git/lancet/v2 v2.3.5
 	github.com/gofiber/fiber/v2 v2.52.6
 	github.com/iancoleman/strcase v0.3.0
@@ -15,12 +14,12 @@ require (
 	github.com/jinzhu/inflection v1.0.0
 	github.com/joho/godotenv v1.5.1
 	github.com/json-iterator/go v1.1.12
+	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/rs/zerolog v1.34.0
 	github.com/samber/lo v1.49.1
 	github.com/stretchr/testify v1.10.0
 	github.com/testcontainers/testcontainers-go v0.35.0
 	github.com/vektah/gqlparser/v2 v2.5.23
-	gorm.io/driver/mysql v1.5.7
 	gorm.io/driver/postgres v1.5.9
 	gorm.io/gorm v1.25.12
 )
@@ -123,4 +122,5 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/datatypes v1.2.4 // indirect
+	gorm.io/driver/mysql v1.5.7 // indirect
 )
