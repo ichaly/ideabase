@@ -110,3 +110,34 @@ classes:
    - 确保虚拟类不包含非虚拟字段
    - 验证别名引用的正确性
    - 检查fields为map结构，key为字段名，value为字段配置对象
+
+## 字段配置合并伪代码（applyFieldConfig）
+
+```go
+for fieldName, fieldConfig in fieldConfigs {
+    var field = nil
+
+    if fieldConfig.Override && fieldConfig.Column != "" {
+        // 覆盖模式
+        if baseField := class.Fields[fieldConfig.Column]; baseField != nil {
+            baseField.Name = fieldName
+            updateField(baseField, fieldConfig)
+            field = baseField
+        }
+    } else if fieldConfig.Column != "" && fieldName != fieldConfig.Column {
+        // 追加模式
+        if baseField := class.Fields[fieldConfig.Column]; baseField != nil {
+            copied = deepCopy(baseField)
+            copied.Name = fieldName
+            updateField(copied, fieldConfig)
+            field = copied
+        }
+    }
+
+    // 其余情况（虚拟字段、普通字段、找不到原字段等）统一新建
+    if field == nil {
+        field = createField(class.Name, fieldName, fieldConfig)
+    }
+    class.Fields[fieldName] = field
+}
+```
