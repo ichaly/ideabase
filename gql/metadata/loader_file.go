@@ -31,7 +31,7 @@ func (my *FileLoader) Priority() int { return 80 }
 
 // Support 判断是否支持文件加载
 func (my *FileLoader) Support() bool {
-	return my.cfg != nil
+	return my.cfg != nil && !my.cfg.IsDebug()
 }
 
 // resolveFilePath 解析文件路径
