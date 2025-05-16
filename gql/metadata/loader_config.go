@@ -26,40 +26,36 @@ func (my *ConfigLoader) Support() bool {
 
 // Load 从配置加载元数据
 func (my *ConfigLoader) Load(h Hoster) error {
-	// 遍历配置中的类定义
 	for className, classConfig := range my.cfg.Metadata.Classes {
 		isVirtual := classConfig.Table == ""
-		isOverride := classConfig.Override
-
-		var ok bool
 		var newClass *internal.Class
-		if isVirtual {
-			// 虚拟类
-			newClass = &internal.Class{
-				Name:    className,
-				Virtual: true,
-				Fields:  make(map[string]*internal.Field),
+
+		if !isVirtual && classConfig.Override {
+			// 覆盖模式
+			if baseClass, ok := h.GetClass(classConfig.Table); ok {
+				baseClass.Name = className
+				newClass = baseClass
 			}
-		} else if isOverride {
-			// 覆盖类
-			if newClass, ok = h.GetClass(classConfig.Table); ok {
-				newClass.Name = className
-			}
-		} else {
-			// 别名类
-			newClass = &internal.Class{
-				Name:   className,
-				Table:  classConfig.Table,
-				Fields: make(map[string]*internal.Field),
-			}
-			// 复制基类字段
-			if oldClass, exists := h.GetClass(classConfig.Table); exists {
-				newClass.PrimaryKeys = oldClass.PrimaryKeys
-				copyClassFields(newClass, oldClass)
+		} else if !isVirtual && className != classConfig.Table {
+			// 追加模式（别名类）
+			if baseClass, ok := h.GetClass(classConfig.Table); ok {
+				copied := deepcopy.Copy(baseClass).(*internal.Class)
+				copied.Name = className
+				newClass = copied
 			}
 		}
 
-		// 1. 更新类属性
+		if newClass == nil {
+			// 虚拟类、主类、找不到原类等
+			newClass = &internal.Class{
+				Name:    className,
+				Table:   classConfig.Table,
+				Virtual: isVirtual,
+				Fields:  make(map[string]*internal.Field),
+			}
+		}
+
+		// 统一合并类属性（在applyFieldFilter之前）
 		if classConfig.Description != "" {
 			newClass.Description = classConfig.Description
 		}
@@ -70,29 +66,12 @@ func (my *ConfigLoader) Load(h Hoster) error {
 			newClass.PrimaryKeys = classConfig.PrimaryKeys
 		}
 
-		// 2. 先应用字段过滤
 		applyFieldFilter(newClass, classConfig)
-		// 3. 再处理配置的字段（覆盖或添加）
 		applyFieldConfig(newClass, classConfig.Fields)
 
-		// 4. 最后添加到元数据
 		h.PutClass(newClass)
 	}
-
 	return nil
-}
-
-// 复制类字段 - 从基类到目标类
-func copyClassFields(targetClass, sourceClass *internal.Class) {
-	for fieldName, field := range sourceClass.Fields {
-		if field.Name == fieldName {
-			newField := *field // 浅拷贝
-			if newField.Relation != nil {
-				newField.Relation.SourceClass = targetClass.Name
-			}
-			targetClass.Fields[fieldName] = &newField
-		}
-	}
 }
 
 // 应用字段过滤
