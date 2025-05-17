@@ -84,7 +84,7 @@ func TestMetadataLoadFromDatabase_NoCamelCase(t *testing.T) {
 	k.Set("metadata.use-singular", false)
 
 	meta, err := NewMetadata(k, db, WithoutLoader(
-		metadata.LoaderMysql, metadata.LoaderFile, metadata.LoaderConfig,
+		metadata.LoaderMysql, metadata.LoaderFile,
 	))
 	require.NoError(t, err, "创建元数据加载器失败")
 	assert.NotEmpty(t, meta.Nodes, "应该从数据库加载到元数据")
