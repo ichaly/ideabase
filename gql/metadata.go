@@ -15,6 +15,7 @@ import (
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
 	"github.com/jinzhu/inflection"
+	"github.com/mohae/deepcopy"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
 )
@@ -553,80 +554,25 @@ func (my *Metadata) normalize() error {
 	nodes := make(map[string]*internal.Class)
 
 	// 第一阶段：处理类信息和收集关系信息
-	relationsToUpdate := make([]*internal.Field, 0)
+	relations := make([]*internal.Field, 0)
 
 	for className, class := range my.Nodes {
-		// 1. 过滤表(只处理非虚拟类)
-		if !class.Virtual && lo.IndexOf(schema.ExcludeTables, class.Table) > -1 {
+		// 1. 过滤表
+		if class.Table != "" && lo.IndexOf(schema.ExcludeTables, class.Table) > -1 {
 			continue
 		}
-		// 1. 处理类
-		isVirtualClass := class.Table == ""
-		if isVirtualClass {
-			// 虚拟类直接使用类名索引
-			class.Name = className
-			nodes[className] = class
-		} else {
-			// 规范化表名
-			fixedName := class.Table
-			// 去前缀
-			for _, prefix := range schema.TablePrefix {
-				if strings.HasPrefix(fixedName, prefix) {
-					fixedName = strings.TrimPrefix(fixedName, prefix)
-					//只处理一次防止多次重复去前缀
-					break
-				}
-			}
-			// 单数化
-			if config.UseSingular {
-				fixedName = inflection.Singular(fixedName)
-			}
-			// 转驼峰
-			if config.UseCamel {
-				fixedName = strcase.ToCamel(fixedName)
-			}
-
-			// 类名与驼峰名和表名都不一致则为别名
-			if className != fixedName && className != class.Table {
-				node, ok := my.Nodes[class.Table]
-				//如果表名和别名为同一个指针则是覆盖模式
-				if node == class {
-					class.Name = className
-					// 添加别名索引
-					nodes[className] = class
-				} else if ok {
-					// 如果表名和别名不是同一个指针则是追加模式
-					class.Name = fixedName
-					nodes[fixedName] = node
-				}
-			} else if className == class.Table {
-				// 如果类名和表名一致则证明是原始表名,同时添加类名索引
-				if fixedName != class.Name {
-					class.Name = fixedName
-					nodes[fixedName] = class
-				}
-				// 添加表名索引
-				nodes[class.Table] = class
-			} else if className == fixedName {
-				// 如果类名和驼峰名一致则证明是主类名
-				class.Name = className
-				nodes[className] = class
-				nodes[class.Table] = class
-			}
-		}
-
 		// 2. 字段处理
 		fields := make(map[string]*internal.Field, len(class.Fields))
 		for fieldName, field := range class.Fields {
-			if lo.IndexOf(schema.ExcludeFields, field.Column) > -1 {
+			if field.Column != "" && lo.IndexOf(schema.ExcludeFields, field.Column) > -1 {
 				continue
 			}
-			isVirtualField := field.Column == ""
-			if isVirtualField {
+			if field.Column == "" {
+				// 虚拟字段直接使用字段名索引
 				field.Name = fieldName
 				fields[fieldName] = field
 			} else {
-				// 规范化表名
+				// 规范化命名
 				fixedName := field.Column
 				if config.UseCamel {
 					fixedName = strcase.ToLowerCamel(field.Column)
@@ -662,14 +608,74 @@ func (my *Metadata) normalize() error {
 
 			// 收集需要更新的关系信息
 			if field.Relation != nil {
-				relationsToUpdate = append(relationsToUpdate, field)
+				relations = append(relations, field)
 			}
 		}
 		class.Fields = fields
+		// 3. 处理类
+		if class.Table == "" {
+			// 虚拟类直接使用类名索引
+			class.Name = className
+			nodes[className] = class
+		} else {
+			// 规范化命名
+			fixedName := class.Table
+			// 去前缀
+			for _, prefix := range schema.TablePrefix {
+				if strings.HasPrefix(fixedName, prefix) {
+					fixedName = strings.TrimPrefix(fixedName, prefix)
+					//只处理一次防止多次重复去前缀
+					break
+				}
+			}
+			// 单数化
+			if config.UseSingular {
+				fixedName = inflection.Singular(fixedName)
+			}
+			// 转驼峰
+			if config.UseCamel {
+				fixedName = strcase.ToCamel(fixedName)
+			}
+
+			if className == class.Table {
+				// 如果类名和表名一致则证明是原始索引,同时添加类名索引
+				if fixedName != class.Name {
+					class.Name = fixedName
+					nodes[fixedName] = class
+				}
+				nodes[class.Table] = class
+			} else if className == fixedName {
+				// 如果类名和驼峰名一致则证明是主类名
+				class.Name = className
+				nodes[className] = class
+				nodes[class.Table] = class
+			} else {
+				// 索引与类名和表名都不一致则为别名
+				node, ok := my.Nodes[class.Table]
+				if node == class {
+					// 如果表名和类名同一个指针则是覆盖模式
+					class.Name = className
+					nodes[className] = class
+					nodes[class.Table] = class
+				} else if ok {
+					class.Name = fixedName
+					nodes[fixedName] = node
+				} else {
+					// 纯配置模式
+					class.Name = className
+					nodes[className] = class
+					// 复制并添加表名类名索引
+					copied := deepcopy.Copy(class).(*internal.Class)
+					copied.Name = fixedName
+					nodes[fixedName] = copied
+					nodes[class.Table] = copied
+				}
+			}
+		}
 	}
 
 	// 第二阶段：更新关系名称
-	for _, field := range relationsToUpdate {
+	for _, field := range relations {
 		// 直接使用 Nodes 中的映射
 		if sourceNode, ok := nodes[field.Relation.SourceClass]; ok {
 			field.Relation.SourceClass = sourceNode.Name
