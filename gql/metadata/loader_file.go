@@ -15,29 +15,51 @@ import (
 // 正则表达式常量
 var modeRegex = regexp.MustCompile(`{\s*mode\s*}`)
 
-// ResolveMetadataPath 统一解析元数据文件路径
+// ResolveMetadataPath 解析元数据文件的存储路径
+//
+// 实现逻辑：
+// 1. 配置处理：
+//   - 从配置中获取文件路径、运行模式和根目录
+//   - 如果配置为空，使用 utl.Root() 作为根目录
+//
+// 2. 路径生成规则：
+//   - 当 cfg.Metadata.File 为空时：
+//   - 使用固定格式：cfg/metadata.json
+//   - 如果存在运行模式，则插入模式名：cfg/metadata.{mode}.json
+//   - 当 cfg.Metadata.File 不为空时：
+//   - 直接使用配置的路径
+//   - 如果路径中包含 {mode}，则替换为实际运行模式
+//
+// 3. 路径处理：
+//   - 对于绝对路径（以 / 开头），直接返回
+//   - 对于相对路径，与根目录（cfg.Root 或 utl.Root()）拼接后返回
 func ResolveMetadataPath(cfg *internal.Config) string {
-	// 获取配置的文件路径
-	filePath := cfg.Metadata.File
+	root := utl.Root()
+	var path, mode string
+	if cfg != nil {
+		path = cfg.Metadata.File
+		mode = cfg.Mode
+		root = cfg.Root
+	}
 
 	// 如果未配置文件路径，则使用默认路径
-	if filePath == "" {
+	if path == "" {
 		parts := []string{filepath.Join("cfg", "metadata")}
-		if cfg.Mode != "" {
-			parts = append(parts, cfg.Mode)
+		if mode != "" {
+			parts = append(parts, mode)
 		}
 		parts = append(parts, "json")
-		filePath = strings.Join(parts, ".")
+		path = strings.Join(parts, ".")
 	} else {
 		// 处理占位符
-		filePath = modeRegex.ReplaceAllString(filePath, cfg.Mode)
+		path = modeRegex.ReplaceAllString(path, mode)
 	}
 
 	// 处理路径拼接
-	if filepath.IsAbs(filePath) {
-		return filePath
+	if filepath.IsAbs(path) {
+		return path
 	}
-	return filepath.Join(cfg.Root, filePath)
+	return filepath.Join(root, path)
 }
 
 // FileLoader 文件元数据加载器
