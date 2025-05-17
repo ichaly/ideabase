@@ -132,15 +132,11 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 		}
 		return nil
 	}
-	// 在配置加载之前执行进行驼峰命名和过滤处理
-	before := func(h metadata.Hoster) error {
-		return my.normalize()
-	}
 	defaultLoaders := []metadata.Loader{
 		&HookedLoader{Loader: metadata.NewPgsqlLoader(cfg, d), afterLoad: after},
 		&HookedLoader{Loader: metadata.NewMysqlLoader(cfg, d), afterLoad: after},
 		metadata.NewFileLoader(cfg),
-		&HookedLoader{Loader: metadata.NewConfigLoader(cfg), beforeLoad: before},
+		metadata.NewConfigLoader(cfg),
 	}
 	options := &metadataOptions{loaders: defaultLoaders}
 	// 应用自定义选项
@@ -163,6 +159,8 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 			}
 		}
 	}
+	// 进行驼峰命名和过滤处理
+	my.normalize()
 	// 统一关系处理
 	my.processRelations()
 	return my, nil
@@ -173,7 +171,6 @@ func (my *Metadata) PutClass(node *internal.Class) error {
 	if node == nil || node.Name == "" {
 		return nil
 	}
-	// 直接添加到Nodes中,双索引处理交给normalize
 	my.Nodes[node.Name] = node
 	return nil
 }
@@ -547,58 +544,123 @@ func (my *Metadata) saveToFile(filePath string) error {
 //   - 支持表名前缀过滤和单数化处理
 //
 // 2. 索引建立：
-//   - 创建表名和类名的双向映射
-//   - 确保可以通过表名或类名快速查找
-//   - 同时维护字段名和列名的映射关系
+//   - 创建表名、类名和别名的索引,字段处理逻辑类似
+//   - 确保可以通过表名、类名或别名快速查找
+//   - 同时维护字段名、列名和别名的映射关系
 func (my *Metadata) normalize() error {
 	if my.cfg == nil {
 		return nil
 	}
 	schema := my.cfg.Schema
+	config := my.cfg.Metadata
 	nodes := make(map[string]*internal.Class)
 
-	// 第一阶段：处理基本命名和收集关系信息
+	// 第一阶段：处理类信息和收集关系信息
 	relationsToUpdate := make([]*internal.Field, 0)
 
-	for _, node := range my.Nodes {
-		if node == nil || node.Name == "" {
-			continue
-		}
-
+	for className, class := range my.Nodes {
 		// 1. 过滤表(只处理非虚拟类)
-		if !node.Virtual && lo.IndexOf(schema.ExcludeTables, node.Table) > -1 {
+		if !class.Virtual && lo.IndexOf(schema.ExcludeTables, class.Table) > -1 {
 			continue
 		}
-
-		// 2. 表名处理(只处理非虚拟类)
-		if !node.Virtual {
-			tableName := node.Table
+		// 1. 处理类
+		isVirtualClass := class.Table == ""
+		if isVirtualClass {
+			// 虚拟类直接使用类名索引
+			class.Name = className
+			nodes[className] = class
+		} else {
+			// 规范化表名
+			fixedName := class.Table
+			// 去前缀
 			for _, prefix := range schema.TablePrefix {
-				if prefix != "" && strings.HasPrefix(tableName, prefix) {
-					tableName = strings.TrimPrefix(tableName, prefix)
+				if strings.HasPrefix(fixedName, prefix) {
+					fixedName = strings.TrimPrefix(fixedName, prefix)
+					//只处理一次防止多次重复去前缀
 					break
 				}
 			}
-			if my.cfg.Metadata.UseSingular {
-				tableName = inflection.Singular(tableName)
+			// 单数化
+			if config.UseSingular {
+				fixedName = inflection.Singular(fixedName)
 			}
-			if my.cfg.Metadata.UseCamel {
-				node.Name = strcase.ToCamel(tableName)
+			// 转驼峰
+			if config.UseCamel {
+				fixedName = strcase.ToCamel(fixedName)
+			}
+
+			// 类名与驼峰名和表名都不一致则为别名
+			if className != fixedName && className != class.Table {
+				node, ok := my.Nodes[class.Table]
+				//如果表名和别名为同一个指针则是覆盖模式
+				if node == class {
+					class.Name = className
+					// 添加别名索引
+					nodes[className] = class
+				} else if ok {
+					// 如果表名和别名不是同一个指针则是追加模式
+					class.Name = fixedName
+					nodes[fixedName] = node
+				}
+			} else if className == class.Table {
+				// 如果类名和表名一致则证明是原始表名,同时添加类名索引
+				if fixedName != class.Name {
+					class.Name = fixedName
+					nodes[fixedName] = class
+				}
+				// 添加表名索引
+				nodes[class.Table] = class
+			} else if className == fixedName {
+				// 如果类名和驼峰名一致则证明是主类名
+				class.Name = className
+				nodes[className] = class
+				nodes[class.Table] = class
 			}
 		}
 
-		// 3. 字段处理
-		fields := make(map[string]*internal.Field, len(node.Fields))
-		for _, field := range node.Fields {
+		// 2. 字段处理
+		fields := make(map[string]*internal.Field, len(class.Fields))
+		for fieldName, field := range class.Fields {
 			if lo.IndexOf(schema.ExcludeFields, field.Column) > -1 {
 				continue
 			}
-			if my.cfg.Metadata.UseCamel && field.Name == field.Column {
-				field.Name = strcase.ToLowerCamel(field.Column)
-			}
-			fields[field.Column] = field
-			if field.Name != field.Column {
-				fields[field.Name] = field
+			isVirtualField := field.Column == ""
+			if isVirtualField {
+				field.Name = fieldName
+				fields[fieldName] = field
+			} else {
+				// 规范化表名
+				fixedName := field.Column
+				if config.UseCamel {
+					fixedName = strcase.ToLowerCamel(field.Column)
+				}
+
+				// 如果字段名和列名不一致则证明是别名
+				if fixedName != field.Name && fixedName != field.Column {
+					node, ok := class.Fields[field.Column]
+					//如果字段名和列名同一个指针则是覆盖模式
+					if node == field {
+						field.Name = fixedName
+						fields[fixedName] = field
+					} else if ok {
+						// 如果字段名和别名不是同一个指针则是追加模式
+						field.Name = fixedName
+						fields[fixedName] = node
+					}
+				} else if fixedName == field.Column {
+					// 如果字段名和列名一致则证明是原始列名,同时添加列名索引
+					if fixedName != field.Name {
+						field.Name = fixedName
+						fields[fixedName] = field
+					}
+					// 添加列名索引
+					fields[field.Column] = field
+				} else if fieldName == fixedName {
+					// 如果字段名和驼峰名一致则证明是主字段名
+					field.Name = fieldName
+					fields[fieldName] = field
+					fields[field.Column] = field
+				}
 			}
 
 			// 收集需要更新的关系信息
@@ -606,15 +668,7 @@ func (my *Metadata) normalize() error {
 				relationsToUpdate = append(relationsToUpdate, field)
 			}
 		}
-		node.Fields = fields
-
-		// 4. 更新索引
-		// 所有类都使用类名索引
-		nodes[node.Name] = node
-		// 非虚拟类额外使用表名索引
-		if !node.Virtual && node.Table != "" {
-			nodes[node.Table] = node
-		}
+		class.Fields = fields
 	}
 
 	// 第二阶段：更新关系名称
@@ -628,7 +682,7 @@ func (my *Metadata) normalize() error {
 		}
 	}
 
-	// 5. 替换原 Nodes
+	// 替换原 Nodes
 	my.Nodes = nodes
 	return nil
 }
