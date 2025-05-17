@@ -15,6 +15,31 @@ import (
 // 正则表达式常量
 var modeRegex = regexp.MustCompile(`{\s*mode\s*}`)
 
+// ResolveMetadataPath 统一解析元数据文件路径
+func ResolveMetadataPath(cfg *internal.Config) string {
+	// 获取配置的文件路径
+	filePath := cfg.Metadata.File
+
+	// 如果未配置文件路径，则使用默认路径
+	if filePath == "" {
+		parts := []string{filepath.Join("cfg", "metadata")}
+		if cfg.Mode != "" {
+			parts = append(parts, cfg.Mode)
+		}
+		parts = append(parts, "json")
+		filePath = strings.Join(parts, ".")
+	} else {
+		// 处理占位符
+		filePath = modeRegex.ReplaceAllString(filePath, cfg.Mode)
+	}
+
+	// 处理路径拼接
+	if filepath.IsAbs(filePath) {
+		return filePath
+	}
+	return filepath.Join(cfg.Root, filePath)
+}
+
 // FileLoader 文件元数据加载器
 // 实现Loader接口
 type FileLoader struct {
@@ -36,27 +61,7 @@ func (my *FileLoader) Support() bool {
 
 // resolveFilePath 解析文件路径
 func (my *FileLoader) resolveFilePath() string {
-	// 获取基础路径
-	filePath := my.cfg.Metadata.File
-
-	// 如果未配置文件路径，则使用默认路径
-	if filePath == "" {
-		parts := []string{filepath.Join("cfg", "metadata")}
-		if my.cfg.Mode != "" {
-			parts = append(parts, my.cfg.Mode)
-		}
-		parts = append(parts, "json")
-		filePath = strings.Join(parts, ".")
-	} else {
-		// 处理占位符
-		filePath = modeRegex.ReplaceAllString(filePath, my.cfg.Mode)
-	}
-
-	// 处理路径拼接
-	if filepath.IsAbs(filePath) {
-		return filePath
-	}
-	return filepath.Join(my.cfg.Root, filePath)
+	return ResolveMetadataPath(my.cfg)
 }
 
 // Load 从文件加载元数据

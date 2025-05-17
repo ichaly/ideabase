@@ -126,7 +126,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	// 默认Loader注册，Pgsql和Mysql用HookedLoader包装，dev模式下自动保存
 	after := func(h metadata.Hoster) error {
 		if cfg.IsDebug() {
-			return my.saveToFile(filepath.Join(cfg.Root, "cfg", "metadata.json"))
+			return my.saveToFile(metadata.ResolveMetadataPath(cfg))
 		}
 		return nil
 	}
