@@ -19,7 +19,7 @@ func TestMetadataLoadFromDatabase_CamelCase(t *testing.T) {
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
 	k.Set("schema.schema", "public")
-	k.Set("schema.use-camel", true)
+	k.Set("metadata.use-camel", true)
 
 	meta, err := NewMetadata(k, db, WithoutLoader(
 		metadata.LoaderMysql, metadata.LoaderFile, metadata.LoaderConfig,
@@ -80,7 +80,8 @@ func TestMetadataLoadFromDatabase_NoCamelCase(t *testing.T) {
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
 	k.Set("schema.schema", "public")
-	k.Set("schema.use-camel", false)
+	k.Set("metadata.use-camel", false)
+	k.Set("metadata.use-singular", false)
 
 	meta, err := NewMetadata(k, db, WithoutLoader(
 		metadata.LoaderMysql, metadata.LoaderFile, metadata.LoaderConfig,
