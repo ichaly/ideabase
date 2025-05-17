@@ -633,7 +633,7 @@ func (my *Metadata) normalize() error {
 				}
 
 				// 如果字段名和列名不一致则证明是别名
-				if fixedName != field.Name && fixedName != field.Column {
+				if fieldName != fixedName && fieldName != field.Column {
 					node, ok := class.Fields[field.Column]
 					//如果字段名和列名同一个指针则是覆盖模式
 					if node == field {
@@ -644,7 +644,7 @@ func (my *Metadata) normalize() error {
 						field.Name = fixedName
 						fields[fixedName] = node
 					}
-				} else if fixedName == field.Column {
+				} else if fieldName == field.Column {
 					// 如果字段名和列名一致则证明是原始列名,同时添加列名索引
 					if fixedName != field.Name {
 						field.Name = fixedName
