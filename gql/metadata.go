@@ -578,31 +578,33 @@ func (my *Metadata) normalize() error {
 					fixedName = strcase.ToLowerCamel(field.Column)
 				}
 
-				// 如果字段名和列名不一致则证明是别名
-				if fieldName != fixedName && fieldName != field.Column {
+				if fieldName == field.Column || fieldName == fixedName {
+					// 如果字段名和列名一致或字段名和驼峰名一致，则统一处理
+					field.Name = fixedName
+					fields[fixedName] = field
+					fields[field.Column] = field
+				} else {
+					// 索引与字段名和列名都不一致则为别名
 					node, ok := class.Fields[field.Column]
-					//如果字段名和列名同一个指针则是覆盖模式
 					if node == field {
-						field.Name = fixedName
-						fields[fixedName] = field
+						// 如果列名和字段名同一个指针则是覆盖模式
+						field.Name = fieldName
+						fields[fieldName] = field
+						fields[field.Column] = field
 					} else if ok {
-						// 如果字段名和别名不是同一个指针则是追加模式
-						field.Name = fixedName
-						fields[fixedName] = node
+						// 如果列名和别名不是同一个指针则是追加模式
+						field.Name = fieldName
+						fields[fieldName] = node
+					} else {
+						// 纯配置模式
+						field.Name = fieldName
+						fields[fieldName] = field
+						// 复制并添加列名索引
+						copied := deepcopy.Copy(field).(*internal.Field)
+						copied.Name = fixedName
+						fields[fixedName] = copied
+						fields[field.Column] = copied
 					}
-				} else if fieldName == field.Column {
-					// 如果字段名和列名一致则证明是原始列名,同时添加列名索引
-					if fixedName != field.Name {
-						field.Name = fixedName
-						fields[fixedName] = field
-					}
-					// 添加列名索引
-					fields[field.Column] = field
-				} else if fieldName == fixedName {
-					// 如果字段名和驼峰名一致则证明是主字段名
-					field.Name = fieldName
-					fields[fieldName] = field
-					fields[field.Column] = field
 				}
 			}
 
@@ -637,17 +639,10 @@ func (my *Metadata) normalize() error {
 				fixedName = strcase.ToCamel(fixedName)
 			}
 
-			if className == class.Table {
-				// 如果类名和表名一致则证明是原始索引,同时添加类名索引
-				if fixedName != class.Name {
-					class.Name = fixedName
-					nodes[fixedName] = class
-				}
-				nodes[class.Table] = class
-			} else if className == fixedName {
-				// 如果类名和驼峰名一致则证明是主类名
-				class.Name = className
-				nodes[className] = class
+			if className == class.Table || className == fixedName {
+				// 如果类名和表名一致或类名和驼峰名一致，则统一处理
+				class.Name = fixedName
+				nodes[fixedName] = class
 				nodes[class.Table] = class
 			} else {
 				// 索引与类名和表名都不一致则为别名
@@ -658,8 +653,9 @@ func (my *Metadata) normalize() error {
 					nodes[className] = class
 					nodes[class.Table] = class
 				} else if ok {
-					class.Name = fixedName
-					nodes[fixedName] = node
+					// 如果表名和别名不是同一个指针则是追加模式
+					class.Name = className
+					nodes[className] = class
 				} else {
 					// 纯配置模式
 					class.Name = className
