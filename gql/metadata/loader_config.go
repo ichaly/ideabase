@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/iancoleman/strcase"
@@ -30,52 +31,73 @@ func (my *ConfigLoader) Support() bool {
 
 // Load 从配置加载元数据
 func (my *ConfigLoader) Load(h Hoster) error {
-	for className, classConfig := range my.cfg.Metadata.Classes {
+	// 第一次遍历：加载主类
+	for indexName, classConfig := range my.cfg.Metadata.Classes {
+		className := ConvertClassName(classConfig.Table, my.cfg.Metadata)
+		if indexName == classConfig.Table || indexName == className {
+			newClass := buildClassFromConfig(indexName, classConfig, nil)
+			h.PutClass(newClass)
+		}
+	}
+	// 第二次遍历：加载别名类
+	for indexName, classConfig := range my.cfg.Metadata.Classes {
 		isVirtual := classConfig.Table == ""
-		var newClass *internal.Class
-
-		if !isVirtual && classConfig.Override {
-			// 覆盖模式
-			if baseClass, ok := h.GetClass(classConfig.Table); ok {
-				baseClass.Name = className
-				newClass = baseClass
+		className := ConvertClassName(classConfig.Table, my.cfg.Metadata)
+		if !(indexName == classConfig.Table || indexName == className) {
+			var baseClass *internal.Class
+			if !isVirtual {
+				if classConfig.Override {
+					if c, ok := h.GetClass(classConfig.Table); ok {
+						baseClass = c
+					} else if c, ok := h.GetClass(className); ok {
+						baseClass = c
+					}
+					if baseClass == nil {
+						return fmt.Errorf("配置别名类 %s 覆盖主类 %s 失败: 主类不存在", indexName, classConfig.Table)
+					}
+				} else {
+					if c, ok := h.GetClass(classConfig.Table); ok {
+						baseClass = c
+					} else if c, ok := h.GetClass(className); ok {
+						baseClass = c
+					}
+				}
 			}
-		} else if !isVirtual && className != classConfig.Table {
-			// 追加模式（别名类）
-			if baseClass, ok := h.GetClass(classConfig.Table); ok {
-				copied := deepcopy.Copy(baseClass).(*internal.Class)
-				copied.Name = className
-				newClass = copied
-			}
+			newClass := buildClassFromConfig(indexName, classConfig, baseClass)
+			h.PutClass(newClass)
 		}
-
-		if newClass == nil {
-			// 虚拟类、主类、找不到原类等
-			newClass = &internal.Class{
-				Name:    className,
-				Table:   classConfig.Table,
-				Virtual: isVirtual,
-				Fields:  make(map[string]*internal.Field),
-			}
-		}
-
-		// 统一合并类属性（在applyFieldFilter之前）
-		if classConfig.Description != "" {
-			newClass.Description = classConfig.Description
-		}
-		if classConfig.Resolver != "" {
-			newClass.Resolver = classConfig.Resolver
-		}
-		if len(classConfig.PrimaryKeys) > 0 {
-			newClass.PrimaryKeys = classConfig.PrimaryKeys
-		}
-
-		applyFieldFilter(newClass, classConfig)
-		applyFieldConfig(newClass, classConfig.Fields)
-
-		h.PutClass(newClass)
 	}
 	return nil
+}
+
+// buildClassFromConfig 根据ClassConfig和可选baseClass构建Class对象
+func buildClassFromConfig(className string, classConfig *internal.ClassConfig, baseClass *internal.Class) *internal.Class {
+	isVirtual := classConfig.Table == ""
+	var newClass *internal.Class
+	if baseClass != nil {
+		// 复制或覆盖
+		newClass = deepcopy.Copy(baseClass).(*internal.Class)
+		newClass.Name = className
+	} else {
+		newClass = &internal.Class{
+			Name:    className,
+			Table:   classConfig.Table,
+			Virtual: isVirtual,
+			Fields:  make(map[string]*internal.Field),
+		}
+	}
+	if classConfig.Description != "" {
+		newClass.Description = classConfig.Description
+	}
+	if classConfig.Resolver != "" {
+		newClass.Resolver = classConfig.Resolver
+	}
+	if len(classConfig.PrimaryKeys) > 0 {
+		newClass.PrimaryKeys = classConfig.PrimaryKeys
+	}
+	applyFieldFilter(newClass, classConfig)
+	applyFieldConfig(newClass, classConfig.Fields)
+	return newClass
 }
 
 // 应用字段过滤
