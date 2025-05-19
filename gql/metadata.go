@@ -549,7 +549,6 @@ func (my *Metadata) normalize() error {
 	if my.cfg == nil {
 		return nil
 	}
-	schema := my.cfg.Schema
 	config := my.cfg.Metadata
 	nodes := make(map[string]*internal.Class)
 
@@ -558,13 +557,13 @@ func (my *Metadata) normalize() error {
 
 	for className, class := range my.Nodes {
 		// 1. 过滤表
-		if class.Table != "" && lo.IndexOf(schema.ExcludeTables, class.Table) > -1 {
+		if class.Table != "" && lo.IndexOf(config.ExcludeTables, class.Table) > -1 {
 			continue
 		}
 		// 2. 字段处理
 		fields := make(map[string]*internal.Field, len(class.Fields))
 		for fieldName, field := range class.Fields {
-			if field.Column != "" && lo.IndexOf(schema.ExcludeFields, field.Column) > -1 {
+			if field.Column != "" && lo.IndexOf(config.ExcludeFields, field.Column) > -1 {
 				continue
 			}
 			if field.Column == "" {
@@ -573,10 +572,7 @@ func (my *Metadata) normalize() error {
 				fields[fieldName] = field
 			} else {
 				// 规范化命名
-				fixedName := field.Column
-				if config.UseCamel {
-					fixedName = strcase.ToLowerCamel(field.Column)
-				}
+				fixedName := metadata.ConvertFieldName(field.Column, config)
 
 				if fieldName == field.Column || fieldName == fixedName {
 					// 如果字段名和列名一致或字段名和驼峰名一致，则统一处理
@@ -621,23 +617,7 @@ func (my *Metadata) normalize() error {
 			nodes[className] = class
 		} else {
 			// 规范化命名
-			fixedName := class.Table
-			// 去前缀
-			for _, prefix := range schema.TablePrefix {
-				if strings.HasPrefix(fixedName, prefix) {
-					fixedName = strings.TrimPrefix(fixedName, prefix)
-					//只处理一次防止多次重复去前缀
-					break
-				}
-			}
-			// 单数化
-			if config.UseSingular {
-				fixedName = inflection.Singular(fixedName)
-			}
-			// 转驼峰
-			if config.UseCamel {
-				fixedName = strcase.ToCamel(fixedName)
-			}
+			fixedName := metadata.ConvertClassName(class.Table, config)
 
 			if className == class.Table || className == fixedName {
 				// 如果类名和表名一致或类名和驼峰名一致，则统一处理

@@ -19,15 +19,6 @@ type SchemaConfig struct {
 
 	// 数据类型映射
 	TypeMapping map[string]string `mapstructure:"mapping"`
-
-	// 表名前缀（将被去除）
-	TablePrefix []string `mapstructure:"table-prefix"`
-
-	// 要排除的表
-	ExcludeTables []string `mapstructure:"exclude-tables"`
-
-	// 要排除的字段
-	ExcludeFields []string `mapstructure:"exclude-fields"`
 }
 
 // MetadataConfig 表示元数据配置
@@ -44,6 +35,15 @@ type MetadataConfig struct {
 
 	// 关系配置
 	ShowThrough bool `mapstructure:"show-through"`
+
+	// 表名前缀（将被去除）
+	TablePrefix []string `mapstructure:"table-prefix"`
+
+	// 要排除的表
+	ExcludeTables []string `mapstructure:"exclude-tables"`
+
+	// 要排除的字段
+	ExcludeFields []string `mapstructure:"exclude-fields"`
 }
 
 // ClassConfig 表示类配置

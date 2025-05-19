@@ -1,7 +1,11 @@
 package metadata
 
 import (
+	"strings"
+
+	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/jinzhu/inflection"
 	"github.com/mohae/deepcopy"
 )
 
@@ -248,4 +252,35 @@ func createField(className, fieldName string, config *internal.FieldConfig) *int
 		}
 	}
 	return field
+}
+
+// ConvertClassName 根据配置将表名转换为类名（去前缀、单数化、驼峰化等）
+func ConvertClassName(tableName string, config internal.MetadataConfig) string {
+	className := tableName
+	// 去前缀
+	for _, prefix := range config.TablePrefix {
+		if strings.HasPrefix(className, prefix) {
+			className = strings.TrimPrefix(className, prefix)
+			break
+		}
+	}
+	// 单数化
+	if config.UseSingular {
+		className = inflection.Singular(className)
+	}
+	// 驼峰
+	if config.UseCamel {
+		className = strcase.ToCamel(className)
+	}
+
+	return className
+}
+
+// ConvertFieldName 根据配置将字段名转换为小驼峰
+func ConvertFieldName(columnName string, config internal.MetadataConfig) string {
+	fieldName := columnName
+	if config.UseCamel {
+		fieldName = strcase.ToLowerCamel(fieldName)
+	}
+	return fieldName
 }
