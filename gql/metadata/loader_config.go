@@ -36,7 +36,9 @@ func (my *ConfigLoader) Load(h Hoster) error {
 		className := ConvertClassName(classConfig.Table, my.cfg.Metadata)
 		if indexName == classConfig.Table || indexName == className {
 			newClass := buildClassFromConfig(indexName, classConfig, nil)
-			h.PutClass(newClass)
+			newClass.Name = newClass.Table
+			h.PutClass(indexName, newClass)
+			h.PutClass(newClass.Table, newClass)
 		}
 	}
 	// 第二次遍历：加载别名类
@@ -64,7 +66,7 @@ func (my *ConfigLoader) Load(h Hoster) error {
 				}
 			}
 			newClass := buildClassFromConfig(indexName, classConfig, baseClass)
-			h.PutClass(newClass)
+			h.PutClass(indexName, newClass)
 		}
 	}
 	return nil

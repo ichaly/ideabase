@@ -165,11 +165,11 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 }
 
 // Metadata 实现Hoster接口
-func (my *Metadata) PutClass(node *internal.Class) error {
+func (my *Metadata) PutClass(className string, node *internal.Class) error {
 	if node == nil || node.Name == "" {
 		return nil
 	}
-	my.Nodes[node.Name] = node
+	my.Nodes[className] = node
 	return nil
 }
 
@@ -186,11 +186,11 @@ func (my *Metadata) DelClass(name string) (*internal.Class, bool) {
 	return n, ok
 }
 
-func (my *Metadata) PutField(className string, field *internal.Field) error {
+func (my *Metadata) PutField(className, fieldName string, field *internal.Field) error {
 	if field == nil || field.Name == "" {
 		return nil
 	}
-	my.Nodes[className].Fields[field.Name] = field
+	my.Nodes[className].Fields[fieldName] = field
 	return nil
 }
 

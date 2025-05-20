@@ -119,9 +119,9 @@ func (my *FileLoader) Load(h Hoster) error {
 	h.SetVersion(meta.Version)
 
 	// 4. 遍历所有主节点，处理字段名/列名索引和多key索引
-	for className, class := range meta.Nodes {
+	for index, class := range meta.Nodes {
 		// 只处理主类名（key与类名一致）
-		if className == class.Name {
+		if index == class.Name {
 			// 初始化字段映射，支持字段名和列名双重索引
 			fields := make(map[string]*internal.Field)
 			for fieldName, field := range class.Fields {
@@ -133,7 +133,7 @@ func (my *FileLoader) Load(h Hoster) error {
 			}
 			class.Fields = fields
 			// 添加类名索引
-			_ = h.PutClass(class)
+			_ = h.PutClass(index, class)
 		}
 	}
 	log.Info().Int("classes", len(meta.Nodes)).Msg("从文件加载元数据完成")

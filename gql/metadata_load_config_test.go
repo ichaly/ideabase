@@ -119,7 +119,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		assertField(t, user, "id", "id", "int", true, false, false, "用户ID", "")
 		assertField(t, user, "name", "name", "string", false, false, false, "用户名", "")
 		assertField(t, user, "email", "email", "string", false, false, false, "邮箱", "")
-		assertField(t, user, "created_at", "created_at", "time.Time", false, false, false, "创建时间", "")
+		assertField(t, user, "createdAt", "created_at", "time.Time", false, false, false, "创建时间", "")
 	})
 
 	// 2. 测试别名类（追加模式）
