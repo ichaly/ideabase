@@ -122,9 +122,6 @@ func applyFieldFilter(class *internal.Class, config *internal.ClassConfig) {
 
 // 处理类字段
 func applyFieldConfig(class *internal.Class, fieldConfigs map[string]*internal.FieldConfig) {
-	if fieldConfigs == nil {
-		return
-	}
 	for fieldName, fieldConfig := range fieldConfigs {
 		var field *internal.Field = nil
 
@@ -228,13 +225,9 @@ func updateField(field *internal.Field, config *internal.FieldConfig) {
 
 // 创建新字段
 func createField(className, fieldName string, config *internal.FieldConfig) *internal.Field {
-	column := config.Column
-	if column == "" {
-		column = fieldName
-	}
 	field := &internal.Field{
 		Name:        fieldName,
-		Column:      column,
+		Column:      config.Column,
 		Type:        config.Type,
 		Description: config.Description,
 		Nullable:    config.IsNullable,
