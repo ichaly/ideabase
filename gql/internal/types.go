@@ -27,6 +27,7 @@ type Class struct {
 	Name        string            // 类名（可能是转换后的名称）
 	Table       string            // 原始表名
 	Virtual     bool              // 是否为虚拟类
+	Original    bool              // 是否为原始类
 	PrimaryKeys []string          // 主键列表
 	Description string            // 描述信息
 	Fields      map[string]*Field // 字段映射表(包含字段名和列名的索引)
@@ -40,6 +41,7 @@ type Field struct {
 	Name        string    `json:"name"`           // 字段名
 	Column      string    `json:"column"`         // 列名
 	Virtual     bool      `json:"virtual"`        // 是否虚拟字段
+	Original    bool      `json:"original"`       // 是否原始字段
 	Nullable    bool      `json:"nullable"`       // 是否可空
 	IsUnique    bool      `json:"isUnique"`       // 是否唯一
 	IsPrimary   bool      `json:"isPrimary"`      // 是否主键
