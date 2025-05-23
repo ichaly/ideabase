@@ -35,7 +35,7 @@ func (my *ConfigLoader) Load(h Hoster) error {
 	for indexName, classConfig := range my.cfg.Metadata.Classes {
 		className := ConvertClassName(classConfig.Table, my.cfg.Metadata)
 		if indexName == classConfig.Table || indexName == className {
-			newClass := buildClassFromConfig(indexName, classConfig, nil)
+			newClass := my.buildClassFromConfig(indexName, classConfig, nil)
 			newClass.Name = newClass.Table
 			h.PutClass(indexName, newClass)
 			h.PutClass(newClass.Table, newClass)
@@ -65,7 +65,7 @@ func (my *ConfigLoader) Load(h Hoster) error {
 					}
 				}
 			}
-			newClass := buildClassFromConfig(indexName, classConfig, baseClass)
+			newClass := my.buildClassFromConfig(indexName, classConfig, baseClass)
 			h.PutClass(indexName, newClass)
 		}
 	}
@@ -73,7 +73,7 @@ func (my *ConfigLoader) Load(h Hoster) error {
 }
 
 // buildClassFromConfig 根据ClassConfig和可选baseClass构建Class对象
-func buildClassFromConfig(className string, classConfig *internal.ClassConfig, baseClass *internal.Class) *internal.Class {
+func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *internal.ClassConfig, baseClass *internal.Class) *internal.Class {
 	isVirtual := classConfig.Table == ""
 	var newClass *internal.Class
 	if baseClass != nil {
@@ -98,7 +98,7 @@ func buildClassFromConfig(className string, classConfig *internal.ClassConfig, b
 		newClass.PrimaryKeys = classConfig.PrimaryKeys
 	}
 	applyFieldFilter(newClass, classConfig)
-	applyFieldConfig(newClass, classConfig.Fields)
+	my.applyFieldConfig(newClass, classConfig.Fields)
 	return newClass
 }
 
@@ -120,34 +120,71 @@ func applyFieldFilter(class *internal.Class, config *internal.ClassConfig) {
 	}
 }
 
-// 处理类字段
-func applyFieldConfig(class *internal.Class, fieldConfigs map[string]*internal.FieldConfig) {
-	for fieldName, fieldConfig := range fieldConfigs {
-		var field *internal.Field = nil
+// 处理类字段（重构为ConfigLoader的方法）
+func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map[string]*internal.FieldConfig) error {
+	if fieldConfigs == nil {
+		return nil
+	}
+	metaConfig := my.cfg.Metadata
 
-		if fieldConfig.Override && fieldConfig.Column != "" {
-			// 覆盖模式
-			if baseField, ok := class.Fields[fieldConfig.Column]; ok {
+	// 1. 分组排序
+	var tableFields, classFields, overrideFields, aliasFields, virtualFields []string
+	for fieldName, fieldConfig := range fieldConfigs {
+		switch {
+		case fieldConfig.Column == "":
+			virtualFields = append(virtualFields, fieldName)
+		case fieldConfig.Override:
+			overrideFields = append(overrideFields, fieldName)
+		case fieldName == fieldConfig.Column:
+			tableFields = append(tableFields, fieldName)
+		case fieldName == ConvertFieldName(fieldConfig.Column, metaConfig):
+			classFields = append(classFields, fieldName)
+		default:
+			aliasFields = append(aliasFields, fieldName)
+		}
+	}
+	orderedFields := append(tableFields, classFields...)
+	orderedFields = append(orderedFields, overrideFields...)
+	orderedFields = append(orderedFields, aliasFields...)
+	orderedFields = append(orderedFields, virtualFields...)
+
+	fields := make(map[string]*internal.Field)
+	for _, fieldName := range orderedFields {
+		fieldConfig := fieldConfigs[fieldName]
+		canonName := ConvertFieldName(fieldConfig.Column, metaConfig)
+
+		// 虚拟字段
+		if fieldConfig.Column == "" {
+			fields[fieldName] = createField(class.Name, fieldName, fieldConfig)
+			continue
+		}
+
+		// 主字段、标准字段、覆盖字段统一处理
+		if fieldName == fieldConfig.Column || fieldName == canonName || fieldConfig.Override {
+			baseField, ok := class.Fields[fieldConfig.Column]
+			if ok {
 				baseField.Name = fieldName
 				updateField(baseField, fieldConfig)
-				field = baseField
+				fields[fieldConfig.Column] = baseField
+			} else {
+				field := createField(class.Name, fieldName, fieldConfig)
+				fields[fieldConfig.Column] = field
 			}
-		} else if fieldConfig.Column != "" && fieldName != fieldConfig.Column {
-			// 追加模式，使用deepcopy
-			if baseField, ok := class.Fields[fieldConfig.Column]; ok {
-				copied := deepcopy.Copy(baseField).(*internal.Field)
-				copied.Name = fieldName
-				updateField(copied, fieldConfig)
-				field = copied
-			}
+			continue
 		}
 
-		// 其余情况（虚拟字段、普通字段、找不到原字段等）统一新建
-		if field == nil {
-			field = createField(class.Name, fieldName, fieldConfig)
+		// 别名/追加字段（必须依赖基础字段）
+		baseField, ok := fields[fieldConfig.Column]
+		if !ok {
+			return fmt.Errorf("别名字段 %s 必须有基础字段 %s", fieldName, fieldConfig.Column)
 		}
-		class.Fields[fieldName] = field
+		field := deepcopy.Copy(baseField).(*internal.Field)
+		field.Name = fieldName
+		updateField(field, fieldConfig)
+		fields[fieldName] = field
 	}
+	class.Fields = fields
+	return nil
 }
 
 // 更新字段
