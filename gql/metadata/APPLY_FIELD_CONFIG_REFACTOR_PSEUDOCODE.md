@@ -3,33 +3,29 @@
 本伪代码用于指导元数据字段合成与索引处理的高效重构，实现一次遍历、分组排序、类型分支处理，保证逻辑清晰、效率高、易维护。
 
 ```go
-// 1. 字段分组与排序
+// 1. 字段分组与排序（用switch/case简化分组逻辑）
+// 这样保证主字段、标准字段优先处理，别名/覆盖/虚拟字段后处理，避免依赖未初始化
 var tableFields, classFields, overrideFields, aliasFields, virtualFields []string
 for fieldName, fieldConfig := range fieldConfigs {
-    if fieldConfig.Column == "" {
-        // 虚拟字段
+    switch {
+    case fieldConfig.Column == "":
+        // 虚拟字段：无物理列，完全自定义
         virtualFields = append(virtualFields, fieldName)
-        continue
-    }
-    if fieldConfig.Override {
-        // 覆盖字段
+    case fieldConfig.Override:
+        // 覆盖字段：用于别名类完全覆盖主类和列字段
         overrideFields = append(overrideFields, fieldName)
-        continue
-    }
-    if fieldName == fieldConfig.Column {
-        // 表名字段
+    case fieldName == fieldConfig.Column:
+        // 表名字段：字段名与列名一致，通常为主字段
         tableFields = append(tableFields, fieldName)
-        continue
-    }
-    if fieldName == ConvertFieldName(fieldConfig.Column, config) {
-        // 标准字段名
+    case fieldName == ConvertFieldName(fieldConfig.Column, config):
+        // 标准字段名：字段名为规范化后的列名
         classFields = append(classFields, fieldName)
-        continue
+    default:
+        // 其他为别名字段：依赖主字段或标准字段
+        aliasFields = append(aliasFields, fieldName)
     }
-    // 其他为别名字段
-    aliasFields = append(aliasFields, fieldName)
 }
-// 拼接顺序：表名 > 类名 > 覆盖 > 别名 > 虚拟
+// 拼接顺序：主字段 > 标准字段 > 覆盖 > 别名 > 虚拟
 orderedFields := append(tableFields, classFields...)
 orderedFields = append(orderedFields, overrideFields...)
 orderedFields = append(orderedFields, aliasFields...)
@@ -107,10 +103,12 @@ class.Fields = fields
 
 ## 说明
 
-- 先分组排序，保证基础字段最先处理，便于后续复用。
-- 一次遍历，分支处理所有类型，效率最高。
-- ConvertFieldName 只调用一次，提升效率。
-- 基础字段优先查找列名，其次标准字段名，都不存在时才新建，且只在原有指针上 update，不做 deepcopy。
-- 覆盖模式优先查列名字段，其次标准字段名，只删除标准字段名索引，保留列名索引。
-- 虚拟字段直接新建，别名字段必须依赖基础字段。
-- 最终整体赋值，保证唯一性和无历史残留。
+- **分组排序**：先分组再排序，保证主字段、标准字段优先，别名/覆盖/虚拟字段后处理，避免依赖未初始化。
+- **分组含义**：
+  - 主字段（tableFields）：字段名与列名一致，通常为主表字段
+  - 标准字段（classFields）：字段名为规范化后的列名
+  - 覆盖字段（overrideFields）：用于别名类完全覆盖主类字段
+  - 别名字段（aliasFields）：依赖主字段或标准字段
+  - 虚拟字段（virtualFields）：无物理列，完全自定义
+- **一次遍历**：分支处理所有类型，效率高。
+- **索引一致性**：最终整体赋值，保证唯一性和无历史残留。
