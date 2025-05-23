@@ -97,13 +97,13 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	if len(classConfig.PrimaryKeys) > 0 {
 		newClass.PrimaryKeys = classConfig.PrimaryKeys
 	}
-	applyFieldFilter(newClass, classConfig)
+	my.applyFieldFilter(newClass, classConfig)
 	my.applyFieldConfig(newClass, classConfig.Fields)
 	return newClass
 }
 
 // 应用字段过滤
-func applyFieldFilter(class *internal.Class, config *internal.ClassConfig) {
+func (my *ConfigLoader) applyFieldFilter(class *internal.Class, config *internal.ClassConfig) {
 	if len(config.IncludeFields) > 0 {
 		includeSet := make(map[string]bool)
 		for _, fieldName := range config.IncludeFields {
@@ -120,12 +120,12 @@ func applyFieldFilter(class *internal.Class, config *internal.ClassConfig) {
 	}
 }
 
-// 处理类字段（重构为ConfigLoader的方法）
+// 处理类字段
 func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map[string]*internal.FieldConfig) error {
 	if fieldConfigs == nil {
 		return nil
 	}
-	metaConfig := my.cfg.Metadata
+	config := my.cfg.Metadata
 
 	// 1. 分组排序
 	var tableFields, classFields, overrideFields, aliasFields, virtualFields []string
@@ -137,7 +137,7 @@ func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map
 			overrideFields = append(overrideFields, fieldName)
 		case fieldName == fieldConfig.Column:
 			tableFields = append(tableFields, fieldName)
-		case fieldName == ConvertFieldName(fieldConfig.Column, metaConfig):
+		case fieldName == ConvertFieldName(fieldConfig.Column, config):
 			classFields = append(classFields, fieldName)
 		default:
 			aliasFields = append(aliasFields, fieldName)
@@ -151,7 +151,7 @@ func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map
 	fields := make(map[string]*internal.Field)
 	for _, fieldName := range orderedFields {
 		fieldConfig := fieldConfigs[fieldName]
-		canonName := ConvertFieldName(fieldConfig.Column, metaConfig)
+		canonName := ConvertFieldName(fieldConfig.Column, config)
 
 		// 虚拟字段
 		if fieldConfig.Column == "" {
@@ -159,7 +159,7 @@ func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map
 			continue
 		}
 
-		// 主字段、标准字段、覆盖字段统一处理
+		// 列字段、标准字段、覆盖字段统一处理
 		if fieldName == fieldConfig.Column || fieldName == canonName || fieldConfig.Override {
 			baseField, ok := class.Fields[fieldConfig.Column]
 			if ok {
@@ -173,7 +173,7 @@ func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map
 			continue
 		}
 
-		// 别名/追加字段（必须依赖基础字段）
+		// 别名字段（必须依赖基础字段）
 		baseField, ok := fields[fieldConfig.Column]
 		if !ok {
 			return fmt.Errorf("别名字段 %s 必须有基础字段 %s", fieldName, fieldConfig.Column)
