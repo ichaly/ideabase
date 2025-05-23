@@ -31,43 +31,64 @@ func (my *ConfigLoader) Support() bool {
 
 // Load 从配置加载元数据
 func (my *ConfigLoader) Load(h Hoster) error {
-	// 第一次遍历：加载主类
-	for indexName, classConfig := range my.cfg.Metadata.Classes {
-		className := ConvertClassName(classConfig.Table, my.cfg.Metadata)
-		if indexName == classConfig.Table || indexName == className {
-			newClass := my.buildClassFromConfig(indexName, classConfig, nil)
-			newClass.Name = newClass.Table
-			h.PutClass(indexName, newClass)
-			h.PutClass(newClass.Table, newClass)
+	// 1. 分组排序
+	var tableClasses, canonClasses, overrideClasses, aliasClasses, virtualClasses []string
+	for className, classConfig := range my.cfg.Metadata.Classes {
+		switch {
+		case classConfig.Table == "":
+			virtualClasses = append(virtualClasses, className)
+		case classConfig.Override:
+			overrideClasses = append(overrideClasses, className)
+		case className == classConfig.Table:
+			tableClasses = append(tableClasses, className)
+		case className == ConvertClassName(classConfig.Table, my.cfg.Metadata):
+			canonClasses = append(canonClasses, className)
+		default:
+			aliasClasses = append(aliasClasses, className)
 		}
 	}
-	// 第二次遍历：加载别名类
-	for indexName, classConfig := range my.cfg.Metadata.Classes {
-		isVirtual := classConfig.Table == ""
-		className := ConvertClassName(classConfig.Table, my.cfg.Metadata)
-		if !(indexName == classConfig.Table || indexName == className) {
-			var baseClass *internal.Class
-			if !isVirtual {
-				if classConfig.Override {
-					if c, ok := h.GetClass(classConfig.Table); ok {
-						baseClass = c
-					} else if c, ok := h.GetClass(className); ok {
-						baseClass = c
-					}
-					if baseClass == nil {
-						return fmt.Errorf("配置别名类 %s 覆盖主类 %s 失败: 主类不存在", indexName, classConfig.Table)
-					}
-				} else {
-					if c, ok := h.GetClass(classConfig.Table); ok {
-						baseClass = c
-					} else if c, ok := h.GetClass(className); ok {
-						baseClass = c
-					}
-				}
-			}
-			newClass := my.buildClassFromConfig(indexName, classConfig, baseClass)
-			h.PutClass(indexName, newClass)
+	orderedClasses := append(tableClasses, canonClasses...)
+	orderedClasses = append(orderedClasses, overrideClasses...)
+	orderedClasses = append(orderedClasses, aliasClasses...)
+	orderedClasses = append(orderedClasses, virtualClasses...)
+
+	classes := make(map[string]*internal.Class)
+	for _, className := range orderedClasses {
+		classConfig := my.cfg.Metadata.Classes[className]
+		canonName := ConvertClassName(classConfig.Table, my.cfg.Metadata)
+
+		// 虚拟类
+		if classConfig.Table == "" {
+			class := my.buildClassFromConfig(className, classConfig, nil)
+			h.PutClass(className, class)
+			continue
 		}
+
+		// 主类/标准类/覆盖类统一处理
+		if className == classConfig.Table || className == canonName || classConfig.Override {
+			baseClass, ok := classes[classConfig.Table]
+			if ok {
+				// 合并配置
+				// 这里只做简单覆盖，实际可用updateClass合并
+				class := my.buildClassFromConfig(className, classConfig, baseClass)
+				classes[classConfig.Table] = class
+				h.PutClass(classConfig.Table, class)
+			} else {
+				class := my.buildClassFromConfig(className, classConfig, nil)
+				classes[classConfig.Table] = class
+				h.PutClass(classConfig.Table, class)
+			}
+			continue
+		}
+
+		// 别名类（必须依赖基础类）
+		baseClass, ok := classes[classConfig.Table]
+		if !ok {
+			return fmt.Errorf("别名类 %s 必须有基础类 %s", className, classConfig.Table)
+		}
+		class := my.buildClassFromConfig(className, classConfig, baseClass)
+		classes[className] = class
+		h.PutClass(className, class)
 	}
 	return nil
 }
