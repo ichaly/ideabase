@@ -35,61 +35,35 @@ orderedFields = append(orderedFields, virtualFields...)
 fields := make(map[string]*internal.Field)
 for _, fieldName := range orderedFields {
     fieldConfig := fieldConfigs[fieldName]
-    fixedName := ConvertFieldName(fieldConfig.Column, config) // 只调用一次
+    canonName := ConvertFieldName(fieldConfig.Column, config) // 只调用一次，规范化后的标准名
 
-    // 虚拟字段：直接新建
+    // 虚拟字段
     if fieldConfig.Column == "" {
-        field := createField(class.Name, fieldName, fieldConfig)
-        fields[fieldName] = field
+        fields[fieldName] = createField(class.Name, fieldName, fieldConfig)
         continue
     }
 
-    // 基础字段（表名字段或标准字段名）
-    // 优先查找列名，其次标准字段名，都不存在时才新建
-    isTableField := fieldName == fieldConfig.Column
-    isStandardField := fieldName == fixedName
-    if isTableField || isStandardField {
-        var field *internal.Field
-        if old, ok := class.Fields[fieldConfig.Column]; ok {
-            updateField(old, fieldConfig)
-            field = old
-        } else if old, ok := class.Fields[fixedName]; ok {
-            updateField(old, fieldConfig)
-            field = old
-        } else {
-            field = createField(class.Name, fieldName, fieldConfig)
-        }
-        fields[fieldName] = field
-        continue
-    }
-
-    // 覆盖模式
-    if fieldConfig.Override {
-        // 优先查列名字段，其次标准字段名
+    // 主字段、标准字段、覆盖字段统一处理
+    // 只用列名做 key，字段 Name 用配置 key（fieldName），合并已有或新建
+    if fieldName == fieldConfig.Column || fieldName == canonName || fieldConfig.Override {
         baseField, ok := fields[fieldConfig.Column]
-        if !ok {
-            baseField, ok = fields[fixedName]
-        }
-        if !ok {
-            // 升级为基础字段
-            field := createField(class.Name, fieldName, fieldConfig)
-            fields[fieldName] = field
-            fields[field.Column] = field
-        } else {
-            // 用新字段名替换原字段名，指针一致
+        if ok {
+            // 复用已有字段指针，Name 用配置 key
             baseField.Name = fieldName
             updateField(baseField, fieldConfig)
-            fields[fieldName] = baseField
-            // 只删除标准字段名索引，保留列名索引
-            delete(fields, fixedName)
+        } else {
+            // 没有基础字段，新建，Name 用配置 key
+            field := createField(class.Name, fieldName, fieldConfig)
+            fields[fieldConfig.Column] = field
         }
         continue
     }
 
-    // 别名字段
-    baseField, ok := fields[fixedName]
+    // 别名/追加字段（必须依赖基础字段）
+    baseField, ok := fields[fieldConfig.Column]
     if !ok {
-        panic("别名字段必须有基础字段: " + fieldName)
+        // 返回错误，由上一级处理（如 Loader 或主流程）
+        return fmt.Errorf("别名字段 %s 必须有基础字段 %s", fieldName, fieldConfig.Column)
     }
     field := deepcopy.Copy(baseField).(*internal.Field)
     field.Name = fieldName
