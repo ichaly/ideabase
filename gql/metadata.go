@@ -15,7 +15,6 @@ import (
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
 	"github.com/jinzhu/inflection"
-	"github.com/mohae/deepcopy"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
 )
@@ -551,117 +550,59 @@ func (my *Metadata) normalize() error {
 	}
 	config := my.cfg.Metadata
 	nodes := make(map[string]*internal.Class)
-
-	// 第一阶段：处理类信息和收集关系信息
 	relations := make([]*internal.Field, 0)
 
-	for className, class := range my.Nodes {
-		// 1. 过滤表
+	for classKey, class := range my.Nodes {
+		// 跳过需要忽略的表
 		if class.Table != "" && lo.IndexOf(config.ExcludeTables, class.Table) > -1 {
 			continue
 		}
-		// 2. 字段处理
-		fields := make(map[string]*internal.Field, len(class.Fields))
-		for fieldName, field := range class.Fields {
+
+		fields := make(map[string]*internal.Field)
+		for fieldKey, field := range class.Fields {
+			// 跳过需要忽略的字段
 			if field.Column != "" && lo.IndexOf(config.ExcludeFields, field.Column) > -1 {
 				continue
 			}
-			if field.Column == "" {
-				// 虚拟字段直接使用字段名索引
-				field.Name = fieldName
-				fields[fieldName] = field
-			} else {
-				// 规范化命名
-				fixedName := metadata.ConvertFieldName(field.Column, config)
-
-				if fieldName == field.Column || fieldName == fixedName {
-					// 如果字段名和列名一致或字段名和驼峰名一致，则统一处理
-					field.Name = fixedName
-					fields[fixedName] = field
-					fields[field.Column] = field
-				} else {
-					// 索引与字段名和列名都不一致则为别名
-					node, ok := class.Fields[field.Column]
-					if node == field {
-						// 如果列名和字段名同一个指针则是覆盖模式
-						field.Name = fieldName
-						fields[fieldName] = field
-						fields[field.Column] = field
-					} else if ok {
-						// 如果列名和别名不是同一个指针则是追加模式
-						field.Name = fieldName
-						fields[fieldName] = node
-					} else {
-						// 纯配置模式
-						field.Name = fieldName
-						fields[fieldName] = field
-						// 复制并添加列名索引
-						copied := deepcopy.Copy(field).(*internal.Field)
-						copied.Name = fixedName
-						fields[fixedName] = copied
-						fields[field.Column] = copied
-					}
+			// 如果是列索引且列名和字段名一致，则用标准名赋值并用标准名做key
+			if field.Column == fieldKey {
+				if field.Name == field.Column {
+					field.Name = metadata.ConvertFieldName(field.Column, config)
 				}
+				fields[field.Name] = field
+			} else {
+				fields[fieldKey] = field
 			}
+			// 始终用原始字段名做key
+			fields[fieldKey] = field
 
-			// 收集需要更新的关系信息
 			if field.Relation != nil {
 				relations = append(relations, field)
 			}
 		}
 		class.Fields = fields
-		// 3. 处理类
-		if class.Table == "" {
-			// 虚拟类直接使用类名索引
-			class.Name = className
-			nodes[className] = class
-		} else {
-			// 规范化命名
-			fixedName := metadata.ConvertClassName(class.Table, config)
 
-			if className == class.Table || className == fixedName {
-				// 如果类名和表名一致或类名和驼峰名一致，则统一处理
-				class.Name = fixedName
-				nodes[fixedName] = class
-				nodes[class.Table] = class
-			} else {
-				// 索引与类名和表名都不一致则为别名
-				node, ok := my.Nodes[class.Table]
-				if node == class {
-					// 如果表名和类名同一个指针则是覆盖模式
-					class.Name = className
-					nodes[className] = class
-					nodes[class.Table] = class
-				} else if ok {
-					// 如果表名和别名不是同一个指针则是追加模式
-					class.Name = className
-					nodes[className] = class
-				} else {
-					// 纯配置模式
-					class.Name = className
-					nodes[className] = class
-					// 复制并添加表名类名索引
-					copied := deepcopy.Copy(class).(*internal.Class)
-					copied.Name = fixedName
-					nodes[fixedName] = copied
-					nodes[class.Table] = copied
-				}
+		// 如果是表索引且表名和类名一致，则用标准名赋值并用标准名做key
+		if class.Table == classKey {
+			if class.Name == class.Table {
+				class.Name = metadata.ConvertClassName(class.Table, config)
 			}
+			nodes[class.Name] = class
 		}
+		// 始终用原始类名做key
+		nodes[classKey] = class
 	}
 
-	// 第二阶段：更新关系名称
+	// 修正关系依赖中的类名
 	for _, field := range relations {
-		// 直接使用 Nodes 中的映射
-		if sourceNode, ok := nodes[field.Relation.SourceClass]; ok {
-			field.Relation.SourceClass = sourceNode.Name
+		if node, ok := nodes[field.Relation.SourceClass]; ok {
+			field.Relation.SourceClass = node.Name
 		}
-		if targetNode, ok := nodes[field.Relation.TargetClass]; ok {
-			field.Relation.TargetClass = targetNode.Name
+		if node, ok := nodes[field.Relation.TargetClass]; ok {
+			field.Relation.TargetClass = node.Name
 		}
 	}
 
-	// 替换原 Nodes
 	my.Nodes = nodes
 	return nil
 }
