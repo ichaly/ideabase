@@ -176,21 +176,13 @@ func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map
 
 		// 虚拟字段
 		if fieldConfig.Column == "" {
-			fields[fieldName] = createField(class.Name, fieldName, fieldConfig)
+			fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, fieldConfig, nil)
 			continue
 		}
 
 		// 列字段、标准字段、覆盖字段统一处理
 		if fieldName == fieldConfig.Column || fieldName == canonName || fieldConfig.Override {
-			baseField, ok := class.Fields[fieldConfig.Column]
-			if ok {
-				baseField.Name = fieldName
-				updateField(baseField, fieldConfig)
-				fields[fieldConfig.Column] = baseField
-			} else {
-				field := createField(class.Name, fieldName, fieldConfig)
-				fields[fieldConfig.Column] = field
-			}
+			fields[fieldConfig.Column] = my.buildFieldFromConfig(class.Name, fieldName, fieldConfig, class.Fields[fieldConfig.Column])
 			continue
 		}
 
@@ -199,36 +191,49 @@ func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map
 		if !ok {
 			return fmt.Errorf("别名字段 %s 必须有基础字段 %s", fieldName, fieldConfig.Column)
 		}
-		field := deepcopy.Copy(baseField).(*internal.Field)
-		field.Name = fieldName
-		updateField(field, fieldConfig)
-		fields[fieldName] = field
+		aliasField := deepcopy.Copy(baseField).(*internal.Field)
+		fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, fieldConfig, aliasField)
 	}
 	class.Fields = fields
 	return nil
 }
 
-// 更新字段
-func updateField(field *internal.Field, config *internal.FieldConfig) {
-	if config.Description != "" {
-		field.Description = config.Description
+// 字段创建或更新（类似类的处理方式）
+func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config *internal.FieldConfig, baseField *internal.Field) *internal.Field {
+	var field *internal.Field
+	if baseField != nil {
+		field = baseField
+	} else {
+		field = &internal.Field{}
 	}
-	if config.Type != "" {
-		field.Type = config.Type
-	}
-	if config.Column != "" {
+	field.Name = fieldName
+	if config.Column != "" || baseField == nil {
 		field.Column = config.Column
 	}
-	if config.Resolver != "" {
+	if config.Type != "" || baseField == nil {
+		field.Type = config.Type
+	}
+	if config.Description != "" || baseField == nil {
+		field.Description = config.Description
+	}
+	if config.Resolver != "" || baseField == nil {
 		field.Resolver = config.Resolver
 	}
-	field.IsPrimary = config.IsPrimary
-	field.IsUnique = config.IsUnique
-	field.Nullable = config.IsNullable
+	if baseField == nil || config.IsPrimary {
+		field.IsPrimary = config.IsPrimary
+	}
+	if baseField == nil || config.IsUnique {
+		field.IsUnique = config.IsUnique
+	}
+	if baseField == nil || config.IsNullable {
+		field.Nullable = config.IsNullable
+	}
+	// 关系处理
 	if config.Relation != nil {
 		if field.Relation == nil {
 			field.Relation = &internal.Relation{
-				SourceField: field.Name,
+				SourceClass: className,
+				SourceField: fieldName,
 			}
 		}
 		rel := field.Relation
@@ -261,7 +266,7 @@ func updateField(field *internal.Field, config *internal.FieldConfig) {
 				through.Name = throughConfig.ClassName
 			}
 			if through.Name == "" && through.Table != "" {
-				through.Name = through.Table // 简化处理
+				through.Name = through.Table
 			}
 			if len(throughConfig.Fields) > 0 {
 				if through.Fields == nil {
@@ -269,59 +274,7 @@ func updateField(field *internal.Field, config *internal.FieldConfig) {
 				}
 				for thrFieldName, thrFieldConfig := range throughConfig.Fields {
 					existingThrField := through.Fields[thrFieldName]
-					if existingThrField != nil {
-						updateField(existingThrField, thrFieldConfig)
-					} else {
-						thrField := createField(through.Name, thrFieldName, thrFieldConfig)
-						through.Fields[thrFieldName] = thrField
-					}
-				}
-			}
-		}
-	}
-}
-
-// 创建新字段
-func createField(className, fieldName string, config *internal.FieldConfig) *internal.Field {
-	field := &internal.Field{
-		Name:        fieldName,
-		Column:      config.Column,
-		Type:        config.Type,
-		Description: config.Description,
-		Nullable:    config.IsNullable,
-		IsPrimary:   config.IsPrimary,
-		IsUnique:    config.IsUnique,
-		Resolver:    config.Resolver,
-	}
-	if config.Relation != nil {
-		field.Relation = &internal.Relation{
-			SourceClass: className,
-			SourceField: fieldName,
-			TargetClass: config.Relation.TargetClass,
-			TargetField: config.Relation.TargetField,
-			Type:        internal.RelationType(config.Relation.Type),
-		}
-		switch field.Relation.Type {
-		case internal.MANY_TO_MANY, internal.ONE_TO_MANY:
-			field.IsList = true
-		case internal.MANY_TO_ONE, internal.RECURSIVE:
-			field.IsList = false
-		}
-		if config.Relation.Through != nil {
-			field.Relation.Through = &internal.Through{
-				Table:     config.Relation.Through.Table,
-				SourceKey: config.Relation.Through.SourceKey,
-				TargetKey: config.Relation.Through.TargetKey,
-				Name:      config.Relation.Through.ClassName,
-			}
-			if field.Relation.Through.Name == "" && field.Relation.Through.Table != "" {
-				field.Relation.Through.Name = field.Relation.Through.Table
-			}
-			if len(config.Relation.Through.Fields) > 0 {
-				field.Relation.Through.Fields = make(map[string]*internal.Field)
-				for thrFieldName, thrFieldConfig := range config.Relation.Through.Fields {
-					thrField := createField(field.Relation.Through.Name, thrFieldName, thrFieldConfig)
-					field.Relation.Through.Fields[thrFieldName] = thrField
+					through.Fields[thrFieldName] = my.buildFieldFromConfig(through.Name, thrFieldName, thrFieldConfig, existingThrField)
 				}
 			}
 		}
