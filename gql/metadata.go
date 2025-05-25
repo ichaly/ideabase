@@ -531,13 +531,14 @@ func (my *Metadata) normalize() error {
 				continue
 			}
 			// 如果是列索引且列名和字段名一致，则用标准名赋值并用标准名做key
-			if field.Column == fieldKey {
+			if field.Column != "" {
+				canonName := metadata.ConvertFieldName(field.Column, config)
 				if field.Name == field.Column {
-					field.Name = metadata.ConvertFieldName(field.Column, config)
+					field.Name = canonName
+					fields[canonName] = field
+				} else if field.Name == canonName {
+					fields[field.Column] = field
 				}
-				fields[field.Name] = field
-			} else {
-				fields[fieldKey] = field
 			}
 			// 始终用原始字段名做key
 			fields[fieldKey] = field
@@ -549,11 +550,14 @@ func (my *Metadata) normalize() error {
 		class.Fields = fields
 
 		// 如果是表索引且表名和类名一致，则用标准名赋值并用标准名做key
-		if class.Table == classKey {
+		if class.Table != "" {
+			canonName := metadata.ConvertClassName(class.Table, config)
 			if class.Name == class.Table {
-				class.Name = metadata.ConvertClassName(class.Table, config)
+				class.Name = canonName
+				nodes[canonName] = class
+			} else if class.Name == canonName {
+				nodes[class.Table] = class
 			}
-			nodes[class.Name] = class
 		}
 		// 始终用原始类名做key
 		nodes[classKey] = class
