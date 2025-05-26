@@ -188,6 +188,7 @@ func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map
 		fieldConfig := fieldConfigs[fieldName]
 		canonName := ConvertFieldName(fieldConfig.Column, config)
 
+		// TODO: 如果字段存在，则尝试使用字段的列名,是否有必要?
 		if field, ok := fields[fieldName]; ok {
 			fieldConfig.Column = field.Column
 		}
