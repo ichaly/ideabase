@@ -59,7 +59,10 @@ func (my *ConfigLoader) Load(h Hoster) error {
 
 		// 虚拟类
 		if classConfig.Table == "" {
-			class := my.buildClassFromConfig(className, classConfig, nil)
+			class, err := my.buildClassFromConfig(className, classConfig, nil)
+			if err != nil {
+				return err
+			}
 			h.PutClass(className, class)
 			continue
 		}
@@ -70,11 +73,17 @@ func (my *ConfigLoader) Load(h Hoster) error {
 			if ok {
 				// 合并配置
 				// 这里只做简单覆盖，实际可用updateClass合并
-				class := my.buildClassFromConfig(className, classConfig, baseClass)
+				class, err := my.buildClassFromConfig(className, classConfig, baseClass)
+				if err != nil {
+					return err
+				}
 				classes[classConfig.Table] = class
 				h.PutClass(classConfig.Table, class)
 			} else {
-				class := my.buildClassFromConfig(className, classConfig, nil)
+				class, err := my.buildClassFromConfig(className, classConfig, nil)
+				if err != nil {
+					return err
+				}
 				classes[classConfig.Table] = class
 				h.PutClass(classConfig.Table, class)
 			}
@@ -86,7 +95,10 @@ func (my *ConfigLoader) Load(h Hoster) error {
 		if !ok {
 			return fmt.Errorf("别名类 %s 必须有基础类 %s", className, classConfig.Table)
 		}
-		class := my.buildClassFromConfig(className, classConfig, baseClass)
+		class, err := my.buildClassFromConfig(className, classConfig, baseClass)
+		if err != nil {
+			return err
+		}
 		classes[className] = class
 		h.PutClass(className, class)
 	}
@@ -94,7 +106,7 @@ func (my *ConfigLoader) Load(h Hoster) error {
 }
 
 // buildClassFromConfig 根据ClassConfig和可选baseClass构建Class对象
-func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *internal.ClassConfig, baseClass *internal.Class) *internal.Class {
+func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *internal.ClassConfig, baseClass *internal.Class) (*internal.Class, error) {
 	isVirtual := classConfig.Table == ""
 	var newClass *internal.Class
 	if baseClass != nil {
@@ -119,8 +131,10 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 		newClass.PrimaryKeys = classConfig.PrimaryKeys
 	}
 	my.applyFieldFilter(newClass, classConfig)
-	my.applyFieldConfig(newClass, classConfig.Fields)
-	return newClass
+	if err := my.applyFieldConfig(newClass, classConfig.Fields); err != nil {
+		return nil, err
+	}
+	return newClass, nil
 }
 
 // 应用字段过滤
@@ -169,10 +183,14 @@ func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map
 	orderedFields = append(orderedFields, aliasFields...)
 	orderedFields = append(orderedFields, virtualFields...)
 
-	fields := make(map[string]*internal.Field)
+	fields := class.Fields
 	for _, fieldName := range orderedFields {
 		fieldConfig := fieldConfigs[fieldName]
 		canonName := ConvertFieldName(fieldConfig.Column, config)
+
+		if field, ok := fields[fieldName]; ok {
+			fieldConfig.Column = field.Column
+		}
 
 		// 虚拟字段
 		if fieldConfig.Column == "" {

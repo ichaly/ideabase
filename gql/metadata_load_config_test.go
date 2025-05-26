@@ -65,7 +65,6 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 			Override:    true,
 			Fields: map[string]*internal.FieldConfig{
 				"role": {
-					Column:      "role_id",
 					Type:        "string",
 					Description: "角色",
 					Resolver:    "RoleResolver",
@@ -128,7 +127,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		require.True(t, exists, "应该存在AdminUser类")
 		assert.Equal(t, "管理员视图", class.Description)
 		assert.Equal(t, "users", class.Table)
-		assertField(t, class, "role", "role_id", "string", false, false, false, "角色", "RoleResolver")
+		assertField(t, class, "role", "", "string", false, false, false, "角色", "RoleResolver")
 		_, exists = class.Fields["name"]
 		assert.True(t, exists, "name字段应该存在")
 		_, exists = class.Fields["email"]
@@ -149,8 +148,8 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		assert.Equal(t, "", class.Table)
 		assert.Equal(t, "统计数据", class.Description)
 		assert.Equal(t, "StatisticsResolver", class.Resolver)
-		assertField(t, class, "totalUsers", "totalUsers", "integer", false, false, false, "用户总数", "CountUsersResolver")
-		assertField(t, class, "activeUsers", "activeUsers", "integer", false, false, false, "活跃用户数", "CountActiveUsersResolver")
+		assertField(t, class, "totalUsers", "", "integer", false, false, false, "用户总数", "CountUsersResolver")
+		assertField(t, class, "activeUsers", "", "integer", false, false, false, "活跃用户数", "CountActiveUsersResolver")
 	})
 
 	t.Run("MiniUser包含字段类", func(t *testing.T) {
@@ -160,7 +159,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		assert.Equal(t, "用户简要信息", class.Description)
 		assertField(t, class, "id", "id", "int", true, false, false, "用户ID", "")
 		assertField(t, class, "name", "name", "string", false, false, false, "用户名", "")
-		assertField(t, class, "displayName", "displayName", "string", false, false, false, "显示名称", "DisplayNameResolver")
+		assertField(t, class, "displayName", "", "string", false, false, false, "显示名称", "DisplayNameResolver")
 		_, exists = class.Fields["email"]
 		assert.False(t, exists, "email字段应该被排除")
 		_, exists = class.Fields["created_at"]
