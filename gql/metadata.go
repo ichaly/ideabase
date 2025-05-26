@@ -535,9 +535,11 @@ func (my *Metadata) normalize() error {
 				canonName := metadata.ConvertFieldName(field.Column, config)
 				if field.Name == field.Column {
 					field.Name = canonName
-					fields[canonName] = field
+					fields[field.Name] = field
 				} else if field.Name == canonName {
 					fields[field.Column] = field
+				} else if fieldKey != field.Name {
+					fields[field.Name] = field
 				}
 			}
 			// 始终用原始字段名做key
@@ -554,9 +556,11 @@ func (my *Metadata) normalize() error {
 			canonName := metadata.ConvertClassName(class.Table, config)
 			if class.Name == class.Table {
 				class.Name = canonName
-				nodes[canonName] = class
+				nodes[class.Name] = class
 			} else if class.Name == canonName {
 				nodes[class.Table] = class
+			} else if classKey != class.Name {
+				nodes[class.Name] = class
 			}
 		}
 		// 始终用原始类名做key
