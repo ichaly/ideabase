@@ -167,15 +167,15 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 	})
 
 	t.Run("多重索引一致性与边界", func(t *testing.T) {
-		for _, class := range meta.Nodes {
-			if class.Table != "" {
-				tablePtr, tableExists := meta.Nodes[class.Table]
+		for classKey, class := range meta.Nodes {
+			if classKey == class.Table {
+				tablePtr, tableExists := meta.Nodes[class.Name]
 				assert.True(t, tableExists)
 				assert.Same(t, class, tablePtr)
 			}
-			for _, field := range class.Fields {
-				if field.Column != "" {
-					colPtr, colExists := class.Fields[field.Column]
+			for fieldKey, field := range class.Fields {
+				if fieldKey == field.Column {
+					colPtr, colExists := class.Fields[field.Name]
 					assert.True(t, colExists)
 					assert.Same(t, field, colPtr)
 				}
@@ -184,7 +184,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		// 不存在的类/字段
 		_, exists := meta.Nodes["NotExist"]
 		assert.False(t, exists)
-		if user, ok := meta.Nodes["User"]; ok {
+		if user, ok := meta.Nodes["AdminUser"]; ok {
 			_, exists = user.Fields["notExistField"]
 			assert.False(t, exists)
 		}
