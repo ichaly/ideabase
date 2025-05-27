@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/huandu/go-clone"
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/jinzhu/inflection"
-	"github.com/mohae/deepcopy"
 )
 
 // ConfigLoader 配置元数据加载器
@@ -52,7 +52,6 @@ func (my *ConfigLoader) Load(h Hoster) error {
 	orderedClasses = append(orderedClasses, aliasClasses...)
 	orderedClasses = append(orderedClasses, virtualClasses...)
 
-	classes := make(map[string]*internal.Class)
 	for _, className := range orderedClasses {
 		classConfig := my.cfg.Metadata.Classes[className]
 		canonName := ConvertClassName(classConfig.Table, my.cfg.Metadata)
@@ -69,7 +68,7 @@ func (my *ConfigLoader) Load(h Hoster) error {
 
 		// 主类/标准类/覆盖类统一处理
 		if className == classConfig.Table || className == canonName || classConfig.Override {
-			baseClass, ok := classes[classConfig.Table]
+			baseClass, ok := h.GetClass(classConfig.Table)
 			if ok {
 				// 合并配置
 				// 这里只做简单覆盖，实际可用updateClass合并
@@ -77,21 +76,19 @@ func (my *ConfigLoader) Load(h Hoster) error {
 				if err != nil {
 					return err
 				}
-				classes[classConfig.Table] = class
 				h.PutClass(classConfig.Table, class)
 			} else {
 				class, err := my.buildClassFromConfig(className, classConfig, nil)
 				if err != nil {
 					return err
 				}
-				classes[classConfig.Table] = class
 				h.PutClass(classConfig.Table, class)
 			}
 			continue
 		}
 
 		// 别名类（必须依赖基础类）
-		baseClass, ok := classes[classConfig.Table]
+		baseClass, ok := h.GetClass(classConfig.Table)
 		if !ok {
 			return fmt.Errorf("别名类 %s 必须有基础类 %s", className, classConfig.Table)
 		}
@@ -99,7 +96,6 @@ func (my *ConfigLoader) Load(h Hoster) error {
 		if err != nil {
 			return err
 		}
-		classes[className] = class
 		h.PutClass(className, class)
 	}
 	return nil
@@ -111,7 +107,7 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	var newClass *internal.Class
 	if baseClass != nil {
 		// 复制或覆盖
-		newClass = deepcopy.Copy(baseClass).(*internal.Class)
+		newClass = clone.Slowly(baseClass).(*internal.Class)
 		newClass.Name = className
 	} else {
 		newClass = &internal.Class{
@@ -210,7 +206,7 @@ func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map
 		if !ok {
 			return fmt.Errorf("别名字段 %s 必须有基础字段 %s", fieldName, fieldConfig.Column)
 		}
-		aliasField := deepcopy.Copy(baseField).(*internal.Field)
+		aliasField := clone.Slowly(baseField).(*internal.Field)
 		fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, fieldConfig, aliasField)
 	}
 	class.Fields = fields
