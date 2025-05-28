@@ -1,8 +1,6 @@
 package gql
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/internal"
@@ -63,15 +61,11 @@ func TestMetadataLoad_FileAndConfig(t *testing.T) {
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
 
-	meta, err := NewMetadata(k, db)
+	_, err = NewMetadata(k, db)
 	require.NoError(t, err)
-	filePath := filepath.Join(utl.Root(), "cfg", "metadata.mixed.json")
-	err = meta.saveToFile(filePath)
-	require.NoError(t, err)
-	defer os.Remove(filePath)
 
 	k.Set("mode", "test")
-	k.Set("metadata.file", "cfg/metadata.mixed.json")
+	k.Set("metadata.file", "cfg/metadata.dev.json")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
 		"PostAlias": {
 			Table:       "posts",
