@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/metadata"
 	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
@@ -107,6 +108,7 @@ func TestMetadataLoad_ConfigOnly(t *testing.T) {
 		"A": {
 			Table:       "a_table",
 			Description: "A类",
+			Override:    true,
 			Fields: map[string]*internal.FieldConfig{
 				"id": {Column: "id", Type: "int", IsPrimary: true},
 			},
@@ -120,7 +122,7 @@ func TestMetadataLoad_ConfigOnly(t *testing.T) {
 		},
 	})
 
-	meta, err := NewMetadata(k, nil)
+	meta, err := NewMetadata(k, nil, WithoutLoader(metadata.LoaderFile))
 	require.NoError(t, err)
 	a, aExists := meta.Nodes["A"]
 	aAlias, aliasExists := meta.Nodes["AAlias"]
