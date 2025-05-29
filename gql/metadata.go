@@ -533,8 +533,10 @@ func (my *Metadata) normalize() error {
 			// 如果是列索引且列名和字段名一致，则用标准名赋值并用标准名做key
 			if field.Column != "" {
 				canonName := metadata.ConvertFieldName(field.Column, config)
-				if field.Name == field.Column {
-					field.Name = canonName
+				if fieldKey == field.Column {
+					if field.Name == field.Column {
+						field.Name = canonName
+					}
 					fields[field.Name] = field
 				} else if field.Name == canonName {
 					fields[field.Column] = field
@@ -554,12 +556,19 @@ func (my *Metadata) normalize() error {
 		// 如果是表索引且表名和类名一致，则用标准名赋值并用标准名做key
 		if class.Table != "" {
 			canonName := metadata.ConvertClassName(class.Table, config)
-			if class.Name == class.Table {
-				class.Name = canonName
+			// classKey就三种情况：原始表名、标准类名、别名类名
+			if classKey == class.Table {
+				// 覆盖模式时类名和表名不一致就不用标准化类名,所以这里只处理类名使用了表名的情况
+				if class.Name == class.Table {
+					class.Name = canonName // 标准化类名
+				}
+				// 用标准化类名做key，支持通过类名查找
 				nodes[class.Name] = class
 			} else if class.Name == canonName {
+				// 用原始表名做key，支持通过表名查找
 				nodes[class.Table] = class
 			} else if classKey != class.Name {
+				// 用标准化类名做key，确保所有标准化名都能索引到
 				nodes[class.Name] = class
 			}
 		}
