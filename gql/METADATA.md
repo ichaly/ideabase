@@ -1,289 +1,239 @@
-# GraphQL 元数据加载器
+# IdeaBase 元数据加载模块
 
-## 概述
+## 设计思想
 
-元数据加载器是 GraphQL 模块的核心组件，负责从多种来源加载数据库结构信息，合并后转换为内存中的数据结构，供 GraphQL 查询引擎使用。它提供了灵活的配置选项，支持多种数据源，以及丰富的名称转换和过滤功能。
+元数据加载系统是 IdeaBase 的核心基础设施，旨在为 GraphQL 查询编译和 SQL 生成提供统一、灵活、可扩展的数据库结构描述。其设计目标包括：
 
-## 主要功能
+- **多源融合**：支持数据库、文件、配置三类数据源，自动合并并按优先级覆盖。
+- **环境自适应**：开发环境优先数据库直连，生产环境优先文件缓存，配置始终可增强和覆盖。
+- **高可扩展性**：采用策略模式，Loader 可插拔，优先级可控，便于扩展新数据源。
+- **一致性与性能**：多重索引、命名规范化、关系自动推导，保证运行时高效与一致。
+- **易用性**：配置灵活，支持虚拟表、字段别名、关系自定义、字段过滤等高级特性。
 
-### 多源数据加载
+## 实现架构
 
-元数据加载器采用了智能的多级加载机制：
+### Loader 策略模式
 
-1. **环境感知加载**：
-   - 开发环境：直接从数据库加载最新的表结构
-   - 生产环境：从预设文件加载固定的表结构（避免不必要的数据库连接）
+系统内置四种 Loader，均实现统一接口：
 
-2. **配置增强**：
-   - 无论在哪种环境，都会从配置中加载可配置的元数据结构
-   - 配置中的定义会与基础元数据合并，配置拥有最高优先级
+- **PgsqlLoader**：从 PostgreSQL 数据库实时加载表、字段、主外键、关系等元数据。
+- **MysqlLoader**：从 MySQL 数据库实时加载结构信息。
+- **FileLoader**：从 JSON 文件加载预生成的元数据快照，适合生产环境。
+- **ConfigLoader**：从应用配置加载自定义元数据，支持虚拟表、字段、关系、别名等。
 
-3. **合并策略**：
-   - 对于同名的类和字段，配置会覆盖基础元数据
-   - 配置中定义的新类和字段会被添加到元数据中
-   - 虚拟表和字段只能通过配置创建
+Loader 通过优先级排序，依次执行，后加载的可覆盖前者。Loader 支持动态增删、钩子扩展。
 
-### 数据源类型
+#### Loader 优先级（默认）
 
-元数据加载器使用以下数据源：
+- 数据库（Pgsql/Mysql）：60
+- 文件：80
+- 配置：100
 
-1. **数据库源（Database）**：
-   - 直接从 PostgreSQL 数据库中读取表结构信息
-   - 自动获取表、列、主键和外键关系
-   - 支持从表和列的注释中读取描述信息
+### 合并与覆盖策略
 
-2. **文件源（File）**：
-   - 从 JSON 文件读取预先生成的元数据缓存
-   - 适用于生产环境，避免频繁连接数据库
-   - 支持从开发环境导出元数据供生产使用
+- **主流程**：
+  1. 按优先级依次执行 Loader，将元数据注入 Hoster（即 Metadata 实例）。
+  2. 同名类/字段后加载的覆盖前者，配置源拥有最高优先级。
+  3. 虚拟表、虚拟字段只能通过配置源创建。
+- **字段合成**：
+  - 字段分组排序：主字段 > 标准字段 > 覆盖 > 别名 > 虚拟。
+  - 别名字段依赖主字段，虚拟字段完全自定义。
+  - 字段过滤（include/exclude）在字段合成后应用。
 
-3. **配置源（Config）**：
-   - 直接从应用配置中读取元数据定义
-   - 完全自定义的表和字段结构
-   - 适用于虚拟表或复杂的自定义数据结构
-   - 支持配置关联表
-   - 可用于覆盖数据库或文件中的定义
+### 命名规范与多重索引
 
-### 元数据缓存
+- **命名规范化**：
+  - 支持下划线转驼峰、表名前缀去除、单复数自动转换。
+  - 可通过配置自定义表名、字段名映射。
+- **多重索引**：
+  - 类名、表名、别名均可索引 Class。
+  - 字段名、列名、别名均可索引 Field。
+  - 支持通过表名、类名、别名、字段名、列名多路径查找。
 
-- 支持将从数据库读取的元数据序列化到 JSON 文件
-- 可配置是否启用缓存功能
-- 适用于无法直接连接数据库的环境（如无权限读取数据库结构）
-- 特别注意元数据的Nodes字段里包含了类名和表名的双重索引,Class的Fields也做了字段名和列名的双重索引
+### 关系自动推导
 
-### 命名转换
+- 自动识别一对多、多对一、多对多、自关联等关系。
+- 多对多关系自动识别中间表，支持通过配置自定义中间表结构。
+- 关系字段自动生成，支持正反向导航。
 
-- **下划线转驼峰**：自动将数据库中的下划线命名转换为 GraphQL 友好的驼峰命名
-- **表名前缀去除**：自动去除表名中的特定前缀（例如 `tbl_`、`app_` 等）
-- **自定义映射**：支持通过配置手动指定表名和字段名的映射关系
+### 并发与性能
 
-### 过滤功能
-
-- **表级过滤**：
-  - 包含列表：仅加载指定的表（白名单）
-  - 排除列表：排除指定的表（黑名单）
-
-- **字段级过滤**：
-  - 排除指定的字段（如敏感信息 `password`、`secret` 等）
-
-### 关系处理
-
-- 自动识别和处理外键关系
-- 支持多种关系类型：一对多、多对一、多对多、递归关系
-- 构建关系索引，便于查询时快速定位关联数据
-
-## 数据结构
-
-元数据加载器使用多层索引结构组织内存中的元数据：
-
-1. **主索引**：`Nodes` - 类名到类定义的映射
-2. **表名索引**：`tableToClass` - 表名到类名的映射
-3. **原始表名索引**：`rawTableToClass` - 原始（转换前）表名到类名的映射
-4. **关系索引**：`relationships` - 表名和列名到外键关系的多级映射
+- Metadata 实例线程安全，Loader 幂等。
+- 文件加载和缓存机制优化生产环境性能。
+- 数据库 Loader 仅在开发/调试模式下启用。
 
 ## 配置选项
 
-元数据加载器支持以下配置选项：
+元数据加载模块的配置分为两大部分：`schema` 和 `metadata`，分别对应 `SchemaConfig` 和 `MetadataConfig` 结构体。
+
+### 1. schema（SchemaConfig）
+
+| 字段名        | 类型              | 默认值 | 说明                           |
+| ------------- | ----------------- | ------ | ------------------------------ |
+| schema        | string            | public | 数据库 schema 名               |
+| default-limit | int               | 10     | 默认分页限制                   |
+| mapping       | map[string]string | 空     | 数据类型映射（如 int→integer） |
+
+**示例：**
 
 ```yaml
 schema:
-  # 元数据加载源：database, file, config
-  source: database
-  
-  # 数据库 schema 名称（用于 database 源）
-  schema: public
-  
-  # 是否启用下划线转驼峰命名
-  enable-camel-case: true
-  
-  # 是否启用缓存
-  enable-cache: false
-  
-  # 缓存文件路径（用于 file 源或 enable-cache 为 true 时）
-  cache-path: ./metadata_cache.json
-  
-  # 表名前缀（用于去除，支持多个前缀）
-  table-prefix: 
-    - tbl_
-    - app_
-  
-  # 要包含的表（空表示包含所有）
-  include-tables: []
-  
-  # 要排除的表
-  exclude-tables: []
-  
-  # 要排除的字段
-  exclude-fields: []
-  
-  # 字段名映射（用于自定义命名）
-  field-mapping: {}
-  
-  # 表名映射（用于自定义命名）
-  table-mapping: {}
-  
-  # 数据类型映射
-  mapping: {}
-  
-  # 默认分页限制
-  default-limit: 10
+  schema: public # 数据库schema名
+  default-limit: 10 # 默认分页限制
+  mapping: # 数据类型映射（可选）
+    int: integer
+    varchar: string
 ```
 
-## 使用示例
+### 2. metadata（MetadataConfig）
 
-### 1. 配置不同环境
+| 字段名         | 类型                     | 默认值 | 说明                             |
+| -------------- | ------------------------ | ------ | -------------------------------- |
+| classes        | map[string]\*ClassConfig | 空     | 类定义映射（key 为类名）         |
+| file           | string                   | 空     | 元数据文件路径，支持{mode}占位符 |
+| use-camel      | bool                     | true   | 是否使用驼峰命名                 |
+| use-singular   | bool                     | true   | 是否使用单数类名                 |
+| show-through   | bool                     | true   | 是否显示多对多中间表             |
+| table-prefix   | []string                 | 空     | 需要去除的表名前缀               |
+| exclude-tables | []string                 | 空     | 需要排除的表名                   |
+| exclude-fields | []string                 | 空     | 需要排除的字段名                 |
 
-```go
-import (
-    "github.com/spf13/viper"
-    "gorm.io/gorm"
-    "github.com/ichaly/ideabase/gql"
-)
-
-func main() {
-    // 配置
-    v := viper.New()
-    
-    // 开发环境配置
-    v.Set("debug", true) // 设置为开发环境，将从数据库加载元数据
-    v.Set("schema.schema", "public")
-    v.Set("schema.enable-camel-case", true)
-    v.Set("schema.table-prefix", []string{"tbl_", "app_"})
-    
-    // 数据库连接（开发环境需要）
-    db, _ := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-    
-    // 创建元数据加载器
-    meta, err := gql.NewMetadata(v, db)
-    if err != nil {
-        panic(err)
-    }
-    
-    // 使用元数据
-    // ...
-}
-```
-
-### 2. 配置元数据增强
+**示例：**
 
 ```yaml
-# 配置文件示例 (config.yaml)
-debug: false  # 生产环境
-
-schema:
-  cache-path: "./metadata_cache.json"  # 预设元数据文件
-
-# 元数据定义 - 将与基础元数据合并
 metadata:
-  tables:
-    - name: users
-      display_name: User
-      description: "用户信息表"
-      primary_keys: ["id"]
-      columns:
-        - name: id
-          display_name: id
+  file: cfg/metadata.{mode}.json # 元数据文件路径，支持{mode}占位符
+  use-camel: true # 是否使用驼峰命名
+  use-singular: true # 是否使用单数类名
+  show-through: true # 是否显示多对多中间表
+  table-prefix: [tbl_, app_] # 需要去除的表名前缀
+  exclude-tables: [audit_log] # 排除的表名
+  exclude-fields: [password] # 排除的字段名
+  classes:
+    User:
+      table: users
+      description: "用户信息"
+      primary_keys: [id]
+      resolver: "UserResolver"
+      fields:
+        id:
+          column: id
           type: integer
-          is_primary: true
-          description: "用户ID"
-        
-        - name: user_name
-          display_name: username
+          primary: true
+        username:
+          column: user_name
           type: string
-          description: "用户名"
-          
-        # 虚拟字段示例
-        - name: full_name
-          display_name: fullName
+        email:
+          column: email
           type: string
-          description: "用户全名(虚拟字段)"
-          # 没有对应的数据库列，会被视为虚拟字段
-        
-        # 外键关系示例
-        - name: department_id
-          display_name: departmentId
-          type: integer
-          description: "部门ID"
-          foreign_key:
-            table: departments  # 关联表
-            column: id         # 关联列
-            kind: many_to_one  # 关系类型
-    
-    # 完全虚拟的表示例
-    - name: statistics_view
-      display_name: Statistics
-      description: "统计数据视图"
-      columns:
-        - name: total_users
-          display_name: totalUsers
-          type: integer
-          description: "用户总数"
+      exclude_fields: [password]
+      include_fields: [id, username, email]
+      override: false
 ```
 
-### 3. 使用过滤功能
+> 详细的 `ClassConfig`、`FieldConfig`、`RelationConfig`、`ThroughConfig` 字段说明请参考 internal/config.go 或相关文档。
+
+## 典型用法
+
+### 1. 自动环境切换
 
 ```go
-// 只包含指定表
-v.Set("schema.include-tables", []string{"users", "posts", "comments"})
-
-// 排除敏感字段
-v.Set("schema.exclude-fields", []string{"password", "secret_key"})
+meta, err := gql.NewMetadata(konfig, db) // dev: 数据库优先，prod: 文件优先
 ```
 
-## 高级功能
-
-### 1. 自定义表名和字段名映射
+### 2. 自定义 Loader 组合
 
 ```go
-// 表名映射
-v.Set("schema.table-mapping", map[string]string{
-    "tbl_user_account": "User",
-    "tbl_blog_post": "Article",
-})
-
-// 字段名映射
-v.Set("schema.field-mapping", map[string]string{
-    "tbl_user_account.user_name": "username",
-    "created_at": "creationTime",
-})
+meta, err := gql.NewMetadata(konfig, db,
+    WithoutLoader(metadata.LoaderPgsql),
+    WithLoader(NewCustomLoader(...)),
+)
 ```
 
-### 2. 虚拟字段和类
+### 3. 配置虚拟表/字段/关系
 
-可以通过配置源创建不存在于数据库中的虚拟字段和类，用于实现复杂的数据关系或计算字段。
+```yaml
+metadata:
+  classes:
+    Statistics:
+      virtual: true
+      description: "统计数据"
+      fields:
+        totalUsers:
+          type: integer
+          resolver: CountUsersResolver
+```
+
+### 4. 字段过滤与别名
+
+```yaml
+metadata:
+  classes:
+    PublicUser:
+      table: users
+      exclude_fields: ["password", "phone"]
+      fields:
+        email:
+          description: "脱敏邮箱"
+          resolver: MaskedEmailResolver
+```
+
+### 5. 多对多关系与中间表
+
+```yaml
+metadata:
+  classes:
+    Post:
+      table: posts
+      fields:
+        tags:
+          virtual: true
+          relation:
+            target_class: Tag
+            type: many_to_many
+            through:
+              table: post_tags
+              source_key: post_id
+              target_key: tag_id
+```
+
+## 数据结构
+
+- **主索引**：`Nodes` - 类名到类定义的映射（支持表名、别名多重索引）
+- **Class/Field/Relation**：详见 internal 包定义
+- **多重索引**：支持通过类名、表名、别名、字段名、列名多路径查找
+
+## 主要接口与数据结构
+
+- `Loader`：Name()、Load(Hoster)、Support()、Priority()
+- `Hoster`：PutClass/GetClass/SetVersion
+- `Metadata.Nodes`：多重索引，类名/表名/别名均可查
+- `internal.Class`/`internal.Field`/`internal.Relation`：详见 internal 包
 
 ## 最佳实践
 
-1. **开发环境**：
-   - 启用 `debug` 模式，直接从数据库加载最新结构
-   - 启用缓存功能，以便导出元数据供生产环境使用
+1. **开发环境**：优先数据库直连，调试结构变更，自动导出文件缓存。
+2. **生产环境**：优先文件加载，禁用数据库直连，配置增强。
+3. **字段过滤**：优先用 include_fields 精简视图，exclude_fields 排除敏感字段。
+4. **关系配置**：复杂关系建议显式配置，避免自动推导误判。
+5. **虚拟表/字段**：仅通过配置源定义，适合统计、聚合、外部数据等场景。
+6. **索引一致性**：类名、表名、别名、字段名、列名均可查找，便于兼容多种访问方式。
 
-2. **测试环境**：
-   - 可以使用与开发环境类似的配置
-   - 在数据库结构变更后清除缓存
+## 注意事项
 
-3. **生产环境**：
-   - 禁用 `debug` 模式，从预设文件加载结构
-   - 配置统一的元数据文件位置
-   - 使用配置元数据覆盖必要的类和字段定义
+- 配置源定义的类/字段/关系拥有最高优先级，始终覆盖其他源。
+- 虚拟表/字段不会自动出现在数据库或文件源中，需显式配置。
+- 多对多关系自动识别仅限于典型中间表结构，复杂场景建议手动配置。
+- 文件缓存建议定期导出，保持与数据库结构同步。
+- Loader 支持自定义扩展，建议实现 Support() 以适配不同环境。
 
-4. **安全考虑**：
-   - 始终使用 `exclude-fields` 排除敏感字段
-   - 使用 `include-tables` 严格控制可访问的表
+## 参考实现与扩展建议
 
-## 扩展计划
+- 可扩展更多 Loader（如 REST、gRPC、NoSQL 等）。
+- 支持 Loader 生命周期钩子、健康检查、动态重载。
+- 提供元数据变更监听与热更新能力。
+- 支持多语言/多租户场景下的元数据隔离。
 
-1. **支持更多数据库**：
-   - 除 PostgreSQL 外，添加对 MySQL、SQL Server 等数据库的支持
-   
-2. **增强的关系检测**：
-   - 基于命名约定的隐式关系识别
-   - 复杂关系类型支持（多对多中间表）
-   
-3. **元数据缓存优化**：
-   - 增量更新机制
-   - 基于 etag 的缓存验证
+---
 
-4. **模式版本控制**：
-   - 跟踪和管理元数据变更
-   - 提供向后兼容性支持
+如需详细接口说明、数据结构定义和高级用法，请参考 internal 包和各 Loader 源码注释。
