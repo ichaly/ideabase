@@ -96,7 +96,7 @@ func TestIntrospection(t *testing.T) {
 	renderer := NewRenderer(meta)
 
 	// 创建测试执行器
-	executor, err := NewExecutor(nil, renderer, meta) // 直接使用元数据初始化执行器
+	executor, err := NewExecutor(nil, renderer, meta, nil) // 直接使用元数据初始化执行器
 	assert.NoError(t, err)
 
 	// 测试__schema查询
@@ -115,7 +115,7 @@ func TestIntrospection(t *testing.T) {
 		assert.NotNil(t, result.Data)
 
 		// 验证结果
-		schemaData, ok := result.Data["__schema"]
+		schemaData := result.Data["__schema"]
 		assert.NotNil(t, schemaData, "结果中应包含__schema")
 
 		schemaDataMap, ok := schemaData.(map[string]interface{})
@@ -160,7 +160,7 @@ func TestIntrospection(t *testing.T) {
 		assert.NotNil(t, result.Data)
 
 		// 验证结果
-		typeData, ok := result.Data["__type"]
+		typeData := result.Data["__type"]
 		assert.NotNil(t, typeData, "结果中应包含__type")
 
 		typeDataMap, ok := typeData.(map[string]interface{})

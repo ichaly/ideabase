@@ -170,7 +170,7 @@ func (my *Compiler) String() string {
 	return strings.TrimSpace(my.buf.String())
 }
 
-func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[string]interface{}) {
+func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[string]interface{}) (string, []any, error) {
 	my.variables = variables
 	switch operation.Operation {
 	case ast.Query, ast.Subscription:
@@ -178,6 +178,7 @@ func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[stri
 	case ast.Mutation:
 		my.dialect.BuildMutation(my, operation.SelectionSet)
 	}
+	return my.String(), my.params, nil
 }
 
 // AddParam 添加参数并返回参数索引

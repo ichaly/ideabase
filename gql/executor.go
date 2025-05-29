@@ -5,7 +5,6 @@ package gql
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/gofiber/fiber/v2"
@@ -57,11 +56,11 @@ type (
 // 负责解析GraphQL查询、编译为SQL并执行查询，支持多种数据库方言
 // 可作为Fiber插件集成到Web服务中，提供标准的GraphQL API
 type Executor struct {
-	db      *gorm.DB       // 数据库连接，用于执行生成的SQL
-	meta    *Metadata      // 元数据信息，包含表结构、关系等
-	intro   *intro.Handler // 自省处理器，处理__schema和__type查询
-	schema  *ast.Schema    // GraphQL模式定义
-	dialect Dialect        // SQL方言实现
+	intro    *intro.Handler // 自省处理器，处理__schema和__type查询
+	schema   *ast.Schema    // GraphQL模式定义
+	database *gorm.DB       // 数据库连接，用于执行生成的SQL
+	metadata *Metadata      // 元数据信息，包含表结构、关系等
+	compiler *Compiler      // 编译器，将GraphQL查询编译为SQL
 }
 
 // 构造函数和初始化方法
@@ -82,15 +81,11 @@ type Executor struct {
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata) (*Executor, error) {
+func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, error) {
 	executor := &Executor{
-		db:   d,
-		meta: m,
-	}
-
-	// 选择SQL方言
-	if err := executor.selectDialect(); err != nil {
-		return nil, err
+		database: d,
+		metadata: m,
+		compiler: c,
 	}
 
 	// 生成并加载GraphQL模式
@@ -100,7 +95,7 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata) (*Executor, error) {
 	}
 	s, err := gqlparser.LoadSchema(&ast.Source{
 		Name:  "schema.graphql",
-		Input: string(data),
+		Input: data,
 	})
 	if err != nil {
 		return nil, err
@@ -109,52 +104,6 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata) (*Executor, error) {
 	executor.schema = s
 	executor.intro = intro.New(s)
 	return executor, nil
-}
-
-// selectDialect 选择适合当前数据库的SQL方言
-// 方言选择逻辑:
-// 1. 优先根据数据库驱动类型选择对应方言
-// 2. 如未找到匹配，尝试使用PostgreSQL方言(推荐方言)
-// 3. 如仍未找到，使用首个可用方言
-// 4. 如无可用方言，返回错误
-// 返回: 如无可用方言则返回错误
-func (my *Executor) selectDialect() error {
-	// 1. 首先尝试根据数据库类型选择方言
-	if my.meta != nil && my.meta.db != nil {
-		dbName := my.meta.db.Name()
-
-		// 根据数据库驱动名称匹配方言
-		switch {
-		case strings.Contains(dbName, "postgres"):
-			if dialect, ok := dialects["postgresql"]; ok {
-				my.dialect = dialect
-			}
-		case strings.Contains(dbName, "mysql"):
-			if dialect, ok := dialects["mysql"]; ok {
-				my.dialect = dialect
-			}
-		}
-	}
-
-	// 2. 如果未找到匹配方言，尝试使用PostgreSQL方言（如果存在）
-	if my.dialect == nil && len(dialects) > 0 {
-		if dialect, ok := dialects["postgresql"]; ok {
-			my.dialect = dialect
-		} else {
-			// 3. 否则使用第一个可用的方言
-			for _, dialect := range dialects {
-				my.dialect = dialect
-				break
-			}
-		}
-	}
-
-	// 4. 如果仍未找到方言，返回错误
-	if my.dialect == nil {
-		return fmt.Errorf("没有可用的SQL方言实现，请确保导入了相应的dialect包")
-	}
-
-	return nil
 }
 
 // 接口实现方法
@@ -173,6 +122,33 @@ func (my *Executor) Path() string {
 func (my *Executor) Bind(r fiber.Router) {
 	// 注册GraphQL请求处理路由
 	r.Post("/", my.Handler)
+}
+
+// Handler 处理GraphQL HTTP请求
+// 作为Fiber中间件函数，解析请求体中的GraphQL查询并执行
+// 参数:
+//   - c: Fiber上下文，包含HTTP请求和响应信息
+//
+// 返回:
+//   - 可能的错误信息
+//
+// 使用示例:
+//
+//	app.Post("/graphql", executor.Handler)
+func (my *Executor) Handler(c *fiber.Ctx) error {
+	// 解析请求
+	var req gqlQuery
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"errors": []gqlerror.Error{*gqlerror.Wrap(err)},
+		})
+	}
+
+	// 直接使用map类型的变量
+	result := my.Execute(c.Context(), req.Query, req.Variables, req.OperationName)
+
+	// 返回结果
+	return c.JSON(result)
 }
 
 // 主要公开方法
@@ -227,78 +203,6 @@ func (my *Executor) Execute(ctx context.Context, query string, variables map[str
 	return r
 }
 
-// Handler 处理GraphQL HTTP请求
-// 作为Fiber中间件函数，解析请求体中的GraphQL查询并执行
-// 参数:
-//   - c: Fiber上下文，包含HTTP请求和响应信息
-//
-// 返回:
-//   - 可能的错误信息
-//
-// 使用示例:
-//
-//	app.Post("/graphql", executor.Handler)
-func (my *Executor) Handler(c *fiber.Ctx) error {
-	// 解析请求
-	var req gqlQuery
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"errors": []gqlerror.Error{*gqlerror.Wrap(err)},
-		})
-	}
-
-	// 直接使用map类型的变量
-	result := my.Execute(c.Context(), req.Query, req.Variables, req.OperationName)
-
-	// 返回结果
-	return c.JSON(result)
-}
-
-// compile 将GraphQL操作编译为SQL语句和参数
-// 此方法是一个内部辅助方法，不直接暴露给外部使用
-// 参数:
-//   - operation: 要编译的GraphQL操作定义
-//   - variables: 操作变量
-//
-// 返回:
-//   - 编译后的SQL语句和参数列表
-func (my *Executor) compile(operation *ast.OperationDefinition, variables map[string]interface{}) (string, []interface{}) {
-	cpl := NewCompiler(my.meta, my.dialect)
-	defer cpl.Release() // 使用完毕后释放回对象池
-	cpl.Build(operation, variables)
-	return cpl.String(), cpl.Args()
-}
-
-// runOperation 执行单个GraphQL操作
-// 将操作编译为SQL并执行，然后处理结果
-// 参数:
-//   - op: 要执行的GraphQL操作定义
-//   - variables: 操作变量
-//
-// 返回:
-//   - 包含执行结果或错误的GraphQL响应
-func (my *Executor) runOperation(op *ast.OperationDefinition, variables map[string]interface{}) gqlReply {
-	var r gqlReply
-
-	// 编译并执行SQL查询
-	r.sql, r.args = my.compile(op, variables)
-
-	result := make(map[string]interface{})
-	if err := my.db.Raw(r.sql, r.args...).Scan(&result).Error; err != nil {
-		r.Errors = append(r.Errors, gqlerror.Wrap(err))
-		return r
-	}
-
-	// 按GraphQL规范组织结果
-	if op.Name != "" {
-		r.Data = map[string]interface{}{op.Name: result}
-	} else {
-		r.Data = result
-	}
-
-	return r
-}
-
 // 获取操作
 // getOperation 根据GraphQL标准从操作列表中选择要执行的操作
 // 根据GraphQL规范:
@@ -327,4 +231,38 @@ func getOperation(operations ast.OperationList, operationName string) (*ast.Oper
 		}
 	}
 	return nil, fmt.Errorf("未找到名为'%s'的操作", operationName)
+}
+
+// runOperation 执行单个GraphQL操作
+// 将操作编译为SQL并执行，然后处理结果
+// 参数:
+//   - op: 要执行的GraphQL操作定义
+//   - variables: 操作变量
+//
+// 返回:
+//   - 包含执行结果或错误的GraphQL响应
+func (my *Executor) runOperation(operation *ast.OperationDefinition, variables map[string]interface{}) gqlReply {
+	var r gqlReply
+
+	// 编译并执行SQL查询
+	var err error
+	if r.sql, r.args, err = my.compiler.Build(operation, variables); err != nil {
+		r.Errors = append(r.Errors, gqlerror.Wrap(err))
+		return r
+	}
+
+	result := make(map[string]interface{})
+	if err = my.database.Raw(r.sql, r.args...).Scan(&result).Error; err != nil {
+		r.Errors = append(r.Errors, gqlerror.Wrap(err))
+		return r
+	}
+
+	// 按GraphQL规范组织结果
+	if operation.Name != "" {
+		r.Data = map[string]interface{}{operation.Name: result}
+	} else {
+		r.Data = result
+	}
+
+	return r
 }
