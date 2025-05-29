@@ -13,6 +13,9 @@ import (
 
 // Dialect 定义SQL方言接口（本包内定义，便于Context直接引用）
 type Dialect interface {
+	// Name 方言名称
+	Name() string
+
 	// QuoteIdentifier 为标识符添加引号
 	QuoteIdentifier() string
 

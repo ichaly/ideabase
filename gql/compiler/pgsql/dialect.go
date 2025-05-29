@@ -17,6 +17,11 @@ func NewDialect() compiler.Dialect {
 	return &Dialect{}
 }
 
+// Name 方言名称
+func (my *Dialect) Name() string {
+	return "postgresql"
+}
+
 // QuoteIdentifier 为标识符添加引号
 func (my *Dialect) QuoteIdentifier() string {
 	return `"`
