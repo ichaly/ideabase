@@ -518,6 +518,49 @@ func createRelationTestMetadata() *Metadata {
 		IsList:      false,
 	}
 
+	commentClass := &internal.Class{
+		Name:   "Comment",
+		Table:  "comments",
+		Fields: make(map[string]*internal.Field),
+	}
+	commentClass.Fields["id"] = &internal.Field{
+		Name:      "id",
+		Column:    "id",
+		Type:      "integer",
+		IsPrimary: true,
+	}
+	commentClass.Fields["content"] = &internal.Field{
+		Name:   "content",
+		Column: "content",
+		Type:   "string",
+	}
+	commentClass.Fields["userId"] = &internal.Field{
+		Name:   "userId",
+		Column: "user_id",
+		Type:   "integer",
+	}
+	// parentId 字段，递归关系
+	commentClass.Fields["parentId"] = &internal.Field{
+		Name:   "parentId",
+		Column: "parent_id",
+		Type:   "integer",
+		Relation: &internal.Relation{
+			SourceClass: "Comment",
+			SourceField: "parentId",
+			TargetClass: "Comment",
+			TargetField: "id",
+			Type:        internal.RECURSIVE,
+		},
+	}
+	// 可选：children 虚拟字段
+	commentClass.Fields["children"] = &internal.Field{
+		Name:        "children",
+		Type:        "Comment",
+		Description: "子Comment列表",
+		Virtual:     true,
+		IsList:      true,
+	}
+
 	// 添加所有类到元数据
 	meta.Nodes["User"] = userClass
 	meta.Nodes["Department"] = deptClass
@@ -525,6 +568,7 @@ func createRelationTestMetadata() *Metadata {
 	meta.Nodes["Post"] = postClass
 	meta.Nodes["Tag"] = tagClass
 	meta.Nodes["PostTags"] = postTagsClass
+	meta.Nodes["Comment"] = commentClass
 
 	return meta
 }
