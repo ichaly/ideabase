@@ -516,8 +516,8 @@ func TestTableAndFieldFiltering(t *testing.T) {
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
-	k.Set("schema.include-tables", []string{"users"})
-	k.Set("schema.exclude-fields", []string{"password"})
+	k.Set("metadata.exclude-tables", []string{"posts"})
+	k.Set("metadata.exclude-fields", []string{"password"})
 
 	// 设置测试元数据配置
 	k.Set("metadata.classes", map[string]map[string]interface{}{
@@ -605,7 +605,8 @@ func TestRelationNameConversion(t *testing.T) {
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
 	k.Set("schema.schema", "public")
-	k.Set("schema.enable-camel-case", true)
+	k.Set("metadata.use-camel", true)
+	k.Set("metadata.use-singular", false)
 
 	// 设置外键关系配置
 	k.Set("metadata.classes", map[string]map[string]interface{}{
