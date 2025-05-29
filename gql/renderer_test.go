@@ -31,8 +31,9 @@ func getTestMetadata(t *testing.T) (*Metadata, error) {
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
 	k.Set("schema.schema", "public")
-	k.Set("schema.enable-camel-case", true)
-	k.Set("schema.table-prefix", []string{"sys_"})
+	k.Set("metadata.use-camel", true)
+	k.Set("metadata.show-through", true)
+	k.Set("metadata.table-prefix", []string{"sys_"})
 
 	// 创建元数据并从数据库加载
 	meta, err := NewMetadata(k, db)
@@ -825,9 +826,8 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", "./assets")
-	// k.Set("app.root", t.TempDir())
-
+	k.Set("app.root", utl.Root())
+	k.Set("metadata.table-prefix", []string{"sys_"})
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
 		"User": {
 			Description: "用户表",
