@@ -461,7 +461,8 @@ func TestNameConversion(t *testing.T) {
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
 	k.Set("metadata.use-camel", true)
-	k.Set("schema.table-prefix", []string{"tbl_"})
+	k.Set("metadata.use-singular", false)
+	k.Set("metadata.table-prefix", []string{"tbl_"})
 
 	// 设置测试元数据配置
 	k.Set("metadata.classes", map[string]map[string]interface{}{
