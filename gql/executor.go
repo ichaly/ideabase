@@ -15,23 +15,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// 方言注册表，存储所有注册的SQL方言实现
-// 不同的数据库(如PostgreSQL、MySQL等)需要不同的SQL生成规则，通过方言机制实现
-var dialects = make(map[string]Dialect)
-
-// RegisterDialect 全局注册方法，用于各个方言包在init函数中调用
-// 方言包应在其init函数中调用此方法注册自己，例如:
-//
-//	func init() {
-//	    gql.RegisterDialect("postgresql", &PostgreSQLDialect{})
-//	}
-//
-// name: 方言名称，如"postgresql"、"mysql"
-// dialect: 方言实现，需实现Dialect接口
-func RegisterDialect(name string, dialect Dialect) {
-	dialects[name] = dialect
-}
-
 // 请求和结果类型定义
 type (
 	// gqlQuery 表示来自客户端的GraphQL请求

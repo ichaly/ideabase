@@ -4,12 +4,12 @@ package pgsql
 import (
 	"fmt"
 
-	"github.com/ichaly/ideabase/gql"
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // buildUpdate 构建UPDATE语句
-func (my *Dialect) buildUpdate(cpl *gql.Compiler, field *ast.Field) error {
+func (my *Dialect) buildUpdate(ctx *compiler.Context, field *ast.Field) error {
 	// 验证表名
 	if field.Name == "" {
 		return fmt.Errorf("table name is required")
@@ -22,7 +22,7 @@ func (my *Dialect) buildUpdate(cpl *gql.Compiler, field *ast.Field) error {
 	}
 
 	// 开始构建UPDATE语句
-	cpl.SpaceAfter("UPDATE").
+	ctx.SpaceAfter("UPDATE").
 		Quote(field.Name).
 		SpaceAfter("SET")
 
@@ -33,12 +33,12 @@ func (my *Dialect) buildUpdate(cpl *gql.Compiler, field *ast.Field) error {
 
 	for i, child := range update.Value.Children {
 		if i > 0 {
-			cpl.Write(",")
+			ctx.Write(",")
 		}
 		if child.Name == "" {
 			return fmt.Errorf("empty field name in update at index %d", i)
 		}
-		cpl.SpaceAfter("").
+		ctx.SpaceAfter("").
 			Quote(child.Name).
 			Write(" = ")
 
@@ -47,18 +47,18 @@ func (my *Dialect) buildUpdate(cpl *gql.Compiler, field *ast.Field) error {
 		if err != nil {
 			return fmt.Errorf("failed to get value for field %s: %w", child.Name, err)
 		}
-		cpl.Write(my.Placeholder(len(cpl.Args()) + 1))
-		cpl.AddParam(value)
+		ctx.Write(my.Placeholder(len(ctx.Args()) + 1))
+		ctx.AddParam(value)
 	}
 
 	// 处理WHERE条件
-	if err := my.buildWhere(cpl, field.Arguments); err != nil {
+	if err := my.buildWhere(ctx, field.Arguments); err != nil {
 		return fmt.Errorf("failed to build WHERE clause: %w", err)
 	}
 
 	// 添加RETURNING子句
 	if len(field.SelectionSet) > 0 {
-		cpl.SpaceAfter("RETURNING")
+		ctx.SpaceAfter("RETURNING")
 		for i, selection := range field.SelectionSet {
 			f, ok := selection.(*ast.Field)
 			if !ok {
@@ -68,9 +68,9 @@ func (my *Dialect) buildUpdate(cpl *gql.Compiler, field *ast.Field) error {
 				return fmt.Errorf("empty field name in RETURNING clause at index %d", i)
 			}
 			if i > 0 {
-				cpl.Write(", ")
+				ctx.Write(", ")
 			}
-			cpl.Quote(f.Name)
+			ctx.Quote(f.Name)
 		}
 	}
 

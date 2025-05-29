@@ -4,15 +4,9 @@ package mysql
 import (
 	"fmt"
 
-	"github.com/ichaly/ideabase/gql"
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/vektah/gqlparser/v2/ast"
 )
-
-// init 在包初始化时自动注册MySQL方言
-func init() {
-	// 注册MySQL方言
-	gql.RegisterDialect("mysql", &Dialect{})
-}
 
 // Dialect MySQL方言实现
 type Dialect struct{}
@@ -23,7 +17,7 @@ func (my *Dialect) QuoteIdentifier() string {
 }
 
 // NewDialect 创建MySQL方言实例
-func NewDialect() gql.Dialect {
+func NewDialect() compiler.Dialect {
 	return &Dialect{}
 }
 
@@ -46,13 +40,13 @@ func (my *Dialect) FormatLimit(limit, offset int) string {
 }
 
 // BuildQuery 构建查询语句
-func (my *Dialect) BuildQuery(cpl *gql.Compiler, set ast.SelectionSet) error {
-	cpl.Write("SELECT * FROM ")
+func (my *Dialect) BuildQuery(ctx *compiler.Context, set ast.SelectionSet) error {
+	ctx.Write("SELECT * FROM ")
 	return nil
 }
 
 // BuildMutation 构建变更语句
-func (my *Dialect) BuildMutation(cpl *gql.Compiler, set ast.SelectionSet) error {
-	cpl.Write("-- MySQL mutation placeholder")
+func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) error {
+	ctx.Write("-- MySQL mutation placeholder")
 	return nil
 }

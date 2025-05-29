@@ -5,21 +5,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ichaly/ideabase/gql"
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/vektah/gqlparser/v2/ast"
 )
-
-// init 在包初始化时自动注册PostgreSQL方言
-func init() {
-	// 注册PostgreSQL方言
-	gql.RegisterDialect("postgresql", &Dialect{})
-}
 
 // Dialect PostgreSQL方言实现
 type Dialect struct{}
 
 // NewDialect 创建PostgreSQL方言实例
-func NewDialect() gql.Dialect {
+func NewDialect() compiler.Dialect {
 	return &Dialect{}
 }
 
@@ -55,7 +49,7 @@ func (my *Dialect) FormatLimit(limit, offset int) string {
 }
 
 // BuildMutation 构建变更语句
-func (my *Dialect) BuildMutation(cpl *gql.Compiler, set ast.SelectionSet) error {
+func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) error {
 	if len(set) == 0 {
 		return fmt.Errorf("empty selection set")
 	}
@@ -69,18 +63,18 @@ func (my *Dialect) BuildMutation(cpl *gql.Compiler, set ast.SelectionSet) error 
 
 	switch op {
 	case "insert":
-		return my.buildInsert(cpl, field)
+		return my.buildInsert(ctx, field)
 	case "update":
-		return my.buildUpdate(cpl, field)
+		return my.buildUpdate(ctx, field)
 	case "delete":
-		return my.buildDelete(cpl, field)
+		return my.buildDelete(ctx, field)
 	default:
 		return fmt.Errorf("unsupported mutation operation: %s", op)
 	}
 }
 
 // buildWhere 构建WHERE子句
-func (my *Dialect) buildWhere(cpl *gql.Compiler, args ast.ArgumentList) error {
+func (my *Dialect) buildWhere(ctx *compiler.Context, args ast.ArgumentList) error {
 	if len(args) == 0 {
 		return nil
 	}
@@ -94,25 +88,25 @@ func (my *Dialect) buildWhere(cpl *gql.Compiler, args ast.ArgumentList) error {
 			continue
 		}
 
-		cpl.Space("WHERE")
+		ctx.Space("WHERE")
 
 		for i, child := range arg.Value.Children {
 			if i > 0 {
-				cpl.Space("AND")
+				ctx.Space("AND")
 			}
 
 			if child.Name == "" {
 				return fmt.Errorf("empty field name in WHERE condition at index %d", i)
 			}
 
-			cpl.Quote(child.Name).Space("=")
+			ctx.Quote(child.Name).Space("=")
 
 			value, err := child.Value.Value(nil)
 			if err != nil {
 				return fmt.Errorf("failed to get value for where condition %s: %w", child.Name, err)
 			}
-			cpl.Write(my.Placeholder(len(cpl.Args()) + 1))
-			cpl.AddParam(value)
+			ctx.Write(my.Placeholder(len(ctx.Args()) + 1))
+			ctx.AddParam(value)
 		}
 	}
 
@@ -120,9 +114,9 @@ func (my *Dialect) buildWhere(cpl *gql.Compiler, args ast.ArgumentList) error {
 }
 
 // buildPagination 构建分页子句
-func (my *Dialect) buildPagination(cpl *gql.Compiler, args ast.ArgumentList) error {
+func (my *Dialect) buildPagination(ctx *compiler.Context, args ast.ArgumentList) error {
 	// 处理排序
-	if err := my.buildOrderBy(cpl, args); err != nil {
+	if err := my.buildOrderBy(ctx, args); err != nil {
 		return fmt.Errorf("failed to build order by: %w", err)
 	}
 
@@ -173,26 +167,26 @@ func (my *Dialect) buildPagination(cpl *gql.Compiler, args ast.ArgumentList) err
 		}
 
 		if after != nil {
-			cpl.Space("AND id >").Write(my.Placeholder(len(cpl.Args()) + 1))
-			cpl.AddParam(after)
+			ctx.Space("AND id >").Write(my.Placeholder(len(ctx.Args()) + 1))
+			ctx.AddParam(after)
 		}
 
 		if before != nil {
-			cpl.Space("AND id <").Write(my.Placeholder(len(cpl.Args()) + 1))
-			cpl.AddParam(before)
+			ctx.Space("AND id <").Write(my.Placeholder(len(ctx.Args()) + 1))
+			ctx.AddParam(before)
 		}
 	}
 
 	// 添加LIMIT/OFFSET子句
 	if limitClause := my.FormatLimit(limit, offset); limitClause != "" {
-		cpl.Space(limitClause)
+		ctx.Space(limitClause)
 	}
 
 	return nil
 }
 
 // buildOrderBy 构建ORDER BY子句
-func (my *Dialect) buildOrderBy(cpl *gql.Compiler, args ast.ArgumentList) error {
+func (my *Dialect) buildOrderBy(ctx *compiler.Context, args ast.ArgumentList) error {
 	if len(args) == 0 {
 		return nil
 	}
@@ -206,18 +200,18 @@ func (my *Dialect) buildOrderBy(cpl *gql.Compiler, args ast.ArgumentList) error 
 			continue
 		}
 
-		cpl.Space("ORDER BY")
+		ctx.Space("ORDER BY")
 
 		for i, child := range arg.Value.Children {
 			if i > 0 {
-				cpl.Write(",")
+				ctx.Write(",")
 			}
 
 			if child.Name == "" {
 				return fmt.Errorf("empty field name in ORDER BY at index %d", i)
 			}
 
-			cpl.Space("").Quote(child.Name)
+			ctx.Space("").Quote(child.Name)
 
 			value, err := child.Value.Value(nil)
 			if err != nil {
@@ -231,7 +225,7 @@ func (my *Dialect) buildOrderBy(cpl *gql.Compiler, args ast.ArgumentList) error 
 
 			switch strings.ToUpper(direction) {
 			case "ASC", "DESC":
-				cpl.Space(strings.ToUpper(direction))
+				ctx.Space(strings.ToUpper(direction))
 			default:
 				return fmt.Errorf("invalid order by direction %q, must be ASC or DESC", direction)
 			}

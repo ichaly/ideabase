@@ -7,6 +7,7 @@ import (
 
 	"sync"
 
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -51,9 +52,10 @@ var contextPool = sync.Pool{
 }
 
 // NewContext 从对象池获取Context实例
-func NewContext(d Dialect) *Context {
+func NewContext(d Dialect, v map[string]interface{}) *Context {
 	ctx := contextPool.Get().(*Context)
 	ctx.dialect = d
+	ctx.variables = v
 	return ctx
 }
 
@@ -61,11 +63,17 @@ func NewContext(d Dialect) *Context {
 func (my *Context) Release() {
 	my.buf.Reset()
 	my.params = my.params[:0]
-	for k := range my.variables {
-		delete(my.variables, k)
-	}
 	my.dialect = nil
+	my.variables = nil
 	contextPool.Put(my)
+}
+
+func (my *Context) FindField(className, fieldName string) (*internal.Field, bool) {
+	return nil, false
+}
+
+func (my *Context) TableName(param string) (string, bool) {
+	return "", false
 }
 
 // Args 返回参数列表

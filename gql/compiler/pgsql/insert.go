@@ -1,39 +1,39 @@
 package pgsql
 
 import (
-	"github.com/ichaly/ideabase/gql"
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // buildInsert 构建INSERT语句
-func (my *Dialect) buildInsert(cpl *gql.Compiler, field *ast.Field) error {
-	cpl.SpaceAfter("INSERT INTO").
+func (my *Dialect) buildInsert(ctx *compiler.Context, field *ast.Field) error {
+	ctx.SpaceAfter("INSERT INTO").
 		Quote(field.Name).
 		SpaceBefore("(")
 
 	// 构建字段列表
-	if err := my.buildInsertColumns(cpl, field); err != nil {
+	if err := my.buildInsertColumns(ctx, field); err != nil {
 		return err
 	}
 
-	cpl.Write(")").SpaceAfter("VALUES").Write("(")
+	ctx.Write(")").SpaceAfter("VALUES").Write("(")
 
 	// 构建值列表
-	if err := my.buildInsertValues(cpl, field); err != nil {
+	if err := my.buildInsertValues(ctx, field); err != nil {
 		return err
 	}
 
-	cpl.Write(")")
+	ctx.Write(")")
 
 	// 添加RETURNING子句
 	if len(field.SelectionSet) > 0 {
-		cpl.SpaceAfter("RETURNING")
+		ctx.SpaceAfter("RETURNING")
 		for i, selection := range field.SelectionSet {
 			if f, ok := selection.(*ast.Field); ok {
 				if i > 0 {
-					cpl.Write(", ")
+					ctx.Write(", ")
 				}
-				cpl.Quote(f.Name)
+				ctx.Quote(f.Name)
 			}
 		}
 	}
@@ -42,7 +42,7 @@ func (my *Dialect) buildInsert(cpl *gql.Compiler, field *ast.Field) error {
 }
 
 // buildInsertColumns 构建INSERT语句的字段列表
-func (my *Dialect) buildInsertColumns(cpl *gql.Compiler, field *ast.Field) error {
+func (my *Dialect) buildInsertColumns(ctx *compiler.Context, field *ast.Field) error {
 	// 从input参数中获取字段列表
 	for _, arg := range field.Arguments {
 		if arg.Name == "input" {
@@ -54,7 +54,7 @@ func (my *Dialect) buildInsertColumns(cpl *gql.Compiler, field *ast.Field) error
 }
 
 // buildInsertValues 构建INSERT语句的值列表
-func (my *Dialect) buildInsertValues(cpl *gql.Compiler, field *ast.Field) error {
+func (my *Dialect) buildInsertValues(ctx *compiler.Context, field *ast.Field) error {
 	// 从input参数中获取值列表
 	for _, arg := range field.Arguments {
 		if arg.Name == "input" {
