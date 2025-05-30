@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/gql"
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -107,12 +109,12 @@ func (my *_DialectSuite) doCase(query string, expected string) {
 	my.Require().NotEmpty(doc.Operations, "GraphQL查询必须包含操作")
 
 	// 创建编译器
-	compiler := gql.NewCompiler(my.meta, my.dialect)
-	defer compiler.Release() // 记得释放编译器资源
+	compiler, e := gql.NewCompiler(my.meta, []protocol.Dialect{my.dialect})
+	my.Require().NoError(e, "创建编译器失败")
 
 	// 编译GraphQL查询
-	compiler.Build(doc.Operations[0], nil)
-	sql := compiler.String()
+	sql, _, e := compiler.Build(doc.Operations[0], nil)
+	my.Require().NoError(e, "编译GraphQL查询失败")
 
 	// SQL归一化处理
 	normalizedSQL := formatSQL(sql)
@@ -582,10 +584,10 @@ func TestBuildPagination(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dialect := &Dialect{}
-			metadata := &gql.Metadata{}
-			cpl := gql.NewCompiler(metadata, dialect)
+			// 直接创建compiler.Context实例
+			ctx := compiler.NewContext(dialect.Quotation(), nil)
 
-			err := dialect.buildPagination(cpl, tt.args)
+			err := dialect.buildPagination(ctx, tt.args)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -593,7 +595,7 @@ func TestBuildPagination(t *testing.T) {
 			}
 
 			assert.NoError(t, err)
-			assert.Contains(t, cpl.String(), tt.wantSQL)
+			assert.Contains(t, ctx.String(), tt.wantSQL)
 		})
 	}
 }

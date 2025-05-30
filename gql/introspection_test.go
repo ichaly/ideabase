@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
 	"github.com/vektah/gqlparser/v2"
@@ -16,8 +17,8 @@ import (
 // mockPgsqlDialect 测试用的PostgreSQL方言实现
 type mockPgsqlDialect struct{}
 
-func (m *mockPgsqlDialect) QuoteIdentifier() string {
-	return "`"
+func (m *mockPgsqlDialect) Quote() string {
+	return `"`
 }
 
 // Placeholder 获取参数占位符 (PostgreSQL使用$1,$2...)
@@ -47,13 +48,13 @@ func (my *mockPgsqlDialect) FormatLimit(limit, offset int) string {
 }
 
 // BuildQuery 构建查询语句
-func (my *mockPgsqlDialect) BuildQuery(ctx *Compiler, selectionSet ast.SelectionSet) error {
+func (my *mockPgsqlDialect) BuildQuery(ctx *compiler.Context, selectionSet ast.SelectionSet) error {
 	ctx.Write("SELECT * FROM ")
 	return nil
 }
 
 // BuildMutation 构建变更语句
-func (my *mockPgsqlDialect) BuildMutation(ctx *Compiler, selectionSet ast.SelectionSet) error {
+func (my *mockPgsqlDialect) BuildMutation(ctx *compiler.Context, selectionSet ast.SelectionSet) error {
 	ctx.Write("-- PostgreSQL mutation placeholder")
 	return nil
 }
@@ -84,9 +85,6 @@ func TestGqlParserSchema(t *testing.T) {
 
 // TestIntrospection 测试自省功能
 func TestIntrospection(t *testing.T) {
-	// 注册测试用的PostgreSQL方言
-	RegisterDialect("postgresql", &mockPgsqlDialect{})
-
 	// 从数据库或模拟数据获取元数据
 	meta, err := getTestMetadata(t)
 	if err != nil {
