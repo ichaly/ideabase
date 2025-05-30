@@ -8,26 +8,7 @@ import (
 	"sync"
 
 	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/vektah/gqlparser/v2/ast"
 )
-
-// Dialect 定义SQL方言接口（本包内定义，便于Context直接引用）
-type Dialect interface {
-	// Name 方言名称
-	Name() string
-
-	// QuoteIdentifier 为标识符添加引号
-	QuoteIdentifier() string
-
-	// Placeholder 获取参数占位符 (如: PostgreSQL的$1,$2..., MySQL的?)
-	Placeholder(index int) string
-
-	// BuildQuery 构建查询语句
-	BuildQuery(ctx *Context, set ast.SelectionSet) error
-
-	// BuildMutation 构建变更语句
-	BuildMutation(ctx *Context, set ast.SelectionSet) error
-}
 
 // Context 负责SQL编译过程中的上下文状态，包括SQL拼接、参数、变量、方言等
 // 该结构体通过sync.Pool由Compiler统一管理，避免GC压力
@@ -35,9 +16,9 @@ type Dialect interface {
 
 type Context struct {
 	buf       *strings.Builder
+	quote     string
 	params    []any
 	variables map[string]interface{}
-	dialect   Dialect
 }
 
 // contextPool 用于Context对象池管理，减少GC压力
@@ -55,9 +36,9 @@ var contextPool = sync.Pool{
 }
 
 // NewContext 从对象池获取Context实例
-func NewContext(d Dialect, v map[string]interface{}) *Context {
+func NewContext(q string, v map[string]interface{}) *Context {
 	ctx := contextPool.Get().(*Context)
-	ctx.dialect = d
+	ctx.quote = q
 	ctx.variables = v
 	return ctx
 }
@@ -65,9 +46,9 @@ func NewContext(d Dialect, v map[string]interface{}) *Context {
 // Release 归还Context实例到对象池
 func (my *Context) Release() {
 	my.buf.Reset()
-	my.params = my.params[:0]
-	my.dialect = nil
+	my.quote = ""
 	my.variables = nil
+	my.params = my.params[:0]
 	contextPool.Put(my)
 }
 
@@ -157,7 +138,7 @@ func (my *Context) SpaceAfter(content ...any) *Context {
 
 // Quote 添加引号
 func (my *Context) Quote(list ...any) *Context {
-	return my.Wrap(my.dialect.QuoteIdentifier(), list...)
+	return my.Wrap(my.quote, list...)
 }
 
 // QuotedWithSpace 添加引号和空格

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ichaly/ideabase/gql/compiler"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -12,7 +13,7 @@ import (
 type Dialect struct{}
 
 // NewDialect 创建MySQL方言实例
-func NewDialect() compiler.Dialect {
+func NewDialect() protocol.Dialect {
 	return &Dialect{}
 }
 
@@ -21,8 +22,8 @@ func (my *Dialect) Name() string {
 	return "mysql"
 }
 
-// QuoteIdentifier 为标识符添加引号
-func (my *Dialect) QuoteIdentifier() string {
+// Quotation 引号标识符
+func (my *Dialect) Quotation() string {
 	return "`"
 }
 
