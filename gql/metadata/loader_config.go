@@ -7,6 +7,7 @@ import (
 	"github.com/huandu/go-clone"
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/jinzhu/inflection"
 )
 
@@ -21,7 +22,7 @@ func NewConfigLoader(cfg *internal.Config) *ConfigLoader {
 	return &ConfigLoader{cfg: cfg}
 }
 
-func (my *ConfigLoader) Name() string  { return LoaderConfig }
+func (my *ConfigLoader) Name() string  { return protocol.LoaderConfig }
 func (my *ConfigLoader) Priority() int { return 100 }
 
 // Support 判断是否支持配置加载（通常总是支持）
@@ -30,7 +31,7 @@ func (my *ConfigLoader) Support() bool {
 }
 
 // Load 从配置加载元数据
-func (my *ConfigLoader) Load(h Hoster) error {
+func (my *ConfigLoader) Load(h protocol.Hoster) error {
 	// 1. 分组排序
 	var tableClasses, canonClasses, overrideClasses, aliasClasses, virtualClasses []string
 	for className, classConfig := range my.cfg.Metadata.Classes {

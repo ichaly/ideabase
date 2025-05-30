@@ -3,7 +3,7 @@ package gql
 import (
 	"testing"
 
-	"github.com/ichaly/ideabase/gql/metadata"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
@@ -22,7 +22,7 @@ func TestMetadataLoadFromDatabase_CamelCase(t *testing.T) {
 	k.Set("metadata.use-camel", true)
 
 	meta, err := NewMetadata(k, db, WithoutLoader(
-		metadata.LoaderMysql, metadata.LoaderFile,
+		protocol.LoaderMysql, protocol.LoaderFile,
 	))
 	require.NoError(t, err, "创建元数据加载器失败")
 	assert.NotEmpty(t, meta.Nodes, "应该从数据库加载到元数据")
@@ -84,7 +84,7 @@ func TestMetadataLoadFromDatabase_NoCamelCase(t *testing.T) {
 	k.Set("metadata.use-singular", false)
 
 	meta, err := NewMetadata(k, db, WithoutLoader(
-		metadata.LoaderMysql, metadata.LoaderFile,
+		protocol.LoaderMysql, protocol.LoaderFile,
 	))
 	require.NoError(t, err, "创建元数据加载器失败")
 	assert.NotEmpty(t, meta.Nodes, "应该从数据库加载到元数据")

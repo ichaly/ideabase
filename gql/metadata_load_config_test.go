@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/ichaly/ideabase/gql/metadata"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
@@ -103,7 +103,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		},
 	})
 
-	meta, err := NewMetadata(k, nil, WithoutLoader(metadata.LoaderFile))
+	meta, err := NewMetadata(k, nil, WithoutLoader(protocol.LoaderFile))
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	t.Run("PublicUser别名类", func(t *testing.T) {

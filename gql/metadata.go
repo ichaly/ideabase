@@ -12,6 +12,7 @@ import (
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
 	"github.com/jinzhu/inflection"
@@ -39,11 +40,11 @@ type Metadata struct {
 type MetadataOption func(*metadataOptions)
 
 type metadataOptions struct {
-	loaders []metadata.Loader
+	loaders []protocol.Loader
 }
 
 // WithLoader 添加或替换Loader
-func WithLoader(loader metadata.Loader) MetadataOption {
+func WithLoader(loader protocol.Loader) MetadataOption {
 	return func(opts *metadataOptions) {
 		if loader == nil {
 			return
@@ -76,11 +77,11 @@ func WithoutLoader(names ...string) MetadataOption {
 
 // HookedLoader 装饰器，支持beforeLoad,afterLoad钩子
 type HookedLoader struct {
-	metadata.Loader
-	afterLoad, beforeLoad func(h metadata.Hoster) error
+	protocol.Loader
+	afterLoad, beforeLoad func(h protocol.Hoster) error
 }
 
-func (my *HookedLoader) Load(h metadata.Hoster) error {
+func (my *HookedLoader) Load(h protocol.Hoster) error {
 	if my.beforeLoad != nil {
 		if err := my.beforeLoad(h); err != nil {
 			return err
@@ -123,13 +124,13 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	}
 
 	// 默认Loader注册，Pgsql和Mysql用HookedLoader包装，dev模式下自动保存
-	after := func(h metadata.Hoster) error {
+	after := func(h protocol.Hoster) error {
 		if cfg.IsDebug() {
 			return my.saveToFile(metadata.ResolveMetadataPath(cfg))
 		}
 		return nil
 	}
-	defaultLoaders := []metadata.Loader{
+	defaultLoaders := []protocol.Loader{
 		&HookedLoader{Loader: metadata.NewPgsqlLoader(cfg, d), afterLoad: after},
 		&HookedLoader{Loader: metadata.NewMysqlLoader(cfg, d), afterLoad: after},
 		metadata.NewFileLoader(cfg),

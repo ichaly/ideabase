@@ -1,4 +1,4 @@
-package metadata
+package protocol
 
 import (
 	"github.com/ichaly/ideabase/gql/internal"

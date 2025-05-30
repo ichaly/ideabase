@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/utl"
 )
@@ -73,7 +74,7 @@ func NewFileLoader(cfg *internal.Config) *FileLoader {
 	return &FileLoader{cfg: cfg}
 }
 
-func (my *FileLoader) Name() string  { return LoaderFile }
+func (my *FileLoader) Name() string  { return protocol.LoaderFile }
 func (my *FileLoader) Priority() int { return 80 }
 
 // Support 判断是否支持文件加载
@@ -92,7 +93,7 @@ func (my *FileLoader) resolveFilePath() string {
 // 3. 反序列化为临时结构
 // 4. 遍历meta.Nodes，处理字段索引和多key索引
 // 5. 注入Hoster并设置版本号
-func (my *FileLoader) Load(h Hoster) error {
+func (my *FileLoader) Load(h protocol.Hoster) error {
 	// 1. 计算文件路径
 	filePath := my.resolveFilePath()
 	log.Info().Str("file", filePath).Msg("开始从文件加载元数据")

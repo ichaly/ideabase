@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"gorm.io/gorm"
 )
 
@@ -102,14 +103,14 @@ func NewPgsqlLoader(cfg *internal.Config, db *gorm.DB) *PgsqlLoader {
 	}
 }
 
-func (my *PgsqlLoader) Name() string  { return LoaderPgsql }
+func (my *PgsqlLoader) Name() string  { return protocol.LoaderPgsql }
 func (my *PgsqlLoader) Priority() int { return 60 }
 func (my *PgsqlLoader) Support() bool {
 	return my.cfg != nil && my.cfg.IsDebug() && my.db != nil && my.db.Dialector.Name() == "postgres"
 }
 
 // Load 从PostgreSQL加载元数据
-func (my *PgsqlLoader) Load(h Hoster) error {
+func (my *PgsqlLoader) Load(h protocol.Hoster) error {
 	args := []interface{}{my.cfg.Schema.Schema}
 	return my.loadMeta(h, pgsqlMetaSQL, args)
 }

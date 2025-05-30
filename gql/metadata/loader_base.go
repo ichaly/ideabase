@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
 )
@@ -24,7 +25,7 @@ type baseLoader struct {
 // 2. 解析为tableInfo/columnInfo等结构体
 // 3. 组装为Class结构，处理主键、外键、多对多关系
 // 4. 注入Hoster
-func (my *baseLoader) loadMeta(h Hoster, query string, args []interface{}) error {
+func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface{}) error {
 	rows, err := my.db.Raw(query, args...).Rows()
 	if err != nil {
 		return fmt.Errorf("执行元数据SQL失败: %w", err)
