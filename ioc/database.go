@@ -19,7 +19,7 @@ func init() {
 				Target: std.NewCache,
 			},
 			fx.Annotate(
-				std.NewConnect,
+				std.NewDatabase,
 				fx.ParamTags(``, `group:"gorm"`, `group:"entity"`),
 			),
 		),
