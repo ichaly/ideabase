@@ -5,6 +5,14 @@ import (
 	"fmt"
 )
 
+// Loader名称常量
+const (
+	LoaderFile   = "file"
+	LoaderPgsql  = "pgsql"
+	LoaderMysql  = "mysql"
+	LoaderConfig = "config"
+)
+
 // NullableType 自定义类型，用于处理MySQL和PostgreSQL的可空字段
 type NullableType bool
 

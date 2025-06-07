@@ -22,7 +22,7 @@ func NewConfigLoader(cfg *internal.Config) *ConfigLoader {
 	return &ConfigLoader{cfg: cfg}
 }
 
-func (my *ConfigLoader) Name() string  { return protocol.LoaderConfig }
+func (my *ConfigLoader) Name() string  { return LoaderConfig }
 func (my *ConfigLoader) Priority() int { return 100 }
 
 // Support 判断是否支持配置加载（通常总是支持）
@@ -31,7 +31,7 @@ func (my *ConfigLoader) Support() bool {
 }
 
 // Load 从配置加载元数据
-func (my *ConfigLoader) Load(h protocol.Hoster) error {
+func (my *ConfigLoader) Load(t protocol.Tree) error {
 	// 1. 分组排序
 	var tableClasses, canonClasses, overrideClasses, aliasClasses, virtualClasses []string
 	for className, classConfig := range my.cfg.Metadata.Classes {
@@ -63,13 +63,13 @@ func (my *ConfigLoader) Load(h protocol.Hoster) error {
 			if err != nil {
 				return err
 			}
-			h.PutClass(className, class)
+			t.PutNode(className, class)
 			continue
 		}
 
 		// 主类/标准类/覆盖类统一处理
 		if className == classConfig.Table || className == canonName || classConfig.Override {
-			baseClass, ok := h.GetClass(classConfig.Table)
+			baseClass, ok := t.GetNode(classConfig.Table)
 			if ok {
 				// 合并配置
 				// 这里只做简单覆盖，实际可用updateClass合并
@@ -77,19 +77,19 @@ func (my *ConfigLoader) Load(h protocol.Hoster) error {
 				if err != nil {
 					return err
 				}
-				h.PutClass(classConfig.Table, class)
+				t.PutNode(classConfig.Table, class)
 			} else {
 				class, err := my.buildClassFromConfig(className, classConfig, nil)
 				if err != nil {
 					return err
 				}
-				h.PutClass(classConfig.Table, class)
+				t.PutNode(classConfig.Table, class)
 			}
 			continue
 		}
 
 		// 别名类（必须依赖基础类）
-		baseClass, ok := h.GetClass(classConfig.Table)
+		baseClass, ok := t.GetNode(classConfig.Table)
 		if !ok {
 			return fmt.Errorf("别名类 %s 必须有基础类 %s", className, classConfig.Table)
 		}
@@ -97,7 +97,7 @@ func (my *ConfigLoader) Load(h protocol.Hoster) error {
 		if err != nil {
 			return err
 		}
-		h.PutClass(className, class)
+		t.PutNode(className, class)
 	}
 	return nil
 }

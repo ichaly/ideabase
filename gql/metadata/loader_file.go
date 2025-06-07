@@ -74,7 +74,7 @@ func NewFileLoader(cfg *internal.Config) *FileLoader {
 	return &FileLoader{cfg: cfg}
 }
 
-func (my *FileLoader) Name() string  { return protocol.LoaderFile }
+func (my *FileLoader) Name() string  { return LoaderFile }
 func (my *FileLoader) Priority() int { return 80 }
 
 // Support 判断是否支持文件加载
@@ -93,7 +93,7 @@ func (my *FileLoader) resolveFilePath() string {
 // 3. 反序列化为临时结构
 // 4. 遍历meta.Nodes，处理字段索引和多key索引
 // 5. 注入Hoster并设置版本号
-func (my *FileLoader) Load(h protocol.Hoster) error {
+func (my *FileLoader) Load(t protocol.Tree) error {
 	// 1. 计算文件路径
 	filePath := my.resolveFilePath()
 	log.Info().Str("file", filePath).Msg("开始从文件加载元数据")
@@ -117,7 +117,7 @@ func (my *FileLoader) Load(h protocol.Hoster) error {
 	}
 
 	// 5. 设置元数据版本号，便于后续追踪和一致性校验
-	h.SetVersion(meta.Version)
+	t.SetVersion(meta.Version)
 
 	// 4. 遍历所有主节点，处理字段名/列名索引和多key索引
 	for index, class := range meta.Nodes {
@@ -134,7 +134,7 @@ func (my *FileLoader) Load(h protocol.Hoster) error {
 			}
 			class.Fields = fields
 			// 添加类名索引
-			_ = h.PutClass(index, class)
+			_ = t.PutNode(index, class)
 		}
 	}
 	log.Info().Int("classes", len(meta.Nodes)).Msg("从文件加载元数据完成")

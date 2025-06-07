@@ -1,10 +1,10 @@
 package gql
 
 import (
+	"github.com/ichaly/ideabase/gql/metadata"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
@@ -122,7 +122,7 @@ func TestMetadataLoad_ConfigOnly(t *testing.T) {
 		},
 	})
 
-	meta, err := NewMetadata(k, nil, WithoutLoader(protocol.LoaderFile))
+	meta, err := NewMetadata(k, nil, WithoutLoader(metadata.LoaderFile))
 	require.NoError(t, err)
 	a, aExists := meta.Nodes["A"]
 	aAlias, aliasExists := meta.Nodes["AAlias"]

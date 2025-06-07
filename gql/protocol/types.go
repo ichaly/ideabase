@@ -4,28 +4,24 @@ import (
 	"github.com/ichaly/ideabase/gql/internal"
 )
 
-// Loader名称常量
-const (
-	LoaderFile   = "file"
-	LoaderPgsql  = "pgsql"
-	LoaderMysql  = "mysql"
-	LoaderConfig = "config"
-)
+type Node interface {
+	Name() string
+}
 
-// Hoster 定义元数据承载者接口
-type Hoster interface {
-	// PutClass 添加或者合并一个类节点
-	PutClass(className string, class *internal.Class) error
-	// GetClass 获取一个类节点
-	GetClass(className string) (*internal.Class, bool)
-	// 设置版本号
+// Tree 定义元数据承载者接口
+type Tree interface {
+	// PutNode 添加或者合并一个类节点
+	PutNode(name string, node *internal.Class) error
+	// GetNode 获取一个类节点
+	GetNode(name string) (*internal.Class, bool)
+	// SetVersion 设置版本号
 	SetVersion(version string)
 }
 
 // Loader 定义加载器接口
 type Loader interface {
 	Name() string
-	Load(h Hoster) error
+	Load(t Tree) error
 	Support() bool
 	Priority() int
 }

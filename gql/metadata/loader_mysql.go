@@ -109,7 +109,7 @@ func NewMysqlLoader(cfg *internal.Config, db *gorm.DB) *MysqlLoader {
 	}
 }
 
-func (my *MysqlLoader) Name() string  { return protocol.LoaderMysql }
+func (my *MysqlLoader) Name() string  { return LoaderMysql }
 func (my *MysqlLoader) Priority() int { return 60 }
 
 // Support 判断是否为MySQL数据库
@@ -118,12 +118,12 @@ func (my *MysqlLoader) Support() bool {
 }
 
 // Load 从MySQL加载元数据
-func (my *MysqlLoader) Load(h protocol.Hoster) error {
+func (my *MysqlLoader) Load(t protocol.Tree) error {
 	args := []interface{}{
 		my.cfg.Schema.Schema,
 		my.cfg.Schema.Schema,
 		my.cfg.Schema.Schema,
 		my.cfg.Schema.Schema,
 	}
-	return my.loadMeta(h, mysqlMetaSQL, args)
+	return my.loadMeta(t, mysqlMetaSQL, args)
 }
