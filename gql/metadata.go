@@ -350,24 +350,6 @@ func (my *Metadata) processRelations() {
 
 				// 处理中间表
 				if relation.Through != nil {
-					// 确保中间表类名和字段信息正确
-					if relation.Through.Name == "" {
-						if relation.Through.Table != "" {
-							relation.Through.Name = relation.Through.Table
-							log.Debug().Str("table", relation.Through.Table).Str("className", relation.Through.Name).
-								Msg("从表名自动推导中间表类名")
-						} else {
-							relation.Through.Name = class.Name + targetClass.Name
-							log.Debug().Str("sourceClass", class.Name).Str("targetClass", targetClass.Name).
-								Str("throughClass", relation.Through.Name).Msg("从关联类名组合中间表类名")
-						}
-					}
-
-					// 确保Fields字段不为空
-					if relation.Through.Fields == nil {
-						relation.Through.Fields = make(map[string]*internal.Field)
-					}
-
 					// 从 Nodes 中查找表对应的类并添加中间表关系
 					if throughClass := my.Nodes[relation.Through.Table]; throughClass != nil {
 						throughFieldName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(throughClass.Name)))

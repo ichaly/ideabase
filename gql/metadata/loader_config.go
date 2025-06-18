@@ -278,21 +278,6 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 			if throughConfig.TargetKey != "" {
 				through.TargetKey = throughConfig.TargetKey
 			}
-			if throughConfig.ClassName != "" {
-				through.Name = throughConfig.ClassName
-			}
-			if through.Name == "" && through.Table != "" {
-				through.Name = through.Table
-			}
-			if len(throughConfig.Fields) > 0 {
-				if through.Fields == nil {
-					through.Fields = make(map[string]*internal.Field)
-				}
-				for thrFieldName, thrFieldConfig := range throughConfig.Fields {
-					existingThrField := through.Fields[thrFieldName]
-					through.Fields[thrFieldName] = my.buildFieldFromConfig(through.Name, thrFieldName, thrFieldConfig, existingThrField)
-				}
-			}
 		}
 	}
 	return field

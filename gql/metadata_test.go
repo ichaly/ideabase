@@ -761,14 +761,6 @@ func TestNewMetadataFeatures(t *testing.T) {
 							"table":      "post_tags",
 							"source_key": "post_id",
 							"target_key": "tag_id",
-							"class_name": "PostTag",
-							"fields": map[string]map[string]interface{}{
-								"createdAt": {
-									"column":      "created_at",
-									"type":        "timestamp",
-									"description": "标签添加时间",
-								},
-							},
 						},
 					},
 				},
@@ -787,7 +779,6 @@ func TestNewMetadataFeatures(t *testing.T) {
 							"table":      "post_tags",
 							"source_key": "tag_id",
 							"target_key": "post_id",
-							"class_name": "PostTag",
 						},
 					},
 				},

@@ -126,10 +126,4 @@ type ThroughConfig struct {
 
 	// 中间表中指向目标表的外键
 	TargetKey string `mapstructure:"target_key"`
-
-	// 中间表作为独立实体的类名
-	ClassName string `mapstructure:"class_name"`
-
-	// 中间表额外字段
-	Fields map[string]*FieldConfig `mapstructure:"fields"`
 }
