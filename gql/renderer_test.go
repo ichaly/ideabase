@@ -2,6 +2,7 @@ package gql
 
 import (
 	"fmt"
+	"github.com/ichaly/ideabase/gql/renderer"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/ichaly/ideabase/gql/renderer/field"
 	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
@@ -795,28 +795,28 @@ func TestRenderer_WriteField(t *testing.T) {
 	var buf strings.Builder
 
 	// 创建一个 Renderer 但将输出重定向到我们的 buffer
-	renderer := &Renderer{
+	r := &Renderer{
 		sb: &buf,
 	}
 
 	// 测试用例：必填字段
 	buf.Reset()
-	renderer.writeField("id", "ID", field.NonNull())
+	r.writeField("id", "ID", renderer.NonNull())
 	require.Equal(t, "  id: ID!\n", buf.String())
 
 	// 测试用例：带描述的字段
 	buf.Reset()
-	renderer.writeField("name", "String", field.WithComment("用户名称"))
+	r.writeField("name", "String", renderer.WithComment("用户名称"))
 	require.Equal(t, "  name: String  # 用户名称\n", buf.String())
 
 	// 测试用例：非必填字段
 	buf.Reset()
-	renderer.writeField("age", "Int", field.List())
+	r.writeField("age", "Int", renderer.List())
 	require.Equal(t, "  age: [Int]\n", buf.String())
 
 	// 测试用例：列表字段
 	buf.Reset()
-	renderer.writeField("tags", "String", field.ListNonNull(), field.NonNull())
+	r.writeField("tags", "String", renderer.ListNonNull(), renderer.NonNull())
 	require.Equal(t, "  tags: [String!]!\n", buf.String())
 }
 

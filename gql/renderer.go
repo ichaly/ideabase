@@ -2,13 +2,13 @@ package gql
 
 import (
 	"fmt"
+	"github.com/ichaly/ideabase/gql/renderer"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/ichaly/ideabase/gql/renderer/field"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/rs/zerolog/log"
@@ -208,20 +208,20 @@ func (my *Renderer) renderCommon() error {
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_PAGING, " ", SEPARATOR_LINE, "\n")
 	my.writeLine("# ", DESC_PAGE_INFO)
 	my.writeLine("type ", TYPE_PAGE_INFO, " {")
-	my.writeField("hasNext", SCALAR_BOOLEAN, field.NonNull(), field.WithComment(COMMENT_HAS_NEXT))
-	my.writeField("hasPrev", SCALAR_BOOLEAN, field.NonNull(), field.WithComment(COMMENT_HAS_PREV))
-	my.writeField("start", SCALAR_CURSOR, field.WithComment(COMMENT_START_CURSOR))
-	my.writeField("end", SCALAR_CURSOR, field.WithComment(COMMENT_END_CURSOR))
+	my.writeField("hasNext", SCALAR_BOOLEAN, renderer.NonNull(), renderer.WithComment(COMMENT_HAS_NEXT))
+	my.writeField("hasPrev", SCALAR_BOOLEAN, renderer.NonNull(), renderer.WithComment(COMMENT_HAS_PREV))
+	my.writeField("start", SCALAR_CURSOR, renderer.WithComment(COMMENT_START_CURSOR))
+	my.writeField("end", SCALAR_CURSOR, renderer.WithComment(COMMENT_END_CURSOR))
 	my.writeLine("}")
 	my.writeLine()
 
 	// 渲染分组选项类型
 	my.writeLine("# ", DESC_GROUP_BY)
 	my.writeLine("input ", TYPE_GROUP_BY, " {")
-	my.writeField("fields", SCALAR_STRING, field.ListNonNull(), field.WithComment(COMMENT_GROUP_FIELDS))
-	my.writeField("having", SCALAR_JSON, field.WithComment(COMMENT_HAVING))
-	my.writeField("limit", SCALAR_INT, field.WithComment(COMMENT_LIMIT))
-	my.writeField("sort", SCALAR_JSON, field.WithComment(COMMENT_SORT))
+	my.writeField("fields", SCALAR_STRING, renderer.ListNonNull(), renderer.WithComment(COMMENT_GROUP_FIELDS))
+	my.writeField("having", SCALAR_JSON, renderer.WithComment(COMMENT_HAVING))
+	my.writeField("limit", SCALAR_INT, renderer.WithComment(COMMENT_LIMIT))
+	my.writeField("sort", SCALAR_JSON, renderer.WithComment(COMMENT_SORT))
 	my.writeLine("}")
 	my.writeLine()
 
@@ -463,9 +463,9 @@ func (my *Renderer) renderInput() error {
 	// 渲染关系操作输入类型
 	my.writeLine("# ", DESC_RELATION)
 	my.writeLine("input RelationInput {")
-	my.writeField("id", SCALAR_ID, field.NonNull())
-	my.writeField("connect", SCALAR_ID, field.ListNonNull())
-	my.writeField("disconnect", SCALAR_ID, field.ListNonNull())
+	my.writeField("id", SCALAR_ID, renderer.NonNull())
+	my.writeField("connect", SCALAR_ID, renderer.ListNonNull())
+	my.writeField("disconnect", SCALAR_ID, renderer.ListNonNull())
 	my.writeLine("}")
 	my.writeLine("")
 
@@ -496,13 +496,13 @@ func (my *Renderer) renderFilter() error {
 			renderedOps[op.Name] = true
 
 			if op.Name == HAS_KEY || op.Name == HAS_KEY_ANY || op.Name == HAS_KEY_ALL {
-				my.writeField(op.Name, SCALAR_STRING, field.WithComment(op.Description))
+				my.writeField(op.Name, SCALAR_STRING, renderer.WithComment(op.Description))
 			} else if op.Name == IN || op.Name == NI {
-				my.writeField(op.Name, scalarType, field.ListNonNull(), field.WithComment(op.Description))
+				my.writeField(op.Name, scalarType, renderer.ListNonNull(), renderer.WithComment(op.Description))
 			} else if op.Name == IS {
-				my.writeField(op.Name, ENUM_IS_INPUT, field.WithComment(op.Description))
+				my.writeField(op.Name, ENUM_IS_INPUT, renderer.WithComment(op.Description))
 			} else {
-				my.writeField(op.Name, scalarType, field.WithComment(op.Description))
+				my.writeField(op.Name, scalarType, renderer.WithComment(op.Description))
 			}
 		}
 
@@ -663,7 +663,7 @@ func (my *Renderer) renderQuery() error {
 
 		// 单个实体查询
 		my.writeLine("  # 单个", className, "查询")
-		my.writeField(strcase.ToLowerCamel(className), className, field.WithArgs([]field.Argument{
+		my.writeField(strcase.ToLowerCamel(className), className, renderer.WithArgs([]renderer.Argument{
 			{Name: "id", Type: SCALAR_ID + "!"},
 		}...))
 
@@ -672,9 +672,9 @@ func (my *Renderer) renderQuery() error {
 		my.writeField(
 			strcase.ToLowerCamel(inflection.Plural(className)),
 			className+SUFFIX_PAGE,
-			field.NonNull(),
-			field.WithMultilineArgs(),
-			field.WithArgs([]field.Argument{
+			renderer.NonNull(),
+			renderer.WithMultilineArgs(),
+			renderer.WithArgs([]renderer.Argument{
 				{Name: "filter", Type: className + SUFFIX_FILTER},
 				{Name: "sort", Type: "[" + className + SUFFIX_SORT + "!]"},
 				{Name: "limit", Type: SCALAR_INT},
@@ -691,8 +691,8 @@ func (my *Renderer) renderQuery() error {
 		my.writeField(
 			strcase.ToLowerCamel(className)+SUFFIX_STATS,
 			className+SUFFIX_STATS,
-			field.NonNull(),
-			field.WithArgs([]field.Argument{
+			renderer.NonNull(),
+			renderer.WithArgs([]renderer.Argument{
 				{Name: "filter", Type: className + SUFFIX_FILTER},
 				{Name: "groupBy", Type: TYPE_GROUP_BY},
 			}...),
@@ -724,7 +724,7 @@ func (my *Renderer) renderMutation() error {
 
 		my.writeLine("  # ", class.Name, "创建")
 		// my.writeLine("  create", class.Name, "(data: ", class.Name, SUFFIX_CREATE_INPUT, "!): ", class.Name, "!")
-		my.writeField("create"+className, className, field.NonNull(), field.WithArgs([]field.Argument{
+		my.writeField("create"+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
 			{Name: "data", Type: className + SUFFIX_CREATE_INPUT + "!"},
 		}...))
 		my.writeLine()
@@ -752,32 +752,32 @@ func (my *Renderer) renderStats() error {
 	// 数值聚合结果
 	my.writeLine("# ", DESC_NUMBER_STATS)
 	my.writeLine("type ", TYPE_NUMBER_STATS, " {")
-	my.writeField("sum", SCALAR_FLOAT, field.WithComment(COMMENT_SUM))
-	my.writeField("avg", SCALAR_FLOAT, field.WithComment(COMMENT_AVG))
-	my.writeField("min", SCALAR_FLOAT, field.WithComment(COMMENT_MIN))
-	my.writeField("max", SCALAR_FLOAT, field.WithComment(COMMENT_MAX))
-	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
-	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_DISTINCT))
+	my.writeField("sum", SCALAR_FLOAT, renderer.WithComment(COMMENT_SUM))
+	my.writeField("avg", SCALAR_FLOAT, renderer.WithComment(COMMENT_AVG))
+	my.writeField("min", SCALAR_FLOAT, renderer.WithComment(COMMENT_MIN))
+	my.writeField("max", SCALAR_FLOAT, renderer.WithComment(COMMENT_MAX))
+	my.writeField("count", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
+	my.writeField("countDistinct", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
 	my.writeLine()
 
 	// 日期聚合结果
 	my.writeLine("# ", DESC_DATE_TIME_STATS)
 	my.writeLine("type ", TYPE_DATE_TIME_STATS, " {")
-	my.writeField("min", SCALAR_DATE_TIME, field.WithComment(COMMENT_MIN_DATE))
-	my.writeField("max", SCALAR_DATE_TIME, field.WithComment(COMMENT_MAX_DATE))
-	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
-	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_DISTINCT))
+	my.writeField("min", SCALAR_DATE_TIME, renderer.WithComment(COMMENT_MIN_DATE))
+	my.writeField("max", SCALAR_DATE_TIME, renderer.WithComment(COMMENT_MAX_DATE))
+	my.writeField("count", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
+	my.writeField("countDistinct", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
 	my.writeLine()
 
 	// 字符串聚合结果
 	my.writeLine("# ", DESC_STRING_STATS)
 	my.writeLine("type ", TYPE_STRING_STATS, " {")
-	my.writeField("min", SCALAR_STRING, field.WithComment(COMMENT_MIN_STRING))
-	my.writeField("max", SCALAR_STRING, field.WithComment(COMMENT_MAX_STRING))
-	my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
-	my.writeField("countDistinct", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_DISTINCT))
+	my.writeField("min", SCALAR_STRING, renderer.WithComment(COMMENT_MIN_STRING))
+	my.writeField("max", SCALAR_STRING, renderer.WithComment(COMMENT_MAX_STRING))
+	my.writeField("count", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
+	my.writeField("countDistinct", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
 	my.writeLine()
 	keys := utl.SortKeys(my.meta.Nodes)
@@ -797,7 +797,7 @@ func (my *Renderer) renderStats() error {
 		// 生成统计类型
 		my.writeLine("# ", className, "聚合")
 		my.writeLine("type ", className, SUFFIX_STATS, " {")
-		my.writeField("count", SCALAR_INT, field.NonNull())
+		my.writeField("count", SCALAR_INT, renderer.NonNull())
 
 		// 添加统计字段
 		fields := utl.SortKeys(class.Fields)
@@ -851,8 +851,8 @@ func (my *Renderer) renderStats() error {
 		// 生成对应的分组类型
 		my.writeLine("# ", className, "分组结果")
 		my.writeLine("type ", className, SUFFIX_GROUP, " {")
-		my.writeField("key", SCALAR_JSON, field.NonNull(), field.WithComment(COMMENT_GROUP_KEY))
-		my.writeField("count", SCALAR_INT, field.NonNull(), field.WithComment(COMMENT_COUNT))
+		my.writeField("key", SCALAR_JSON, renderer.NonNull(), renderer.WithComment(COMMENT_GROUP_KEY))
+		my.writeField("count", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
 		my.writeLine("  # 可以包含其他聚合字段")
 		my.writeLine("}")
 		my.writeLine("")
@@ -881,9 +881,9 @@ func (my *Renderer) renderPaging() error {
 		// 生成分页类型
 		my.writeLine("# ", className, "分页结果")
 		my.writeLine("type ", className, SUFFIX_PAGE, " {")
-		my.writeField("items", className, field.NonNull(), field.ListNonNull(), field.WithComment("直接返回"+className+"对象数组"))
-		my.writeField("pageInfo", TYPE_PAGE_INFO, field.NonNull())
-		my.writeField("total", SCALAR_INT, field.NonNull())
+		my.writeField("items", className, renderer.NonNull(), renderer.ListNonNull(), renderer.WithComment("直接返回"+className+"对象数组"))
+		my.writeField("pageInfo", TYPE_PAGE_INFO, renderer.NonNull())
+		my.writeField("total", SCALAR_INT, renderer.NonNull())
 		my.writeLine("}")
 		my.writeLine("")
 	}
@@ -892,8 +892,8 @@ func (my *Renderer) renderPaging() error {
 }
 
 // writeField 使用优化的子包渲染字段
-func (my *Renderer) writeField(name string, typeName string, options ...field.Option) {
+func (my *Renderer) writeField(name string, typeName string, options ...renderer.Option) {
 	// 使用子包中的便捷方法生成字段字符串
-	fieldStr := field.MakeField(name, typeName, options...)
+	fieldStr := renderer.MakeField(name, typeName, options...)
 	my.writeLine(fieldStr)
 }

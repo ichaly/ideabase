@@ -1,4 +1,4 @@
-package field
+package renderer
 
 // Type 表示字段类型
 type Type struct {
