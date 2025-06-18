@@ -248,17 +248,17 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 	if config.Relation != nil {
 		if field.Relation == nil {
 			field.Relation = &internal.Relation{
-				SourceClass: className,
-				SourceField: fieldName,
+				SourceTable:  className,
+				SourceColumn: fieldName,
 			}
 		}
 		rel := field.Relation
 		relConfig := config.Relation
 		if relConfig.TargetClass != "" {
-			rel.TargetClass = relConfig.TargetClass
+			rel.TargetTable = relConfig.TargetClass
 		}
 		if relConfig.TargetField != "" {
-			rel.TargetField = relConfig.TargetField
+			rel.TargetColumn = relConfig.TargetField
 		}
 		if relConfig.Type != "" {
 			rel.Type = internal.RelationType(relConfig.Type)

@@ -314,15 +314,15 @@ func (my *Metadata) processRelations() {
 
 			// 获取并补充关系信息
 			relation := field.Relation
-			if relation.SourceClass == "" {
-				relation.SourceClass = class.Name
+			if relation.SourceTable == "" {
+				relation.SourceTable = class.Name
 			}
-			if relation.SourceField == "" {
-				relation.SourceField = field.Name
+			if relation.SourceColumn == "" {
+				relation.SourceColumn = field.Name
 			}
 
 			// 查找目标类
-			targetClassName := relation.TargetClass
+			targetClassName := relation.TargetTable
 			targetClass := my.Nodes[targetClassName]
 			if targetClass == nil {
 				log.Warn().Str("class", class.Name).Str("field", field.Name).
@@ -331,10 +331,10 @@ func (my *Metadata) processRelations() {
 			}
 
 			// 找到目标字段
-			targetField := targetClass.Fields[relation.TargetField]
+			targetField := targetClass.Fields[relation.TargetColumn]
 			if targetField == nil {
 				log.Warn().Str("class", class.Name).Str("field", field.Name).
-					Str("targetClass", targetClassName).Str("targetField", relation.TargetField).
+					Str("targetClass", targetClassName).Str("targetField", relation.TargetColumn).
 					Msg("关系目标字段不存在")
 				continue
 			}
@@ -342,12 +342,12 @@ func (my *Metadata) processRelations() {
 			// 如果目标字段没有反向关系，创建一个
 			if targetField.Relation == nil {
 				targetField.Relation = &internal.Relation{
-					SourceClass: targetClass.Name,
-					SourceField: targetField.Name,
-					TargetClass: class.Name,
-					TargetField: field.Name,
-					Type:        relation.Type.Reverse(),
-					Reverse:     relation,
+					SourceTable:  targetClass.Name,
+					SourceColumn: targetField.Name,
+					TargetTable:  class.Name,
+					TargetColumn: field.Name,
+					Type:         relation.Type.Reverse(),
+					Reverse:      relation,
 				}
 			}
 
@@ -578,11 +578,11 @@ func (my *Metadata) normalize() error {
 
 	// 修正关系依赖中的类名
 	for _, field := range relations {
-		if node, ok := nodes[field.Relation.SourceClass]; ok {
-			field.Relation.SourceClass = node.Name
+		if node, ok := nodes[field.Relation.SourceTable]; ok {
+			field.Relation.SourceTable = node.Name
 		}
-		if node, ok := nodes[field.Relation.TargetClass]; ok {
-			field.Relation.TargetClass = node.Name
+		if node, ok := nodes[field.Relation.TargetTable]; ok {
+			field.Relation.TargetTable = node.Name
 		}
 	}
 

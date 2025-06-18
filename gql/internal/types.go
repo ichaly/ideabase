@@ -18,17 +18,6 @@ type Symbol struct {
 	Description string
 }
 
-// Relation 表示类之间的关系
-type Relation struct {
-	SourceClass string       `json:"sourceClass"`       // 源类名
-	SourceField string       `json:"sourceField"`       // 源字段名
-	TargetClass string       `json:"targetClass"`       // 目标类名
-	TargetField string       `json:"targetField"`       // 目标字段名
-	Type        RelationType `json:"type"`              // 关系类型
-	Reverse     *Relation    `json:"-"`                 // 反向关系引用
-	Through     *Through     `json:"through,omitempty"` // 多对多关系配置
-}
-
 // Through 表示多对多关系中的中间表配置
 type Through struct {
 	Name      string            `json:"name"`      // 中间表类名
