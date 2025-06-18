@@ -270,8 +270,8 @@ func (my *Renderer) renderTypes() error {
 			if !my.meta.cfg.Metadata.ShowThrough {
 				// 检查字段是否引用了中间表类型
 				refType := field.Type
-				if field.Relation != nil && field.Relation.TargetTable != "" {
-					refType = field.Relation.TargetTable
+				if field.Relation != nil && field.Relation.TargetClass != "" {
+					refType = field.Relation.TargetClass
 				}
 
 				// 如果引用的类型是中间表类型，则跳过该字段
@@ -555,8 +555,8 @@ func (my *Renderer) renderEntity() error {
 			if !my.meta.cfg.Metadata.ShowThrough {
 				// 检查字段是否引用了中间表类型
 				refType := field.Type
-				if field.Relation != nil && field.Relation.TargetTable != "" {
-					refType = field.Relation.TargetTable
+				if field.Relation != nil && field.Relation.TargetClass != "" {
+					refType = field.Relation.TargetClass
 				}
 
 				// 如果引用的类型是中间表类型，则跳过该字段
@@ -620,8 +620,8 @@ func (my *Renderer) renderSort() error {
 			if !my.meta.cfg.Metadata.ShowThrough {
 				// 检查字段是否引用了中间表类型
 				refType := field.Type
-				if field.Relation != nil && field.Relation.TargetTable != "" {
-					refType = field.Relation.TargetTable
+				if field.Relation != nil && field.Relation.TargetClass != "" {
+					refType = field.Relation.TargetClass
 				}
 
 				// 如果引用的类型是中间表类型，则跳过该字段
@@ -817,8 +817,8 @@ func (my *Renderer) renderStats() error {
 			if !my.meta.cfg.Metadata.ShowThrough {
 				// 检查字段是否引用了中间表类型
 				refType := field.Type
-				if field.Relation != nil && field.Relation.TargetTable != "" {
-					refType = field.Relation.TargetTable
+				if field.Relation != nil && field.Relation.TargetClass != "" {
+					refType = field.Relation.TargetClass
 				}
 
 				// 如果引用的类型是中间表类型，则跳过该字段

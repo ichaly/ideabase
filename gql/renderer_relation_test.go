@@ -547,7 +547,7 @@ func createRelationTestMetadata() *Metadata {
 		Relation: &internal.Relation{
 			SourceClass: "Comment",
 			SourceFiled: "parentId",
-			TargetTable: "Comment",
+			TargetClass: "Comment",
 			TargetFiled: "id",
 			Type:        internal.RECURSIVE,
 		},

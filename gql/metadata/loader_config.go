@@ -255,7 +255,7 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 		rel := field.Relation
 		relConfig := config.Relation
 		if relConfig.TargetClass != "" {
-			rel.TargetTable = relConfig.TargetClass
+			rel.TargetClass = relConfig.TargetClass
 		}
 		if relConfig.TargetField != "" {
 			rel.TargetFiled = relConfig.TargetField

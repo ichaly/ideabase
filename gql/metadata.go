@@ -322,7 +322,7 @@ func (my *Metadata) processRelations() {
 			}
 
 			// 查找目标类
-			targetClassName := relation.TargetTable
+			targetClassName := relation.TargetClass
 			targetClass := my.Nodes[targetClassName]
 			if targetClass == nil {
 				log.Warn().Str("class", class.Name).Str("field", field.Name).
@@ -548,8 +548,8 @@ func (my *Metadata) normalize() error {
 		if node, ok := nodes[field.Relation.SourceClass]; ok {
 			field.Relation.SourceClass = node.Name
 		}
-		if node, ok := nodes[field.Relation.TargetTable]; ok {
-			field.Relation.TargetTable = node.Name
+		if node, ok := nodes[field.Relation.TargetClass]; ok {
+			field.Relation.TargetClass = node.Name
 		}
 	}
 

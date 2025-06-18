@@ -138,7 +138,7 @@ func (my *baseLoader) loadMeta(t protocol.Tree, query string, args []interface{}
 		sourceField.Relation = &internal.Relation{
 			SourceClass: sourceTable,
 			SourceFiled: sourceColumn,
-			TargetTable: targetTable,
+			TargetClass: targetTable,
 			TargetFiled: targetColumn,
 			Type:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.MANY_TO_ONE),
 		}
@@ -146,7 +146,7 @@ func (my *baseLoader) loadMeta(t protocol.Tree, query string, args []interface{}
 		targetField.Relation = &internal.Relation{
 			SourceClass: targetTable,
 			SourceFiled: targetColumn,
-			TargetTable: sourceTable,
+			TargetClass: sourceTable,
 			TargetFiled: sourceColumn,
 			Type:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.ONE_TO_MANY),
 		}
@@ -227,7 +227,7 @@ func createManyToManyRelation(classes map[string]*internal.Class, throughTable s
 		return internal.Relation{
 			SourceClass: sourceTable,
 			SourceFiled: sourceColumn,
-			TargetTable: targetTable,
+			TargetClass: targetTable,
 			TargetFiled: targetColumn,
 			Type:        internal.MANY_TO_MANY,
 			Through: &internal.Through{
