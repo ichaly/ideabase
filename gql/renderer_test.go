@@ -174,11 +174,11 @@ func createMockMetadata(t *testing.T) *Metadata {
 
 	// 创建关系
 	userIdField.Relation = &internal.Relation{
-		SourceTable:  "Post",
-		SourceColumn: "userId",
-		TargetTable:  "User",
-		TargetColumn: "id",
-		Type:         internal.MANY_TO_ONE,
+		SourceClass: "Post",
+		SourceFiled: "userId",
+		TargetTable: "User",
+		TargetFiled: "id",
+		Type:        internal.MANY_TO_ONE,
 	}
 
 	postClass.AddField(userIdField)

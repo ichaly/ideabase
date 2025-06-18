@@ -314,11 +314,11 @@ func (my *Metadata) processRelations() {
 
 			// 获取并补充关系信息
 			relation := field.Relation
-			if relation.SourceTable == "" {
-				relation.SourceTable = class.Name
+			if relation.SourceClass == "" {
+				relation.SourceClass = class.Name
 			}
-			if relation.SourceColumn == "" {
-				relation.SourceColumn = field.Name
+			if relation.SourceFiled == "" {
+				relation.SourceFiled = field.Name
 			}
 
 			// 查找目标类
@@ -331,10 +331,10 @@ func (my *Metadata) processRelations() {
 			}
 
 			// 找到目标字段
-			targetField := targetClass.Fields[relation.TargetColumn]
+			targetField := targetClass.Fields[relation.TargetFiled]
 			if targetField == nil {
 				log.Warn().Str("class", class.Name).Str("field", field.Name).
-					Str("targetClass", targetClassName).Str("targetField", relation.TargetColumn).
+					Str("targetClass", targetClassName).Str("targetField", relation.TargetFiled).
 					Msg("关系目标字段不存在")
 				continue
 			}
@@ -342,12 +342,12 @@ func (my *Metadata) processRelations() {
 			// 如果目标字段没有反向关系，创建一个
 			if targetField.Relation == nil {
 				targetField.Relation = &internal.Relation{
-					SourceTable:  targetClass.Name,
-					SourceColumn: targetField.Name,
-					TargetTable:  class.Name,
-					TargetColumn: field.Name,
-					Type:         relation.Type.Reverse(),
-					Reverse:      relation,
+					SourceClass: targetClass.Name,
+					SourceFiled: targetField.Name,
+					TargetTable: class.Name,
+					TargetFiled: field.Name,
+					Type:        relation.Type.Reverse(),
+					Reverse:     relation,
 				}
 			}
 
@@ -578,8 +578,8 @@ func (my *Metadata) normalize() error {
 
 	// 修正关系依赖中的类名
 	for _, field := range relations {
-		if node, ok := nodes[field.Relation.SourceTable]; ok {
-			field.Relation.SourceTable = node.Name
+		if node, ok := nodes[field.Relation.SourceClass]; ok {
+			field.Relation.SourceClass = node.Name
 		}
 		if node, ok := nodes[field.Relation.TargetTable]; ok {
 			field.Relation.TargetTable = node.Name

@@ -248,8 +248,8 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 	if config.Relation != nil {
 		if field.Relation == nil {
 			field.Relation = &internal.Relation{
-				SourceTable:  className,
-				SourceColumn: fieldName,
+				SourceClass: className,
+				SourceFiled: fieldName,
 			}
 		}
 		rel := field.Relation
@@ -258,7 +258,7 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 			rel.TargetTable = relConfig.TargetClass
 		}
 		if relConfig.TargetField != "" {
-			rel.TargetColumn = relConfig.TargetField
+			rel.TargetFiled = relConfig.TargetField
 		}
 		if relConfig.Type != "" {
 			rel.Type = internal.RelationType(relConfig.Type)

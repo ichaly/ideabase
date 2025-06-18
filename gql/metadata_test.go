@@ -170,7 +170,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 				assert.NotNil(t, parentId.Relation, "parentId应该有关系定义")
 				assert.Equal(t, internal.RECURSIVE, parentId.Relation.Type, "应该是recursive关系")
 				assert.Equal(t, "Comment", parentId.Relation.TargetTable, "关系目标类应该是Comment")
-				assert.Equal(t, "id", parentId.Relation.TargetColumn, "关系目标字段应该是id")
+				assert.Equal(t, "id", parentId.Relation.TargetFiled, "关系目标字段应该是id")
 
 				// 验证反向关系
 				assert.NotNil(t, parentId.Relation.Reverse, "应该有反向关系")
@@ -260,7 +260,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 						// 比较关系定义
 						if field1.Relation != nil && field2.Relation != nil {
 							assert.Equal(t, field1.Relation.Type, field2.Relation.Type, "关系类型应该相同")
-							assert.Equal(t, field1.Relation.SourceTable, field2.Relation.SourceTable, "源类应该相同")
+							assert.Equal(t, field1.Relation.SourceClass, field2.Relation.SourceClass, "源类应该相同")
 							assert.Equal(t, field1.Relation.TargetTable, field2.Relation.TargetTable, "目标类应该相同")
 						}
 					}
@@ -642,10 +642,10 @@ func TestRelationNameConversion(t *testing.T) {
 		require.NotNil(t, userId.Relation, "应该有关系定义")
 
 		// 验证关系中的名称是否转换正确
-		assert.Equal(t, "UserProfiles", userId.Relation.SourceTable, "源类名应该是转换后的UserProfiles")
-		assert.Equal(t, "userId", userId.Relation.SourceColumn, "源字段名应该是转换后的userId")
+		assert.Equal(t, "UserProfiles", userId.Relation.SourceClass, "源类名应该是转换后的UserProfiles")
+		assert.Equal(t, "userId", userId.Relation.SourceFiled, "源字段名应该是转换后的userId")
 		assert.Equal(t, "Users", userId.Relation.TargetTable, "目标类名应该是转换后的Users")
-		assert.Equal(t, "id", userId.Relation.TargetColumn, "目标字段名应该是id")
+		assert.Equal(t, "id", userId.Relation.TargetFiled, "目标字段名应该是id")
 	})
 
 	// 验证多对多关系名称转换

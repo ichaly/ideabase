@@ -545,11 +545,11 @@ func createRelationTestMetadata() *Metadata {
 		Column: "parent_id",
 		Type:   "integer",
 		Relation: &internal.Relation{
-			SourceTable:  "Comment",
-			SourceColumn: "parentId",
-			TargetTable:  "Comment",
-			TargetColumn: "id",
-			Type:         internal.RECURSIVE,
+			SourceClass: "Comment",
+			SourceFiled: "parentId",
+			TargetTable: "Comment",
+			TargetFiled: "id",
+			Type:        internal.RECURSIVE,
 		},
 	}
 	// 可选：children 虚拟字段

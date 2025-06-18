@@ -136,19 +136,19 @@ func (my *baseLoader) loadMeta(t protocol.Tree, query string, args []interface{}
 		isRecursive := sourceTable == targetTable
 		// 正向关系（多对一/递归）：如 comments.user_id -> users.id
 		sourceField.Relation = &internal.Relation{
-			SourceTable:  sourceTable,
-			SourceColumn: sourceColumn,
-			TargetTable:  targetTable,
-			TargetColumn: targetColumn,
-			Type:         lo.Ternary(isRecursive, internal.RECURSIVE, internal.MANY_TO_ONE),
+			SourceClass: sourceTable,
+			SourceFiled: sourceColumn,
+			TargetTable: targetTable,
+			TargetFiled: targetColumn,
+			Type:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.MANY_TO_ONE),
 		}
 		// 反向关系（一对多/递归）：如 users.id <- comments.user_id
 		targetField.Relation = &internal.Relation{
-			SourceTable:  targetTable,
-			SourceColumn: targetColumn,
-			TargetTable:  sourceTable,
-			TargetColumn: sourceColumn,
-			Type:         lo.Ternary(isRecursive, internal.RECURSIVE, internal.ONE_TO_MANY),
+			SourceClass: targetTable,
+			SourceFiled: targetColumn,
+			TargetTable: sourceTable,
+			TargetFiled: sourceColumn,
+			Type:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.ONE_TO_MANY),
 		}
 		// 建立双向引用，便于后续GraphQL编译和关系导航
 		sourceField.Relation.Reverse = targetField.Relation
@@ -228,11 +228,11 @@ func createManyToManyRelation(classes map[string]*internal.Class, throughTable s
 		sourceTable, targetTable, sourceColumn, targetColumn, sourceKey, targetKey string, reverse *internal.Relation,
 	) internal.Relation {
 		return internal.Relation{
-			SourceTable:  sourceTable,
-			SourceColumn: sourceColumn,
-			TargetTable:  targetTable,
-			TargetColumn: targetColumn,
-			Type:         internal.MANY_TO_MANY,
+			SourceClass: sourceTable,
+			SourceFiled: sourceColumn,
+			TargetTable: targetTable,
+			TargetFiled: targetColumn,
+			Type:        internal.MANY_TO_MANY,
 			Through: &internal.Through{
 				Table:     throughTable,
 				SourceKey: sourceKey,
