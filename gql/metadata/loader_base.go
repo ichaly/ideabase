@@ -150,9 +150,6 @@ func (my *baseLoader) loadMeta(t protocol.Tree, query string, args []interface{}
 			TargetFiled: sourceColumn,
 			Type:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.ONE_TO_MANY),
 		}
-		// 建立双向引用，便于后续GraphQL编译和关系导航
-		sourceField.Relation.Reverse = targetField.Relation
-		targetField.Relation.Reverse = sourceField.Relation
 	}
 	// 处理多对多关系
 	detectManyToManyRelations(classMap, foreignKeys, primaryKeys)
@@ -225,7 +222,7 @@ func createManyToManyRelation(classes map[string]*internal.Class, throughTable s
 		throughClass.IsThrough = true
 	}
 	createRelation := func(
-		sourceTable, targetTable, sourceColumn, targetColumn, sourceKey, targetKey string, reverse *internal.Relation,
+		sourceTable, targetTable, sourceColumn, targetColumn, sourceKey, targetKey string,
 	) internal.Relation {
 		return internal.Relation{
 			SourceClass: sourceTable,
@@ -238,16 +235,14 @@ func createManyToManyRelation(classes map[string]*internal.Class, throughTable s
 				SourceKey: sourceKey,
 				TargetKey: targetKey,
 			},
-			Reverse: reverse,
 		}
 	}
-	r1, r2 := &internal.Relation{}, &internal.Relation{}
-	*r1 = createRelation(fk1.TargetTable, fk2.TargetTable, fk1.TargetColumn, fk2.TargetColumn, fk1.SourceColumn, fk2.SourceColumn, r2)
-	*r2 = createRelation(fk2.TargetTable, fk1.TargetTable, fk2.TargetColumn, fk1.TargetColumn, fk2.SourceColumn, fk1.SourceColumn, r1)
+	r1 := createRelation(fk1.TargetTable, fk2.TargetTable, fk1.TargetColumn, fk2.TargetColumn, fk1.SourceColumn, fk2.SourceColumn)
+	r2 := createRelation(fk2.TargetTable, fk1.TargetTable, fk2.TargetColumn, fk1.TargetColumn, fk2.SourceColumn, fk1.SourceColumn)
 	if f1 := class1.Fields[fk1.TargetColumn]; f1 != nil && f1.IsPrimary {
-		f1.Relation = r1
+		f1.Relation = &r1
 	}
 	if f2 := class2.Fields[fk2.TargetColumn]; f2 != nil && f2.IsPrimary {
-		f2.Relation = r2
+		f2.Relation = &r2
 	}
 }

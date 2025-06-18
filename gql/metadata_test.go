@@ -171,13 +171,6 @@ func TestMetadataLoadingModes(t *testing.T) {
 				assert.Equal(t, internal.RECURSIVE, parentId.Relation.Type, "应该是recursive关系")
 				assert.Equal(t, "Comment", parentId.Relation.TargetTable, "关系目标类应该是Comment")
 				assert.Equal(t, "id", parentId.Relation.TargetFiled, "关系目标字段应该是id")
-
-				// 验证反向关系
-				assert.NotNil(t, parentId.Relation.Reverse, "应该有反向关系")
-				if parentId.Relation.Reverse != nil {
-					assert.Equal(t, internal.RECURSIVE, parentId.Relation.Reverse.Type, "反向关系也应该是recursive")
-					assert.Equal(t, "Comment", parentId.Relation.Reverse.TargetTable, "反向关系目标类应该是Comment")
-				}
 			}
 		}
 	})

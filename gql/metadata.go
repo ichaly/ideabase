@@ -339,21 +339,6 @@ func (my *Metadata) processRelations() {
 				continue
 			}
 
-			// 如果目标字段没有反向关系，创建一个
-			if targetField.Relation == nil {
-				targetField.Relation = &internal.Relation{
-					SourceClass: targetClass.Name,
-					SourceFiled: targetField.Name,
-					TargetTable: class.Name,
-					TargetFiled: field.Name,
-					Type:        relation.Type.Reverse(),
-					Reverse:     relation,
-				}
-			}
-
-			// 链接反向关系
-			relation.Reverse = targetField.Relation
-
 			// 根据关系类型收集需要创建的字段信息
 			switch relation.Type {
 			case internal.MANY_TO_MANY:

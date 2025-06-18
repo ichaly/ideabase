@@ -7,6 +7,5 @@ type Relation struct {
 	TargetTable string       `json:"targetTable"`       // 目标类名
 	TargetFiled string       `json:"targetFiled"`       // 目标字段名
 	Type        RelationType `json:"type"`              // 关系类型
-	Reverse     *Relation    `json:"-"`                 // 反向关系引用
 	Through     *Through     `json:"through,omitempty"` // 多对多关系配置
 }
