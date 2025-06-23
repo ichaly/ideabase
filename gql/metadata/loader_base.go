@@ -25,7 +25,7 @@ type baseLoader struct {
 // 2. 解析为tableInfo/columnInfo等结构体
 // 3. 组装为Class结构，处理主键、外键、多对多关系
 // 4. 注入Hoster
-func (my *baseLoader) loadMeta(t protocol.Tree, query string, args []interface{}) error {
+func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface{}) error {
 	rows, err := my.db.Raw(query, args...).Rows()
 	if err != nil {
 		return fmt.Errorf("执行元数据SQL失败: %w", err)
@@ -155,12 +155,12 @@ func (my *baseLoader) loadMeta(t protocol.Tree, query string, args []interface{}
 	detectManyToManyRelations(classMap, foreignKeys, primaryKeys)
 	// 注入Hoster，供后续GraphQL编译等使用
 	for index, class := range classMap {
-		if err := t.PutNode(index, class); err != nil {
+		if err := h.PutNode(index, class); err != nil {
 			return fmt.Errorf("注入Hoster失败: %w", err)
 		}
 	}
 	// 使用当前时间作为版本号
-	t.SetVersion(time.Now().Format("20060102150405"))
+	h.SetVersion(time.Now().Format("20060102150405"))
 	return nil
 }
 

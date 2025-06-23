@@ -78,10 +78,10 @@ func WithoutLoader(names ...string) MetadataOption {
 // HookedLoader 装饰器，支持beforeLoad,afterLoad钩子
 type HookedLoader struct {
 	protocol.Loader
-	afterLoad, beforeLoad func(h protocol.Tree) error
+	afterLoad, beforeLoad func(h protocol.Hoster) error
 }
 
-func (my *HookedLoader) Load(h protocol.Tree) error {
+func (my *HookedLoader) Load(h protocol.Hoster) error {
 	if my.beforeLoad != nil {
 		if err := my.beforeLoad(h); err != nil {
 			return err
@@ -124,7 +124,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	}
 
 	// 默认Loader注册，Pgsql和Mysql用HookedLoader包装，dev模式下自动保存
-	after := func(h protocol.Tree) error {
+	after := func(h protocol.Hoster) error {
 		if cfg.IsDebug() {
 			return my.saveToFile(metadata.ResolveMetadataPath(cfg))
 		}

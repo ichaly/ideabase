@@ -2,9 +2,10 @@ package compiler
 
 import (
 	"fmt"
-	"github.com/ichaly/ideabase/gql/protocol"
 	"strconv"
 	"strings"
+
+	"github.com/ichaly/ideabase/gql/protocol"
 
 	"sync"
 )
@@ -17,6 +18,7 @@ type Context struct {
 	buf       *strings.Builder
 	quote     string
 	params    []any
+	hoster    protocol.Hoster
 	variables map[string]interface{}
 }
 
@@ -35,9 +37,10 @@ var contextPool = sync.Pool{
 }
 
 // NewContext 从对象池获取Context实例
-func NewContext(q string, v map[string]interface{}) *Context {
+func NewContext(q string, v map[string]interface{}, h protocol.Hoster) *Context {
 	ctx := contextPool.Get().(*Context)
 	ctx.quote = q
+	ctx.hoster = h
 	ctx.variables = v
 	return ctx
 }
@@ -46,17 +49,33 @@ func NewContext(q string, v map[string]interface{}) *Context {
 func (my *Context) Release() {
 	my.buf.Reset()
 	my.quote = ""
+	my.hoster = nil
 	my.variables = nil
 	my.params = my.params[:0]
 	contextPool.Put(my)
 }
 
 func (my *Context) FindField(className, fieldName string) (*protocol.Field, bool) {
-	return nil, false
+	if my.hoster == nil {
+		return nil, false
+	}
+	class, ok := my.hoster.GetNode(className)
+	if !ok {
+		return nil, false
+	}
+	field, ok := class.Fields[fieldName]
+	return field, ok
 }
 
-func (my *Context) TableName(param string) (string, bool) {
-	return "", false
+func (my *Context) TableName(className string) (string, bool) {
+	if my.hoster == nil {
+		return "", false
+	}
+	class, ok := my.hoster.GetNode(className)
+	if !ok || class.Table == "" {
+		return "", false
+	}
+	return class.Table, true
 }
 
 // Args 返回参数列表

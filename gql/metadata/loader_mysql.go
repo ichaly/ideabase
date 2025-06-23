@@ -118,12 +118,12 @@ func (my *MysqlLoader) Support() bool {
 }
 
 // Load 从MySQL加载元数据
-func (my *MysqlLoader) Load(t protocol.Tree) error {
+func (my *MysqlLoader) Load(h protocol.Hoster) error {
 	args := []interface{}{
 		my.cfg.Schema.Schema,
 		my.cfg.Schema.Schema,
 		my.cfg.Schema.Schema,
 		my.cfg.Schema.Schema,
 	}
-	return my.loadMeta(t, mysqlMetaSQL, args)
+	return my.loadMeta(h, mysqlMetaSQL, args)
 }

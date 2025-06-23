@@ -110,7 +110,7 @@ func (my *PgsqlLoader) Support() bool {
 }
 
 // Load 从PostgreSQL加载元数据
-func (my *PgsqlLoader) Load(t protocol.Tree) error {
+func (my *PgsqlLoader) Load(h protocol.Hoster) error {
 	args := []interface{}{my.cfg.Schema.Schema}
-	return my.loadMeta(t, pgsqlMetaSQL, args)
+	return my.loadMeta(h, pgsqlMetaSQL, args)
 }
