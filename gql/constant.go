@@ -2,7 +2,6 @@ package gql
 
 import (
 	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/samber/lo"
 
 	jsoniter "github.com/json-iterator/go"
@@ -10,14 +9,6 @@ import (
 
 // 全局JSON处理实例，使用jsoniter替代标准库
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
-
-const (
-	NONE         protocol.RelationType = ""
-	RECURSIVE    protocol.RelationType = "Recursive"
-	ONE_TO_MANY  protocol.RelationType = "OneToMany"
-	MANY_TO_ONE  protocol.RelationType = "ManyToOne"
-	MANY_TO_MANY protocol.RelationType = "ManyToMany"
-)
 
 // 参数名称
 const (
@@ -184,7 +175,7 @@ var dataTypes = map[string]string{
 }
 
 // 顺序不要调整这个会影响内置标量的可用操作符
-var operators = []*internal.Symbol{
+var operators = []*internal.Operator{
 	{Name: IS, Value: "is", Description: descIs},
 	{Name: EQ, Value: "=", Description: descEqual},
 	{Name: IN, Value: "in", Description: descIn},
@@ -203,7 +194,7 @@ var operators = []*internal.Symbol{
 }
 
 // 构建操作符和内置标量的关系
-var symbols = map[string][]*internal.Symbol{
+var grouping = map[string][]*internal.Operator{
 	SCALAR_ID:        operators[1:7],                           //[eq,in,gt,ge,lt,le]
 	SCALAR_INT:       operators[:8],                            //[is,eq,in,gt,ge,lt,le,ne]
 	SCALAR_FLOAT:     operators[:8],                            //[is,eq,in,gt,ge,lt,le,ne]
@@ -214,10 +205,10 @@ var symbols = map[string][]*internal.Symbol{
 }
 
 // 运算符按照名字索引字典
-var dictionary = lo.Reduce(operators, func(agg map[string]*internal.Symbol, item *internal.Symbol, index int) map[string]*internal.Symbol {
+var dictionary = lo.Reduce(operators, func(agg map[string]*internal.Operator, item *internal.Operator, index int) map[string]*internal.Operator {
 	agg[item.Name] = item
 	return agg
-}, map[string]*internal.Symbol{})
+}, map[string]*internal.Operator{})
 
 // 内置标量类型集合
 var scalars = []string{SCALAR_ID, SCALAR_INT, SCALAR_FLOAT, SCALAR_STRING, SCALAR_BOOLEAN}

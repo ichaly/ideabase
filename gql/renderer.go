@@ -477,9 +477,9 @@ func (my *Renderer) renderFilter() error {
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_FILTER, " ", SEPARATOR_LINE, "\n")
 
 	// 定义过滤器映射表，每种类型支持的操作
-	keys := utl.SortKeys(symbols)
+	keys := utl.SortKeys(grouping)
 	for _, scalarType := range keys {
-		operators := symbols[scalarType]
+		operators := grouping[scalarType]
 		filterName := scalarType + SUFFIX_FILTER
 		my.writeLine("# ", scalarType, "过滤器")
 		my.writeLine("input ", filterName, " {")

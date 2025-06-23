@@ -22,10 +22,10 @@ type RelationType string
 
 // 关系类型常量
 const (
-	RECURSIVE    RelationType = "recursive"    // 递归关系
-	MANY_TO_ONE  RelationType = "many_to_one"  // 多对一关系
-	ONE_TO_MANY  RelationType = "one_to_many"  // 一对多关系
-	MANY_TO_MANY RelationType = "many_to_many" // 多对多关系
+	RECURSIVE    RelationType = "Recursive"  // 递归关系
+	MANY_TO_ONE  RelationType = "ManyToOne"  // 多对一关系
+	ONE_TO_MANY  RelationType = "OneToMany"  // 一对多关系
+	MANY_TO_MANY RelationType = "ManyToMany" // 多对多关系
 )
 
 // Parse 从字符串转换为关系类型

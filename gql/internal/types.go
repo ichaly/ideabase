@@ -1,7 +1,7 @@
 package internal
 
-// Symbol 表示操作符号
-type Symbol struct {
+// Operator 表示操作符号
+type Operator struct {
 	Name        string
 	Value       string
 	Description string
