@@ -1,6 +1,7 @@
 package gql
 
 import (
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"strings"
 	"testing"
@@ -15,11 +16,11 @@ func TestRenderRelation(t *testing.T) {
 	meta := createRelationTestMetadata()
 
 	// 创建配置
-	meta.cfg = &protocol.Config{
-		Schema: protocol.SchemaConfig{
+	meta.cfg = &internal.Config{
+		Schema: internal.SchemaConfig{
 			TypeMapping: map[string]string{},
 		},
-		Metadata: protocol.MetadataConfig{
+		Metadata: internal.MetadataConfig{
 			ShowThrough: false, // 默认隐藏中间表关系
 		},
 	}
@@ -250,11 +251,11 @@ func TestRenderRelation(t *testing.T) {
 
 		// 创建一个新的元数据对象，确保中间表关系字段被正确标记
 		newMeta := createRelationTestMetadata()
-		newMeta.cfg = &protocol.Config{
-			Schema: protocol.SchemaConfig{
+		newMeta.cfg = &internal.Config{
+			Schema: internal.SchemaConfig{
 				TypeMapping: map[string]string{},
 			},
-			Metadata: protocol.MetadataConfig{
+			Metadata: internal.MetadataConfig{
 				ShowThrough: false,
 			},
 		}

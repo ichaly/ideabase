@@ -1,6 +1,7 @@
 package gql
 
 import (
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"testing"
@@ -16,13 +17,13 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "test")
 	k.Set("app.root", utl.Root())
-	k.Set("metadata.classes", map[string]*protocol.ClassConfig{
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
 		// 1. 基本类定义
 		"User": {
 			Table:       "users",
 			Description: "用户表",
 			PrimaryKeys: []string{"id"},
-			Fields: map[string]*protocol.FieldConfig{
+			Fields: map[string]*internal.FieldConfig{
 				"id": {
 					Column:      "id",
 					Type:        "int",
@@ -51,7 +52,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 			Table:         "users",
 			Description:   "用户公开信息",
 			ExcludeFields: []string{"email", "created_at"},
-			Fields: map[string]*protocol.FieldConfig{
+			Fields: map[string]*internal.FieldConfig{
 				"name": {
 					Description: "用户昵称",
 					Resolver:    "MaskedNameResolver",
@@ -63,7 +64,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 			Table:       "users",
 			Description: "管理员视图",
 			Override:    true,
-			Fields: map[string]*protocol.FieldConfig{
+			Fields: map[string]*internal.FieldConfig{
 				"role": {
 					Type:        "string",
 					Description: "角色",
@@ -75,7 +76,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		"Statistics": {
 			Description: "统计数据",
 			Resolver:    "StatisticsResolver",
-			Fields: map[string]*protocol.FieldConfig{
+			Fields: map[string]*internal.FieldConfig{
 				"totalUsers": {
 					Type:        "integer",
 					Description: "用户总数",
@@ -93,7 +94,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 			Table:         "users",
 			Description:   "用户简要信息",
 			IncludeFields: []string{"id", "name"},
-			Fields: map[string]*protocol.FieldConfig{
+			Fields: map[string]*internal.FieldConfig{
 				"displayName": {
 					Type:        "string",
 					Description: "显示名称",

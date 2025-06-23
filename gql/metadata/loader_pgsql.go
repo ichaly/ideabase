@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"gorm.io/gorm"
 )
@@ -96,7 +97,7 @@ SELECT
 `
 
 // NewPgsqlLoader 创建PostgreSQL加载器
-func NewPgsqlLoader(cfg *protocol.Config, db *gorm.DB) *PgsqlLoader {
+func NewPgsqlLoader(cfg *internal.Config, db *gorm.DB) *PgsqlLoader {
 	return &PgsqlLoader{
 		&baseLoader{db: db, cfg: cfg},
 	}

@@ -2,6 +2,7 @@ package gql
 
 import (
 	"fmt"
+	"github.com/ichaly/ideabase/gql/internal"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,7 +29,7 @@ func init() {
 type Metadata struct {
 	k   *std.Konfig
 	db  *gorm.DB
-	cfg *protocol.Config
+	cfg *internal.Config
 
 	// 统一索引: 支持类名、表名、原始表名查找
 	Nodes   map[string]*protocol.Class `json:"nodes"`
@@ -97,7 +98,7 @@ func (my *HookedLoader) Load(h protocol.Tree) error {
 
 // NewMetadata 策略模式重构，支持Loader注册与优先级排序
 func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, error) {
-	cfg := &protocol.Config{Schema: protocol.SchemaConfig{TypeMapping: dataTypes}}
+	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: dataTypes}}
 
 	// 设置默认配置
 	k.SetDefault("schema.schema", "public")

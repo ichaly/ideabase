@@ -3,6 +3,7 @@ package gql
 import (
 	"context"
 	"fmt"
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"os"
 	"path/filepath"
@@ -269,11 +270,11 @@ func TestMetadataLoadingModes(t *testing.T) {
 		require.NoError(t, err, "创建配置失败")
 		k.Set("mode", "test")
 		k.Set("app.root", "../")
-		k.Set("metadata.classes", map[string]*protocol.ClassConfig{
+		k.Set("metadata.classes", map[string]*internal.ClassConfig{
 			"User": {
 				Table:       "users",
 				Description: "用户表",
-				Fields: map[string]*protocol.FieldConfig{
+				Fields: map[string]*internal.FieldConfig{
 					"id": {
 						Column:      "id",
 						Type:        "int",
@@ -289,7 +290,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			},
 			"VirtualTable": {
 				Description: "虚拟表",
-				Fields: map[string]*protocol.FieldConfig{
+				Fields: map[string]*internal.FieldConfig{
 					"id": {
 						Column:    "id",
 						Type:      "int",

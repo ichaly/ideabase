@@ -2,6 +2,7 @@ package gql
 
 import (
 	"fmt"
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/gql/renderer"
 	"os"
@@ -85,8 +86,8 @@ func createMockMetadata(t *testing.T) *Metadata {
 		k:       k,
 		Nodes:   make(map[string]*protocol.Class),
 		Version: time.Now().Format("20060102150405"),
-		cfg: &protocol.Config{
-			Schema: protocol.SchemaConfig{
+		cfg: &internal.Config{
+			Schema: internal.SchemaConfig{
 				TypeMapping: typeMapping,
 			},
 		},
@@ -638,8 +639,8 @@ func TestRenderer_DataTypeMapping(t *testing.T) {
 	}
 
 	// 设置配置
-	meta.cfg = &protocol.Config{
-		Schema: protocol.SchemaConfig{
+	meta.cfg = &internal.Config{
+		Schema: internal.SchemaConfig{
 			TypeMapping: typeMapping,
 		},
 	}
@@ -770,8 +771,8 @@ func TestRenderer_GetGraphQLType(t *testing.T) {
 	// 创建渲染器
 	renderer := &Renderer{
 		meta: &Metadata{
-			cfg: &protocol.Config{
-				Schema: protocol.SchemaConfig{
+			cfg: &internal.Config{
+				Schema: internal.SchemaConfig{
 					TypeMapping: testCases, // 直接使用testCases作为TypeMapping
 				},
 			},
@@ -828,11 +829,11 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
 	k.Set("metadata.table-prefix", []string{"sys_"})
-	k.Set("metadata.classes", map[string]*protocol.ClassConfig{
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
 		"User": {
 			Description: "用户表",
 			Table:       "sys_user",
-			Fields: map[string]*protocol.FieldConfig{
+			Fields: map[string]*internal.FieldConfig{
 				"id": {
 					Type:      "ID",
 					IsPrimary: true,
@@ -854,7 +855,7 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 		"Post": {
 			Description: "文章表",
 			Table:       "sys_post",
-			Fields: map[string]*protocol.FieldConfig{
+			Fields: map[string]*internal.FieldConfig{
 				"id": {
 					Type:      "ID",
 					IsPrimary: true,
@@ -870,7 +871,7 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 				"userId": {
 					Type:        "Int",
 					Description: "作者ID",
-					Relation: &protocol.RelationConfig{
+					Relation: &internal.RelationConfig{
 						TargetClass: "User",
 						TargetField: "id",
 						Type:        "many_to_one",

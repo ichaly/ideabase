@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"fmt"
+	"github.com/ichaly/ideabase/gql/internal"
 	"strings"
 
 	"github.com/huandu/go-clone"
@@ -13,11 +14,11 @@ import (
 // ConfigLoader 配置元数据加载器
 // 实现Loader接口
 type ConfigLoader struct {
-	cfg *protocol.Config
+	cfg *internal.Config
 }
 
 // NewConfigLoader 创建配置加载器
-func NewConfigLoader(cfg *protocol.Config) *ConfigLoader {
+func NewConfigLoader(cfg *internal.Config) *ConfigLoader {
 	return &ConfigLoader{cfg: cfg}
 }
 
@@ -102,7 +103,7 @@ func (my *ConfigLoader) Load(t protocol.Tree) error {
 }
 
 // buildClassFromConfig 根据ClassConfig和可选baseClass构建Class对象
-func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *protocol.ClassConfig, baseClass *protocol.Class) (*protocol.Class, error) {
+func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *internal.ClassConfig, baseClass *protocol.Class) (*protocol.Class, error) {
 	isVirtual := classConfig.Table == ""
 	var newClass *protocol.Class
 	if baseClass != nil {
@@ -134,7 +135,7 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *prot
 }
 
 // 应用字段过滤
-func (my *ConfigLoader) applyFieldFilter(class *protocol.Class, config *protocol.ClassConfig) {
+func (my *ConfigLoader) applyFieldFilter(class *protocol.Class, config *internal.ClassConfig) {
 	if len(config.IncludeFields) > 0 {
 		includeSet := make(map[string]bool)
 		for _, fieldName := range config.IncludeFields {
@@ -152,7 +153,7 @@ func (my *ConfigLoader) applyFieldFilter(class *protocol.Class, config *protocol
 }
 
 // 处理类字段
-func (my *ConfigLoader) applyFieldConfig(class *protocol.Class, fieldConfigs map[string]*protocol.FieldConfig) error {
+func (my *ConfigLoader) applyFieldConfig(class *protocol.Class, fieldConfigs map[string]*internal.FieldConfig) error {
 	if fieldConfigs == nil {
 		return nil
 	}
@@ -214,7 +215,7 @@ func (my *ConfigLoader) applyFieldConfig(class *protocol.Class, fieldConfigs map
 }
 
 // 字段创建或更新（类似类的处理方式）
-func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config *protocol.FieldConfig, baseField *protocol.Field) *protocol.Field {
+func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config *internal.FieldConfig, baseField *protocol.Field) *protocol.Field {
 	var field *protocol.Field
 	if baseField != nil {
 		field = baseField
@@ -283,7 +284,7 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 }
 
 // ConvertClassName 根据配置将表名转换为类名（去前缀、单数化、驼峰化等）
-func ConvertClassName(tableName string, config protocol.MetadataConfig) string {
+func ConvertClassName(tableName string, config internal.MetadataConfig) string {
 	className := tableName
 	// 去前缀
 	for _, prefix := range config.TablePrefix {
@@ -305,7 +306,7 @@ func ConvertClassName(tableName string, config protocol.MetadataConfig) string {
 }
 
 // ConvertFieldName 根据配置将字段名转换为小驼峰
-func ConvertFieldName(columnName string, config protocol.MetadataConfig) string {
+func ConvertFieldName(columnName string, config internal.MetadataConfig) string {
 	fieldName := columnName
 	if config.UseCamel {
 		fieldName = strcase.ToLowerCamel(fieldName)

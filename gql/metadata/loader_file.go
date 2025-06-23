@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"fmt"
+	"github.com/ichaly/ideabase/gql/internal"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,7 +34,7 @@ var modeRegex = regexp.MustCompile(`{\s*mode\s*}`)
 // 3. 路径处理：
 //   - 对于绝对路径（以 / 开头），直接返回
 //   - 对于相对路径，与根目录（cfg.Root 或 utl.Root()）拼接后返回
-func ResolveMetadataPath(cfg *protocol.Config) string {
+func ResolveMetadataPath(cfg *internal.Config) string {
 	root := utl.Root()
 	var path, mode string
 	if cfg != nil {
@@ -65,11 +66,11 @@ func ResolveMetadataPath(cfg *protocol.Config) string {
 // FileLoader 文件元数据加载器
 // 实现Loader接口
 type FileLoader struct {
-	cfg *protocol.Config
+	cfg *internal.Config
 }
 
 // NewFileLoader 创建文件加载器
-func NewFileLoader(cfg *protocol.Config) *FileLoader {
+func NewFileLoader(cfg *internal.Config) *FileLoader {
 	return &FileLoader{cfg: cfg}
 }
 

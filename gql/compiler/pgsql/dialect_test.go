@@ -1,10 +1,11 @@
 package pgsql
 
 import (
-	"github.com/ichaly/ideabase/gql/protocol"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ichaly/ideabase/gql/internal"
 
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
@@ -38,13 +39,14 @@ func (my *_DialectSuite) SetupSuite() {
 	my.Require().NoError(err, "创建配置失败")
 	k.Set("mode", "test")
 	k.Set("app.root", "../../../")
+	k.Set("metadata.table-prefix", []string{"sys_"})
 
 	// 设置测试用的元数据配置
-	k.Set("metadata.classes", map[string]*protocol.ClassConfig{
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
 		"User": {
 			Description: "用户表",
 			Table:       "sys_user",
-			Fields: map[string]*protocol.FieldConfig{
+			Fields: map[string]*internal.FieldConfig{
 				"id": {
 					Type:      "ID",
 					IsPrimary: true,

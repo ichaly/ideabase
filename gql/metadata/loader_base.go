@@ -3,6 +3,7 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/ichaly/ideabase/gql/internal"
 	"reflect"
 	"sort"
 	"time"
@@ -16,7 +17,7 @@ import (
 // 不对外暴露
 type baseLoader struct {
 	db  *gorm.DB
-	cfg *protocol.Config
+	cfg *internal.Config
 }
 
 // loadMeta 通用数据库元数据加载主流程
