@@ -1,7 +1,6 @@
 package gql
 
 import (
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/samber/lo"
 
 	jsoniter "github.com/json-iterator/go"
@@ -9,6 +8,13 @@ import (
 
 // 全局JSON处理实例，使用jsoniter替代标准库
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
+
+// Operator 表示操作符号
+type Operator struct {
+	Name        string
+	Value       string
+	Description string
+}
 
 // 参数名称
 const (
@@ -175,7 +181,7 @@ var dataTypes = map[string]string{
 }
 
 // 顺序不要调整这个会影响内置标量的可用操作符
-var operators = []*internal.Operator{
+var operators = []*Operator{
 	{Name: IS, Value: "is", Description: descIs},
 	{Name: EQ, Value: "=", Description: descEqual},
 	{Name: IN, Value: "in", Description: descIn},
@@ -194,7 +200,7 @@ var operators = []*internal.Operator{
 }
 
 // 构建操作符和内置标量的关系
-var grouping = map[string][]*internal.Operator{
+var grouping = map[string][]*Operator{
 	SCALAR_ID:        operators[1:7],                           //[eq,in,gt,ge,lt,le]
 	SCALAR_INT:       operators[:8],                            //[is,eq,in,gt,ge,lt,le,ne]
 	SCALAR_FLOAT:     operators[:8],                            //[is,eq,in,gt,ge,lt,le,ne]
@@ -205,7 +211,7 @@ var grouping = map[string][]*internal.Operator{
 }
 
 // 运算符按照名字索引字典
-var dictionary = lo.KeyBy(operators, func(op *internal.Operator) string {
+var dictionary = lo.KeyBy(operators, func(op *Operator) string {
 	return op.Name
 })
 
