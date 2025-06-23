@@ -2,35 +2,17 @@ package gql
 
 import (
 	"fmt"
-	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/ichaly/ideabase/gql/renderer"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/gql/renderer"
 
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/rs/zerolog/log"
-)
-
-// 类型常量
-const (
-	// GraphQL类型名称
-	TYPE_SORT_DIRECTION  = "SortDirection"
-	TYPE_PAGE_INFO       = "PageInfo"
-	TYPE_GROUP_BY        = "GroupBy"
-	TYPE_NUMBER_STATS    = "NumberStats"
-	TYPE_STRING_STATS    = "StringStats"
-	TYPE_DATE_TIME_STATS = "DateTimeStats"
-
-	// 类型名称后缀
-	SUFFIX_FILTER       = "Filter"
-	SUFFIX_SORT         = "Sort"
-	SUFFIX_STATS        = "Stats"
-	SUFFIX_GROUP        = "Group"
-	SUFFIX_PAGE         = "Page"
-	SUFFIX_CREATE_INPUT = "CreateInput"
 )
 
 // 分隔线和描述常量
@@ -881,9 +863,9 @@ func (my *Renderer) renderPaging() error {
 		// 生成分页类型
 		my.writeLine("# ", className, "分页结果")
 		my.writeLine("type ", className, SUFFIX_PAGE, " {")
-		my.writeField("items", className, renderer.NonNull(), renderer.ListNonNull(), renderer.WithComment("直接返回"+className+"对象数组"))
-		my.writeField("pageInfo", TYPE_PAGE_INFO, renderer.NonNull())
-		my.writeField("total", SCALAR_INT, renderer.NonNull())
+		my.writeField(ITEMS, className, renderer.NonNull(), renderer.ListNonNull(), renderer.WithComment("直接返回"+className+"对象数组"))
+		my.writeField(PAGE_INFO, TYPE_PAGE_INFO, renderer.NonNull())
+		my.writeField(TOTAL, SCALAR_INT, renderer.NonNull())
 		my.writeLine("}")
 		my.writeLine("")
 	}

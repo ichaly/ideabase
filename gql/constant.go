@@ -16,6 +16,25 @@ type Operator struct {
 	Description string
 }
 
+// 类型常量
+const (
+	// GraphQL类型名称
+	TYPE_SORT_DIRECTION  = "SortDirection"
+	TYPE_PAGE_INFO       = "PageInfo"
+	TYPE_GROUP_BY        = "GroupBy"
+	TYPE_NUMBER_STATS    = "NumberStats"
+	TYPE_STRING_STATS    = "StringStats"
+	TYPE_DATE_TIME_STATS = "DateTimeStats"
+
+	// 类型名称后缀
+	SUFFIX_FILTER       = "Filter"
+	SUFFIX_SORT         = "Sort"
+	SUFFIX_STATS        = "Stats"
+	SUFFIX_GROUP        = "Group"
+	SUFFIX_PAGE         = "Page"
+	SUFFIX_CREATE_INPUT = "CreateInput"
+)
+
 // 参数名称
 const (
 	DISTINCT   = "distinct"
@@ -33,12 +52,15 @@ const (
 	UPDATE     = "update"
 	REMOVE     = "delete"
 	CONNECT    = "connect"
-	DISCONNECT = "disconnect "
+	DISCONNECT = "disconnect"
 )
 
 const (
-	PARENTS  = "parents"
-	CHILDREN = "children"
+	TOTAL     = "total"
+	ITEMS     = "items"
+	PAGE_INFO = "pageInfo"
+	PARENTS   = "parents"
+	CHILDREN  = "children"
 )
 
 // GraphQL入参名称后缀

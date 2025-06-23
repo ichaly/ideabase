@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -34,7 +35,7 @@ func (my *Dialect) buildRoot(ctx *compiler.Context, set ast.SelectionSet) error 
 		if i != 0 {
 			ctx.SpaceAfter(`,`)
 		}
-		ctx.Write(`'`, field.Name, `', __sj_`, i, `.json`)
+		ctx.Write(`'`, field.Name, `', __sj_`, i, `.'json'`)
 	}
 	ctx.Write(`) AS "__root" FROM (SELECT TRUE) AS "__root_x"`)
 	return nil
@@ -45,25 +46,25 @@ func (my *Dialect) buildJson(ctx *compiler.Context, set ast.SelectionSet) {
 		field := s.(*ast.Field)
 		ctx.SpaceBefore(`LEFT OUTER JOIN LATERAL (`)
 
-		// 判断是否为列表查询
-		isListQuery := !strings.HasSuffix(field.Definition.Type.Name(), "Page") && field.Arguments.ForName("id") == nil
+		isSingleQuery := field.Arguments.ForName("id") != nil
 
-		if isListQuery {
-			ctx.Write(`SELECT COALESCE(JSONB_AGG(TO_JSONB(__sr_`, i, `.*)), '[]') -> 0 AS json FROM (`)
+		if isSingleQuery {
+			ctx.Write(`SELECT COALESCE(JSONB_AGG(TO_JSONB(__sr_`, i, `.*)), '[]') -> 0 AS "json" FROM (`)
 		} else {
-			ctx.Write(`SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB(__sr_`, i, `.*)), '[]')`)
-			// 检查是否有total字段
+			ctx.Write(`SELECT JSONB_BUILD_OBJECT('`, gql.ITEMS, `', COALESCE(JSONB_AGG(TO_JSONB(__sr_`, i, `.*)), '[]')`)
+
 			hasTotal := false
 			for _, sel := range field.SelectionSet {
-				if f, ok := sel.(*ast.Field); ok && f.Name == "total" {
+				if f, ok := sel.(*ast.Field); ok && f.Name == gql.TOTAL {
 					hasTotal = true
 					break
 				}
 			}
 			if hasTotal {
-				ctx.Write(`, 'total', COUNT(*) OVER()`)
+				ctx.Write(`, gql.TOTAL, COUNT(*) OVER()`)
 			}
-			ctx.Write(`) AS json FROM (`)
+
+			ctx.Write(`) AS "json" FROM (`)
 		}
 
 		my.buildSelect(ctx, field, i, "0")
@@ -83,7 +84,7 @@ func (my *Dialect) buildSelect(ctx *compiler.Context, field *ast.Field, index in
 	}
 
 	// 判断是否为分页查询
-	isPage := strings.HasSuffix(field.Definition.Type.Name(), "Page")
+	isPage := strings.HasSuffix(field.Definition.Type.Name(), gql.SUFFIX_PAGE)
 
 	alias := strings.Join([]string{table, parent, strconv.Itoa(index)}, "_")
 	ctx.SpaceAfter(`SELECT`)
