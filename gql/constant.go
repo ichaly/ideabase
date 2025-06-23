@@ -205,10 +205,9 @@ var grouping = map[string][]*internal.Operator{
 }
 
 // 运算符按照名字索引字典
-var dictionary = lo.Reduce(operators, func(agg map[string]*internal.Operator, item *internal.Operator, index int) map[string]*internal.Operator {
-	agg[item.Name] = item
-	return agg
-}, map[string]*internal.Operator{})
+var dictionary = lo.KeyBy(operators, func(op *internal.Operator) string {
+	return op.Name
+})
 
 // 内置标量类型集合
 var scalars = []string{SCALAR_ID, SCALAR_INT, SCALAR_FLOAT, SCALAR_STRING, SCALAR_BOOLEAN}
