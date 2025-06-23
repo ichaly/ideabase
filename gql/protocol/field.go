@@ -1,4 +1,4 @@
-package internal
+package protocol
 
 // Field 表示类的一个字段/列的完整定义
 type Field struct {

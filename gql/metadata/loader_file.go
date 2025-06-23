@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/utl"
@@ -34,7 +33,7 @@ var modeRegex = regexp.MustCompile(`{\s*mode\s*}`)
 // 3. 路径处理：
 //   - 对于绝对路径（以 / 开头），直接返回
 //   - 对于相对路径，与根目录（cfg.Root 或 utl.Root()）拼接后返回
-func ResolveMetadataPath(cfg *internal.Config) string {
+func ResolveMetadataPath(cfg *protocol.Config) string {
 	root := utl.Root()
 	var path, mode string
 	if cfg != nil {
@@ -66,11 +65,11 @@ func ResolveMetadataPath(cfg *internal.Config) string {
 // FileLoader 文件元数据加载器
 // 实现Loader接口
 type FileLoader struct {
-	cfg *internal.Config
+	cfg *protocol.Config
 }
 
 // NewFileLoader 创建文件加载器
-func NewFileLoader(cfg *internal.Config) *FileLoader {
+func NewFileLoader(cfg *protocol.Config) *FileLoader {
 	return &FileLoader{cfg: cfg}
 }
 
@@ -107,7 +106,7 @@ func (my *FileLoader) Load(t protocol.Tree) error {
 
 	// 3. 反序列化为临时结构体，包含所有类节点和版本号
 	var meta struct {
-		Nodes   map[string]*internal.Class `json:"nodes"`
+		Nodes   map[string]*protocol.Class `json:"nodes"`
 		Version string                     `json:"version"`
 	}
 
@@ -124,7 +123,7 @@ func (my *FileLoader) Load(t protocol.Tree) error {
 		// 只处理主类名（key与类名一致）
 		if index == class.Name {
 			// 初始化字段映射，支持字段名和列名双重索引
-			fields := make(map[string]*internal.Field)
+			fields := make(map[string]*protocol.Field)
 			for fieldName, field := range class.Fields {
 				fields[fieldName] = field
 				// 如果列名与字段名不同，添加列名索引，便于通过列名查找字段

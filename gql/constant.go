@@ -2,6 +2,7 @@ package gql
 
 import (
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/samber/lo"
 
 	jsoniter "github.com/json-iterator/go"
@@ -11,11 +12,11 @@ import (
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 const (
-	NONE         internal.RelationType = ""
-	RECURSIVE    internal.RelationType = "Recursive"
-	ONE_TO_MANY  internal.RelationType = "OneToMany"
-	MANY_TO_ONE  internal.RelationType = "ManyToOne"
-	MANY_TO_MANY internal.RelationType = "ManyToMany"
+	NONE         protocol.RelationType = ""
+	RECURSIVE    protocol.RelationType = "Recursive"
+	ONE_TO_MANY  protocol.RelationType = "OneToMany"
+	MANY_TO_ONE  protocol.RelationType = "ManyToOne"
+	MANY_TO_MANY protocol.RelationType = "ManyToMany"
 )
 
 // 参数名称

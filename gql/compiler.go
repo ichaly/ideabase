@@ -5,18 +5,17 @@ import (
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/compiler"
-	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // Compiler 编译上下文
 type Compiler struct {
 	meta    *Metadata        // 元数据引用
-	dialect protocol.Dialect // 方言实现引用，避免重复查询
+	dialect compiler.Dialect // 方言实现引用，避免重复查询
 }
 
 // NewCompiler 创建新的编译上下文
-func NewCompiler(m *Metadata, dialects []protocol.Dialect) (*Compiler, error) {
+func NewCompiler(m *Metadata, dialects []compiler.Dialect) (*Compiler, error) {
 	my := &Compiler{meta: m}
 	if err := my.selectDialect(dialects); err != nil {
 		return nil, err
@@ -42,8 +41,8 @@ func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[stri
 // 3. 如仍未找到，使用首个可用方言
 // 4. 如无可用方言，返回错误
 // 返回: 如无可用方言则返回错误
-func (my *Compiler) selectDialect(list []protocol.Dialect) error {
-	dialects := make(map[string]protocol.Dialect, len(list))
+func (my *Compiler) selectDialect(list []compiler.Dialect) error {
+	dialects := make(map[string]compiler.Dialect, len(list))
 	for _, dialect := range list {
 		dialects[dialect.Name()] = dialect
 	}

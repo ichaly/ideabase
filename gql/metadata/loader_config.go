@@ -6,7 +6,6 @@ import (
 
 	"github.com/huandu/go-clone"
 	"github.com/iancoleman/strcase"
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/jinzhu/inflection"
 )
@@ -14,11 +13,11 @@ import (
 // ConfigLoader 配置元数据加载器
 // 实现Loader接口
 type ConfigLoader struct {
-	cfg *internal.Config
+	cfg *protocol.Config
 }
 
 // NewConfigLoader 创建配置加载器
-func NewConfigLoader(cfg *internal.Config) *ConfigLoader {
+func NewConfigLoader(cfg *protocol.Config) *ConfigLoader {
 	return &ConfigLoader{cfg: cfg}
 }
 
@@ -103,19 +102,19 @@ func (my *ConfigLoader) Load(t protocol.Tree) error {
 }
 
 // buildClassFromConfig 根据ClassConfig和可选baseClass构建Class对象
-func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *internal.ClassConfig, baseClass *internal.Class) (*internal.Class, error) {
+func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *protocol.ClassConfig, baseClass *protocol.Class) (*protocol.Class, error) {
 	isVirtual := classConfig.Table == ""
-	var newClass *internal.Class
+	var newClass *protocol.Class
 	if baseClass != nil {
 		// 复制或覆盖
-		newClass = clone.Slowly(baseClass).(*internal.Class)
+		newClass = clone.Slowly(baseClass).(*protocol.Class)
 		newClass.Name = className
 	} else {
-		newClass = &internal.Class{
+		newClass = &protocol.Class{
 			Name:    className,
 			Table:   classConfig.Table,
 			Virtual: isVirtual,
-			Fields:  make(map[string]*internal.Field),
+			Fields:  make(map[string]*protocol.Field),
 		}
 	}
 	if classConfig.Description != "" {
@@ -135,7 +134,7 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 }
 
 // 应用字段过滤
-func (my *ConfigLoader) applyFieldFilter(class *internal.Class, config *internal.ClassConfig) {
+func (my *ConfigLoader) applyFieldFilter(class *protocol.Class, config *protocol.ClassConfig) {
 	if len(config.IncludeFields) > 0 {
 		includeSet := make(map[string]bool)
 		for _, fieldName := range config.IncludeFields {
@@ -153,7 +152,7 @@ func (my *ConfigLoader) applyFieldFilter(class *internal.Class, config *internal
 }
 
 // 处理类字段
-func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map[string]*internal.FieldConfig) error {
+func (my *ConfigLoader) applyFieldConfig(class *protocol.Class, fieldConfigs map[string]*protocol.FieldConfig) error {
 	if fieldConfigs == nil {
 		return nil
 	}
@@ -207,7 +206,7 @@ func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map
 		if !ok {
 			return fmt.Errorf("别名字段 %s 必须有基础字段 %s", fieldName, fieldConfig.Column)
 		}
-		aliasField := clone.Slowly(baseField).(*internal.Field)
+		aliasField := clone.Slowly(baseField).(*protocol.Field)
 		fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, fieldConfig, aliasField)
 	}
 	class.Fields = fields
@@ -215,12 +214,12 @@ func (my *ConfigLoader) applyFieldConfig(class *internal.Class, fieldConfigs map
 }
 
 // 字段创建或更新（类似类的处理方式）
-func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config *internal.FieldConfig, baseField *internal.Field) *internal.Field {
-	var field *internal.Field
+func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config *protocol.FieldConfig, baseField *protocol.Field) *protocol.Field {
+	var field *protocol.Field
 	if baseField != nil {
 		field = baseField
 	} else {
-		field = &internal.Field{}
+		field = &protocol.Field{}
 	}
 	field.Name = fieldName
 	if config.Column != "" || baseField == nil {
@@ -247,7 +246,7 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 	// 关系处理
 	if config.Relation != nil {
 		if field.Relation == nil {
-			field.Relation = &internal.Relation{
+			field.Relation = &protocol.Relation{
 				SourceClass: className,
 				SourceFiled: fieldName,
 			}
@@ -261,11 +260,11 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 			rel.TargetFiled = relConfig.TargetField
 		}
 		if relConfig.Type != "" {
-			rel.Type = internal.RelationType(relConfig.Type)
+			rel.Type = protocol.RelationType(relConfig.Type)
 		}
 		if relConfig.Through != nil {
 			if rel.Through == nil {
-				rel.Through = &internal.Through{}
+				rel.Through = &protocol.Through{}
 			}
 			through := rel.Through
 			throughConfig := relConfig.Through
@@ -284,7 +283,7 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 }
 
 // ConvertClassName 根据配置将表名转换为类名（去前缀、单数化、驼峰化等）
-func ConvertClassName(tableName string, config internal.MetadataConfig) string {
+func ConvertClassName(tableName string, config protocol.MetadataConfig) string {
 	className := tableName
 	// 去前缀
 	for _, prefix := range config.TablePrefix {
@@ -306,7 +305,7 @@ func ConvertClassName(tableName string, config internal.MetadataConfig) string {
 }
 
 // ConvertFieldName 根据配置将字段名转换为小驼峰
-func ConvertFieldName(columnName string, config internal.MetadataConfig) string {
+func ConvertFieldName(columnName string, config protocol.MetadataConfig) string {
 	fieldName := columnName
 	if config.UseCamel {
 		fieldName = strcase.ToLowerCamel(fieldName)

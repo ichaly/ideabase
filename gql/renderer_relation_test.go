@@ -1,10 +1,10 @@
 package gql
 
 import (
+	"github.com/ichaly/ideabase/gql/protocol"
 	"strings"
 	"testing"
 
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,11 +15,11 @@ func TestRenderRelation(t *testing.T) {
 	meta := createRelationTestMetadata()
 
 	// 创建配置
-	meta.cfg = &internal.Config{
-		Schema: internal.SchemaConfig{
+	meta.cfg = &protocol.Config{
+		Schema: protocol.SchemaConfig{
 			TypeMapping: map[string]string{},
 		},
-		Metadata: internal.MetadataConfig{
+		Metadata: protocol.MetadataConfig{
 			ShowThrough: false, // 默认隐藏中间表关系
 		},
 	}
@@ -250,11 +250,11 @@ func TestRenderRelation(t *testing.T) {
 
 		// 创建一个新的元数据对象，确保中间表关系字段被正确标记
 		newMeta := createRelationTestMetadata()
-		newMeta.cfg = &internal.Config{
-			Schema: internal.SchemaConfig{
+		newMeta.cfg = &protocol.Config{
+			Schema: protocol.SchemaConfig{
 				TypeMapping: map[string]string{},
 			},
-			Metadata: internal.MetadataConfig{
+			Metadata: protocol.MetadataConfig{
 				ShowThrough: false,
 			},
 		}
@@ -284,34 +284,34 @@ func TestRenderRelation(t *testing.T) {
 // createRelationTestMetadata 创建用于测试关系的元数据
 func createRelationTestMetadata() *Metadata {
 	meta := &Metadata{
-		Nodes: make(map[string]*internal.Class),
+		Nodes: make(map[string]*protocol.Class),
 	}
 
 	// 创建User类
-	userClass := &internal.Class{
+	userClass := &protocol.Class{
 		Name:   "User",
 		Table:  "users",
-		Fields: make(map[string]*internal.Field),
+		Fields: make(map[string]*protocol.Field),
 	}
-	userClass.Fields["id"] = &internal.Field{
+	userClass.Fields["id"] = &protocol.Field{
 		Name:      "id",
 		Column:    "id",
 		Type:      "integer",
 		IsPrimary: true,
 	}
-	userClass.Fields["name"] = &internal.Field{
+	userClass.Fields["name"] = &protocol.Field{
 		Name:   "name",
 		Column: "name",
 		Type:   "string",
 	}
-	userClass.Fields["departmentId"] = &internal.Field{
+	userClass.Fields["departmentId"] = &protocol.Field{
 		Name:   "departmentId",
 		Column: "department_id",
 		Type:   "integer",
 	}
 
 	// 添加多对一关系字段
-	userClass.Fields["department"] = &internal.Field{
+	userClass.Fields["department"] = &protocol.Field{
 		Name:        "department",
 		Type:        "Department",
 		Description: "关联的Department",
@@ -320,7 +320,7 @@ func createRelationTestMetadata() *Metadata {
 	}
 
 	// 添加一对多关系字段 - User指向Post
-	userClass.Fields["posts"] = &internal.Field{
+	userClass.Fields["posts"] = &protocol.Field{
 		Name:        "posts",
 		Type:        "Post",
 		Description: "用户的文章列表",
@@ -329,25 +329,25 @@ func createRelationTestMetadata() *Metadata {
 	}
 
 	// 创建Department类
-	deptClass := &internal.Class{
+	deptClass := &protocol.Class{
 		Name:   "Department",
 		Table:  "departments",
-		Fields: make(map[string]*internal.Field),
+		Fields: make(map[string]*protocol.Field),
 	}
-	deptClass.Fields["id"] = &internal.Field{
+	deptClass.Fields["id"] = &protocol.Field{
 		Name:      "id",
 		Column:    "id",
 		Type:      "integer",
 		IsPrimary: true,
 	}
-	deptClass.Fields["name"] = &internal.Field{
+	deptClass.Fields["name"] = &protocol.Field{
 		Name:   "name",
 		Column: "name",
 		Type:   "string",
 	}
 
 	// 添加一对多关系字段
-	deptClass.Fields["users"] = &internal.Field{
+	deptClass.Fields["users"] = &protocol.Field{
 		Name:        "users",
 		Type:        "User",
 		Description: "关联的User列表",
@@ -356,36 +356,36 @@ func createRelationTestMetadata() *Metadata {
 	}
 
 	// 创建Admin类，用于测试字段冲突处理
-	adminClass := &internal.Class{
+	adminClass := &protocol.Class{
 		Name:   "Admin",
 		Table:  "admins",
-		Fields: make(map[string]*internal.Field),
+		Fields: make(map[string]*protocol.Field),
 	}
-	adminClass.Fields["id"] = &internal.Field{
+	adminClass.Fields["id"] = &protocol.Field{
 		Name:      "id",
 		Column:    "id",
 		Type:      "integer",
 		IsPrimary: true,
 	}
-	adminClass.Fields["name"] = &internal.Field{
+	adminClass.Fields["name"] = &protocol.Field{
 		Name:   "name",
 		Column: "name",
 		Type:   "string",
 	}
-	adminClass.Fields["userId"] = &internal.Field{
+	adminClass.Fields["userId"] = &protocol.Field{
 		Name:   "userId",
 		Column: "user_id",
 		Type:   "integer",
 	}
 	// 添加已存在的名为admin的普通字段，将与关系字段冲突
-	adminClass.Fields["admin"] = &internal.Field{
+	adminClass.Fields["admin"] = &protocol.Field{
 		Name:   "admin",
 		Column: "admin",
 		Type:   "boolean",
 	}
 
 	// 添加多对一关系字段，会与admin字段冲突
-	adminClass.Fields["user1"] = &internal.Field{
+	adminClass.Fields["user1"] = &protocol.Field{
 		Name:        "user1",
 		Type:        "User",
 		Description: "关联的User",
@@ -394,31 +394,31 @@ func createRelationTestMetadata() *Metadata {
 	}
 
 	// 创建Post类
-	postClass := &internal.Class{
+	postClass := &protocol.Class{
 		Name:   "Post",
 		Table:  "posts",
-		Fields: make(map[string]*internal.Field),
+		Fields: make(map[string]*protocol.Field),
 	}
-	postClass.Fields["id"] = &internal.Field{
+	postClass.Fields["id"] = &protocol.Field{
 		Name:      "id",
 		Column:    "id",
 		Type:      "integer",
 		IsPrimary: true,
 	}
-	postClass.Fields["title"] = &internal.Field{
+	postClass.Fields["title"] = &protocol.Field{
 		Name:   "title",
 		Column: "title",
 		Type:   "string",
 	}
 	// 添加userId字段
-	postClass.Fields["userId"] = &internal.Field{
+	postClass.Fields["userId"] = &protocol.Field{
 		Name:   "userId",
 		Column: "user_id",
 		Type:   "integer",
 	}
 
 	// 添加多对一关系字段 - Post指向User
-	postClass.Fields["user"] = &internal.Field{
+	postClass.Fields["user"] = &protocol.Field{
 		Name:        "user",
 		Type:        "User",
 		Description: "文章作者",
@@ -427,7 +427,7 @@ func createRelationTestMetadata() *Metadata {
 	}
 
 	// 添加多对多关系字段
-	postClass.Fields["tags"] = &internal.Field{
+	postClass.Fields["tags"] = &protocol.Field{
 		Name:        "tags",
 		Type:        "Tag",
 		Description: "多对多关联的Tag列表",
@@ -436,7 +436,7 @@ func createRelationTestMetadata() *Metadata {
 	}
 
 	// 添加关系，并明确标记IsThroughField
-	postClass.Fields["postTags"] = &internal.Field{
+	postClass.Fields["postTags"] = &protocol.Field{
 		Name:        "postTags",
 		Type:        "PostTags",
 		Description: "关联的PostTags列表",
@@ -446,25 +446,25 @@ func createRelationTestMetadata() *Metadata {
 	}
 
 	// 创建Tag类
-	tagClass := &internal.Class{
+	tagClass := &protocol.Class{
 		Name:   "Tag",
 		Table:  "tags",
-		Fields: make(map[string]*internal.Field),
+		Fields: make(map[string]*protocol.Field),
 	}
-	tagClass.Fields["id"] = &internal.Field{
+	tagClass.Fields["id"] = &protocol.Field{
 		Name:      "id",
 		Column:    "id",
 		Type:      "integer",
 		IsPrimary: true,
 	}
-	tagClass.Fields["name"] = &internal.Field{
+	tagClass.Fields["name"] = &protocol.Field{
 		Name:   "name",
 		Column: "name",
 		Type:   "string",
 	}
 
 	// 添加多对多关系字段
-	tagClass.Fields["posts"] = &internal.Field{
+	tagClass.Fields["posts"] = &protocol.Field{
 		Name:        "posts",
 		Type:        "Post",
 		Description: "多对多关联的Post列表",
@@ -473,7 +473,7 @@ func createRelationTestMetadata() *Metadata {
 	}
 
 	// 添加中间表关系字段，并明确标记IsThroughField
-	tagClass.Fields["postTags"] = &internal.Field{
+	tagClass.Fields["postTags"] = &protocol.Field{
 		Name:        "postTags",
 		Type:        "PostTags",
 		Description: "关联的PostTags列表",
@@ -483,25 +483,25 @@ func createRelationTestMetadata() *Metadata {
 	}
 
 	// 添加中间表 PostTags
-	postTagsClass := &internal.Class{
+	postTagsClass := &protocol.Class{
 		Name:      "PostTags",
 		Table:     "post_tags",
-		Fields:    make(map[string]*internal.Field),
+		Fields:    make(map[string]*protocol.Field),
 		IsThrough: true, // 标记为中间表
 	}
-	postTagsClass.Fields["postId"] = &internal.Field{
+	postTagsClass.Fields["postId"] = &protocol.Field{
 		Name:   "postId",
 		Column: "post_id",
 		Type:   "integer",
 	}
-	postTagsClass.Fields["tagId"] = &internal.Field{
+	postTagsClass.Fields["tagId"] = &protocol.Field{
 		Name:   "tagId",
 		Column: "tag_id",
 		Type:   "integer",
 	}
 
 	// 添加多对一关系字段
-	postTagsClass.Fields["post"] = &internal.Field{
+	postTagsClass.Fields["post"] = &protocol.Field{
 		Name:        "post",
 		Type:        "Post",
 		Description: "关联的Post",
@@ -510,7 +510,7 @@ func createRelationTestMetadata() *Metadata {
 	}
 
 	// 添加多对一关系字段
-	postTagsClass.Fields["tag"] = &internal.Field{
+	postTagsClass.Fields["tag"] = &protocol.Field{
 		Name:        "tag",
 		Type:        "Tag",
 		Description: "关联的Tag",
@@ -518,42 +518,42 @@ func createRelationTestMetadata() *Metadata {
 		IsList:      false,
 	}
 
-	commentClass := &internal.Class{
+	commentClass := &protocol.Class{
 		Name:   "Comment",
 		Table:  "comments",
-		Fields: make(map[string]*internal.Field),
+		Fields: make(map[string]*protocol.Field),
 	}
-	commentClass.Fields["id"] = &internal.Field{
+	commentClass.Fields["id"] = &protocol.Field{
 		Name:      "id",
 		Column:    "id",
 		Type:      "integer",
 		IsPrimary: true,
 	}
-	commentClass.Fields["content"] = &internal.Field{
+	commentClass.Fields["content"] = &protocol.Field{
 		Name:   "content",
 		Column: "content",
 		Type:   "string",
 	}
-	commentClass.Fields["userId"] = &internal.Field{
+	commentClass.Fields["userId"] = &protocol.Field{
 		Name:   "userId",
 		Column: "user_id",
 		Type:   "integer",
 	}
 	// parentId 字段，递归关系
-	commentClass.Fields["parentId"] = &internal.Field{
+	commentClass.Fields["parentId"] = &protocol.Field{
 		Name:   "parentId",
 		Column: "parent_id",
 		Type:   "integer",
-		Relation: &internal.Relation{
+		Relation: &protocol.Relation{
 			SourceClass: "Comment",
 			SourceFiled: "parentId",
 			TargetClass: "Comment",
 			TargetFiled: "id",
-			Type:        internal.RECURSIVE,
+			Type:        protocol.RECURSIVE,
 		},
 	}
 	// 可选：children 虚拟字段
-	commentClass.Fields["children"] = &internal.Field{
+	commentClass.Fields["children"] = &protocol.Field{
 		Name:        "children",
 		Type:        "Comment",
 		Description: "子Comment列表",

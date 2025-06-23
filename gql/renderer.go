@@ -2,13 +2,13 @@ package gql
 
 import (
 	"fmt"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/gql/renderer"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/iancoleman/strcase"
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/rs/zerolog/log"
@@ -306,7 +306,7 @@ func (my *Renderer) renderTypes() error {
 }
 
 // getGraphQLType 获取GraphQL类型
-func (my *Renderer) getGraphQLType(field *internal.Field) string {
+func (my *Renderer) getGraphQLType(field *protocol.Field) string {
 	fieldType := field.Type
 
 	// 处理集合类型
@@ -323,7 +323,7 @@ func (my *Renderer) getGraphQLType(field *internal.Field) string {
 		}
 
 		// 避免递归调用导致嵌套数组，直接处理内部类型
-		innerField := &internal.Field{
+		innerField := &protocol.Field{
 			Type:      innerType,
 			IsPrimary: false,
 			IsList:    false, // 重要：确保内部字段不是集合类型

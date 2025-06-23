@@ -2,12 +2,11 @@ package compiler
 
 import (
 	"fmt"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"strconv"
 	"strings"
 
 	"sync"
-
-	"github.com/ichaly/ideabase/gql/internal"
 )
 
 // Context 负责SQL编译过程中的上下文状态，包括SQL拼接、参数、变量、方言等
@@ -52,7 +51,7 @@ func (my *Context) Release() {
 	contextPool.Put(my)
 }
 
-func (my *Context) FindField(className, fieldName string) (*internal.Field, bool) {
+func (my *Context) FindField(className, fieldName string) (*protocol.Field, bool) {
 	return nil, false
 }
 

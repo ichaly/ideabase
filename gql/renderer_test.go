@@ -2,6 +2,7 @@ package gql
 
 import (
 	"fmt"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/gql/renderer"
 	"os"
 	"path/filepath"
@@ -9,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
@@ -83,26 +83,26 @@ func createMockMetadata(t *testing.T) *Metadata {
 
 	meta := &Metadata{
 		k:       k,
-		Nodes:   make(map[string]*internal.Class),
+		Nodes:   make(map[string]*protocol.Class),
 		Version: time.Now().Format("20060102150405"),
-		cfg: &internal.Config{
-			Schema: internal.SchemaConfig{
+		cfg: &protocol.Config{
+			Schema: protocol.SchemaConfig{
 				TypeMapping: typeMapping,
 			},
 		},
 	}
 
 	// 添加模拟的User类
-	userClass := &internal.Class{
+	userClass := &protocol.Class{
 		Name:        "User",
 		Table:       "users",
 		Description: "用户信息",
 		PrimaryKeys: []string{"id"},
-		Fields:      make(map[string]*internal.Field),
+		Fields:      make(map[string]*protocol.Field),
 	}
 
 	// 添加User类的字段
-	userClass.AddField(&internal.Field{
+	userClass.AddField(&protocol.Field{
 		Name:        "id",
 		Column:      "id",
 		Type:        "integer",
@@ -110,21 +110,21 @@ func createMockMetadata(t *testing.T) *Metadata {
 		Description: "用户ID",
 	})
 
-	userClass.AddField(&internal.Field{
+	userClass.AddField(&protocol.Field{
 		Name:        "name",
 		Column:      "name",
 		Type:        "text",
 		Description: "用户名",
 	})
 
-	userClass.AddField(&internal.Field{
+	userClass.AddField(&protocol.Field{
 		Name:        "email",
 		Column:      "email",
 		Type:        "text",
 		Description: "邮箱",
 	})
 
-	userClass.AddField(&internal.Field{
+	userClass.AddField(&protocol.Field{
 		Name:        "createdAt",
 		Column:      "created_at",
 		Type:        "timestamp",
@@ -132,16 +132,16 @@ func createMockMetadata(t *testing.T) *Metadata {
 	})
 
 	// 添加模拟的Post类
-	postClass := &internal.Class{
+	postClass := &protocol.Class{
 		Name:        "Post",
 		Table:       "posts",
 		Description: "文章信息",
 		PrimaryKeys: []string{"id"},
-		Fields:      make(map[string]*internal.Field),
+		Fields:      make(map[string]*protocol.Field),
 	}
 
 	// 添加Post类的字段
-	postClass.AddField(&internal.Field{
+	postClass.AddField(&protocol.Field{
 		Name:        "id",
 		Column:      "id",
 		Type:        "integer",
@@ -149,14 +149,14 @@ func createMockMetadata(t *testing.T) *Metadata {
 		Description: "文章ID",
 	})
 
-	postClass.AddField(&internal.Field{
+	postClass.AddField(&protocol.Field{
 		Name:        "title",
 		Column:      "title",
 		Type:        "text",
 		Description: "标题",
 	})
 
-	postClass.AddField(&internal.Field{
+	postClass.AddField(&protocol.Field{
 		Name:        "content",
 		Column:      "content",
 		Type:        "text",
@@ -165,7 +165,7 @@ func createMockMetadata(t *testing.T) *Metadata {
 	})
 
 	// 添加关系字段
-	userIdField := &internal.Field{
+	userIdField := &protocol.Field{
 		Name:        "userId",
 		Column:      "user_id",
 		Type:        "integer",
@@ -173,12 +173,12 @@ func createMockMetadata(t *testing.T) *Metadata {
 	}
 
 	// 创建关系
-	userIdField.Relation = &internal.Relation{
+	userIdField.Relation = &protocol.Relation{
 		SourceClass: "Post",
 		SourceFiled: "userId",
 		TargetClass: "User",
 		TargetFiled: "id",
-		Type:        internal.MANY_TO_ONE,
+		Type:        protocol.MANY_TO_ONE,
 	}
 
 	postClass.AddField(userIdField)
@@ -629,7 +629,7 @@ func TestRenderer_DataTypeMapping(t *testing.T) {
 	// 先添加所有字段到类中
 	for dbType, _ := range typeMapping {
 		fieldName := "field_" + dbType
-		class.AddField(&internal.Field{
+		class.AddField(&protocol.Field{
 			Name:      fieldName,
 			Column:    fieldName,
 			Type:      dbType,
@@ -638,8 +638,8 @@ func TestRenderer_DataTypeMapping(t *testing.T) {
 	}
 
 	// 设置配置
-	meta.cfg = &internal.Config{
-		Schema: internal.SchemaConfig{
+	meta.cfg = &protocol.Config{
+		Schema: protocol.SchemaConfig{
 			TypeMapping: typeMapping,
 		},
 	}
@@ -770,8 +770,8 @@ func TestRenderer_GetGraphQLType(t *testing.T) {
 	// 创建渲染器
 	renderer := &Renderer{
 		meta: &Metadata{
-			cfg: &internal.Config{
-				Schema: internal.SchemaConfig{
+			cfg: &protocol.Config{
+				Schema: protocol.SchemaConfig{
 					TypeMapping: testCases, // 直接使用testCases作为TypeMapping
 				},
 			},
@@ -781,7 +781,7 @@ func TestRenderer_GetGraphQLType(t *testing.T) {
 	// 测试每种类型的映射
 	for dbType, expectedGraphQLType := range testCases {
 		t.Run(dbType, func(t *testing.T) {
-			field := &internal.Field{Type: dbType, IsPrimary: false}
+			field := &protocol.Field{Type: dbType, IsPrimary: false}
 			actualType := renderer.getGraphQLType(field)
 			assert.Equal(t, expectedGraphQLType, actualType,
 				"数据库类型 %s 应该映射为 %s, 但得到了 %s",
@@ -828,11 +828,11 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
 	k.Set("metadata.table-prefix", []string{"sys_"})
-	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+	k.Set("metadata.classes", map[string]*protocol.ClassConfig{
 		"User": {
 			Description: "用户表",
 			Table:       "sys_user",
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"id": {
 					Type:      "ID",
 					IsPrimary: true,
@@ -854,7 +854,7 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 		"Post": {
 			Description: "文章表",
 			Table:       "sys_post",
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"id": {
 					Type:      "ID",
 					IsPrimary: true,
@@ -870,7 +870,7 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 				"userId": {
 					Type:        "Int",
 					Description: "作者ID",
-					Relation: &internal.RelationConfig{
+					Relation: &protocol.RelationConfig{
 						TargetClass: "User",
 						TargetField: "id",
 						Type:        "many_to_one",

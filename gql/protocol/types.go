@@ -1,9 +1,5 @@
 package protocol
 
-import (
-	"github.com/ichaly/ideabase/gql/internal"
-)
-
 type Node interface {
 	Name() string
 }
@@ -11,9 +7,9 @@ type Node interface {
 // Tree 定义元数据承载者接口
 type Tree interface {
 	// PutNode 添加或者合并一个类节点
-	PutNode(name string, node *internal.Class) error
+	PutNode(name string, node *Class) error
 	// GetNode 获取一个类节点
-	GetNode(name string) (*internal.Class, bool)
+	GetNode(name string) (*Class, bool)
 	// SetVersion 设置版本号
 	SetVersion(version string)
 }

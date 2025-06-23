@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/compiler"
-	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -14,7 +13,7 @@ import (
 type Dialect struct{}
 
 // NewDialect 创建PostgreSQL方言实例
-func NewDialect() protocol.Dialect {
+func NewDialect() compiler.Dialect {
 	return &Dialect{}
 }
 

@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -17,7 +16,7 @@ import (
 // 不对外暴露
 type baseLoader struct {
 	db  *gorm.DB
-	cfg *internal.Config
+	cfg *protocol.Config
 }
 
 // loadMeta 通用数据库元数据加载主流程
@@ -58,12 +57,12 @@ func (my *baseLoader) loadMeta(t protocol.Tree, query string, args []interface{}
 	}
 
 	// 组装Class结构，主索引为表名
-	classMap := make(map[string]*internal.Class)
+	classMap := make(map[string]*protocol.Class)
 	for _, t := range tables {
-		classMap[t.TableName] = &internal.Class{
+		classMap[t.TableName] = &protocol.Class{
 			Name:        t.TableName,
 			Table:       t.TableName,
-			Fields:      make(map[string]*internal.Field),
+			Fields:      make(map[string]*protocol.Field),
 			PrimaryKeys: []string{},
 			Description: t.TableDescription,
 		}
@@ -71,7 +70,7 @@ func (my *baseLoader) loadMeta(t protocol.Tree, query string, args []interface{}
 	// 组装字段信息
 	for _, c := range columns {
 		if class, ok := classMap[c.TableName]; ok {
-			class.Fields[c.ColumnName] = &internal.Field{
+			class.Fields[c.ColumnName] = &protocol.Field{
 				Name:        c.ColumnName,
 				Column:      c.ColumnName,
 				Type:        c.DataType,
@@ -135,20 +134,20 @@ func (my *baseLoader) loadMeta(t protocol.Tree, query string, args []interface{}
 		// 判断是否为自关联
 		isRecursive := sourceTable == targetTable
 		// 正向关系（多对一/递归）：如 comments.user_id -> users.id
-		sourceField.Relation = &internal.Relation{
+		sourceField.Relation = &protocol.Relation{
 			SourceClass: sourceTable,
 			SourceFiled: sourceColumn,
 			TargetClass: targetTable,
 			TargetFiled: targetColumn,
-			Type:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.MANY_TO_ONE),
+			Type:        lo.Ternary(isRecursive, protocol.RECURSIVE, protocol.MANY_TO_ONE),
 		}
 		// 反向关系（一对多/递归）：如 users.id <- comments.user_id
-		targetField.Relation = &internal.Relation{
+		targetField.Relation = &protocol.Relation{
 			SourceClass: targetTable,
 			SourceFiled: targetColumn,
 			TargetClass: sourceTable,
 			TargetFiled: sourceColumn,
-			Type:        lo.Ternary(isRecursive, internal.RECURSIVE, internal.ONE_TO_MANY),
+			Type:        lo.Ternary(isRecursive, protocol.RECURSIVE, protocol.ONE_TO_MANY),
 		}
 	}
 	// 处理多对多关系
@@ -167,7 +166,7 @@ func (my *baseLoader) loadMeta(t protocol.Tree, query string, args []interface{}
 // detectManyToManyRelations 检测并处理多对多关系
 // 1. 检查每个表的外键和主键，识别中间表
 // 2. 为多对多关系自动建立Relation结构
-func detectManyToManyRelations(classes map[string]*internal.Class, foreignKeys []foreignKeyInfo, primaryKeys []primaryKeyInfo) {
+func detectManyToManyRelations(classes map[string]*protocol.Class, foreignKeys []foreignKeyInfo, primaryKeys []primaryKeyInfo) {
 	tableToFKs := make(map[string][]foreignKeyInfo)
 	for _, fk := range foreignKeys {
 		tableToFKs[fk.SourceTable] = append(tableToFKs[fk.SourceTable], fk)
@@ -213,7 +212,7 @@ func isThroughTableByName(tableName, table1, table2 string) bool {
 }
 
 // createManyToManyRelation 为多对多关系自动建立Relation结构
-func createManyToManyRelation(classes map[string]*internal.Class, tableName string, fk1, fk2 foreignKeyInfo) {
+func createManyToManyRelation(classes map[string]*protocol.Class, tableName string, fk1, fk2 foreignKeyInfo) {
 	class1, class2 := classes[fk1.TargetTable], classes[fk2.TargetTable]
 	if class1 == nil || class2 == nil {
 		return
@@ -223,14 +222,14 @@ func createManyToManyRelation(classes map[string]*internal.Class, tableName stri
 	}
 	createRelation := func(
 		sourceTable, targetTable, sourceColumn, targetColumn, sourceKey, targetKey string,
-	) internal.Relation {
-		return internal.Relation{
+	) protocol.Relation {
+		return protocol.Relation{
 			SourceClass: sourceTable,
 			SourceFiled: sourceColumn,
 			TargetClass: targetTable,
 			TargetFiled: targetColumn,
-			Type:        internal.MANY_TO_MANY,
-			Through: &internal.Through{
+			Type:        protocol.MANY_TO_MANY,
+			Through: &protocol.Through{
 				TableName: tableName,
 				SourceKey: sourceKey,
 				TargetKey: targetKey,

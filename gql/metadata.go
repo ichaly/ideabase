@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/iancoleman/strcase"
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
@@ -29,10 +28,10 @@ func init() {
 type Metadata struct {
 	k   *std.Konfig
 	db  *gorm.DB
-	cfg *internal.Config
+	cfg *protocol.Config
 
 	// 统一索引: 支持类名、表名、原始表名查找
-	Nodes   map[string]*internal.Class `json:"nodes"`
+	Nodes   map[string]*protocol.Class `json:"nodes"`
 	Version string                     `json:"version"`
 }
 
@@ -98,7 +97,7 @@ func (my *HookedLoader) Load(h protocol.Tree) error {
 
 // NewMetadata 策略模式重构，支持Loader注册与优先级排序
 func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, error) {
-	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: dataTypes}}
+	cfg := &protocol.Config{Schema: protocol.SchemaConfig{TypeMapping: dataTypes}}
 
 	// 设置默认配置
 	k.SetDefault("schema.schema", "public")
@@ -119,7 +118,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 
 	my := &Metadata{
 		k: k, db: d, cfg: cfg,
-		Nodes:   make(map[string]*internal.Class),
+		Nodes:   make(map[string]*protocol.Class),
 		Version: time.Now().Format("20060102150405"),
 	}
 
@@ -164,7 +163,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	return my, nil
 }
 
-func (my *Metadata) PutNode(className string, node *internal.Class) error {
+func (my *Metadata) PutNode(className string, node *protocol.Class) error {
 	if node == nil || node.Name == "" {
 		return nil
 	}
@@ -172,7 +171,7 @@ func (my *Metadata) PutNode(className string, node *internal.Class) error {
 	return nil
 }
 
-func (my *Metadata) GetNode(name string) (*internal.Class, bool) {
+func (my *Metadata) GetNode(name string) (*protocol.Class, bool) {
 	n, ok := my.Nodes[name]
 	return n, ok
 }
@@ -182,7 +181,7 @@ func (my *Metadata) SetVersion(version string) {
 }
 
 // FindClass 根据类名查找类
-func (my *Metadata) FindClass(className string, virtual bool) (*internal.Class, bool) {
+func (my *Metadata) FindClass(className string, virtual bool) (*protocol.Class, bool) {
 	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
 		return node, true
 	}
@@ -190,7 +189,7 @@ func (my *Metadata) FindClass(className string, virtual bool) (*internal.Class, 
 }
 
 // FindField 根据类名和字段名查找字段
-func (my *Metadata) FindField(className, fieldName string, virtual bool) (*internal.Field, bool) {
+func (my *Metadata) FindField(className, fieldName string, virtual bool) (*protocol.Field, bool) {
 	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
 		if field := node.Fields[fieldName]; field != nil && field.Virtual == virtual {
 			return field, true
@@ -200,7 +199,7 @@ func (my *Metadata) FindField(className, fieldName string, virtual bool) (*inter
 }
 
 // FindRelation 获取外键关系(支持字段名或列名)
-func (my *Metadata) FindRelation(sourceTable, nameOrColumn string) (*internal.Relation, bool) {
+func (my *Metadata) FindRelation(sourceTable, nameOrColumn string) (*protocol.Relation, bool) {
 	if node, ok := my.Nodes[sourceTable]; ok {
 		if field := node.Fields[nameOrColumn]; field != nil {
 			return field.Relation, field.Relation != nil
@@ -230,7 +229,7 @@ func (my *Metadata) ColumnName(className, fieldName string, virtual bool) (strin
 // MarshalJSON 自定义JSON序列化
 func (my *Metadata) MarshalJSON() ([]byte, error) {
 	// 仅导出key和类名相同的节点
-	nodes := make(map[string]*internal.Class)
+	nodes := make(map[string]*protocol.Class)
 	for key, class := range my.Nodes {
 		if key == class.Name {
 			// 直接使用原始对象，减少字段复制
@@ -266,7 +265,7 @@ func (my *Metadata) processRelations() {
 		Nullable     bool
 		Description  string
 		IsThrough    bool
-		RelationType internal.RelationType
+		RelationType protocol.RelationType
 	}
 
 	// 存储所有需要创建的关系字段
@@ -276,7 +275,7 @@ func (my *Metadata) processRelations() {
 
 	// 添加关系字段信息的辅助函数
 	addRelationField := func(sourceClass, targetClass string, isList, nullable, isReverse, isThrough bool,
-		relType internal.RelationType, fieldName string, description string) {
+		relType protocol.RelationType, fieldName string, description string) {
 
 		fieldsToCreate = append(fieldsToCreate, RelationFieldInfo{
 			SourceClass:  sourceClass,
@@ -341,12 +340,12 @@ func (my *Metadata) processRelations() {
 
 			// 根据关系类型收集需要创建的字段信息
 			switch relation.Type {
-			case internal.MANY_TO_MANY:
+			case protocol.MANY_TO_MANY:
 				// 添加多对多关系字段
 				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 				desc := createDescription(targetClassName, true)
 				addRelationField(class.Name, targetClassName, true, false, false, false,
-					internal.MANY_TO_MANY, relName, desc)
+					protocol.MANY_TO_MANY, relName, desc)
 
 				// 处理中间表
 				if relation.Through != nil {
@@ -355,23 +354,23 @@ func (my *Metadata) processRelations() {
 						throughFieldName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(throughClass.Name)))
 						throughDesc := createDescription(throughClass.Name, true)
 						addRelationField(class.Name, throughClass.Name, true, false, false, true,
-							internal.MANY_TO_MANY, throughFieldName, throughDesc)
+							protocol.MANY_TO_MANY, throughFieldName, throughDesc)
 					}
 				}
 
-			case internal.ONE_TO_MANY:
+			case protocol.ONE_TO_MANY:
 				// 添加一对多关系字段
 				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 				desc := createDescription(targetClassName, true)
 				addRelationField(class.Name, targetClassName, true, false, false, false,
-					internal.ONE_TO_MANY, relName, desc)
+					protocol.ONE_TO_MANY, relName, desc)
 
-			case internal.MANY_TO_ONE:
+			case protocol.MANY_TO_ONE:
 				// 添加多对一关系字段
 				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(targetClassName))
 				desc := createDescription(targetClassName, false)
 				addRelationField(class.Name, targetClassName, false, field.Nullable, false, false,
-					internal.MANY_TO_ONE, relName, desc)
+					protocol.MANY_TO_ONE, relName, desc)
 
 				// 收集反向关系字段信息（一对多）
 				// 创建唯一的键来防止重复
@@ -380,24 +379,24 @@ func (my *Metadata) processRelations() {
 					reverseName := my.uniqueFieldName(targetClass, strcase.ToLowerCamel(inflection.Plural(className)))
 					reverseDesc := createDescription(className, true)
 					addRelationField(targetClassName, class.Name, true, false, true, false,
-						internal.ONE_TO_MANY, reverseName, reverseDesc)
+						protocol.ONE_TO_MANY, reverseName, reverseDesc)
 					reverseRelationKeys[reverseKey] = true
 				}
 
-			case internal.RECURSIVE:
+			case protocol.RECURSIVE:
 				// 处理递归关系
 				if strings.HasSuffix(fieldName, "Id") || strings.HasSuffix(fieldName, "ID") {
 					// 添加父级关系字段
 					parentName := my.uniqueFieldName(class, "parent")
 					parentDesc := "父" + className + "对象"
 					addRelationField(class.Name, className, false, true, false, false,
-						internal.RECURSIVE, parentName, parentDesc)
+						protocol.RECURSIVE, parentName, parentDesc)
 
 					// 添加子级关系字段
 					childrenName := my.uniqueFieldName(targetClass, "children")
 					childrenDesc := "子" + className + "列表"
 					addRelationField(className, className, true, false, false, false,
-						internal.RECURSIVE, childrenName, childrenDesc)
+						protocol.RECURSIVE, childrenName, childrenDesc)
 				}
 			}
 		}
@@ -408,7 +407,7 @@ func (my *Metadata) processRelations() {
 		if class := my.Nodes[info.SourceClass]; class != nil {
 			// 如果字段不存在，则创建
 			if _, has := class.Fields[info.FieldName]; !has {
-				class.Fields[info.FieldName] = &internal.Field{
+				class.Fields[info.FieldName] = &protocol.Field{
 					Type:        info.TargetClass,
 					Name:        info.FieldName,
 					Virtual:     true,
@@ -425,7 +424,7 @@ func (my *Metadata) processRelations() {
 }
 
 // uniqueFieldName 确保字段名在类中唯一
-func (my *Metadata) uniqueFieldName(class *internal.Class, baseName string) string {
+func (my *Metadata) uniqueFieldName(class *protocol.Class, baseName string) string {
 	fieldName := baseName
 	counter := 1
 
@@ -482,8 +481,8 @@ func (my *Metadata) normalize() error {
 		return nil
 	}
 	config := my.cfg.Metadata
-	nodes := make(map[string]*internal.Class)
-	relations := make([]*internal.Field, 0)
+	nodes := make(map[string]*protocol.Class)
+	relations := make([]*protocol.Field, 0)
 
 	for classKey, class := range my.Nodes {
 		// 跳过需要忽略的表
@@ -491,7 +490,7 @@ func (my *Metadata) normalize() error {
 			continue
 		}
 
-		fields := make(map[string]*internal.Field)
+		fields := make(map[string]*protocol.Field)
 		for fieldKey, field := range class.Fields {
 			// 跳过需要忽略的字段
 			if field.Column != "" && lo.IndexOf(config.ExcludeFields, field.Column) > -1 {

@@ -1,7 +1,6 @@
 package metadata
 
 import (
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"gorm.io/gorm"
 )
@@ -103,7 +102,7 @@ SELECT
 `
 
 // NewMysqlLoader 创建MySQL加载器
-func NewMysqlLoader(cfg *internal.Config, db *gorm.DB) *MysqlLoader {
+func NewMysqlLoader(cfg *protocol.Config, db *gorm.DB) *MysqlLoader {
 	return &MysqlLoader{
 		&baseLoader{db: db, cfg: cfg},
 	}

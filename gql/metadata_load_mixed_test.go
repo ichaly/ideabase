@@ -2,9 +2,9 @@ package gql
 
 import (
 	"github.com/ichaly/ideabase/gql/metadata"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"testing"
 
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
@@ -20,11 +20,11 @@ func TestMetadataLoad_DatabaseAndConfig(t *testing.T) {
 	k.Set("mode", "dev")
 	k.Set("app.root", utl.Root())
 	k.Set("schema.schema", "public")
-	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+	k.Set("metadata.classes", map[string]*protocol.ClassConfig{
 		"UserAlias": {
 			Table:       "users",
 			Description: "用户别名视图",
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"id": {
 					Column:      "id",
 					Type:        "int",
@@ -67,11 +67,11 @@ func TestMetadataLoad_FileAndConfig(t *testing.T) {
 
 	k.Set("mode", "test")
 	k.Set("metadata.file", "cfg/metadata.dev.json")
-	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+	k.Set("metadata.classes", map[string]*protocol.ClassConfig{
 		"PostAlias": {
 			Table:       "posts",
 			Description: "帖子别名视图",
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"id": {
 					Column:      "id",
 					Type:        "int",
@@ -104,19 +104,19 @@ func TestMetadataLoad_ConfigOnly(t *testing.T) {
 	require.NoError(t, err)
 	k.Set("mode", "test")
 	k.Set("app.root", utl.Root())
-	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+	k.Set("metadata.classes", map[string]*protocol.ClassConfig{
 		"A": {
 			Table:       "a_table",
 			Description: "A类",
 			Override:    true,
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"id": {Column: "id", Type: "int", IsPrimary: true},
 			},
 		},
 		"AAlias": {
 			Table:       "a_table",
 			Description: "A别名",
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"id": {Column: "id", Type: "int", IsPrimary: true},
 			},
 		},

@@ -1,4 +1,4 @@
-package internal
+package protocol
 
 // Relation 表示类之间的关系
 type Relation struct {

@@ -1,14 +1,13 @@
 package pgsql
 
 import (
+	"github.com/ichaly/ideabase/gql/protocol"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
-	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -41,11 +40,11 @@ func (my *_DialectSuite) SetupSuite() {
 	k.Set("app.root", "../../../")
 
 	// 设置测试用的元数据配置
-	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+	k.Set("metadata.classes", map[string]*protocol.ClassConfig{
 		"User": {
 			Description: "用户表",
 			Table:       "sys_user",
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"id": {
 					Type:      "ID",
 					IsPrimary: true,
@@ -109,7 +108,7 @@ func (my *_DialectSuite) doCase(query string, expected string) {
 	my.Require().NotEmpty(doc.Operations, "GraphQL查询必须包含操作")
 
 	// 创建编译器
-	compiler, e := gql.NewCompiler(my.meta, []protocol.Dialect{my.dialect})
+	compiler, e := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
 	my.Require().NoError(e, "创建编译器失败")
 
 	// 编译GraphQL查询

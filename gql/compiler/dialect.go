@@ -1,7 +1,6 @@
-package protocol
+package compiler
 
 import (
-	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -17,8 +16,8 @@ type Dialect interface {
 	Placeholder(index int) string
 
 	// BuildQuery 构建查询语句
-	BuildQuery(ctx *compiler.Context, set ast.SelectionSet) error
+	BuildQuery(ctx *Context, set ast.SelectionSet) error
 
 	// BuildMutation 构建变更语句
-	BuildMutation(ctx *compiler.Context, set ast.SelectionSet) error
+	BuildMutation(ctx *Context, set ast.SelectionSet) error
 }

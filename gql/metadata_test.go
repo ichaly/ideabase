@@ -3,12 +3,12 @@ package gql
 import (
 	"context"
 	"fmt"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
@@ -131,7 +131,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			assert.NotNil(t, userId, "应该有userId字段")
 			if userId != nil {
 				assert.NotNil(t, userId.Relation, "userId应该有关系定义")
-				assert.Equal(t, internal.MANY_TO_ONE, userId.Relation.Type, "应该是many-to-one关系")
+				assert.Equal(t, protocol.MANY_TO_ONE, userId.Relation.Type, "应该是many-to-one关系")
 				assert.Equal(t, "User", userId.Relation.TargetClass, "关系目标类应该是User")
 			}
 		}
@@ -145,7 +145,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			assert.NotNil(t, postId, "应该有postId字段")
 			if postId != nil {
 				assert.NotNil(t, postId.Relation, "postId应该有关系定义")
-				assert.Equal(t, internal.MANY_TO_ONE, postId.Relation.Type, "应该是many-to-one关系")
+				assert.Equal(t, protocol.MANY_TO_ONE, postId.Relation.Type, "应该是many-to-one关系")
 				assert.Equal(t, "Post", postId.Relation.TargetClass, "关系目标类应该是Post")
 			}
 
@@ -154,7 +154,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			assert.NotNil(t, tagId, "应该有tagId字段")
 			if tagId != nil {
 				assert.NotNil(t, tagId.Relation, "tagId应该有关系定义")
-				assert.Equal(t, internal.MANY_TO_ONE, tagId.Relation.Type, "应该是many-to-one关系")
+				assert.Equal(t, protocol.MANY_TO_ONE, tagId.Relation.Type, "应该是many-to-one关系")
 				assert.Equal(t, "Tag", tagId.Relation.TargetClass, "关系目标类应该是Tag")
 			}
 		}
@@ -168,7 +168,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			assert.NotNil(t, parentId, "应该有parentId字段")
 			if parentId != nil {
 				assert.NotNil(t, parentId.Relation, "parentId应该有关系定义")
-				assert.Equal(t, internal.RECURSIVE, parentId.Relation.Type, "应该是recursive关系")
+				assert.Equal(t, protocol.RECURSIVE, parentId.Relation.Type, "应该是recursive关系")
 				assert.Equal(t, "Comment", parentId.Relation.TargetClass, "关系目标类应该是Comment")
 				assert.Equal(t, "id", parentId.Relation.TargetFiled, "关系目标字段应该是id")
 			}
@@ -269,11 +269,11 @@ func TestMetadataLoadingModes(t *testing.T) {
 		require.NoError(t, err, "创建配置失败")
 		k.Set("mode", "test")
 		k.Set("app.root", "../")
-		k.Set("metadata.classes", map[string]*internal.ClassConfig{
+		k.Set("metadata.classes", map[string]*protocol.ClassConfig{
 			"User": {
 				Table:       "users",
 				Description: "用户表",
-				Fields: map[string]*internal.FieldConfig{
+				Fields: map[string]*protocol.FieldConfig{
 					"id": {
 						Column:      "id",
 						Type:        "int",
@@ -289,7 +289,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 			},
 			"VirtualTable": {
 				Description: "虚拟表",
-				Fields: map[string]*internal.FieldConfig{
+				Fields: map[string]*protocol.FieldConfig{
 					"id": {
 						Column:    "id",
 						Type:      "int",
@@ -666,7 +666,7 @@ func TestRelationNameConversion(t *testing.T) {
 		require.NotNil(t, postId.Relation, "应该有关系定义")
 
 		// 验证关系目标
-		assert.Equal(t, internal.MANY_TO_ONE, postId.Relation.Type, "应该是多对一关系")
+		assert.Equal(t, protocol.MANY_TO_ONE, postId.Relation.Type, "应该是多对一关系")
 		assert.Equal(t, "Post", postId.Relation.TargetClass, "关系目标类应该是Post")
 	})
 }

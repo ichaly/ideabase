@@ -2,9 +2,9 @@ package gql
 
 import (
 	"github.com/ichaly/ideabase/gql/metadata"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"testing"
 
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
@@ -16,13 +16,13 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "test")
 	k.Set("app.root", utl.Root())
-	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+	k.Set("metadata.classes", map[string]*protocol.ClassConfig{
 		// 1. 基本类定义
 		"User": {
 			Table:       "users",
 			Description: "用户表",
 			PrimaryKeys: []string{"id"},
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"id": {
 					Column:      "id",
 					Type:        "int",
@@ -51,7 +51,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 			Table:         "users",
 			Description:   "用户公开信息",
 			ExcludeFields: []string{"email", "created_at"},
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"name": {
 					Description: "用户昵称",
 					Resolver:    "MaskedNameResolver",
@@ -63,7 +63,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 			Table:       "users",
 			Description: "管理员视图",
 			Override:    true,
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"role": {
 					Type:        "string",
 					Description: "角色",
@@ -75,7 +75,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		"Statistics": {
 			Description: "统计数据",
 			Resolver:    "StatisticsResolver",
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"totalUsers": {
 					Type:        "integer",
 					Description: "用户总数",
@@ -93,7 +93,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 			Table:         "users",
 			Description:   "用户简要信息",
 			IncludeFields: []string{"id", "name"},
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*protocol.FieldConfig{
 				"displayName": {
 					Type:        "string",
 					Description: "显示名称",
@@ -192,7 +192,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 }
 
 // assertField 辅助函数，断言字段多重索引和属性
-func assertField(t *testing.T, class *internal.Class, name, column, fieldType string, isPrimary, isUnique, nullable bool, description, resolver string) {
+func assertField(t *testing.T, class *protocol.Class, name, column, fieldType string, isPrimary, isUnique, nullable bool, description, resolver string) {
 	field, exists := class.Fields[name]
 	require.True(t, exists, "字段 %s 不存在", name)
 	assert.Equal(t, name, field.Name)
