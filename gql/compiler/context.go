@@ -37,7 +37,7 @@ var contextPool = sync.Pool{
 }
 
 // NewContext 从对象池获取Context实例
-func NewContext(q string, v map[string]interface{}, h protocol.Hoster) *Context {
+func NewContext(h protocol.Hoster, q string, v map[string]interface{}) *Context {
 	ctx := contextPool.Get().(*Context)
 	ctx.quote = q
 	ctx.hoster = h

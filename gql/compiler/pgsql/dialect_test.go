@@ -587,7 +587,7 @@ func TestBuildPagination(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dialect := &Dialect{}
 			// 直接创建compiler.Context实例
-			ctx := compiler.NewContext(dialect.Quotation(), nil)
+			ctx := compiler.NewContext(nil, dialect.Quotation(), nil)
 
 			err := dialect.buildPagination(ctx, tt.args)
 

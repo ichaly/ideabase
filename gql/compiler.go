@@ -24,7 +24,7 @@ func NewCompiler(m *Metadata, dialects []compiler.Dialect) (*Compiler, error) {
 }
 
 func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[string]interface{}) (string, []any, error) {
-	ctx := compiler.NewContext(my.dialect.Quotation(), variables)
+	ctx := compiler.NewContext(my.meta, my.dialect.Quotation(), variables)
 	switch operation.Operation {
 	case ast.Query, ast.Subscription:
 		my.dialect.BuildQuery(ctx, operation.SelectionSet)
