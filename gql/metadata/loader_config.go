@@ -269,8 +269,8 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 			}
 			through := rel.Through
 			throughConfig := relConfig.Through
-			if throughConfig.Table != "" {
-				through.Table = throughConfig.Table
+			if throughConfig.TableName != "" {
+				through.TableName = throughConfig.TableName
 			}
 			if throughConfig.SourceKey != "" {
 				through.SourceKey = throughConfig.SourceKey

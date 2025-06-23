@@ -12,7 +12,7 @@ type Relation struct {
 
 // Through 表示多对多关系中的中间表配置
 type Through struct {
-	Table     string `json:"table"`     // 中间表名称
+	TableName string `json:"tableName"` // 中间表名称
 	TargetKey string `json:"targetKey"` // 中间表中指向目标表的外键
 	SourceKey string `json:"sourceKey"` // 中间表中指向源表的外键
 }

@@ -119,7 +119,7 @@ type RelationConfig struct {
 // ThroughConfig 表示多对多关系中的中间表配置
 type ThroughConfig struct {
 	// 中间表名称
-	Table string `mapstructure:"table"`
+	TableName string `mapstructure:"table_name"`
 
 	// 中间表中指向源表的外键
 	SourceKey string `mapstructure:"source_key"`

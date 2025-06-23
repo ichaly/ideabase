@@ -213,12 +213,12 @@ func isThroughTableByName(tableName, table1, table2 string) bool {
 }
 
 // createManyToManyRelation 为多对多关系自动建立Relation结构
-func createManyToManyRelation(classes map[string]*internal.Class, throughTable string, fk1, fk2 foreignKeyInfo) {
+func createManyToManyRelation(classes map[string]*internal.Class, tableName string, fk1, fk2 foreignKeyInfo) {
 	class1, class2 := classes[fk1.TargetTable], classes[fk2.TargetTable]
 	if class1 == nil || class2 == nil {
 		return
 	}
-	if throughClass, exists := classes[throughTable]; exists {
+	if throughClass, exists := classes[tableName]; exists {
 		throughClass.IsThrough = true
 	}
 	createRelation := func(
@@ -231,7 +231,7 @@ func createManyToManyRelation(classes map[string]*internal.Class, throughTable s
 			TargetFiled: targetColumn,
 			Type:        internal.MANY_TO_MANY,
 			Through: &internal.Through{
-				Table:     throughTable,
+				TableName: tableName,
 				SourceKey: sourceKey,
 				TargetKey: targetKey,
 			},

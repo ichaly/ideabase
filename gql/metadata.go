@@ -351,7 +351,7 @@ func (my *Metadata) processRelations() {
 				// 处理中间表
 				if relation.Through != nil {
 					// 从 Nodes 中查找表对应的类并添加中间表关系
-					if throughClass := my.Nodes[relation.Through.Table]; throughClass != nil {
+					if throughClass := my.Nodes[relation.Through.TableName]; throughClass != nil {
 						throughFieldName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(throughClass.Name)))
 						throughDesc := createDescription(throughClass.Name, true)
 						addRelationField(class.Name, throughClass.Name, true, false, false, true,
