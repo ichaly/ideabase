@@ -42,8 +42,20 @@ func (my *Dialect) buildRoot(ctx *compiler.Context, set ast.SelectionSet) error 
 }
 
 func (my *Dialect) buildJson(ctx *compiler.Context, set ast.SelectionSet) {
-	for i, s := range set {
-		field := s.(*ast.Field)
+	i := 0 // 关系字段的索引计数器
+
+	for _, s := range set {
+		field, ok := s.(*ast.Field)
+		if !ok {
+			continue
+		}
+
+		// 检查是否为关系字段：字段类型对应一个表
+		if _, hasTable := ctx.TableName(field.Definition.Type.Name()); !hasTable {
+			continue // 跳过标量字段
+		}
+
+		// 为关系字段生成JOIN子查询
 		ctx.SpaceBefore(`LEFT OUTER JOIN LATERAL (`)
 
 		isSingleQuery := field.Arguments.ForName("id") != nil
@@ -68,13 +80,15 @@ func (my *Dialect) buildJson(ctx *compiler.Context, set ast.SelectionSet) {
 		}
 
 		my.buildSelect(ctx, field, i, "0")
-		// 只有当字段是关系字段时才递归构建子查询
-		if len(field.SelectionSet) > 0 && my.hasRelationFields(ctx, field.SelectionSet) {
+		// 递归处理嵌套的关系字段
+		if len(field.SelectionSet) > 0 {
 			my.buildJson(ctx, field.SelectionSet)
 		}
 
 		ctx.SpaceAfter(`) AS`).Quote(`__sr_`, i)
 		ctx.SpaceAfter(`) AS`).Quote(`__sj_`, i).Write(` ON TRUE`)
+
+		i++ // 递增关系字段索引
 	}
 }
 
@@ -198,21 +212,4 @@ func (my *Dialect) buildSourceItemsFields(ctx *compiler.Context, field *ast.Fiel
 			ctx.Space(`AS`).Quote(f.Alias)
 		}
 	}
-}
-
-// hasRelationFields 检查SelectionSet中是否包含关系字段
-// 关系字段的特征：
-// 1. 字段类型对应一个表（实体类型）
-// 2. 字段有子选择集（嵌套查询）
-// 标量字段（如 id, name, email）不应该被认为是关系字段
-func (my *Dialect) hasRelationFields(ctx *compiler.Context, set ast.SelectionSet) bool {
-	for _, s := range set {
-		if field, ok := s.(*ast.Field); ok {
-			// 只有当字段类型对应一个表且有子选择集时，才认为是关系字段
-			if _, hasTable := ctx.TableName(field.Definition.Type.Name()); hasTable && len(field.SelectionSet) > 0 {
-				return true
-			}
-		}
-	}
-	return false
 }
