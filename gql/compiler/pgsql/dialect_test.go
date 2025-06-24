@@ -50,26 +50,32 @@ func (my *_DialectSuite) SetupSuite() {
 			Fields: map[string]*internal.FieldConfig{
 				"id": {
 					Type:      "ID",
+					Column:    "id",
 					IsPrimary: true,
 				},
 				"age": {
 					Type:        "Int",
+					Column:      "age",
 					Description: "年龄",
 				},
 				"name": {
 					Type:        "String",
+					Column:      "name",
 					Description: "用户名",
 				},
 				"email": {
 					Type:        "String",
+					Column:      "email",
 					Description: "邮箱",
 				},
 				"metadata": {
 					Type:        "Json",
+					Column:      "metadata",
 					Description: "用户元数据",
 				},
 				"settings": {
 					Type:        "Json",
+					Column:      "settings",
 					Description: "用户设置",
 				},
 			},
