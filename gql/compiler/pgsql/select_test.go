@@ -13,21 +13,25 @@ func (my *_DialectSuite) TestBasicQueries() {
 					}
 				}
 			`,
-			expected: `SELECT jsonb_build_object('user', __sj_0.json) AS "__root" 
-				FROM (SELECT TRUE) AS "__root_x" 
-				LEFT OUTER JOIN LATERAL (
-					SELECT COALESCE(jsonb_agg(to_jsonb(__sr_0.*)), '[]') -> 0 AS json 
-					FROM (
-						SELECT sys_user_0_0.id AS "id",
-							sys_user_0_0.name AS "name",
-							sys_user_0_0.email AS "email"
-						FROM (
-							SELECT id, name, email 
-							FROM sys_user 
-							WHERE id = 1
-						) AS sys_user_0_0
-					) AS "__sr_0"
-				) AS "__sj_0" ON TRUE`,
+			expected: `SELECT
+	JSONB_BUILD_OBJECT ('user', __sj_0."json") AS "__root"
+FROM
+	(SELECT TRUE) AS "__root_x"
+	LEFT OUTER JOIN LATERAL (
+		SELECT COALESCE
+			(JSONB_AGG (TO_JSONB (__sr_0.*)), '[]') -> 0 AS "json"
+		FROM
+			(
+				SELECT
+					"sys_user_0_0"."id" AS "id",
+					"sys_user_0_0"."name" AS "name",
+					"sys_user_0_0"."email" AS "email"
+				FROM
+					(SELECT "sys_user"."id" AS "id", "sys_user"."name" AS "name", "sys_user"."email" AS "email" FROM sys_user) AS "sys_user_0_0"
+				WHERE
+					"sys_user_0_0".ID = 1
+			) AS "__sr_0"
+	) AS "__sj_0" ON TRUE`,
 		},
 		// {
 		// 	name: "用户列表分页查询",
