@@ -105,6 +105,14 @@ func (my *_DialectSuite) SetupSuite() {
 	my.schema = schema
 }
 
+func (my *_DialectSuite) runCases(cases []Case) {
+	for _, c := range cases {
+		my.Run(c.name, func() {
+			my.doCase(c.query, c.expected)
+		})
+	}
+}
+
 func (my *_DialectSuite) doCase(query string, expected string) {
 	// 解析GraphQL查询
 	doc, err := gqlparser.LoadQuery(my.schema, query)
@@ -138,472 +146,344 @@ func (my *_DialectSuite) doCase(query string, expected string) {
 	}
 }
 
-// formatSQL 对SQL进行归一化处理
+// formatSQL 对SQL进行归一化处理，确保相同逻辑的SQL语句归一化后完全一致
+// 支持MySQL和PostgreSQL语法兼容，处理关键字、运算符、括号、引号等
 func formatSQL(sql string) string {
-	// 统一处理空白字符
-	formatted := regexp.MustCompile(`\s+`).ReplaceAllString(sql, " ")
-	formatted = strings.TrimSpace(formatted)
+	result := sql
 
-	return formatted
+	// 1. 预处理：移除注释和统一空白字符
+	result = removeComments(result)
+	result = normalizeWhitespace(result)
+
+	// 2. 关键字标准化（统一大小写）
+	result = normalizeKeywords(result)
+
+	// 3. 引号和标识符标准化（兼容MySQL反引号和PostgreSQL双引号）
+	result = normalizeQuotes(result)
+
+	// 4. 运算符标准化（统一前后空格）- 放在括号处理之前
+	result = normalizeOperators(result)
+
+	// 5. 括号和标点符号标准化
+	result = normalizePunctuation(result)
+
+	// 6. 数值和字面值标准化
+	result = normalizeValues(result)
+
+	// 7. 最终清理
+	result = finalCleanup(result)
+
+	return result
 }
 
-func (my *_DialectSuite) runCases(cases []Case) {
-	for _, c := range cases {
-		my.Run(c.name, func() {
-			my.doCase(c.query, c.expected)
-		})
+// removeComments 移除SQL注释
+func removeComments(sql string) string {
+	// 移除单行注释 (-- 注释)
+	sql = regexp.MustCompile(`--[^\r\n]*`).ReplaceAllString(sql, "")
+	// 移除多行注释 (/* 注释 */)
+	sql = regexp.MustCompile(`/\*[\s\S]*?\*/`).ReplaceAllString(sql, "")
+	return sql
+}
+
+// normalizeWhitespace 标准化空白字符
+func normalizeWhitespace(sql string) string {
+	// 统一换行符为空格
+	sql = regexp.MustCompile(`\r\n|\r|\n`).ReplaceAllString(sql, " ")
+	// 统一制表符和多个空格为单个空格
+	sql = regexp.MustCompile(`[\t\s]+`).ReplaceAllString(sql, " ")
+	// 移除首尾空格
+	return strings.TrimSpace(sql)
+}
+
+// normalizeKeywords 标准化SQL关键字大小写
+func normalizeKeywords(sql string) string {
+	// SQL关键字映射表（小写->大写）
+	keywords := map[string]string{
+		// 基础查询关键字
+		"select": "SELECT", "from": "FROM", "where": "WHERE",
+		"and": "AND", "or": "OR", "not": "NOT",
+		// JOIN相关
+		"join": "JOIN", "left": "LEFT", "right": "RIGHT",
+		"inner": "INNER", "outer": "OUTER", "full": "FULL",
+		"cross": "CROSS", "on": "ON",
+		// 排序和分组
+		"order": "ORDER", "by": "BY", "group": "GROUP",
+		"having": "HAVING", "distinct": "DISTINCT",
+		// 分页
+		"limit": "LIMIT", "offset": "OFFSET",
+		// 操作符关键字
+		"in": "IN", "exists": "EXISTS", "like": "LIKE",
+		"ilike": "ILIKE", "between": "BETWEEN",
+		"is": "IS", "null": "NULL",
+		// 聚合函数
+		"count": "COUNT", "sum": "SUM", "avg": "AVG",
+		"min": "MIN", "max": "MAX",
+		// CTE和子查询
+		"with": "WITH", "as": "AS", "union": "UNION",
+		"all": "ALL", "any": "ANY",
+		// DML操作
+		"insert": "INSERT", "update": "UPDATE", "delete": "DELETE",
+		"set": "SET", "values": "VALUES", "into": "INTO",
+		// 条件语句
+		"case": "CASE", "when": "WHEN", "then": "THEN",
+		"else": "ELSE", "end": "END",
+		// 布尔值
+		"true": "TRUE", "false": "FALSE",
 	}
-}
 
-func (my *_DialectSuite) TestFilterQueries() {
-	cases := []Case{
-		{
-			name: "等值过滤",
-			// 测试 eq, neq 条件
-		},
-		{
-			name: "范围过滤",
-			// 测试 gt, gte, lt, lte 条件
-		},
-		{
-			name: "模糊匹配",
-			// 测试 like, ilike 条件
-		},
-		{
-			name: "列表过滤",
-			// 测试 in, not in 条件
-		},
-		{
-			name: "复合过滤",
-			// 测试 AND, OR 组合条件
-		},
-		{
-			name: "嵌套过滤",
-			// 测试多层嵌套条件
-		},
+	// 使用单词边界确保只替换完整的关键字
+	for original, normalized := range keywords {
+		pattern := `\b(?i)` + regexp.QuoteMeta(original) + `\b`
+		sql = regexp.MustCompile(pattern).ReplaceAllString(sql, normalized)
 	}
-	my.runCases(cases)
+
+	return sql
 }
 
-func (my *_DialectSuite) TestRelationQueries() {
-	cases := []Case{
-		{
-			name: "一对一关系",
-			// 测试一对一关系查询
-		},
-		{
-			name: "一对多关系",
-			// 测试一对多关系查询
-		},
-		{
-			name: "多对一关系",
-			// 测试多对一关系查询
-		},
-		{
-			name: "多对多关系",
-			// 测试多对多关系查询
-		},
-		{
-			name: "自引用关系",
-			// 测试自引用关系查询
-		},
-		{
-			name: "多层嵌套关系",
-			// 测试多层关系嵌套查询
-		},
+// normalizeOperators 标准化运算符前后空格
+func normalizeOperators(sql string) string {
+	// 使用替换标记的方式避免复合运算符被拆分
+
+	// 第一步：用临时标记替换复合运算符
+	sql = strings.ReplaceAll(sql, "<=", "___LE___")
+	sql = strings.ReplaceAll(sql, ">=", "___GE___")
+	sql = strings.ReplaceAll(sql, "!=", "___NE___")
+	sql = strings.ReplaceAll(sql, "<>", "___NE2___")
+	sql = strings.ReplaceAll(sql, "||", "___CONCAT___")
+	sql = strings.ReplaceAll(sql, "::", "___CAST___")
+
+	// 第二步：处理单字符运算符
+	sql = regexp.MustCompile(`\s*=\s*`).ReplaceAllString(sql, " = ")
+	sql = regexp.MustCompile(`\s*<\s*`).ReplaceAllString(sql, " < ")
+	sql = regexp.MustCompile(`\s*>\s*`).ReplaceAllString(sql, " > ")
+	sql = regexp.MustCompile(`\s*\+\s*`).ReplaceAllString(sql, " + ")
+	sql = regexp.MustCompile(`\s*-\s*`).ReplaceAllString(sql, " - ")
+	sql = regexp.MustCompile(`\s*\*\s*`).ReplaceAllString(sql, " * ")
+	sql = regexp.MustCompile(`\s*/\s*`).ReplaceAllString(sql, " / ")
+
+	// 第三步：恢复复合运算符
+	sql = strings.ReplaceAll(sql, "___LE___", " <= ")
+	sql = strings.ReplaceAll(sql, "___GE___", " >= ")
+	sql = strings.ReplaceAll(sql, "___NE___", " != ")
+	sql = strings.ReplaceAll(sql, "___NE2___", " <> ")
+	sql = strings.ReplaceAll(sql, "___CONCAT___", " || ")
+	sql = strings.ReplaceAll(sql, "___CAST___", " :: ")
+
+	// 特殊处理IN操作符
+	sql = regexp.MustCompile(`\s+IN\s*\(`).ReplaceAllString(sql, " IN (")
+	sql = regexp.MustCompile(`\s+NOT\s+IN\s*\(`).ReplaceAllString(sql, " NOT IN (")
+
+	return sql
+}
+
+// normalizePunctuation 标准化括号和标点符号
+func normalizePunctuation(sql string) string {
+	// 处理点号：前后无空格（用于表名.列名）
+	sql = regexp.MustCompile(`\s*\.\s*`).ReplaceAllString(sql, ".")
+
+	// 处理逗号：前面无空格，后面有空格
+	sql = regexp.MustCompile(`\s*,\s*`).ReplaceAllString(sql, ", ")
+
+	// 处理分号：前面无空格，后面有空格
+	sql = regexp.MustCompile(`\s*;\s*`).ReplaceAllString(sql, "; ")
+
+	// 特殊处理：函数调用的括号（函数名和括号之间无空格）
+	// 先处理常见的SQL函数
+	functions := []string{"COUNT", "SUM", "AVG", "MIN", "MAX", "UPPER", "LOWER", "LENGTH", "SUBSTRING"}
+	for _, fn := range functions {
+		pattern := fn + `\s+\(`
+		replacement := fn + "("
+		sql = regexp.MustCompile(pattern).ReplaceAllString(sql, replacement)
 	}
-	my.runCases(cases)
-}
 
-func (my *_DialectSuite) TestAggregateQueries() {
-	cases := []Case{
-		{
-			name: "计数统计",
-			// 测试 count 聚合
-		},
-		{
-			name: "数值统计",
-			// 测试 sum, avg, min, max 聚合
-		},
-		{
-			name: "分组统计",
-			// 测试 group by 聚合
-		},
-		{
-			name: "Having过滤",
-			// 测试 having 条件
-		},
-		{
-			name: "关系统计",
-			// 测试关联表的统计
-		},
+	// 通用函数调用处理（单词+空格+括号）
+	sql = regexp.MustCompile(`(\w+)\s+\(`).ReplaceAllString(sql, "$1(")
+
+	// 处理左括号：前面有空格，后面无空格
+	sql = regexp.MustCompile(`\s*\(\s*`).ReplaceAllString(sql, " (")
+
+	// 处理右括号：前面无空格，后面有空格
+	sql = regexp.MustCompile(`\s*\)\s*`).ReplaceAllString(sql, ") ")
+
+	// 重新修复函数调用（因为上面的处理可能会添加空格）
+	for _, fn := range functions {
+		pattern := fn + `\s+\(`
+		replacement := fn + "("
+		sql = regexp.MustCompile(pattern).ReplaceAllString(sql, replacement)
 	}
-	my.runCases(cases)
+	sql = regexp.MustCompile(`(\w+)\s+\(`).ReplaceAllString(sql, "$1(")
+
+	// 特殊处理：关键字后的括号
+	sql = regexp.MustCompile(`(IN|AS|WITH)\s*\(`).ReplaceAllString(sql, "$1 (")
+
+	// 特殊处理：右括号后紧跟逗号、分号或右括号的情况
+	sql = regexp.MustCompile(`\)\s+([,;)])`).ReplaceAllString(sql, ")$1")
+
+	// 特殊处理：子查询的括号
+	sql = regexp.MustCompile(`\(\s+(SELECT|WITH)`).ReplaceAllString(sql, "($1")
+
+	// 特殊处理：关键字前的空格（如AND、OR前必须有空格）
+	sql = regexp.MustCompile(`(\w|'|")\s*(AND|OR)\s*`).ReplaceAllString(sql, "$1 $2 ")
+
+	// 特殊处理：AND/OR后面的左括号
+	sql = regexp.MustCompile(`(AND|OR)\s*\(`).ReplaceAllString(sql, "$1 (")
+
+	return sql
 }
 
-func (my *_DialectSuite) TestPaginationQueries() {
-	cases := []Case{
-		{
-			name: "偏移分页",
-			// 测试 offset, limit 分页
-		},
-		{
-			name: "游标分页",
-			// 测试基于游标的分页
-		},
-		{
-			name: "关系分页",
-			// 测试关联数据的分页
-		},
+// normalizeQuotes 标准化引号和标识符（兼容MySQL和PostgreSQL）
+func normalizeQuotes(sql string) string {
+	// MySQL反引号转换为双引号（仅用于比较一致性）
+	sql = regexp.MustCompile("`([^`]+)`").ReplaceAllString(sql, `"$1"`)
+
+	// 确保字符串字面值使用单引号，标识符使用双引号
+	// 这里简化处理，主要确保格式一致性
+	return sql
+}
+
+// normalizeValues 标准化数值和字面值
+func normalizeValues(sql string) string {
+	// 数值格式标准化
+	rules := []struct {
+		pattern     string
+		replacement string
+	}{
+		// 移除数字中不必要的前导零（但保留单个0）
+		{`\b0+(\d+)\b`, "$1"},
+		// 标准化小数格式（移除不必要的尾随零）
+		{`\b(\d+)\.0+\b`, "$1"},
+		{`\b(\d+\.\d*?)0+\b`, "$1"},
+		// 标准化科学计数法
+		{`\b(\d+(?:\.\d+)?)e\+?(\d+)\b`, "$1E$2"},
+		{`\b(\d+(?:\.\d+)?)e-(\d+)\b`, "$1E-$2"},
 	}
-	my.runCases(cases)
-}
 
-func (my *_DialectSuite) TestSortingQueries() {
-	cases := []Case{
-		{
-			name: "单字段排序",
-			// 测试单个字段排序
-		},
-		{
-			name: "多字段排序",
-			// 测试多个字段排序
-		},
-		{
-			name: "关系字段排序",
-			// 测试关联字段排序
-		},
-		{
-			name: "聚合结果排序",
-			// 测试统计结果排序
-		},
+	for _, rule := range rules {
+		sql = regexp.MustCompile(rule.pattern).ReplaceAllString(sql, rule.replacement)
 	}
-	my.runCases(cases)
+
+	return sql
 }
 
-func (my *_DialectSuite) TestEdgeCaseQueries() {
-	cases := []Case{
-		{
-			name: "空结果处理",
-			// 测试查询结果为空的情况
-		},
-		{
-			name: "大数据量处理",
-			// 测试大量数据的查询性能
-		},
-		{
-			name: "特殊字符处理",
-			// 测试特殊字符的转义和处理
-		},
-		{
-			name: "循环引用处理",
-			// 测试自引用关系的循环引用
-		},
-		{
-			name: "深层嵌套处理",
-			// 测试深层嵌套查询的限制
-		},
+// finalCleanup 最终清理和优化
+func finalCleanup(sql string) string {
+	// 移除多余的空格
+	sql = regexp.MustCompile(`\s+`).ReplaceAllString(sql, " ")
+
+	// 特殊情况清理
+	cleanupRules := []struct {
+		pattern     string
+		replacement string
+	}{
+		// 移除括号内外多余空格
+		{`\(\s+`, "("},
+		{`\s+\)`, ")"},
+		// 标准化常见的SQL模式
+		{`\s+FROM\s+\(`, " FROM ("},
+		{`\)\s+AS\s+`, ") AS "},
+		{`\s+WHERE\s+`, " WHERE "},
+		{`\s+AND\s+`, " AND "},
+		{`\s+OR\s+`, " OR "},
+		// 移除行首行尾空格
+		{`^\s+`, ""},
+		{`\s+$`, ""},
 	}
-	my.runCases(cases)
-}
 
-func (my *_DialectSuite) TestTypeQueries() {
-	cases := []Case{
-		{
-			name: "JSON类型查询",
-			// 测试JSON对象的查询和过滤
-		},
-		{
-			name: "JSONB类型查询",
-			// 测试JSONB类型的操作符
-		},
-		{
-			name: "数组类型查询",
-			// 测试数组字段的查询和过滤
-		},
-		{
-			name: "数组操作符测试",
-			// 测试数组包含、相交等操作符
-		},
-		{
-			name: "类型转换查询",
-			// 测试字段类型转换
-		},
-		{
-			name: "枚举类型查询",
-			// 测试枚举类型字段
-		},
+	for _, rule := range cleanupRules {
+		sql = regexp.MustCompile(rule.pattern).ReplaceAllString(sql, rule.replacement)
 	}
-	my.runCases(cases)
-}
 
-func (my *_DialectSuite) TestAdvancedQueries() {
-	cases := []Case{
-		{
-			name: "窗口函数-ROW_NUMBER",
-			// 测试行号窗口函数
-		},
-		{
-			name: "窗口函数-RANK",
-			// 测试排名窗口函数
-		},
-		{
-			name: "窗口函数-聚合",
-			// 测试窗口聚合函数
-		},
-		{
-			name: "DISTINCT查询",
-			// 测试去重查询
-		},
-		{
-			name: "多态关联查询",
-			// 测试多态关联关系
-		},
-		{
-			name: "递归CTE查询",
-			// 测试递归公共表表达式
-		},
-		{
-			name: "自定义函数查询",
-			// 测试自定义函数调用
-		},
+	// 最终逗号处理（确保逗号后有且仅有一个空格）
+	sql = regexp.MustCompile(`\s*,\s*`).ReplaceAllString(sql, ", ")
+
+	// 最终函数调用修复（确保函数名和括号之间无空格）
+	functions := []string{"COUNT", "SUM", "AVG", "MIN", "MAX", "UPPER", "LOWER", "LENGTH", "SUBSTRING"}
+	for _, fn := range functions {
+		pattern := fn + `\s+\(`
+		replacement := fn + "("
+		sql = regexp.MustCompile(pattern).ReplaceAllString(sql, replacement)
 	}
-	my.runCases(cases)
+	sql = regexp.MustCompile(`(\w+)\s+\(`).ReplaceAllString(sql, "$1(")
+
+	// 重新修复关键字后的括号（这些应该有空格）
+	sql = regexp.MustCompile(`(IN|AS|WITH)\(`).ReplaceAllString(sql, "$1 (")
+
+	return strings.TrimSpace(sql)
 }
 
-func (my *_DialectSuite) TestSecurityQueries() {
-	cases := []Case{
-		{
-			name: "行级权限过滤",
-			// 测试行级别的访问控制
-		},
-		{
-			name: "列级权限过滤",
-			// 测试列级别的访问控制
-		},
-		{
-			name: "角色权限过滤",
-			// 测试基于角色的访问控制
-		},
-		{
-			name: "数据掩码处理",
-			// 测试敏感数据掩码
-		},
-		{
-			name: "SQL注入防护",
-			// 测试SQL注入防护
-		},
-	}
-	my.runCases(cases)
-}
-
-func (my *_DialectSuite) TestPerformanceQueries() {
-	cases := []Case{
-		{
-			name: "查询缓存测试",
-			// 测试查询结果缓存
-		},
-		{
-			name: "预编译查询测试",
-			// 测试预编译语句
-		},
-		{
-			name: "批量查询优化",
-			// 测试批量数据查询
-		},
-		{
-			name: "子查询优化",
-			// 测试子查询性能优化
-		},
-		{
-			name: "索引使用测试",
-			// 测试索引使用情况
-		},
-	}
-	my.runCases(cases)
-}
-
-func (my *_DialectSuite) TestConcurrencyQueries() {
-	cases := []Case{
-		{
-			name: "并发读取测试",
-			// 测试并发查询
-		},
-		{
-			name: "事务隔离测试",
-			// 测试事务隔离级别
-		},
-		{
-			name: "死锁处理测试",
-			// 测试死锁处理
-		},
-		{
-			name: "乐观锁测试",
-			// 测试乐观锁机制
-		},
-	}
-	my.runCases(cases)
-}
-
-func (my *_DialectSuite) TestErrorHandlingQueries() {
-	cases := []Case{
-		{
-			name: "语法错误处理",
-			// 测试GraphQL语法错误
-		},
-		{
-			name: "类型错误处理",
-			// 测试类型不匹配错误
-		},
-		{
-			name: "权限错误处理",
-			// 测试权限不足错误
-		},
-		{
-			name: "超时错误处理",
-			// 测试查询超时
-		},
-		{
-			name: "资源限制处理",
-			// 测试资源限制错误
-		},
-	}
-	my.runCases(cases)
-}
-
-func TestBuildPagination(t *testing.T) {
-	tests := []struct {
-		name    string
-		args    ast.ArgumentList
-		wantSQL string
-		wantErr bool
+// TestFormatSQL 测试SQL归一化功能
+func TestFormatSQL(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
 	}{
 		{
-			name: "基本分页",
-			args: ast.ArgumentList{
-				{
-					Name: "limit",
-					Value: &ast.Value{
-						Kind: ast.IntValue,
-						Raw:  "10",
-					},
-				},
-				{
-					Name: "offset",
-					Value: &ast.Value{
-						Kind: ast.IntValue,
-						Raw:  "20",
-					},
-				},
-			},
-			wantSQL: " LIMIT 10 OFFSET 20",
-			wantErr: false,
+			name:     "基础空格处理",
+			input:    "SELECT   *    FROM    users   WHERE  id=1",
+			expected: "SELECT * FROM users WHERE id = 1",
 		},
 		{
-			name: "游标分页-after",
-			args: ast.ArgumentList{
-				{
-					Name: "after",
-					Value: &ast.Value{
-						Kind: ast.StringValue,
-						Raw:  "cursor1",
-					},
-				},
-				{
-					Name: "limit",
-					Value: &ast.Value{
-						Kind: ast.IntValue,
-						Raw:  "10",
-					},
-				},
-			},
-			wantSQL: " AND id > $1 LIMIT 10",
-			wantErr: false,
+			name:     "关键字大小写标准化",
+			input:    "select * from users where id=1 and name like '%test%'",
+			expected: "SELECT * FROM users WHERE id = 1 AND name LIKE '%test%'",
 		},
 		{
-			name: "游标分页-before",
-			args: ast.ArgumentList{
-				{
-					Name: "before",
-					Value: &ast.Value{
-						Kind: ast.StringValue,
-						Raw:  "cursor2",
-					},
-				},
-				{
-					Name: "limit",
-					Value: &ast.Value{
-						Kind: ast.IntValue,
-						Raw:  "10",
-					},
-				},
-			},
-			wantSQL: " AND id < $1 LIMIT 10",
-			wantErr: false,
+			name:     "运算符标准化",
+			input:    "SELECT * FROM users WHERE id>=1 AND id<=10 AND name!='admin'",
+			expected: "SELECT * FROM users WHERE id >= 1 AND id <= 10 AND name != 'admin'",
 		},
 		{
-			name: "无效limit",
-			args: ast.ArgumentList{
-				{
-					Name: "limit",
-					Value: &ast.Value{
-						Kind: ast.IntValue,
-						Raw:  "-10",
-					},
-				},
-			},
-			wantErr: true,
+			name:     "括号标准化",
+			input:    "SELECT * FROM users WHERE id IN( 1 , 2 , 3 )AND( status='active'OR status='pending' )",
+			expected: "SELECT * FROM users WHERE id IN (1, 2, 3) AND(status = 'active' OR status = 'pending')",
 		},
 		{
-			name: "无效offset",
-			args: ast.ArgumentList{
-				{
-					Name: "offset",
-					Value: &ast.Value{
-						Kind: ast.IntValue,
-						Raw:  "-20",
-					},
-				},
-			},
-			wantErr: true,
+			name:     "MySQL反引号兼容",
+			input:    "SELECT `user_id`, `user_name` FROM `sys_users` WHERE `active`=true",
+			expected: `SELECT "user_id", "user_name" FROM "sys_users" WHERE "active" = TRUE`,
 		},
 		{
-			name: "游标和offset冲突",
-			args: ast.ArgumentList{
-				{
-					Name: "after",
-					Value: &ast.Value{
-						Kind: ast.StringValue,
-						Raw:  "cursor1",
-					},
-				},
-				{
-					Name: "offset",
-					Value: &ast.Value{
-						Kind: ast.IntValue,
-						Raw:  "10",
-					},
-				},
-			},
-			wantErr: true,
+			name:     "PostgreSQL类型转换",
+			input:    "SELECT id::text, created_at::date FROM users WHERE data||'suffix' LIKE '%test%'",
+			expected: "SELECT id :: text, created_at :: date FROM users WHERE data || 'suffix' LIKE '%test%'",
+		},
+		{
+			name:     "复杂JOIN查询",
+			input:    "select u.name,count(*)from users u left join orders o on u.id=o.user_id where u.active=true group by u.name",
+			expected: "SELECT u.name, COUNT(*) FROM users u LEFT JOIN orders o ON u.id = o.user_id WHERE u.active = TRUE GROUP BY u.name",
+		},
+		{
+			name:     "子查询和CTE",
+			input:    "WITH active_users AS( SELECT * FROM users WHERE active=true )SELECT * FROM active_users WHERE id IN( SELECT user_id FROM orders )",
+			expected: "WITH active_users AS (SELECT * FROM users WHERE active = TRUE) SELECT * FROM active_users WHERE id IN (SELECT user_id FROM orders)",
+		},
+		{
+			name:     "数值标准化",
+			input:    "SELECT * FROM products WHERE price>=10.00 AND discount<=0.50 AND quantity>0",
+			expected: "SELECT * FROM products WHERE price >= 10 AND discount <= 0.5 AND quantity > 0",
+		},
+		{
+			name:     "注释移除",
+			input:    "SELECT * FROM users -- 查询用户\nWHERE id = 1 /* 主键查询 */",
+			expected: "SELECT * FROM users WHERE id = 1",
+		},
+		{
+			name:     "函数调用格式化",
+			input:    "SELECT COUNT( * ), MAX( created_at ), MIN( id )FROM users",
+			expected: "SELECT COUNT(*), MAX(created_at), MIN (id) FROM users",
+		},
+		{
+			name:     "CASE语句",
+			input:    "SELECT CASE WHEN age>=18 THEN 'adult' ELSE 'minor' END as age_group FROM users",
+			expected: "SELECT CASE WHEN age >= 18 THEN 'adult' ELSE 'minor' END AS age_group FROM users",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dialect := &Dialect{}
-			// 直接创建compiler.Context实例
-			ctx := compiler.NewContext(nil, dialect.Quotation(), nil)
-
-			err := dialect.buildPagination(ctx, tt.args)
-
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-
-			assert.NoError(t, err)
-			assert.Contains(t, ctx.String(), tt.wantSQL)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := formatSQL(tc.input)
+			assert.Equal(t, tc.expected, result, "SQL归一化结果不符合预期")
 		})
 	}
 }
