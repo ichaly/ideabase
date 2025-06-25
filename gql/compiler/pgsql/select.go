@@ -114,7 +114,7 @@ func (my *Dialect) buildSelect(ctx *compiler.Context, field *ast.Field, index in
 
 	// 处理WHERE条件
 	if arg := field.Arguments.ForName("id"); arg != nil {
-		ctx.Space(`WHERE`).Quote(alias).Write(`.id = `).Write(arg.Value.Raw)
+		ctx.Space(`WHERE`).Quote(alias).Write(`.ID = `).Write(arg.Value.Raw)
 	}
 
 	// 处理分页查询
@@ -132,7 +132,7 @@ func (my *Dialect) buildFields(ctx *compiler.Context, field *ast.Field, alias st
 		}
 		switch f := s.(type) {
 		case *ast.Field:
-			if f.Name == "items" {
+			if f.Name == gql.ITEMS {
 				hasItems = true
 				my.buildItemsField(ctx, f, alias)
 				continue
@@ -166,7 +166,7 @@ func (my *Dialect) buildItemsField(ctx *compiler.Context, field *ast.Field, alia
 			ctx.Quote(alias).Write(".").Quote(field.Column)
 		}
 	}
-	ctx.Write(`) AS items`)
+	ctx.SpaceAfter(`) AS`).Write(gql.ITEMS)
 }
 
 // 构建源字段
@@ -178,7 +178,7 @@ func (my *Dialect) buildSourceFields(ctx *compiler.Context, field *ast.Field, ta
 		}
 		switch f := s.(type) {
 		case *ast.Field:
-			if f.Name == "items" {
+			if f.Name == gql.ITEMS {
 				hasItems = true
 				my.buildSourceItemsFields(ctx, f, table)
 				continue

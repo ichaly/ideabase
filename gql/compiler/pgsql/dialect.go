@@ -78,46 +78,6 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 	}
 }
 
-// buildWhere 构建WHERE子句
-func (my *Dialect) buildWhere(ctx *compiler.Context, args ast.ArgumentList) error {
-	if len(args) == 0 {
-		return nil
-	}
-
-	for _, arg := range args {
-		if arg.Name != "where" {
-			continue
-		}
-
-		if arg.Value == nil || len(arg.Value.Children) == 0 {
-			continue
-		}
-
-		ctx.Space("WHERE")
-
-		for i, child := range arg.Value.Children {
-			if i > 0 {
-				ctx.Space("AND")
-			}
-
-			if child.Name == "" {
-				return fmt.Errorf("empty field name in WHERE condition at index %d", i)
-			}
-
-			ctx.Quote(child.Name).Space("=")
-
-			value, err := child.Value.Value(nil)
-			if err != nil {
-				return fmt.Errorf("failed to get value for where condition %s: %w", child.Name, err)
-			}
-			ctx.Write(my.Placeholder(len(ctx.Args()) + 1))
-			ctx.AddParam(value)
-		}
-	}
-
-	return nil
-}
-
 // buildPagination 构建分页子句
 func (my *Dialect) buildPagination(ctx *compiler.Context, args ast.ArgumentList) error {
 	// 处理排序

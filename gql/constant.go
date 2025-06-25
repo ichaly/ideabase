@@ -237,5 +237,11 @@ var dictionary = lo.KeyBy(operators, func(op *Operator) string {
 	return op.Name
 })
 
+// GetOperator 根据名称获取操作符信息
+func GetOperator(name string) (*Operator, bool) {
+	op, exists := dictionary[name]
+	return op, exists
+}
+
 // 内置标量类型集合
 var scalars = []string{SCALAR_ID, SCALAR_INT, SCALAR_FLOAT, SCALAR_STRING, SCALAR_BOOLEAN}
