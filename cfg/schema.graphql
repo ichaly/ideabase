@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20250626142404
+# 版本: 20250626163029
 
 # 自定义标量类型
 scalar Json
@@ -282,13 +282,13 @@ type UserGroup {
 # ------------------ 过滤器类型定义 ------------------
 
 # Boolean过滤器
-input BooleanFilter {
+input BooleanWhereInput {
   eq: Boolean  # Equals value
   in: [Boolean!]  # Is in list of values
 }
 
 # DateTime过滤器
-input DateTimeFilter {
+input DateTimeWhereInput {
   is: IsInput  # Is value null (true) or not null (false)
   eq: DateTime  # Equals value
   in: [DateTime!]  # Is in list of values
@@ -300,7 +300,7 @@ input DateTimeFilter {
 }
 
 # Float过滤器
-input FloatFilter {
+input FloatWhereInput {
   is: IsInput  # Is value null (true) or not null (false)
   eq: Float  # Equals value
   in: [Float!]  # Is in list of values
@@ -312,7 +312,7 @@ input FloatFilter {
 }
 
 # ID过滤器
-input IDFilter {
+input IDWhereInput {
   eq: ID  # Equals value
   in: [ID!]  # Is in list of values
   hasKey: String  # Value is a JSON object with the specified key
@@ -322,7 +322,7 @@ input IDFilter {
 }
 
 # Int过滤器
-input IntFilter {
+input IntWhereInput {
   is: IsInput  # Is value null (true) or not null (false)
   eq: Int  # Equals value
   in: [Int!]  # Is in list of values
@@ -334,7 +334,7 @@ input IntFilter {
 }
 
 # Json过滤器
-input JsonFilter {
+input JsonWhereInput {
   is: IsInput  # Is value null (true) or not null (false)
   eq: Json  # Equals value
   in: [Json!]  # Is in list of values
@@ -344,7 +344,7 @@ input JsonFilter {
 }
 
 # String过滤器
-input StringFilter {
+input StringWhereInput {
   is: IsInput  # Is value null (true) or not null (false)
   eq: String  # Equals value
   in: [String!]  # Is in list of values
@@ -360,60 +360,60 @@ input StringFilter {
 }
 
 # Comment查询条件
-input CommentFilter {
-  content: StringFilter
-  createdAt: DateTimeFilter
-  id: IDFilter
-  parentId: IntFilter
-  postId: IntFilter
-  userId: IntFilter
-  and: [CommentFilter!]
-  or: [CommentFilter!]
-  not: CommentFilter
+input CommentWhereInput {
+  content: StringWhereInput
+  createdAt: DateTimeWhereInput
+  id: IDWhereInput
+  parentId: IntWhereInput
+  postId: IntWhereInput
+  userId: IntWhereInput
+  and: [CommentWhereInput!]
+  or: [CommentWhereInput!]
+  not: CommentWhereInput
 }
 
 # Post查询条件
-input PostFilter {
-  content: StringFilter
-  createdAt: DateTimeFilter
-  id: IDFilter
-  title: StringFilter
-  userId: IntFilter
-  and: [PostFilter!]
-  or: [PostFilter!]
-  not: PostFilter
+input PostWhereInput {
+  content: StringWhereInput
+  createdAt: DateTimeWhereInput
+  id: IDWhereInput
+  title: StringWhereInput
+  userId: IntWhereInput
+  and: [PostWhereInput!]
+  or: [PostWhereInput!]
+  not: PostWhereInput
 }
 
 # PostTag查询条件
-input PostTagFilter {
-  createdAt: DateTimeFilter
-  postId: IDFilter
-  tagId: IDFilter
-  and: [PostTagFilter!]
-  or: [PostTagFilter!]
-  not: PostTagFilter
+input PostTagWhereInput {
+  createdAt: DateTimeWhereInput
+  postId: IDWhereInput
+  tagId: IDWhereInput
+  and: [PostTagWhereInput!]
+  or: [PostTagWhereInput!]
+  not: PostTagWhereInput
 }
 
 # Tag查询条件
-input TagFilter {
-  createdAt: DateTimeFilter
-  id: IDFilter
-  name: StringFilter
-  and: [TagFilter!]
-  or: [TagFilter!]
-  not: TagFilter
+input TagWhereInput {
+  createdAt: DateTimeWhereInput
+  id: IDWhereInput
+  name: StringWhereInput
+  and: [TagWhereInput!]
+  or: [TagWhereInput!]
+  not: TagWhereInput
 }
 
 # User查询条件
-input UserFilter {
-  createdAt: DateTimeFilter
-  email: StringFilter
-  id: IDFilter
-  name: StringFilter
-  updatedAt: DateTimeFilter
-  and: [UserFilter!]
-  or: [UserFilter!]
-  not: UserFilter
+input UserWhereInput {
+  createdAt: DateTimeWhereInput
+  email: StringWhereInput
+  id: IDWhereInput
+  name: StringWhereInput
+  updatedAt: DateTimeWhereInput
+  and: [UserWhereInput!]
+  or: [UserWhereInput!]
+  not: UserWhereInput
 }
 
 # Comment排序
@@ -568,11 +568,11 @@ input RelationInput {
 # 查询根类型
 type Query {
   # 单个Comment查询
-  comment(id: ID, where: CommentFilter): Comment
+  comment(id: ID, where: CommentWhereInput): Comment
 
   # Comment列表查询
   comments(
-    where: CommentFilter
+    where: CommentWhereInput
     sort: [CommentSort!]
     limit: Int
     offset: Int
@@ -583,13 +583,13 @@ type Query {
   ): CommentPage!
 
   # Comment统计查询
-  commentStats(where: CommentFilter, groupBy: GroupBy): CommentStats!
+  commentStats(where: CommentWhereInput, groupBy: GroupBy): CommentStats!
   # 单个Post查询
-  post(id: ID, where: PostFilter): Post
+  post(id: ID, where: PostWhereInput): Post
 
   # Post列表查询
   posts(
-    where: PostFilter
+    where: PostWhereInput
     sort: [PostSort!]
     limit: Int
     offset: Int
@@ -600,13 +600,13 @@ type Query {
   ): PostPage!
 
   # Post统计查询
-  postStats(where: PostFilter, groupBy: GroupBy): PostStats!
+  postStats(where: PostWhereInput, groupBy: GroupBy): PostStats!
   # 单个PostTag查询
-  postTag(id: ID, where: PostTagFilter): PostTag
+  postTag(id: ID, where: PostTagWhereInput): PostTag
 
   # PostTag列表查询
   postTags(
-    where: PostTagFilter
+    where: PostTagWhereInput
     sort: [PostTagSort!]
     limit: Int
     offset: Int
@@ -617,13 +617,13 @@ type Query {
   ): PostTagPage!
 
   # PostTag统计查询
-  postTagStats(where: PostTagFilter, groupBy: GroupBy): PostTagStats!
+  postTagStats(where: PostTagWhereInput, groupBy: GroupBy): PostTagStats!
   # 单个Tag查询
-  tag(id: ID, where: TagFilter): Tag
+  tag(id: ID, where: TagWhereInput): Tag
 
   # Tag列表查询
   tags(
-    where: TagFilter
+    where: TagWhereInput
     sort: [TagSort!]
     limit: Int
     offset: Int
@@ -634,13 +634,13 @@ type Query {
   ): TagPage!
 
   # Tag统计查询
-  tagStats(where: TagFilter, groupBy: GroupBy): TagStats!
+  tagStats(where: TagWhereInput, groupBy: GroupBy): TagStats!
   # 单个User查询
-  user(id: ID, where: UserFilter): User
+  user(id: ID, where: UserWhereInput): User
 
   # User列表查询
   users(
-    where: UserFilter
+    where: UserWhereInput
     sort: [UserSort!]
     limit: Int
     offset: Int
@@ -651,64 +651,39 @@ type Query {
   ): UserPage!
 
   # User统计查询
-  userStats(where: UserFilter, groupBy: GroupBy): UserStats!
+  userStats(where: UserWhereInput, groupBy: GroupBy): UserStats!
 }
 
 # 突变根类型
 type Mutation {
   # Comment创建
-  createComment(data: CommentCreateInput!): Comment!
-
+  createComment(input: CommentCreateInput!): Comment!
   # Comment更新
-  updateComment(id: ID!, data: CommentUpdateInput!): Comment!
-
+  updateComment(input: CommentUpdateInput!, id: ID, where: CommentWhereInput): Comment!
   # Comment删除
-  deleteComment(id: ID!): Boolean!
-
-  # Comment批量删除
-  batchDeleteComment(filter: CommentFilter!): Int!
+  deleteComment(id: ID, where: CommentWhereInput): Int!
   # Post创建
-  createPost(data: PostCreateInput!): Post!
-
+  createPost(input: PostCreateInput!): Post!
   # Post更新
-  updatePost(id: ID!, data: PostUpdateInput!): Post!
-
+  updatePost(input: PostUpdateInput!, id: ID, where: PostWhereInput): Post!
   # Post删除
-  deletePost(id: ID!): Boolean!
-
-  # Post批量删除
-  batchDeletePost(filter: PostFilter!): Int!
+  deletePost(id: ID, where: PostWhereInput): Int!
   # PostTag创建
-  createPostTag(data: PostTagCreateInput!): PostTag!
-
+  createPostTag(input: PostTagCreateInput!): PostTag!
   # PostTag更新
-  updatePostTag(id: ID!, data: PostTagUpdateInput!): PostTag!
-
+  updatePostTag(input: PostTagUpdateInput!, id: ID, where: PostTagWhereInput): PostTag!
   # PostTag删除
-  deletePostTag(id: ID!): Boolean!
-
-  # PostTag批量删除
-  batchDeletePostTag(filter: PostTagFilter!): Int!
+  deletePostTag(id: ID, where: PostTagWhereInput): Int!
   # Tag创建
-  createTag(data: TagCreateInput!): Tag!
-
+  createTag(input: TagCreateInput!): Tag!
   # Tag更新
-  updateTag(id: ID!, data: TagUpdateInput!): Tag!
-
+  updateTag(input: TagUpdateInput!, id: ID, where: TagWhereInput): Tag!
   # Tag删除
-  deleteTag(id: ID!): Boolean!
-
-  # Tag批量删除
-  batchDeleteTag(filter: TagFilter!): Int!
+  deleteTag(id: ID, where: TagWhereInput): Int!
   # User创建
-  createUser(data: UserCreateInput!): User!
-
+  createUser(input: UserCreateInput!): User!
   # User更新
-  updateUser(id: ID!, data: UserUpdateInput!): User!
-
+  updateUser(input: UserUpdateInput!, id: ID, where: UserWhereInput): User!
   # User删除
-  deleteUser(id: ID!): Boolean!
-
-  # User批量删除
-  batchDeleteUser(filter: UserFilter!): Int!
+  deleteUser(id: ID, where: UserWhereInput): Int!
 }

@@ -27,17 +27,26 @@ const (
 	TYPE_DATE_TIME_STATS = "DateTimeStats"
 
 	// 类型名称后缀
-	SUFFIX_WHERE        = "Filter"
 	SUFFIX_SORT         = "Sort"
 	SUFFIX_STATS        = "Stats"
 	SUFFIX_GROUP        = "Group"
 	SUFFIX_PAGE         = "Page"
+	SUFFIX_WHERE_INPUT  = "WhereInput"
 	SUFFIX_CREATE_INPUT = "CreateInput"
+	SUFFIX_UPDATE_INPUT = "UpdateInput"
+)
+
+// GraphQL入参名称后缀
+const (
+	SUFFIX_SORT_INPUT   = "SortInput"
+	SUFFIX_UPSERT_INPUT = "UpsertInput"
+	SUFFIX_INSERT_INPUT = "InsertInput"
 )
 
 // 参数名称
 const (
 	ID         = "id"
+	INPUT      = "input"
 	DISTINCT   = "distinct"
 	LIMIT      = "limit"
 	OFFSET     = "offset"
@@ -74,15 +83,6 @@ const (
 	FUNCTION_KEY            = "key"
 	FUNCTION_COUNT          = "count"
 	FUNCTION_COUNT_DISTINCT = "countDistinct"
-)
-
-// GraphQL入参名称后缀
-const (
-	SUFFIX_SORT_INPUT   = "SortInput"
-	SUFFIX_WHERE_INPUT  = "WhereInput"
-	SUFFIX_UPSERT_INPUT = "UpsertInput"
-	SUFFIX_INSERT_INPUT = "InsertInput"
-	SUFFIX_UPDATE_INPUT = "UpdateInput"
 )
 
 // 路基表达式后缀
