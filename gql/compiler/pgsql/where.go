@@ -12,17 +12,81 @@ import (
 
 // buildWhere 构建WHERE子句 - 使用完善的WHERE处理
 func (my *Dialect) buildWhere(ctx *compiler.Context, args ast.ArgumentList) error {
-	whereArg := args.ForName(gql.WHERE)
-	if whereArg == nil || whereArg.Value == nil {
+	return my.buildWhereWithAlias(ctx, args, "")
+}
+
+// buildWhereWithAlias 构建WHERE子句，支持表别名和id参数转换
+func (my *Dialect) buildWhereWithAlias(ctx *compiler.Context, args ast.ArgumentList, alias string) error {
+	conditions := my.collectConditions(args)
+	if len(conditions) == 0 {
 		return nil
 	}
 
 	ctx.Space("WHERE")
-	return my.buildWhereValue(ctx, whereArg.Value)
+	return my.buildCombinedConditions(ctx, conditions, alias)
 }
 
-// buildWhereValue 构建WHERE条件值
+// collectConditions 收集所有WHERE条件（包括id转换）
+func (my *Dialect) collectConditions(args ast.ArgumentList) []*ast.Value {
+	var conditions []*ast.Value
+
+	// 1. 处理id参数，转换为where条件
+	if idArg := args.ForName(gql.ID); idArg != nil && idArg.Value != nil {
+		idCondition := &ast.Value{
+			Kind: ast.ObjectValue,
+			Children: []*ast.ChildValue{
+				{
+					Name: gql.ID,
+					Value: &ast.Value{
+						Kind: ast.ObjectValue,
+						Children: []*ast.ChildValue{
+							{
+								Name:  gql.EQ,
+								Value: idArg.Value,
+							},
+						},
+					},
+				},
+			},
+		}
+		conditions = append(conditions, idCondition)
+	}
+
+	// 2. 处理where参数
+	if whereArg := args.ForName(gql.WHERE); whereArg != nil && whereArg.Value != nil {
+		conditions = append(conditions, whereArg.Value)
+	}
+
+	return conditions
+}
+
+// buildCombinedConditions 构建组合条件
+func (my *Dialect) buildCombinedConditions(ctx *compiler.Context, conditions []*ast.Value, alias string) error {
+	if len(conditions) == 1 {
+		return my.buildWhereValueWithAlias(ctx, conditions[0], alias)
+	}
+
+	// 多个条件用AND连接
+	ctx.Write("(")
+	for i, condition := range conditions {
+		if i > 0 {
+			ctx.Space("AND")
+		}
+		if err := my.buildWhereValueWithAlias(ctx, condition, alias); err != nil {
+			return err
+		}
+	}
+	ctx.Write(")")
+	return nil
+}
+
+// buildWhereValue 构建WHERE条件值（向后兼容）
 func (my *Dialect) buildWhereValue(ctx *compiler.Context, value *ast.Value) error {
+	return my.buildWhereValueWithAlias(ctx, value, "")
+}
+
+// buildWhereValueWithAlias 构建WHERE条件值，支持表别名
+func (my *Dialect) buildWhereValueWithAlias(ctx *compiler.Context, value *ast.Value, alias string) error {
 	if value == nil {
 		return nil
 	}
@@ -39,7 +103,7 @@ func (my *Dialect) buildWhereValue(ctx *compiler.Context, value *ast.Value) erro
 
 	// 如果只有一个子条件，不需要额外的括号
 	if len(value.Children) == 1 {
-		return my.buildChildValue(ctx, value.Children[0])
+		return my.buildChildValueWithAlias(ctx, value.Children[0], alias)
 	}
 
 	// 多个子条件，使用AND连接
@@ -48,7 +112,7 @@ func (my *Dialect) buildWhereValue(ctx *compiler.Context, value *ast.Value) erro
 		if i > 0 {
 			ctx.Space("AND")
 		}
-		if err := my.buildChildValue(ctx, child); err != nil {
+		if err := my.buildChildValueWithAlias(ctx, child, alias); err != nil {
 			return err
 		}
 	}
@@ -73,26 +137,36 @@ func (my *Dialect) buildRawValue(ctx *compiler.Context, value *ast.Value) error 
 	return nil
 }
 
-// buildChildValue 构建子条件
+// buildChildValue 构建子条件（向后兼容）
 func (my *Dialect) buildChildValue(ctx *compiler.Context, child *ast.ChildValue) error {
+	return my.buildChildValueWithAlias(ctx, child, "")
+}
+
+// buildChildValueWithAlias 构建子条件，支持表别名
+func (my *Dialect) buildChildValueWithAlias(ctx *compiler.Context, child *ast.ChildValue, alias string) error {
 	if child == nil || child.Name == "" {
 		return fmt.Errorf("invalid child value: empty name")
 	}
 
 	switch child.Name {
 	case gql.AND:
-		return my.buildLogicalOperator(ctx, child, "AND")
+		return my.buildLogicalOperatorWithAlias(ctx, child, "AND", alias)
 	case gql.OR:
-		return my.buildLogicalOperator(ctx, child, "OR")
+		return my.buildLogicalOperatorWithAlias(ctx, child, "OR", alias)
 	case gql.NOT:
-		return my.buildNotOperator(ctx, child)
+		return my.buildNotOperatorWithAlias(ctx, child, alias)
 	default:
-		return my.buildFieldCondition(ctx, child)
+		return my.buildFieldConditionWithAlias(ctx, child, alias)
 	}
 }
 
-// buildLogicalOperator 构建逻辑操作符（AND/OR）
+// buildLogicalOperator 构建逻辑操作符（向后兼容）
 func (my *Dialect) buildLogicalOperator(ctx *compiler.Context, child *ast.ChildValue, operator string) error {
+	return my.buildLogicalOperatorWithAlias(ctx, child, operator, "")
+}
+
+// buildLogicalOperatorWithAlias 构建逻辑操作符，支持表别名
+func (my *Dialect) buildLogicalOperatorWithAlias(ctx *compiler.Context, child *ast.ChildValue, operator string, alias string) error {
 	if child.Value == nil || len(child.Value.Children) == 0 {
 		return fmt.Errorf("logical operator %s requires at least one condition", operator)
 	}
@@ -102,7 +176,7 @@ func (my *Dialect) buildLogicalOperator(ctx *compiler.Context, child *ast.ChildV
 		if i > 0 {
 			ctx.Space(operator)
 		}
-		if err := my.buildWhereValue(ctx, subChild.Value); err != nil {
+		if err := my.buildWhereValueWithAlias(ctx, subChild.Value, alias); err != nil {
 			return err
 		}
 	}
@@ -111,28 +185,38 @@ func (my *Dialect) buildLogicalOperator(ctx *compiler.Context, child *ast.ChildV
 	return nil
 }
 
-// buildNotOperator 构建NOT操作符
+// buildNotOperator 构建NOT操作符（向后兼容）
 func (my *Dialect) buildNotOperator(ctx *compiler.Context, child *ast.ChildValue) error {
+	return my.buildNotOperatorWithAlias(ctx, child, "")
+}
+
+// buildNotOperatorWithAlias 构建NOT操作符，支持表别名
+func (my *Dialect) buildNotOperatorWithAlias(ctx *compiler.Context, child *ast.ChildValue, alias string) error {
 	if child.Value == nil {
 		return fmt.Errorf("NOT operator requires a condition")
 	}
 
 	ctx.Write("NOT (")
-	err := my.buildWhereValue(ctx, child.Value)
+	err := my.buildWhereValueWithAlias(ctx, child.Value, alias)
 	ctx.Write(")")
 
 	return err
 }
 
-// buildFieldCondition 构建字段条件
+// buildFieldCondition 构建字段条件（向后兼容）
 func (my *Dialect) buildFieldCondition(ctx *compiler.Context, child *ast.ChildValue) error {
+	return my.buildFieldConditionWithAlias(ctx, child, "")
+}
+
+// buildFieldConditionWithAlias 构建字段条件，支持表别名
+func (my *Dialect) buildFieldConditionWithAlias(ctx *compiler.Context, child *ast.ChildValue, alias string) error {
 	fieldName := child.Name
 	if child.Value == nil || len(child.Value.Children) == 0 {
 		return fmt.Errorf("field condition %s requires operator and value", fieldName)
 	}
 
-	// 获取字段信息并构建字段引用
-	if err := my.buildFieldReference(ctx, fieldName, child.Value); err != nil {
+	// 构建字段引用
+	if err := my.buildFieldReferenceWithAlias(ctx, fieldName, child.Value, alias); err != nil {
 		return err
 	}
 
@@ -146,8 +230,19 @@ func (my *Dialect) buildFieldCondition(ctx *compiler.Context, child *ast.ChildVa
 	return nil
 }
 
-// buildFieldReference 构建字段引用
+// buildFieldReference 构建字段引用（向后兼容）
 func (my *Dialect) buildFieldReference(ctx *compiler.Context, fieldName string, value *ast.Value) error {
+	return my.buildFieldReferenceWithAlias(ctx, fieldName, value, "")
+}
+
+// buildFieldReferenceWithAlias 构建字段引用，优先使用表别名
+func (my *Dialect) buildFieldReferenceWithAlias(ctx *compiler.Context, fieldName string, value *ast.Value, alias string) error {
+	// 如果提供了表别名，优先使用
+	if alias != "" {
+		ctx.Quote(alias).Write(".").Quote(fieldName)
+		return nil
+	}
+
 	// 尝试从Definition获取表和列信息
 	if value.Definition != nil {
 		typeName := strings.TrimSuffix(value.Definition.Name, gql.SUFFIX_WHERE_INPUT)

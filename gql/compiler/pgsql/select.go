@@ -55,29 +55,25 @@ func (my *Dialect) buildJson(ctx *compiler.Context, set ast.SelectionSet) {
 			continue // 跳过标量字段
 		}
 
-		// 为关系字段生成JOIN子查询
+		// 为关系字段生成JOIN子查询 - 统一使用数组返回模式
 		ctx.SpaceBefore(`LEFT OUTER JOIN LATERAL (`)
 
-		isSingleQuery := field.Arguments.ForName("id") != nil
+		// 构建JSON对象，包含items数组和可选的total字段
+		ctx.Write(`SELECT JSONB_BUILD_OBJECT('`, gql.ITEMS, `', COALESCE(JSONB_AGG(TO_JSONB(__sr_`, i, `.*)), '[]')`)
 
-		if isSingleQuery {
-			ctx.Write(`SELECT COALESCE(JSONB_AGG(TO_JSONB(__sr_`, i, `.*)), '[]') -> 0 AS "json" FROM (`)
-		} else {
-			ctx.Write(`SELECT JSONB_BUILD_OBJECT('`, gql.ITEMS, `', COALESCE(JSONB_AGG(TO_JSONB(__sr_`, i, `.*)), '[]')`)
-
-			hasTotal := false
-			for _, sel := range field.SelectionSet {
-				if f, ok := sel.(*ast.Field); ok && f.Name == gql.TOTAL {
-					hasTotal = true
-					break
-				}
+		// 检查是否需要total字段
+		hasTotal := false
+		for _, sel := range field.SelectionSet {
+			if f, ok := sel.(*ast.Field); ok && f.Name == gql.TOTAL {
+				hasTotal = true
+				break
 			}
-			if hasTotal {
-				ctx.SpaceAfter(`,`).Write(gql.TOTAL).Write(`, COUNT(*) OVER()`)
-			}
-
-			ctx.Write(`) AS "json" FROM (`)
 		}
+		if hasTotal {
+			ctx.SpaceAfter(`,`).Write(`'`, gql.TOTAL, `', COUNT(*) OVER()`)
+		}
+
+		ctx.Write(`) AS "json" FROM (`)
 
 		my.buildSelect(ctx, field, i, "0")
 		// 递归处理嵌套的关系字段
@@ -98,9 +94,6 @@ func (my *Dialect) buildSelect(ctx *compiler.Context, field *ast.Field, index in
 		return
 	}
 
-	// 判断是否为分页查询
-	isPage := strings.HasSuffix(field.Definition.Type.Name(), gql.SUFFIX_RESULT)
-
 	alias := strings.Join([]string{table, parent, strconv.Itoa(index)}, "_")
 	ctx.SpaceAfter(`SELECT`)
 
@@ -112,15 +105,14 @@ func (my *Dialect) buildSelect(ctx *compiler.Context, field *ast.Field, index in
 	my.buildSourceFields(ctx, field, table)
 	ctx.Space("FROM").Write(table).Space(`) AS`).Quote(alias)
 
-	// 处理WHERE条件
-	if arg := field.Arguments.ForName("id"); arg != nil {
-		ctx.Space(`WHERE`).Quote(alias).Write(`.ID = `).Write(arg.Value.Raw)
-	}
+	// 统一处理WHERE条件（包括id参数转换） - 调用where.go中的方法
+	_ = my.buildWhereWithAlias(ctx, field.Arguments, alias)
 
-	// 处理分页查询
-	if isPage {
-		_ = my.buildPagination(ctx, field.Arguments) // 使用dialect.go中的实现
-	}
+	// 处理排序
+	_ = my.buildOrderBy(ctx, field.Arguments)
+
+	// 处理分页（所有查询都可能需要分页）
+	_ = my.buildPagination(ctx, field.Arguments)
 }
 
 // 构建选择字段

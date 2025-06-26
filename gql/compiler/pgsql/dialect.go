@@ -3,7 +3,6 @@ package pgsql
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -145,56 +144,6 @@ func (my *Dialect) buildPagination(ctx *compiler.Context, args ast.ArgumentList)
 	// 添加LIMIT/OFFSET子句
 	if limitClause := my.FormatLimit(limit, offset); limitClause != "" {
 		ctx.Space(limitClause)
-	}
-
-	return nil
-}
-
-// buildOrderBy 构建ORDER BY子句
-func (my *Dialect) buildOrderBy(ctx *compiler.Context, args ast.ArgumentList) error {
-	if len(args) == 0 {
-		return nil
-	}
-
-	for _, arg := range args {
-		if arg.Name != "orderBy" {
-			continue
-		}
-
-		if arg.Value == nil || len(arg.Value.Children) == 0 {
-			continue
-		}
-
-		ctx.Space("ORDER BY")
-
-		for i, child := range arg.Value.Children {
-			if i > 0 {
-				ctx.Write(",")
-			}
-
-			if child.Name == "" {
-				return fmt.Errorf("empty field name in ORDER BY at index %d", i)
-			}
-
-			ctx.Space("").Quote(child.Name)
-
-			value, err := child.Value.Value(nil)
-			if err != nil {
-				return fmt.Errorf("failed to get value for order by field %s: %w", child.Name, err)
-			}
-
-			direction, ok := value.(string)
-			if !ok {
-				return fmt.Errorf("order by value must be a string, got %T", value)
-			}
-
-			switch strings.ToUpper(direction) {
-			case "ASC", "DESC":
-				ctx.Space(strings.ToUpper(direction))
-			default:
-				return fmt.Errorf("invalid order by direction %q, must be ASC or DESC", direction)
-			}
-		}
 	}
 
 	return nil
