@@ -735,32 +735,32 @@ func (my *Renderer) renderStats() error {
 	// 数值聚合结果
 	my.writeLine("# ", DESC_NUMBER_STATS)
 	my.writeLine("type ", TYPE_NUMBER_STATS, " {")
-	my.writeField("sum", SCALAR_FLOAT, renderer.WithComment(COMMENT_SUM))
-	my.writeField("avg", SCALAR_FLOAT, renderer.WithComment(COMMENT_AVG))
-	my.writeField("min", SCALAR_FLOAT, renderer.WithComment(COMMENT_MIN))
-	my.writeField("max", SCALAR_FLOAT, renderer.WithComment(COMMENT_MAX))
-	my.writeField("count", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
-	my.writeField("countDistinct", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_DISTINCT))
+	my.writeField(FUNCTION_SUM, SCALAR_FLOAT, renderer.WithComment(COMMENT_SUM))
+	my.writeField(FUNCTION_AVG, SCALAR_FLOAT, renderer.WithComment(COMMENT_AVG))
+	my.writeField(FUNCTION_MIN, SCALAR_FLOAT, renderer.WithComment(COMMENT_MIN))
+	my.writeField(FUNCTION_MAX, SCALAR_FLOAT, renderer.WithComment(COMMENT_MAX))
+	my.writeField(FUNCTION_COUNT, SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
+	my.writeField(FUNCTION_COUNT_DISTINCT, SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
 	my.writeLine()
 
 	// 日期聚合结果
 	my.writeLine("# ", DESC_DATE_TIME_STATS)
 	my.writeLine("type ", TYPE_DATE_TIME_STATS, " {")
-	my.writeField("min", SCALAR_DATE_TIME, renderer.WithComment(COMMENT_MIN_DATE))
-	my.writeField("max", SCALAR_DATE_TIME, renderer.WithComment(COMMENT_MAX_DATE))
-	my.writeField("count", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
-	my.writeField("countDistinct", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_DISTINCT))
+	my.writeField(FUNCTION_MIN, SCALAR_DATE_TIME, renderer.WithComment(COMMENT_MIN_DATE))
+	my.writeField(FUNCTION_MAX, SCALAR_DATE_TIME, renderer.WithComment(COMMENT_MAX_DATE))
+	my.writeField(FUNCTION_COUNT, SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
+	my.writeField(FUNCTION_COUNT_DISTINCT, SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
 	my.writeLine()
 
 	// 字符串聚合结果
 	my.writeLine("# ", DESC_STRING_STATS)
 	my.writeLine("type ", TYPE_STRING_STATS, " {")
-	my.writeField("min", SCALAR_STRING, renderer.WithComment(COMMENT_MIN_STRING))
-	my.writeField("max", SCALAR_STRING, renderer.WithComment(COMMENT_MAX_STRING))
-	my.writeField("count", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
-	my.writeField("countDistinct", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_DISTINCT))
+	my.writeField(FUNCTION_MIN, SCALAR_STRING, renderer.WithComment(COMMENT_MIN_STRING))
+	my.writeField(FUNCTION_MAX, SCALAR_STRING, renderer.WithComment(COMMENT_MAX_STRING))
+	my.writeField(FUNCTION_COUNT, SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
+	my.writeField(FUNCTION_COUNT_DISTINCT, SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_DISTINCT))
 	my.writeLine("}")
 	my.writeLine()
 	keys := utl.SortKeys(my.meta.Nodes)
@@ -780,7 +780,7 @@ func (my *Renderer) renderStats() error {
 		// 生成统计类型
 		my.writeLine("# ", className, "聚合")
 		my.writeLine("type ", className, SUFFIX_STATS, " {")
-		my.writeField("count", SCALAR_INT, renderer.NonNull())
+		my.writeField(FUNCTION_COUNT, SCALAR_INT, renderer.NonNull())
 
 		// 添加统计字段
 		fields := utl.SortKeys(class.Fields)
@@ -827,15 +827,15 @@ func (my *Renderer) renderStats() error {
 
 		// 添加分组聚合
 		my.writeLine("  # 分组聚合")
-		my.writeField("groupBy", "["+className+SUFFIX_GROUP+"!]")
+		my.writeField(GROUP_BY, "["+className+SUFFIX_GROUP+"!]")
 		my.writeLine("}")
 		my.writeLine("")
 
 		// 生成对应的分组类型
 		my.writeLine("# ", className, "分组结果")
 		my.writeLine("type ", className, SUFFIX_GROUP, " {")
-		my.writeField("key", SCALAR_JSON, renderer.NonNull(), renderer.WithComment(COMMENT_GROUP_KEY))
-		my.writeField("count", SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
+		my.writeField(FUNCTION_KEY, SCALAR_JSON, renderer.NonNull(), renderer.WithComment(COMMENT_GROUP_KEY))
+		my.writeField(FUNCTION_COUNT, SCALAR_INT, renderer.NonNull(), renderer.WithComment(COMMENT_COUNT))
 		my.writeLine("  # 可以包含其他聚合字段")
 		my.writeLine("}")
 		my.writeLine("")

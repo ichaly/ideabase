@@ -65,6 +65,17 @@ const (
 	CHILDREN  = "children"
 )
 
+// 聚合函数字段名常量
+const (
+	FUNCTION_SUM            = "sum"
+	FUNCTION_AVG            = "avg"
+	FUNCTION_MIN            = "min"
+	FUNCTION_MAX            = "max"
+	FUNCTION_KEY            = "key"
+	FUNCTION_COUNT          = "count"
+	FUNCTION_COUNT_DISTINCT = "countDistinct"
+)
+
 // GraphQL入参名称后缀
 const (
 	SUFFIX_SORT_INPUT   = "SortInput"
