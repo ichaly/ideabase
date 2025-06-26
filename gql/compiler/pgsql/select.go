@@ -99,7 +99,7 @@ func (my *Dialect) buildSelect(ctx *compiler.Context, field *ast.Field, index in
 	}
 
 	// 判断是否为分页查询
-	isPage := strings.HasSuffix(field.Definition.Type.Name(), gql.SUFFIX_PAGE)
+	isPage := strings.HasSuffix(field.Definition.Type.Name(), gql.SUFFIX_RESULT)
 
 	alias := strings.Join([]string{table, parent, strconv.Itoa(index)}, "_")
 	ctx.SpaceAfter(`SELECT`)

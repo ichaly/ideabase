@@ -647,7 +647,7 @@ func (my *Renderer) renderQuery() error {
 		my.writeLine("  # ", className, "查询")
 		my.writeField(
 			strcase.ToLowerCamel(inflection.Plural(className)),
-			className+SUFFIX_PAGE,
+			className+SUFFIX_RESULT,
 			renderer.NonNull(),
 			renderer.WithMultilineArgs(),
 			renderer.WithArgs([]renderer.Argument{
@@ -857,10 +857,10 @@ func (my *Renderer) renderPaging() error {
 
 		// 生成分页类型
 		my.writeLine("# ", className, "分页结果")
-		my.writeLine("type ", className, SUFFIX_PAGE, " {")
+		my.writeLine("type ", className, SUFFIX_RESULT, " {")
 		my.writeField(ITEMS, className, renderer.NonNull(), renderer.ListNonNull(), renderer.WithComment("直接返回"+className+"对象数组"))
-		my.writeField(PAGE_INFO, TYPE_PAGE_INFO, renderer.NonNull())
 		my.writeField(TOTAL, SCALAR_INT, renderer.NonNull())
+		my.writeField(PAGE_INFO, TYPE_PAGE_INFO, renderer.NonNull())
 		my.writeLine("}")
 		my.writeLine("")
 	}

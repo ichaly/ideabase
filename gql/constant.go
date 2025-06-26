@@ -29,7 +29,7 @@ const (
 	// GraphQL入参名称后缀
 	SUFFIX_STATS        = "Stats"
 	SUFFIX_GROUP        = "Group"
-	SUFFIX_PAGE         = "Page"
+	SUFFIX_RESULT       = "Result"
 	SUFFIX_SORT_INPUT   = "SortInput"
 	SUFFIX_WHERE_INPUT  = "WhereInput"
 	SUFFIX_CREATE_INPUT = "CreateInput"

@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20250626191154
+# 版本: 20250626192425
 
 # 自定义标量类型
 scalar Json
@@ -125,38 +125,38 @@ type User {
 # ------------------ 连接和边类型（游标分页） ------------------
 
 # Comment分页结果
-type CommentPage {
+type CommentResult {
   items: [Comment!]!  # 直接返回Comment对象数组
-  pageInfo: PageInfo!
   total: Int!
+  pageInfo: PageInfo!
 }
 
 # Post分页结果
-type PostPage {
+type PostResult {
   items: [Post!]!  # 直接返回Post对象数组
-  pageInfo: PageInfo!
   total: Int!
+  pageInfo: PageInfo!
 }
 
 # PostTag分页结果
-type PostTagPage {
+type PostTagResult {
   items: [PostTag!]!  # 直接返回PostTag对象数组
-  pageInfo: PageInfo!
   total: Int!
+  pageInfo: PageInfo!
 }
 
 # Tag分页结果
-type TagPage {
+type TagResult {
   items: [Tag!]!  # 直接返回Tag对象数组
-  pageInfo: PageInfo!
   total: Int!
+  pageInfo: PageInfo!
 }
 
 # User分页结果
-type UserPage {
+type UserResult {
   items: [User!]!  # 直接返回User对象数组
-  pageInfo: PageInfo!
   total: Int!
+  pageInfo: PageInfo!
 }
 
 # ------------------ 聚合函数相关类型 ------------------
@@ -578,7 +578,7 @@ type Query {
     last: Int
     after: Cursor
     before: Cursor
-  ): CommentPage!
+  ): CommentResult!
   # Comment统计查询
   commentStats(where: CommentWhereInput, groupBy: GroupBy): CommentStats!
   # Post查询
@@ -592,7 +592,7 @@ type Query {
     last: Int
     after: Cursor
     before: Cursor
-  ): PostPage!
+  ): PostResult!
   # Post统计查询
   postStats(where: PostWhereInput, groupBy: GroupBy): PostStats!
   # PostTag查询
@@ -606,7 +606,7 @@ type Query {
     last: Int
     after: Cursor
     before: Cursor
-  ): PostTagPage!
+  ): PostTagResult!
   # PostTag统计查询
   postTagStats(where: PostTagWhereInput, groupBy: GroupBy): PostTagStats!
   # Tag查询
@@ -620,7 +620,7 @@ type Query {
     last: Int
     after: Cursor
     before: Cursor
-  ): TagPage!
+  ): TagResult!
   # Tag统计查询
   tagStats(where: TagWhereInput, groupBy: GroupBy): TagStats!
   # User查询
@@ -634,7 +634,7 @@ type Query {
     last: Int
     after: Cursor
     before: Cursor
-  ): UserPage!
+  ): UserResult!
   # User统计查询
   userStats(where: UserWhereInput, groupBy: GroupBy): UserStats!
 }
