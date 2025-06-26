@@ -73,7 +73,7 @@ func (my *Dialect) buildJson(ctx *compiler.Context, set ast.SelectionSet) {
 				}
 			}
 			if hasTotal {
-				ctx.Write(`, gql.TOTAL, COUNT(*) OVER()`)
+				ctx.SpaceAfter(`,`).Write(gql.TOTAL).Write(`, COUNT(*) OVER()`)
 			}
 
 			ctx.Write(`) AS "json" FROM (`)
