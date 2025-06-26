@@ -37,6 +37,7 @@ const (
 
 // 参数名称
 const (
+	ID         = "id"
 	DISTINCT   = "distinct"
 	LIMIT      = "limit"
 	OFFSET     = "offset"
@@ -53,6 +54,7 @@ const (
 	REMOVE     = "delete"
 	CONNECT    = "connect"
 	DISCONNECT = "disconnect"
+	GROUP_BY   = "groupBy"
 )
 
 const (

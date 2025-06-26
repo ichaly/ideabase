@@ -646,7 +646,8 @@ func (my *Renderer) renderQuery() error {
 		// 单个实体查询
 		my.writeLine("  # 单个", className, "查询")
 		my.writeField(strcase.ToLowerCamel(className), className, renderer.WithArgs([]renderer.Argument{
-			{Name: "id", Type: SCALAR_ID + "!"},
+			{Name: ID, Type: SCALAR_ID},
+			{Name: WHERE, Type: className + SUFFIX_WHERE},
 		}...))
 
 		// 统一列表查询（支持两种分页方式）
@@ -676,7 +677,7 @@ func (my *Renderer) renderQuery() error {
 			renderer.NonNull(),
 			renderer.WithArgs([]renderer.Argument{
 				{Name: WHERE, Type: className + SUFFIX_WHERE},
-				{Name: "groupBy", Type: TYPE_GROUP_BY},
+				{Name: GROUP_BY, Type: TYPE_GROUP_BY},
 			}...),
 		)
 	}
