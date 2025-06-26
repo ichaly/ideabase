@@ -706,19 +706,19 @@ func (my *Renderer) renderMutation() error {
 		}
 
 		my.writeLine("  # ", class.Name, "创建")
-		my.writeField("create"+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+		my.writeField(CREATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
 			{Name: INPUT, Type: className + SUFFIX_CREATE_INPUT + "!"},
 		}...))
 
 		my.writeLine("  # ", class.Name, "更新")
-		my.writeField("update"+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+		my.writeField(UPDATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
 			{Name: INPUT, Type: className + SUFFIX_UPDATE_INPUT + "!"},
 			{Name: ID, Type: SCALAR_ID},
 			{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
 		}...))
 
 		my.writeLine("  # ", class.Name, "删除")
-		my.writeField("delete"+className, SCALAR_INT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+		my.writeField(DELETE+className, SCALAR_INT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
 			{Name: ID, Type: SCALAR_ID},
 			{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
 		}...))
