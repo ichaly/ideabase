@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20250626163322
+# 版本: 20250626191154
 
 # 自定义标量类型
 scalar Json
@@ -417,7 +417,7 @@ input UserWhereInput {
 }
 
 # Comment排序
-input CommentSort {
+input CommentSortInput {
   children: SortDirection
   content: SortDirection
   createdAt: SortDirection
@@ -431,7 +431,7 @@ input CommentSort {
 }
 
 # Post排序
-input PostSort {
+input PostSortInput {
   comments: SortDirection
   content: SortDirection
   createdAt: SortDirection
@@ -444,7 +444,7 @@ input PostSort {
 }
 
 # PostTag排序
-input PostTagSort {
+input PostTagSortInput {
   createdAt: SortDirection
   post: SortDirection
   postId: SortDirection
@@ -453,7 +453,7 @@ input PostTagSort {
 }
 
 # Tag排序
-input TagSort {
+input TagSortInput {
   createdAt: SortDirection
   id: SortDirection
   name: SortDirection
@@ -462,7 +462,7 @@ input TagSort {
 }
 
 # User排序
-input UserSort {
+input UserSortInput {
   comments: SortDirection
   createdAt: SortDirection
   email: SortDirection
@@ -567,13 +567,11 @@ input RelationInput {
 
 # 查询根类型
 type Query {
-  # 单个Comment查询
-  comment(id: ID, where: CommentWhereInput): Comment
-
-  # Comment列表查询
+  # Comment查询
   comments(
+    id: ID
     where: CommentWhereInput
-    sort: [CommentSort!]
+    sort: [CommentSortInput!]
     limit: Int
     offset: Int
     first: Int
@@ -581,16 +579,13 @@ type Query {
     after: Cursor
     before: Cursor
   ): CommentPage!
-
   # Comment统计查询
   commentStats(where: CommentWhereInput, groupBy: GroupBy): CommentStats!
-  # 单个Post查询
-  post(id: ID, where: PostWhereInput): Post
-
-  # Post列表查询
+  # Post查询
   posts(
+    id: ID
     where: PostWhereInput
-    sort: [PostSort!]
+    sort: [PostSortInput!]
     limit: Int
     offset: Int
     first: Int
@@ -598,16 +593,13 @@ type Query {
     after: Cursor
     before: Cursor
   ): PostPage!
-
   # Post统计查询
   postStats(where: PostWhereInput, groupBy: GroupBy): PostStats!
-  # 单个PostTag查询
-  postTag(id: ID, where: PostTagWhereInput): PostTag
-
-  # PostTag列表查询
+  # PostTag查询
   postTags(
+    id: ID
     where: PostTagWhereInput
-    sort: [PostTagSort!]
+    sort: [PostTagSortInput!]
     limit: Int
     offset: Int
     first: Int
@@ -615,16 +607,13 @@ type Query {
     after: Cursor
     before: Cursor
   ): PostTagPage!
-
   # PostTag统计查询
   postTagStats(where: PostTagWhereInput, groupBy: GroupBy): PostTagStats!
-  # 单个Tag查询
-  tag(id: ID, where: TagWhereInput): Tag
-
-  # Tag列表查询
+  # Tag查询
   tags(
+    id: ID
     where: TagWhereInput
-    sort: [TagSort!]
+    sort: [TagSortInput!]
     limit: Int
     offset: Int
     first: Int
@@ -632,16 +621,13 @@ type Query {
     after: Cursor
     before: Cursor
   ): TagPage!
-
   # Tag统计查询
   tagStats(where: TagWhereInput, groupBy: GroupBy): TagStats!
-  # 单个User查询
-  user(id: ID, where: UserWhereInput): User
-
-  # User列表查询
+  # User查询
   users(
+    id: ID
     where: UserWhereInput
-    sort: [UserSort!]
+    sort: [UserSortInput!]
     limit: Int
     offset: Int
     first: Int
@@ -649,7 +635,6 @@ type Query {
     after: Cursor
     before: Cursor
   ): UserPage!
-
   # User统计查询
   userStats(where: UserWhereInput, groupBy: GroupBy): UserStats!
 }

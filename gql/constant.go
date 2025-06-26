@@ -26,19 +26,14 @@ const (
 	TYPE_STRING_STATS    = "StringStats"
 	TYPE_DATE_TIME_STATS = "DateTimeStats"
 
-	// 类型名称后缀
-	SUFFIX_SORT         = "Sort"
+	// GraphQL入参名称后缀
 	SUFFIX_STATS        = "Stats"
 	SUFFIX_GROUP        = "Group"
 	SUFFIX_PAGE         = "Page"
+	SUFFIX_SORT_INPUT   = "SortInput"
 	SUFFIX_WHERE_INPUT  = "WhereInput"
 	SUFFIX_CREATE_INPUT = "CreateInput"
 	SUFFIX_UPDATE_INPUT = "UpdateInput"
-)
-
-// GraphQL入参名称后缀
-const (
-	SUFFIX_SORT_INPUT   = "SortInput"
 	SUFFIX_UPSERT_INPUT = "UpsertInput"
 	SUFFIX_INSERT_INPUT = "InsertInput"
 )

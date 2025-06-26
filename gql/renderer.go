@@ -582,7 +582,7 @@ func (my *Renderer) renderSort() error {
 
 		// 生成排序类型
 		my.writeLine("# ", className, "排序")
-		my.writeLine("input ", className, SUFFIX_SORT, " {")
+		my.writeLine("input ", className, SUFFIX_SORT_INPUT, " {")
 
 		// 添加可排序字段
 		fields := utl.SortKeys(class.Fields)
@@ -643,23 +643,17 @@ func (my *Renderer) renderQuery() error {
 			continue
 		}
 
-		// 单个实体查询
-		my.writeLine("  # 单个", className, "查询")
-		my.writeField(strcase.ToLowerCamel(className), className, renderer.WithArgs([]renderer.Argument{
-			{Name: ID, Type: SCALAR_ID},
-			{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
-		}...))
-
-		// 统一列表查询（支持两种分页方式）
-		my.writeLine("\n  # ", className, "列表查询")
+		// 统一查询（支持单条和多条）
+		my.writeLine("  # ", className, "查询")
 		my.writeField(
 			strcase.ToLowerCamel(inflection.Plural(className)),
 			className+SUFFIX_PAGE,
 			renderer.NonNull(),
 			renderer.WithMultilineArgs(),
 			renderer.WithArgs([]renderer.Argument{
+				{Name: ID, Type: SCALAR_ID},
 				{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
-				{Name: SORT, Type: "[" + className + SUFFIX_SORT + "!]"},
+				{Name: SORT, Type: "[" + className + SUFFIX_SORT_INPUT + "!]"},
 				{Name: LIMIT, Type: SCALAR_INT},
 				{Name: OFFSET, Type: SCALAR_INT},
 				{Name: FIRST, Type: SCALAR_INT},
@@ -670,7 +664,7 @@ func (my *Renderer) renderQuery() error {
 		)
 
 		// 统计查询
-		my.writeLine("\n  # ", className, "统计查询")
+		my.writeLine("  # ", className, "统计查询")
 		my.writeField(
 			strcase.ToLowerCamel(className)+SUFFIX_STATS,
 			className+SUFFIX_STATS,
