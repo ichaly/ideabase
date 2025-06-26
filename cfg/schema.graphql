@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20250430144713
+# 版本: 20250626134348
 
 # 自定义标量类型
 scalar Json
@@ -70,6 +70,8 @@ type Post {
   content: String
   createdAt: DateTime!
   id: ID!
+  # 关联的PostTag列表
+  postTags: [PostTag]!
   # 关联的Tag列表
   tags: [Tag]!
   # 标题
@@ -80,12 +82,27 @@ type Post {
   userId: Int!
 }
 
+# 文章标签关联表
+type PostTag {
+  createdAt: DateTime!
+  # 关联的Post
+  post: Post!
+  # 文章ID
+  postId: ID!
+  # 关联的Tag
+  tag: Tag!
+  # 标签ID
+  tagId: ID!
+}
+
 # 标签表
 type Tag {
   createdAt: DateTime!
   id: ID!
   # 标签名称
   name: String!
+  # 关联的PostTag列表
+  postTags: [PostTag]!
   # 关联的Post列表
   posts: [Post]!
 }
@@ -117,6 +134,13 @@ type CommentPage {
 # Post分页结果
 type PostPage {
   items: [Post!]!  # 直接返回Post对象数组
+  pageInfo: PageInfo!
+  total: Int!
+}
+
+# PostTag分页结果
+type PostTagPage {
+  items: [PostTag!]!  # 直接返回PostTag对象数组
   pageInfo: PageInfo!
   total: Int!
 }
@@ -197,6 +221,23 @@ type PostStats {
 
 # Post分组结果
 type PostGroup {
+  key: Json!  # 分组键
+  count: Int!  # 计数
+  # 可以包含其他聚合字段
+}
+
+# PostTag聚合
+type PostTagStats {
+  count: Int!
+  createdAt: DateTimeStats
+  postId: NumberStats
+  tagId: NumberStats
+  # 分组聚合
+  groupBy: [PostTagGroup!]
+}
+
+# PostTag分组结果
+type PostTagGroup {
   key: Json!  # 分组键
   count: Int!  # 计数
   # 可以包含其他聚合字段
@@ -343,6 +384,16 @@ input PostFilter {
   not: PostFilter
 }
 
+# PostTag查询条件
+input PostTagFilter {
+  createdAt: DateTimeFilter
+  postId: IDFilter
+  tagId: IDFilter
+  and: [PostTagFilter!]
+  or: [PostTagFilter!]
+  not: PostTagFilter
+}
+
 # Tag查询条件
 input TagFilter {
   createdAt: DateTimeFilter
@@ -385,10 +436,20 @@ input PostSort {
   content: SortDirection
   createdAt: SortDirection
   id: SortDirection
+  postTags: SortDirection
   tags: SortDirection
   title: SortDirection
   user: SortDirection
   userId: SortDirection
+}
+
+# PostTag排序
+input PostTagSort {
+  createdAt: SortDirection
+  post: SortDirection
+  postId: SortDirection
+  tag: SortDirection
+  tagId: SortDirection
 }
 
 # Tag排序
@@ -396,6 +457,7 @@ input TagSort {
   createdAt: SortDirection
   id: SortDirection
   name: SortDirection
+  postTags: SortDirection
   posts: SortDirection
 }
 
@@ -448,6 +510,21 @@ input PostUpdateInput {
   relation: RelationInput
 }
 
+# PostTag创建输入
+input PostTagCreateInput {
+  createdAt: DateTime!
+  postId: ID!
+  tagId: ID!
+}
+
+# PostTag更新输入
+input PostTagUpdateInput {
+  postId: ID
+  tagId: ID
+  # 关系操作
+  relation: RelationInput
+}
+
 # Tag创建输入
 input TagCreateInput {
   createdAt: DateTime!
@@ -495,7 +572,7 @@ type Query {
 
   # Comment列表查询
   comments(
-    filter: CommentFilter
+    where: CommentFilter
     sort: [CommentSort!]
     limit: Int
     offset: Int
@@ -506,13 +583,13 @@ type Query {
   ): CommentPage!
 
   # Comment统计查询
-  commentStats(filter: CommentFilter, groupBy: GroupBy): CommentStats!
+  commentStats(where: CommentFilter, groupBy: GroupBy): CommentStats!
   # 单个Post查询
   post(id: ID!): Post
 
   # Post列表查询
   posts(
-    filter: PostFilter
+    where: PostFilter
     sort: [PostSort!]
     limit: Int
     offset: Int
@@ -523,13 +600,30 @@ type Query {
   ): PostPage!
 
   # Post统计查询
-  postStats(filter: PostFilter, groupBy: GroupBy): PostStats!
+  postStats(where: PostFilter, groupBy: GroupBy): PostStats!
+  # 单个PostTag查询
+  postTag(id: ID!): PostTag
+
+  # PostTag列表查询
+  postTags(
+    where: PostTagFilter
+    sort: [PostTagSort!]
+    limit: Int
+    offset: Int
+    first: Int
+    last: Int
+    after: Cursor
+    before: Cursor
+  ): PostTagPage!
+
+  # PostTag统计查询
+  postTagStats(where: PostTagFilter, groupBy: GroupBy): PostTagStats!
   # 单个Tag查询
   tag(id: ID!): Tag
 
   # Tag列表查询
   tags(
-    filter: TagFilter
+    where: TagFilter
     sort: [TagSort!]
     limit: Int
     offset: Int
@@ -540,13 +634,13 @@ type Query {
   ): TagPage!
 
   # Tag统计查询
-  tagStats(filter: TagFilter, groupBy: GroupBy): TagStats!
+  tagStats(where: TagFilter, groupBy: GroupBy): TagStats!
   # 单个User查询
   user(id: ID!): User
 
   # User列表查询
   users(
-    filter: UserFilter
+    where: UserFilter
     sort: [UserSort!]
     limit: Int
     offset: Int
@@ -557,7 +651,7 @@ type Query {
   ): UserPage!
 
   # User统计查询
-  userStats(filter: UserFilter, groupBy: GroupBy): UserStats!
+  userStats(where: UserFilter, groupBy: GroupBy): UserStats!
 }
 
 # 突变根类型
@@ -584,6 +678,17 @@ type Mutation {
 
   # Post批量删除
   batchDeletePost(filter: PostFilter!): Int!
+  # PostTag创建
+  createPostTag(data: PostTagCreateInput!): PostTag!
+
+  # PostTag更新
+  updatePostTag(id: ID!, data: PostTagUpdateInput!): PostTag!
+
+  # PostTag删除
+  deletePostTag(id: ID!): Boolean!
+
+  # PostTag批量删除
+  batchDeletePostTag(filter: PostTagFilter!): Int!
   # Tag创建
   createTag(data: TagCreateInput!): Tag!
 

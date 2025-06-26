@@ -462,7 +462,7 @@ func (my *Renderer) renderFilter() error {
 	keys := utl.SortKeys(grouping)
 	for _, scalarType := range keys {
 		operators := grouping[scalarType]
-		filterName := scalarType + SUFFIX_FILTER
+		filterName := scalarType + SUFFIX_WHERE
 		my.writeLine("# ", scalarType, "过滤器")
 		my.writeLine("input ", filterName, " {")
 
@@ -512,7 +512,7 @@ func (my *Renderer) renderEntity() error {
 
 		// 生成过滤器类型
 		my.writeLine("# ", className, "查询条件")
-		my.writeLine("input ", className, SUFFIX_FILTER, " {")
+		my.writeLine("input ", className, SUFFIX_WHERE, " {")
 
 		// 添加常规字段过滤条件
 		fields := utl.SortKeys(class.Fields)
@@ -549,13 +549,13 @@ func (my *Renderer) renderEntity() error {
 
 			// 获取字段类型
 			fieldType := my.getGraphQLType(field)
-			my.writeLine("  ", fieldName, ": ", fieldType, "Filter")
+			my.writeLine("  ", fieldName, ": ", fieldType, SUFFIX_WHERE)
 		}
 
 		// 添加布尔逻辑操作符
-		my.writeLine("  and: [", className, SUFFIX_FILTER, "!]")
-		my.writeLine("  or: [", className, SUFFIX_FILTER, "!]")
-		my.writeLine("  not: ", className, SUFFIX_FILTER)
+		my.writeLine("  and: [", className, SUFFIX_WHERE, "!]")
+		my.writeLine("  or: [", className, SUFFIX_WHERE, "!]")
+		my.writeLine("  not: ", className, SUFFIX_WHERE)
 
 		my.writeLine("}")
 		my.writeLine("")
@@ -657,14 +657,14 @@ func (my *Renderer) renderQuery() error {
 			renderer.NonNull(),
 			renderer.WithMultilineArgs(),
 			renderer.WithArgs([]renderer.Argument{
-				{Name: "filter", Type: className + SUFFIX_FILTER},
-				{Name: "sort", Type: "[" + className + SUFFIX_SORT + "!]"},
-				{Name: "limit", Type: SCALAR_INT},
-				{Name: "offset", Type: SCALAR_INT},
-				{Name: "first", Type: SCALAR_INT},
-				{Name: "last", Type: SCALAR_INT},
-				{Name: "after", Type: SCALAR_CURSOR},
-				{Name: "before", Type: SCALAR_CURSOR},
+				{Name: WHERE, Type: className + SUFFIX_WHERE},
+				{Name: SORT, Type: "[" + className + SUFFIX_SORT + "!]"},
+				{Name: LIMIT, Type: SCALAR_INT},
+				{Name: OFFSET, Type: SCALAR_INT},
+				{Name: FIRST, Type: SCALAR_INT},
+				{Name: LAST, Type: SCALAR_INT},
+				{Name: AFTER, Type: SCALAR_CURSOR},
+				{Name: BEFORE, Type: SCALAR_CURSOR},
 			}...),
 		)
 
@@ -675,7 +675,7 @@ func (my *Renderer) renderQuery() error {
 			className+SUFFIX_STATS,
 			renderer.NonNull(),
 			renderer.WithArgs([]renderer.Argument{
-				{Name: "filter", Type: className + SUFFIX_FILTER},
+				{Name: WHERE, Type: className + SUFFIX_WHERE},
 				{Name: "groupBy", Type: TYPE_GROUP_BY},
 			}...),
 		)
@@ -720,7 +720,7 @@ func (my *Renderer) renderMutation() error {
 		my.writeLine()
 
 		my.writeLine("  # ", class.Name, "批量删除")
-		my.writeLine("  batchDelete", class.Name, "(filter: ", class.Name, SUFFIX_FILTER, "!): Int!")
+		my.writeLine("  batchDelete", class.Name, "(filter: ", class.Name, SUFFIX_WHERE, "!): Int!")
 	}
 
 	my.writeLine("}")

@@ -27,7 +27,7 @@ const (
 	TYPE_DATE_TIME_STATS = "DateTimeStats"
 
 	// 类型名称后缀
-	SUFFIX_FILTER       = "Filter"
+	SUFFIX_WHERE        = "Filter"
 	SUFFIX_SORT         = "Sort"
 	SUFFIX_STATS        = "Stats"
 	SUFFIX_GROUP        = "Group"
