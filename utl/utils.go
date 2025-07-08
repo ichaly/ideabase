@@ -65,3 +65,11 @@ func RandomCode(width int) string {
 	}
 	return sb.String()
 }
+
+// Must 保证函数返回的错误不会为 nil，否则会 panic
+func Must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
