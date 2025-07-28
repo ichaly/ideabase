@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"github.com/ichaly/ideabase/utl"
 	"path/filepath"
 
 	"github.com/ichaly/ideabase/ioc"
@@ -17,7 +18,7 @@ var runCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		configFile, _ := cmd.Flags().GetString(configFlag)
 		if configFile == "" {
-			configFile = filepath.Join("./cfg", "config.yml")
+			configFile = filepath.Join(utl.Root(), "cfg", "config.yml")
 		}
 		fx.New(
 			ioc.Get(),
