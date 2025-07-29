@@ -1,9 +1,10 @@
-module github.com/ichaly/ideabase/app
+module github.com/ichaly/ideabase/cli
 
 go 1.23
 
 require (
 	github.com/ichaly/ideabase/ioc v0.0.0-20250327072946-530e8b6eceac
+	github.com/ichaly/ideabase/utl v0.0.0-20250228111901-475eea8d4811
 	github.com/spf13/cobra v1.9.1
 	go.uber.org/fx v1.23.0
 )
@@ -17,7 +18,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/ichaly/ideabase/log v0.0.0-20250326064410-373e295423ea // indirect
 	github.com/ichaly/ideabase/std v0.0.0-20250326064410-373e295423ea // indirect
-	github.com/ichaly/ideabase/utl v0.0.0-20250228111901-475eea8d4811 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
