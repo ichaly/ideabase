@@ -4,11 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/ichaly/ideabase/utl"
 	"time"
 
 	"github.com/eko/gocache/lib/v4/cache"
 	"github.com/eko/gocache/lib/v4/store"
-	"github.com/ichaly/go-next/pkg/util"
 	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
@@ -31,7 +31,7 @@ func NewCache(s *cache.Cache[string]) gorm.Plugin {
 	return Cache{s, 30 * time.Minute, func(db *gorm.DB) string {
 		return fmt.Sprintf(
 			"sql:%s",
-			util.MD5(db.Dialector.Explain(db.Statement.SQL.String(), db.Statement.Vars...)),
+			utl.MD5(db.Dialector.Explain(db.Statement.SQL.String(), db.Statement.Vars...)),
 		)
 	}}
 }
@@ -64,7 +64,7 @@ func (my Cache) query(db *gorm.DB) {
 	// get from cache
 	val, err := my.Cache.Get(db.Statement.Context, cacheKey)
 	if err == nil {
-		if err = util.UnmarshalJson(val, db.Statement.Dest); err == nil {
+		if err = utl.UnmarshalJSON([]byte(val), db.Statement.Dest); err == nil {
 			return
 		}
 	}
@@ -73,8 +73,8 @@ func (my Cache) query(db *gorm.DB) {
 	my.queryFromDB(db, cacheKey)
 
 	// add to cache
-	if val, err = util.MarshalJson(db.Statement.Dest); err == nil {
-		_ = my.Cache.Set(db.Statement.Context, cacheKey, val, store.WithExpiration(my.exp), store.WithTags([]string{db.Statement.Table}))
+	if res, err := utl.MarshalJSON(db.Statement.Dest); err == nil {
+		_ = my.Cache.Set(db.Statement.Context, cacheKey, string(res), store.WithExpiration(my.exp), store.WithTags([]string{db.Statement.Table}))
 	}
 }
 
