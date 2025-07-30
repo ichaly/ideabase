@@ -324,13 +324,6 @@ main() {
         fi
     fi
 
-    # 检查是否有未提交的更改
-    if [ -n "$(git status --porcelain)" ] && [ "$DRY_RUN" -eq 0 ]; then
-        echo "${RED}错误: 工作区有未提交的更改${NC}"
-        git status --short
-        exit 1
-    fi
-
     # 发布每个模块
     for module in $modules; do
         release_module "$module" "$bump_type" "$custom_version"
