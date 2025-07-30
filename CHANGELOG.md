@@ -82,3 +82,19 @@
 - refactor: 优化Viper配置合并逻辑，简化错误处理
 - refactor: Enhance Viper configuration management with flexible options and robust error handling
 - chore: restructure project
+
+## utl v0.0.1 (2025-07-30)
+- feat: 新增Must函数处理错误
+- chore: 更新多个模块的依赖版本，提升项目的稳定性和安全性
+- feat: 新增JSON序列化工具函数，提供标准化的JSON解析和序列化功能
+- feat: 添加安全填充功能以支持Cookie加密中间件，优化密钥处理逻辑并增加相关测试用例
+- build: 更新模块版本并优化安装脚本
+- chore: 更新Go版本至1.23，并调整相关模块的go.mod文件以保持一致性
+- chore: 更新go.mod文件，添加新依赖项以支持项目功能扩展
+- refactor: 添加泛型函数以获取和排序map的键，提升代码复用性
+- chore: 统一项目Go版本至1.22并更新依赖
+- refactor: 用统一的键检索方法增强TeeMap
+- docs: 为工具类函数添加详细的注释文档
+- refactor: Improve file utility functions with predefined error constants and deferred error handling
+- refactor: Improve utility functions with enhanced error handling and performance
+- chore: restructure project
