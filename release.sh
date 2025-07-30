@@ -41,7 +41,7 @@ show_help() {
 # 检查是否在Git仓库中
 check_git_repo() {
     if [ ! -d .git ]; then
-        echo -e "${RED}错误：当前目录不是Git仓库根目录${NC}"
+        echo "${RED}错误：当前目录不是Git仓库根目录${NC}"
         exit 1
     fi
 }
@@ -92,7 +92,7 @@ calculate_new_version() {
             new_version="$major.$minor.$((patch + 1))"
             ;;
         *)
-            echo -e "${RED}错误: 无效的版本类型: $bump_type${NC}"
+            echo "${RED}错误: 无效的版本类型: $bump_type${NC}"
             exit 1
             ;;
     esac
@@ -104,7 +104,7 @@ calculate_new_version() {
 validate_version() {
     local version="$1"
     if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo -e "${RED}错误: 无效的版本号格式: $version${NC}"
+        echo "${RED}错误: 无效的版本号格式: $version${NC}"
         echo "版本号必须符合语义化版本规范 (例如：1.2.3)"
         exit 1
     fi
@@ -119,13 +119,13 @@ update_version_file() {
         # 如果文件不存在，创建它
         if [ ! -f "$module/version.txt" ]; then
             echo "$version" > "$module/version.txt"
-            echo -e "📄 ${GREEN}创建 $module/version.txt${NC}"
+            echo "📄 ${GREEN}创建 $module/version.txt${NC}"
         else
             echo "$version" > "$module/version.txt"
         fi
 
         git add "$module/version.txt"
-        echo -e "📝 ${GREEN}更新 $module 版本: $current_version -> $version${NC}"
+        echo "📝 ${GREEN}更新 $module 版本: $current_version -> $version${NC}"
     fi
 }
 
@@ -136,7 +136,7 @@ commit_changes() {
     local message="chore($module): release $version"
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        echo -e "${YELLOW}[模拟] git commit -m \"$message\"${NC}"
+        echo "${YELLOW}[模拟] git commit -m \"$message\"${NC}"
     else
         # 检查是否有需要提交的更改
         if [ -n "$(git status --porcelain)" ]; then
@@ -155,22 +155,22 @@ create_tag() {
     local tag="${MODULE_PREFIX}${module}/v${version}"
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        echo -e "${YELLOW}[模拟] git tag -a $tag -m \"Release $tag\"${NC}"
+        echo "${YELLOW}[模拟] git tag -a $tag -m \"Release $tag\"${NC}"
     else
         git tag -a "$tag" -m "Release $tag"
-        echo -e "🏷️  ${GREEN}创建标签: $tag${NC}"
+        echo "🏷️  ${GREEN}创建标签: $tag${NC}"
     fi
 }
 
 # 推送变更
 push_changes() {
     if [ "$DRY_RUN" -eq 1 ]; then
-        echo -e "${YELLOW}[模拟] git push origin $MAIN_BRANCH${NC}"
-        echo -e "${YELLOW}[模拟] git push origin --tags${NC}"
+        echo "${YELLOW}[模拟] git push origin $MAIN_BRANCH${NC}"
+        echo "${YELLOW}[模拟] git push origin --tags${NC}"
     else
         git push origin "$MAIN_BRANCH"
         git push origin --tags
-        echo -e "🚀 ${GREEN}已推送变更到仓库${NC}"
+        echo "🚀 ${GREEN}已推送变更到仓库${NC}"
     fi
 }
 
@@ -201,10 +201,10 @@ generate_changelog() {
     # 处理Git操作（仅在非Dry Run时执行）
     if [ "$DRY_RUN" -eq 0 ]; then
         git add "$CHANGELOG_FILE"                          # 只在实际运行时添加文件
-        echo -e "📝 ${GREEN}更新 $module 变更日志${NC}"
+        echo "📝 ${GREEN}更新 $module 变更日志${NC}"
     else
-        echo -e "${YELLOW}[模拟] 更新变更日志 $CHANGELOG_FILE${NC}"
-        echo -e "${YELLOW}新增内容:\n$changes\n${NC}"      # 模拟显示新增内容
+        echo "${YELLOW}[模拟] 更新变更日志 $CHANGELOG_FILE${NC}"
+        echo "${YELLOW}新增内容:\n$changes\n${NC}"      # 模拟显示新增内容
     fi
 }
 
@@ -241,7 +241,7 @@ parse_args() {
                 if [ -f "$CONFIG_FILE" ]; then
                     source "$CONFIG_FILE"
                 else
-                    echo -e "${RED}错误: 配置文件 $CONFIG_FILE 未找到${NC}"
+                    echo "${RED}错误: 配置文件 $CONFIG_FILE 未找到${NC}"
                     exit 1
                 fi
                 shift 2
@@ -250,7 +250,7 @@ parse_args() {
                 show_help
                 ;;
             *)
-                echo -e "${RED}错误: 未知选项: $1${NC}"
+                echo "${RED}错误: 未知选项: $1${NC}"
                 show_help
                 ;;
         esac
@@ -258,12 +258,12 @@ parse_args() {
 
     # 验证参数
     if [ -z "$modules" ]; then
-        echo -e "${RED}错误: 必须指定至少一个模块 (-m)${NC}"
+        echo "${RED}错误: 必须指定至少一个模块 (-m)${NC}"
         show_help
     fi
 
     if [ -n "$custom_version" ] && [ -n "$bump_type" ] && [ "$bump_type" != "patch" ]; then
-        echo -e "${YELLOW}警告: 同时指定版本和类型，类型参数将被忽略${NC}"
+        echo "${YELLOW}警告: 同时指定版本和类型，类型参数将被忽略${NC}"
     fi
 }
 
@@ -275,7 +275,7 @@ release_module() {
 
     # 检查模块目录是否存在
     if [ ! -d "$module" ]; then
-        echo -e "${RED}错误: 模块 '$module' 不存在${NC}"
+        echo "${RED}错误: 模块 '$module' 不存在${NC}"
         return
     fi
 
@@ -291,7 +291,7 @@ release_module() {
 
     validate_version "$new_version"
 
-    echo -e "\n${GREEN}===[ 发布 $module 模块 ]===${NC}"
+    echo "\n${GREEN}===[ 发布 $module 模块 ]===${NC}"
     echo "当前版本: $current_version"
     echo "新版本: $new_version"
 
@@ -316,7 +316,7 @@ main() {
 
     # 确保在正确的分支上
     if [ "$(git branch --show-current)" != "$MAIN_BRANCH" ]; then
-        echo -e "${YELLOW}⚠️  当前分支不是 $MAIN_BRANCH，切换到 $MAIN_BRANCH 分支${NC}"
+        echo "${YELLOW}⚠️  当前分支不是 $MAIN_BRANCH，切换到 $MAIN_BRANCH 分支${NC}"
 
         if [ "$DRY_RUN" -eq 0 ]; then
             git checkout "$MAIN_BRANCH"
@@ -326,7 +326,7 @@ main() {
 
     # 检查是否有未提交的更改
     if [ -n "$(git status --porcelain)" ] && [ "$DRY_RUN" -eq 0 ]; then
-        echo -e "${RED}错误: 工作区有未提交的更改${NC}"
+        echo "${RED}错误: 工作区有未提交的更改${NC}"
         git status --short
         exit 1
     fi
