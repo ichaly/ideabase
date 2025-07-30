@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/ichaly/ideabase/cli/cmd"
+	"github.com/ichaly/ideabase/cmd"
 )
 
 func main() {
