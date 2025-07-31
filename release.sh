@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #=======================================
-# 混合版本管理发布脚本
-# 支持可选 version.txt + Git 标签
+# 多模块项目发布脚本
+# 使用 Git 标签进行版本管理，基于 go.work 统一管理
 #=======================================
 
 # 配置
@@ -10,7 +10,6 @@ MAIN_BRANCH="main"
 MODULE_PREFIX=""
 DRY_RUN=0
 CHANGELOG_FILE="CHANGELOG.md"
-USE_VERSION_FILE=1  # 默认使用 version.txt
 
 # 颜色定义
 RED='\033[0;31m'
@@ -24,17 +23,16 @@ show_help() {
     echo
     echo "选项:"
     echo "  -m, --module <模块>   指定要发布的模块 (多个用逗号分隔)"
+    echo "  -a, --all             发布所有模块"
     echo "  -t, --type <类型>     版本类型: major, minor, patch (默认: patch)"
     echo "  -v, --version <版本>  指定精确版本号"
     echo "  -d, --dry-run         模拟运行，不实际提交更改"
-    echo "  -n, --no-version-file 不使用 version.txt 文件"
-    echo "  -c, --config <文件>   指定配置文件"
     echo "  -h, --help            显示帮助信息"
     echo
     echo "示例:"
     echo "  $0 -m core,app -t minor   # 升级核心和应用模块的次版本"
     echo "  $0 -m cli -v 1.2.3        # 将CLI模块升级到指定版本"
-    echo "  $0 -m auth -n              # 发布auth模块但不使用version.txt"
+    echo "  $0 -a -t minor            # 将所有模块升级到次版本"
     exit 0
 }
 
@@ -46,27 +44,54 @@ check_git_repo() {
     fi
 }
 
-# 获取模块的当前版本
+# 获取所有本地模块
+get_all_modules() {
+    # 使用 go list -m 获取所有模块
+    local modules
+    modules=$(go list -m 2>/dev/null)
+    
+    if [ -n "$modules" ]; then
+        # 获取第一个模块作为基准来确定仓库根路径
+        local base_module
+        base_module=$(echo "$modules" | head -n 1)
+        
+        # 提取仓库根路径（去掉最后一个路径段）
+        local repo_root
+        repo_root=$(echo "$base_module" | sed 's|/[^/]*$||')
+        
+        # 过滤并转换为相对路径
+        echo "$modules" | while read -r module_path; do
+            if [[ $module_path == "$repo_root"/* ]]; then
+                echo "$module_path" | sed "s|^$repo_root/||"
+            elif [[ $module_path == "$repo_root" ]]; then
+                echo "."  # 根模块
+            fi
+        done
+    else
+        echo "${RED}错误: 无法获取模块列表${NC}" >&2
+        exit 1
+    fi
+}
+
+# 获取模块的当前版本（仅从Git标签）
 get_current_version() {
     local module="$1"
-
-    # 1. 尝试从version.txt获取
-    if [ "$USE_VERSION_FILE" -eq 1 ] && [ -f "$module/version.txt" ]; then
-        current_version=$(head -n 1 "$module/version.txt")
-        echo "$current_version"
-        return
-    fi
-
-    # 2. 尝试从Git标签获取
-    local latest_tag=$(git describe --tags --match "${MODULE_PREFIX}${module}/v*" --abbrev=0 2>/dev/null)
+    
+    # 模块路径已经为正确格式，无需转换
+    local module_path="$module"
+    
+    # 尝试从Git标签获取
+    # shellcheck disable=SC2155
+    local latest_tag=$(git describe --tags --match "${MODULE_PREFIX}${module_path}/v*" --abbrev=0 2>/dev/null)
 
     if [ -n "$latest_tag" ]; then
         # 从标签中提取版本号
-        echo "$latest_tag" | sed "s#${MODULE_PREFIX}${module}/v##"
+        # shellcheck disable=SC2001
+        echo "$latest_tag" | sed "s#${MODULE_PREFIX}${module_path}/v##"
         return
     fi
 
-    # 3. 如果都没有，返回0.0.0
+    # 如果没有标签，返回0.0.0
     echo "0.0.0"
 }
 
@@ -110,30 +135,51 @@ validate_version() {
     fi
 }
 
-# 更新版本文件（如果使用）
-update_version_file() {
-    local module="$1"
-    local version="$2"
+# 更新所有模块的依赖版本
+update_module_dependencies() {
+    local version="$1"
+    local repo_prefix="$2"
 
-    if [ "$USE_VERSION_FILE" -eq 1 ]; then
-        # 如果文件不存在，创建它
-        if [ ! -f "$module/version.txt" ]; then
-            echo "$version" > "$module/version.txt"
-            echo "📄 ${GREEN}创建 $module/version.txt${NC}"
-        else
-            echo "$version" > "$module/version.txt"
+    # 获取所有模块
+    local modules=$(get_all_modules)
+
+    echo "${GREEN}更新所有模块间的依赖版本到 $version${NC}"
+
+    # 遍历每个模块目录
+    for module in $modules; do
+        if [ ! -f "$module/go.mod" ]; then
+            echo "${YELLOW}警告: $module 模块中未找到 go.mod 文件${NC}"
+            continue
         fi
 
-        git add "$module/version.txt"
-        echo "📝 ${GREEN}更新 $module 版本: $current_version -> $version${NC}"
-    fi
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "${YELLOW}[模拟] 更新 $module 模块的依赖${NC}"
+
+            # 显示将要更新的依赖
+            for dep_module in $modules; do
+                if [ "$module" != "$dep_module" ]; then
+                    echo "${YELLOW}[模拟]   更新依赖: $repo_prefix/$dep_module v$version${NC}"
+                fi
+            done
+        else
+            # 实际更新依赖
+            for dep_module in $modules; do
+                if [ "$module" != "$dep_module" ]; then
+                    # 使用 go mod edit 更新依赖版本
+                    (cd "$module" && go mod edit -require="$repo_prefix/$dep_module@$version" && go mod tidy)
+                fi
+            done
+
+            echo "🔗 ${GREEN}已更新 $module 模块的依赖${NC}"
+        fi
+    done
 }
 
 # 提交版本变更
 commit_changes() {
-    local module="$1"
+    local modules="$1"
     local version="$2"
-    local message="chore($module): release $version"
+    local message="chore(release): release v$version"
 
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "${YELLOW}[模拟] git commit -m \"$message\"${NC}"
@@ -176,41 +222,56 @@ push_changes() {
 
 # 生成变更日志
 generate_changelog() {
-    local module="$1"
+    local modules="$1"
     local version="$2"
-    local tag="${MODULE_PREFIX}${module}/v${version}"
-    local prev_tag range changes
+    local changes=""
 
-    # 获取历史标签范围
-    if [ -z "$(git tag --list "${MODULE_PREFIX}${module}/v*")" ]; then
-        range="HEAD"
-    else
-        prev_tag=$(git describe --tags --match "${MODULE_PREFIX}${module}/v*" --abbrev=0 2>/dev/null)
-        range="${prev_tag}..HEAD"
-    fi
+    # 为每个模块生成变更记录
+    for module in $modules; do
+        local tag="${MODULE_PREFIX}${module}/v${version}"
+        local prev_tag range module_changes
 
-    # 获取模块提交记录
-    changes=$(git log "$range" --pretty=format:"- %s" -- "$module")
+        # 获取历史标签范围
+        if [ -z "$(git tag --list "${MODULE_PREFIX}${module}/v*")" ]; then
+            range="HEAD"
+        else
+            prev_tag=$(git describe --tags --match "${MODULE_PREFIX}${module}/v*" --abbrev=0 2>/dev/null)
+            range="${prev_tag}..HEAD"
+        fi
+
+        # 获取模块提交记录
+        module_changes=$(git log "$range" --pretty=format:"- %s" -- "$module" 2>/dev/null)
+        
+        if [ -n "$module_changes" ]; then
+            changes="$changes
+### $module
+$module_changes"
+        fi
+    done
 
     # 生成Markdown内容（始终执行）
     {
-        echo "\n## $module v$version ($(date +%Y-%m-%d))"  # 添加版本标题
-        echo "$changes"                                      # 插入提交记录
-    } >> "$CHANGELOG_FILE"                                 # 直接追加到文件
+        echo "\n## v$version ($(date +%Y-%m-%d))"
+        if [ -n "$changes" ]; then
+            echo "$changes"
+        else
+            echo "- 无变更记录"
+        fi
+    } >> "$CHANGELOG_FILE"
 
     # 处理Git操作（仅在非Dry Run时执行）
     if [ "$DRY_RUN" -eq 0 ]; then
-        git add "$CHANGELOG_FILE"                          # 只在实际运行时添加文件
-        echo "📝 ${GREEN}更新 $module 变更日志${NC}"
+        git add "$CHANGELOG_FILE"
+        echo "📝 ${GREEN}更新变更日志${NC}"
     else
         echo "${YELLOW}[模拟] 更新变更日志 $CHANGELOG_FILE${NC}"
-        echo "${YELLOW}新增内容:\n$changes\n${NC}"      # 模拟显示新增内容
     fi
 }
 
 # 解析命令行参数
 parse_args() {
     modules=""
+    all_modules=0
     bump_type="patch"
     custom_version=""
 
@@ -219,6 +280,10 @@ parse_args() {
             -m|--module)
                 modules="${2//,/ }"  # 转换逗号为空格
                 shift 2
+                ;;
+            -a|--all)
+                all_modules=1
+                shift
                 ;;
             -t|--type)
                 bump_type="$2"
@@ -232,20 +297,6 @@ parse_args() {
                 DRY_RUN=1
                 shift
                 ;;
-            -n|--no-version-file)
-                USE_VERSION_FILE=0
-                shift
-                ;;
-            -c|--config)
-                CONFIG_FILE="$2"
-                if [ -f "$CONFIG_FILE" ]; then
-                    source "$CONFIG_FILE"
-                else
-                    echo "${RED}错误: 配置文件 $CONFIG_FILE 未找到${NC}"
-                    exit 1
-                fi
-                shift 2
-                ;;
             -h|--help)
                 show_help
                 ;;
@@ -257,8 +308,8 @@ parse_args() {
     done
 
     # 验证参数
-    if [ -z "$modules" ]; then
-        echo "${RED}错误: 必须指定至少一个模块 (-m)${NC}"
+    if [ -z "$modules" ] && [ "$all_modules" -eq 0 ]; then
+        echo "${RED}错误: 必须指定至少一个模块 (-m) 或使用全部模块 (-a)${NC}"
         show_help
     fi
 
@@ -270,8 +321,7 @@ parse_args() {
 # 主发布函数
 release_module() {
     local module="$1"
-    local bump_type="$2"
-    local custom_version="$3"
+    local version="$2"
 
     # 检查模块目录是否存在
     if [ ! -d "$module" ]; then
@@ -279,34 +329,11 @@ release_module() {
         return
     fi
 
-    # 获取当前版本
-    current_version=$(get_current_version "$module")
-
-    # 确定新版本
-    if [ -n "$custom_version" ]; then
-        new_version="$custom_version"
-    else
-        new_version=$(calculate_new_version "$current_version" "$bump_type")
-    fi
-
-    validate_version "$new_version"
-
     echo "\n${GREEN}===[ 发布 $module 模块 ]===${NC}"
-    echo "当前版本: $current_version"
-    echo "新版本: $new_version"
-
-    # 显示版本来源
-    if [ "$USE_VERSION_FILE" -eq 1 ] && [ -f "$module/version.txt" ]; then
-        echo "版本来源: version.txt"
-    else
-        echo "版本来源: Git 标签"
-    fi
+    echo "版本: $version"
 
     # 执行发布步骤
-    update_version_file "$module" "$new_version"
-    generate_changelog "$module" "$new_version"
-    commit_changes "$module" "$new_version"
-    create_tag "$module" "$new_version"
+    create_tag "$module" "$version"
 }
 
 # 主函数
@@ -324,10 +351,44 @@ main() {
         fi
     fi
 
+    # 如果指定了-a，则获取所有模块
+    if [ "$all_modules" -eq 1 ]; then
+        modules=$(get_all_modules)
+    fi
+
+    # 获取当前版本（使用第一个模块的版本作为参考）
+    first_module=$(echo $modules | awk '{print $1}')
+    current_version=$(get_current_version "$first_module")
+
+    # 确定新版本
+    if [ -n "$custom_version" ]; then
+        new_version="$custom_version"
+    else
+        new_version=$(calculate_new_version "$current_version" "$bump_type")
+    fi
+
+    validate_version "$new_version"
+
+    echo "\n${GREEN}===[ 发布准备 ]===${NC}"
+    echo "当前版本: $current_version"
+    echo "新版本: $new_version"
+    echo "发布模块: $modules"
+
+    # 更新所有模块间的依赖版本
+    repo_url=$(go list -m | head -n 1)
+    repo_root=$(echo "$repo_url" | sed 's|/[^/]*$||')
+    update_module_dependencies "$new_version" "$repo_root"
+
+    # 生成变更日志
+    generate_changelog "$modules" "$new_version"
+
     # 发布每个模块
     for module in $modules; do
-        release_module "$module" "$bump_type" "$custom_version"
+        release_module "$module" "$new_version"
     done
+
+    # 提交所有变更
+    commit_changes "$modules" "$new_version"
 
     # 推送所有变更
     push_changes
