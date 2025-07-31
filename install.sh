@@ -64,11 +64,11 @@ echo -e "${GREEN}go work sync 执行成功!${NC}"
 
 # 安装模块依赖
 echo -e "${YELLOW}安装模块依赖...${NC}"
-# 为每个模块执行go mod tidy
+# 为每个模块更新依赖
 for MODULE in $MODULES; do
     echo -e "处理模块: ${MODULE}"
     if [ -d "$MODULE" ] && [ -f "${MODULE}/go.mod" ]; then
-        (cd "$MODULE" && go mod tidy)
+        (cd "$MODULE" && get -u ./...  && go mod tidy)
         if [ $? -ne 0 ]; then
             echo -e "${RED}模块 ${MODULE} 依赖安装失败!${NC}"
         else
