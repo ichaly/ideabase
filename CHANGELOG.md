@@ -129,3 +129,12 @@
 - chore: 更新Go版本至1.23，并调整相关模块的go.mod文件以保持一致性
 - refactor: 重构IOC容器，添加Add和Get方法以增强依赖管理的灵活性
 - feat: 添加应用的基本结构，包括主入口、命令行工具和IOC容器，以支持后续功能开发
+
+## log v0.0.2 (2025-07-31)
+- chore(log): release 0.0.1
+- chore: 更新多个模块的依赖版本，提升项目的稳定性和安全性
+- refactor: 将Default函数重命名为GetDefault并调整返回类型
+- chore: 更新Go版本至1.23，并调整相关模块的go.mod文件以保持一致性
+- feat: 支持自关联关系类型识别和处理
+- chore: 统一项目Go版本至1.22并更新依赖
+- chore: restructure project
