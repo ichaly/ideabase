@@ -70,6 +70,13 @@ func checkGitRepo() error {
 
 // getAllModules 获取所有本地模块
 func getAllModules() ([]string, error) {
+	// 获取仓库根路径
+	repoRoot, err := getRepoRoot()
+	if err != nil {
+		return nil, fmt.Errorf("获取仓库根路径失败: %v", err)
+	}
+
+	// 获取所有模块
 	cmd := exec.Command("go", "list", "-m")
 	output, err := cmd.Output()
 	if err != nil {
@@ -81,16 +88,13 @@ func getAllModules() ([]string, error) {
 		return nil, fmt.Errorf("未找到任何模块")
 	}
 
-	// 获取第一个模块作为基准来确定仓库根路径
-	baseModule := modules[0]
-	repoRoot := regexp.MustCompile(`/[^/]*$`).ReplaceAllString(baseModule, "")
-
 	var result []string
-	for _, modulePath := range modules {
-		if strings.HasPrefix(modulePath, repoRoot+"/") {
-			relativePath := strings.TrimPrefix(modulePath, repoRoot+"/")
+	for _, module := range modules {
+		// 移除模块路径中的仓库根路径前缀
+		if strings.HasPrefix(module, repoRoot+"/") {
+			relativePath := strings.TrimPrefix(module, repoRoot+"/")
 			result = append(result, relativePath)
-		} else if modulePath == repoRoot {
+		} else if module == repoRoot {
 			result = append(result, ".") // 根模块
 		}
 	}
@@ -331,4 +335,40 @@ func pushChanges(dryRun bool) error {
 func getCurrentDate() string {
 	// 使用Go标准库替代外部命令调用，提高性能和可移植性
 	return time.Now().Format("2006-01-02")
+}
+
+// getRepoRoot 获取仓库根路径
+func getRepoRoot() (string, error) {
+	cmd := exec.Command("go", "list", "-m")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 {
+		return "", fmt.Errorf("无法获取仓库URL")
+	}
+
+	// 如果只有一个模块，直接使用它作为根路径
+	if len(lines) == 1 {
+		// 移除最后一个路径部分，得到根路径
+		repoRoot := regexp.MustCompile(`/[^/]*$`).ReplaceAllString(lines[0], "")
+		return repoRoot, nil
+	}
+
+	// 查找所有模块的公共前缀
+	commonPrefix := lines[0]
+	for _, module := range lines[1:] {
+		// 找到当前公共前缀和当前模块的公共部分
+		for !strings.HasPrefix(module, commonPrefix) {
+			// 移除公共前缀的最后一部分
+			commonPrefix = regexp.MustCompile(`/[^/]*$`).ReplaceAllString(commonPrefix, "")
+			if commonPrefix == "" {
+				return "", fmt.Errorf("无法确定模块的公共根路径")
+			}
+		}
+	}
+
+	return commonPrefix, nil
 }

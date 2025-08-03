@@ -18,6 +18,7 @@ var (
 )
 
 func main() {
+	var debug bool
 	rootCmd := &cobra.Command{
 		Use:   "release",
 		Short: "多模块项目发布工具",
@@ -31,6 +32,7 @@ func main() {
 	rootCmd.Flags().StringVarP(&bumpType, "type", "t", "patch", "版本类型: major, minor, patch (默认: patch)")
 	rootCmd.Flags().StringVarP(&customVersion, "version", "v", "", "指定精确版本号")
 	rootCmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "模拟运行，不实际提交更改")
+	rootCmd.Flags().BoolVar(&debug, "debug", false, "调试模式")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -39,6 +41,7 @@ func main() {
 }
 
 func run(cmd *cobra.Command, args []string) error {
+
 	// 检查是否在Git仓库中
 	if err := checkGitRepo(); err != nil {
 		return err
@@ -104,12 +107,11 @@ func run(cmd *cobra.Command, args []string) error {
 	fmt.Printf("发布模块: %v\n", releaseModules)
 
 	// 3. 更新所有模块间的依赖版本
-	repoURL, err := getRepoURL()
+	repoRoot, err := getRepoRoot()
 	if err != nil {
-		return fmt.Errorf("获取仓库URL失败: %v", err)
+		return fmt.Errorf("获取仓库根路径失败: %v", err)
 	}
 
-	repoRoot := strings.TrimSuffix(repoURL, "/"+strings.Split(repoURL, "/")[len(strings.Split(repoURL, "/"))-1])
 	if err := updateModuleDependencies(newVersions, repoRoot, dryRun); err != nil {
 		return fmt.Errorf("更新模块依赖失败: %v", err)
 	}
@@ -171,20 +173,4 @@ func checkBranch() error {
 	}
 
 	return nil
-}
-
-// getRepoURL 获取仓库URL
-func getRepoURL() (string, error) {
-	cmd := exec.Command("go", "list", "-m")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) == 0 {
-		return "", fmt.Errorf("无法获取仓库URL")
-	}
-
-	return strings.TrimSpace(lines[0]), nil
 }
