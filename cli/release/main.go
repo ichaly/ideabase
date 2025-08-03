@@ -167,21 +167,7 @@ func checkBranch() error {
 
 	currentBranch := strings.TrimSpace(string(output))
 	if currentBranch != Branch {
-		fmt.Printf("⚠️  当前分支不是 %s，切换到 %s 分支\n", Branch, Branch)
-
-		if !dryRun {
-			// 切换分支
-			cmd = exec.Command("git", "checkout", Branch)
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("切换分支失败: %v", err)
-			}
-
-			// 拉取最新代码
-			cmd = exec.Command("git", "pull", "origin", Branch)
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("拉取最新代码失败: %v", err)
-			}
-		}
+		return fmt.Errorf("必须在 '%s' 分支上执行发布操作，当前分支是 '%s'", Branch, currentBranch)
 	}
 
 	return nil
