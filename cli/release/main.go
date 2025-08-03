@@ -50,7 +50,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// 确保在正确的分支上
-	if err := checkAndSwitchBranch(); err != nil {
+	if err := checkBranch(); err != nil {
 		return err
 	}
 
@@ -157,8 +157,8 @@ func releaseModule(module string, version Version) error {
 	return nil
 }
 
-// checkAndSwitchBranch 确保在正确的分支上
-func checkAndSwitchBranch() error {
+// checkBranch 确保在正确的分支上
+func checkBranch() error {
 	cmd := exec.Command("git", "branch", "--show-current")
 	output, err := cmd.Output()
 	if err != nil {
