@@ -7,11 +7,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
-	MainBranch    = "main"
-	ChangeLogFile = "CHANGELOG.md"
+	Branch    = "main"
+	ChangeLog = "CHANGELOG.md"
 )
 
 // Version 表示语义化版本
@@ -22,8 +23,22 @@ type Version struct {
 }
 
 // String 返回版本字符串
-func (v Version) String() string {
-	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
+func (my Version) String() string {
+	return fmt.Sprintf("%d.%d.%d", my.Major, my.Minor, my.Patch)
+}
+
+// Upgrade 根据类型升级版本
+func (my Version) Upgrade(upgradeType string) Version {
+	switch upgradeType {
+	case "major":
+		return Version{Major: my.Major + 1, Minor: 0, Patch: 0}
+	case "minor":
+		return Version{Major: my.Major, Minor: my.Minor + 1, Patch: 0}
+	case "patch":
+		return Version{Major: my.Major, Minor: my.Minor, Patch: my.Patch + 1}
+	default:
+		return my
+	}
 }
 
 // ParseVersion 从字符串解析版本
@@ -43,20 +58,6 @@ func ParseVersion(version string) (Version, error) {
 		Minor: minor,
 		Patch: patch,
 	}, nil
-}
-
-// Bump 根据类型升级版本
-func (v Version) Bump(bumpType string) Version {
-	switch bumpType {
-	case "major":
-		return Version{Major: v.Major + 1, Minor: 0, Patch: 0}
-	case "minor":
-		return Version{Major: v.Major, Minor: v.Minor + 1, Patch: 0}
-	case "patch":
-		return Version{Major: v.Major, Minor: v.Minor, Patch: v.Patch + 1}
-	default:
-		return v
-	}
 }
 
 // checkGitRepo 检查是否在Git仓库中
@@ -133,15 +134,18 @@ func createTag(module string, version Version, dryRun bool) error {
 	return nil
 }
 
-// updateModuleDependencies 更新所有模块的依赖版本
-func updateModuleDependencies(version Version, repoRoot string, dryRun bool) error {
+// updateModuleDependencies 使用指定版本更新所有模块的依赖版本
+func updateModuleDependencies(versions map[string]Version, repoRoot string, dryRun bool) error {
 	// 获取所有模块
 	modules, err := getAllModules()
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("更新所有模块间的依赖版本到 %s\n", version.String())
+	fmt.Printf("更新所有模块间的依赖版本:\n")
+	for module, version := range versions {
+		fmt.Printf("  %s: %s\n", module, version.String())
+	}
 
 	// 遍历每个模块目录
 	for _, module := range modules {
@@ -159,14 +163,14 @@ func updateModuleDependencies(version Version, repoRoot string, dryRun bool) err
 			fmt.Printf("[模拟] 更新 %s 模块的依赖\n", module)
 
 			// 显示将要更新的依赖
-			for _, depModule := range modules {
+			for depModule, version := range versions {
 				if module != depModule {
 					fmt.Printf("[模拟]   更新依赖: %s/%s v%s\n", repoRoot, depModule, version.String())
 				}
 			}
 		} else {
 			// 实际更新依赖
-			for _, depModule := range modules {
+			for depModule, version := range versions {
 				if module != depModule {
 					// 使用 go mod edit 更新依赖版本
 					cmd := exec.Command("go", "mod", "edit", "-require", fmt.Sprintf("%s/%s@v%s", repoRoot, depModule, version.String()))
@@ -198,8 +202,8 @@ func updateModuleDependencies(version Version, repoRoot string, dryRun bool) err
 	return nil
 }
 
-// generateChangelog 生成变更日志
-func generateChangelog(modules []string, version Version, dryRun bool) error {
+// generateChangelog 生成变更日志（使用每个模块的版本号）
+func generateChangelog(modules []string, versions map[string]Version, dryRun bool) error {
 	changes := ""
 
 	// 为每个模块生成变更记录
@@ -231,18 +235,21 @@ func generateChangelog(modules []string, version Version, dryRun bool) error {
 		}
 
 		if moduleChanges != "" {
-			changes += fmt.Sprintf("\n### %s\n%s", module, moduleChanges)
+			changes += fmt.Sprintf("\n### %s (v%s)\n%s", module, versions[module].String(), moduleChanges)
 		}
 	}
 
+	// 使用第一个模块的版本号作为整体版本号
+	firstModuleVersion := versions[modules[0]]
+
 	// 生成Markdown内容
-	changelogEntry := fmt.Sprintf("\n## v%s (%s)%s", version.String(), getCurrentDate(), changes)
+	changelogEntry := fmt.Sprintf("\n## v%s (%s)%s", firstModuleVersion.String(), getCurrentDate(), changes)
 	if changes == "" {
 		changelogEntry += "\n- 无变更记录"
 	}
 
 	if !dryRun {
-		f, err := os.OpenFile(ChangeLogFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+		f, err := os.OpenFile(ChangeLog, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 		if err != nil {
 			return fmt.Errorf("无法打开变更日志文件: %v", err)
 		}
@@ -253,14 +260,14 @@ func generateChangelog(modules []string, version Version, dryRun bool) error {
 		}
 
 		// 添加到git
-		cmd := exec.Command("git", "add", ChangeLogFile)
+		cmd := exec.Command("git", "add", ChangeLog)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("添加变更日志到git失败: %v", err)
 		}
 
 		fmt.Println("📝 更新变更日志")
 	} else {
-		fmt.Printf("[模拟] 更新变更日志 %s\n", ChangeLogFile)
+		fmt.Printf("[模拟] 更新变更日志 %s\n", ChangeLog)
 	}
 
 	return nil
@@ -299,13 +306,13 @@ func commitChanges(modules []string, version Version, dryRun bool) error {
 // pushChanges 推送变更
 func pushChanges(dryRun bool) error {
 	if dryRun {
-		fmt.Printf("[模拟] git push origin %s\n", MainBranch)
+		fmt.Printf("[模拟] git push origin %s\n", Branch)
 		fmt.Printf("[模拟] git push origin --tags\n")
 		return nil
 	}
 
 	// 推送分支
-	cmd := exec.Command("git", "push", "origin", MainBranch)
+	cmd := exec.Command("git", "push", "origin", Branch)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("推送分支失败: %v", err)
 	}
@@ -322,10 +329,6 @@ func pushChanges(dryRun bool) error {
 
 // getCurrentDate 获取当前日期
 func getCurrentDate() string {
-	cmd := exec.Command("date", "+%Y-%m-%d")
-	output, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
+	// 使用Go标准库替代外部命令调用，提高性能和可移植性
+	return time.Now().Format("2006-01-02")
 }

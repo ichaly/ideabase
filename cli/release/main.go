@@ -50,7 +50,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// 确保在正确的分支上
-	if err := checkAndSwitchToMainBranch(); err != nil {
+	if err := checkAndSwitchBranch(); err != nil {
 		return err
 	}
 
@@ -66,53 +66,68 @@ func run(cmd *cobra.Command, args []string) error {
 		releaseModules = modules
 	}
 
-	// 获取当前版本（使用第一个模块的版本作为参考）
-	currentVersion, err := getCurrentVersion(releaseModules[0])
-	if err != nil {
-		return fmt.Errorf("获取当前版本失败: %v", err)
+	// 1. 获取所有待发布模块的当前版本号
+	fmt.Printf("\n===[ 获取当前版本 ]===\n")
+	currentVersions := make(map[string]Version)
+	for _, module := range releaseModules {
+		currentVersion, err := getCurrentVersion(module)
+		if err != nil {
+			return fmt.Errorf("获取模块 %s 的当前版本失败: %v", module, err)
+		}
+		currentVersions[module] = currentVersion
+		fmt.Printf("%s: %s\n", module, currentVersion.String())
 	}
 
-	// 确定新版本
-	var newVersion Version
+	// 2. 计算所有模块的新版本号
+	fmt.Printf("\n===[ 计算新版本 ]===\n")
+	newVersions := make(map[string]Version)
 	if customVersion != "" {
-		newVersion, err = ParseVersion(customVersion)
+		// 使用指定的版本号
+		version, err := ParseVersion(customVersion)
 		if err != nil {
 			return fmt.Errorf("无效的版本号格式: %v", err)
 		}
+		for _, module := range releaseModules {
+			newVersions[module] = version
+		}
+		fmt.Printf("使用指定版本: %s\n", customVersion)
 	} else {
-		newVersion = currentVersion.Bump(bumpType)
+		// 根据类型升级版本
+		for _, module := range releaseModules {
+			newVersion := currentVersions[module].Upgrade(bumpType)
+			newVersions[module] = newVersion
+			fmt.Printf("%s: %s -> %s\n", module, currentVersions[module].String(), newVersion.String())
+		}
 	}
 
 	fmt.Printf("\n===[ 发布准备 ]===\n")
-	fmt.Printf("当前版本: %s\n", currentVersion.String())
-	fmt.Printf("新版本: %s\n", newVersion.String())
 	fmt.Printf("发布模块: %v\n", releaseModules)
 
-	// 更新所有模块间的依赖版本
+	// 3. 更新所有模块间的依赖版本
 	repoURL, err := getRepoURL()
 	if err != nil {
 		return fmt.Errorf("获取仓库URL失败: %v", err)
 	}
 
 	repoRoot := strings.TrimSuffix(repoURL, "/"+strings.Split(repoURL, "/")[len(strings.Split(repoURL, "/"))-1])
-	if err := updateModuleDependencies(newVersion, repoRoot, dryRun); err != nil {
+	if err := updateModuleDependencies(newVersions, repoRoot, dryRun); err != nil {
 		return fmt.Errorf("更新模块依赖失败: %v", err)
 	}
 
-	// 生成变更日志
-	if err := generateChangelog(releaseModules, newVersion, dryRun); err != nil {
+	// 生成变更日志（使用每个模块的新版本号）
+	if err := generateChangelog(releaseModules, newVersions, dryRun); err != nil {
 		return fmt.Errorf("生成变更日志失败: %v", err)
 	}
 
-	// 发布每个模块
+	// 4. 发布每个模块（使用各自的新版本号）
 	for _, module := range releaseModules {
-		if err := releaseModule(module, newVersion); err != nil {
+		if err := releaseModule(module, newVersions[module]); err != nil {
 			return fmt.Errorf("发布模块 %s 失败: %v", module, err)
 		}
 	}
 
-	// 提交所有变更
-	if err := commitChanges(releaseModules, newVersion, dryRun); err != nil {
+	// 提交所有变更（使用第一个模块的新版本号作为整体版本号）
+	if err := commitChanges(releaseModules, newVersions[releaseModules[0]], dryRun); err != nil {
 		return fmt.Errorf("提交变更失败: %v", err)
 	}
 
@@ -124,7 +139,7 @@ func run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// releaseModule 发布单个模块
+// releaseModule 使用指定版本发布单个模块
 func releaseModule(module string, version Version) error {
 	// 检查模块目录是否存在
 	if _, err := os.Stat(module); os.IsNotExist(err) {
@@ -142,8 +157,8 @@ func releaseModule(module string, version Version) error {
 	return nil
 }
 
-// checkAndSwitchToMainBranch 确保在正确的分支上
-func checkAndSwitchToMainBranch() error {
+// checkAndSwitchBranch 确保在正确的分支上
+func checkAndSwitchBranch() error {
 	cmd := exec.Command("git", "branch", "--show-current")
 	output, err := cmd.Output()
 	if err != nil {
@@ -151,18 +166,18 @@ func checkAndSwitchToMainBranch() error {
 	}
 
 	currentBranch := strings.TrimSpace(string(output))
-	if currentBranch != MainBranch {
-		fmt.Printf("⚠️  当前分支不是 %s，切换到 %s 分支\n", MainBranch, MainBranch)
+	if currentBranch != Branch {
+		fmt.Printf("⚠️  当前分支不是 %s，切换到 %s 分支\n", Branch, Branch)
 
 		if !dryRun {
 			// 切换分支
-			cmd = exec.Command("git", "checkout", MainBranch)
+			cmd = exec.Command("git", "checkout", Branch)
 			if err := cmd.Run(); err != nil {
 				return fmt.Errorf("切换分支失败: %v", err)
 			}
 
 			// 拉取最新代码
-			cmd = exec.Command("git", "pull", "origin", MainBranch)
+			cmd = exec.Command("git", "pull", "origin", Branch)
 			if err := cmd.Run(); err != nil {
 				return fmt.Errorf("拉取最新代码失败: %v", err)
 			}
