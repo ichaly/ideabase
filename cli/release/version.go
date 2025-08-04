@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,7 +19,6 @@ const (
 // 全局缓存变量，用于存储模块信息
 var (
 	moduleInfoCache []ModuleInfo
-	repoRootCache   string
 	cacheOnce       sync.Once
 	cacheError      error
 )
@@ -76,148 +74,45 @@ func ParseVersion(version string) (Version, error) {
 	}, nil
 }
 
-// checkGitRepo 检查是否在Git仓库中
-func checkGitRepo() error {
-	cmd := exec.Command("git", "rev-parse", "--git-dir")
-	err := cmd.Run()
-	if err != nil {
-		return fmt.Errorf("错误：当前目录不是Git仓库根目录")
-	}
-	return nil
-}
-
 // getModuleInfo 获取模块信息，使用缓存确保只执行一次
-func getModuleInfo() ([]ModuleInfo, string, error) {
+func getModuleInfo() ([]ModuleInfo, error) {
 	cacheOnce.Do(func() {
-		// 1. 尝试从go.work获取模块信息
-		if modules, root, err := getModulesFromGoWork(); err == nil {
-			moduleInfoCache, repoRootCache, cacheError = modules, root, nil
-			return
-		}
-
-		// 2. 如果go.work不可用，使用go list -m获取
-		moduleInfoCache, repoRootCache, cacheError = getModulesFromGoList()
+		// 只使用 go list -m 获取模块信息
+		modules, err := getModulesFromGoList()
+		moduleInfoCache, cacheError = modules, err
 	})
-	return moduleInfoCache, repoRootCache, cacheError
-}
-
-// 从go.work获取模块信息
-func getModulesFromGoWork() ([]ModuleInfo, string, error) {
-	// 读取go.work文件
-	workData, err := os.ReadFile("../go.work")
-	if err != nil {
-		// 尝试在当前目录读取
-		workData, err = os.ReadFile("go.work")
-		if err != nil {
-			return nil, "", err
-		}
-	}
-
-	// 解析go.work文件
-	// 提取use指令中的模块路径
-	var modules []ModuleInfo
-	var root string
-
-	// 正则匹配use块中的模块路径
-	useRegex := regexp.MustCompile(`use\s*\((?s).*?\)`)
-	useBlock := useRegex.Find(workData)
-	if useBlock != nil {
-		// 匹配模块路径
-		moduleRegex := regexp.MustCompile(`\.\./[^\s]+|\./[^\s]+`)
-		matches := moduleRegex.FindAll(useBlock, -1)
-
-		for _, match := range matches {
-			path := string(match)
-			// 从路径中提取模块名（最后一部分）
-			parts := strings.Split(strings.TrimSpace(path), "/")
-			name := parts[len(parts)-1]
-			// 标准化路径为相对路径
-			relPath := strings.TrimPrefix(path, "./")
-			relPath = strings.TrimPrefix(relPath, "../")
-			modules = append(modules, ModuleInfo{Name: name, Path: relPath})
-		}
-
-		// 从go.work文件路径推断根路径
-		absPath, _ := filepath.Abs("..")
-		if _, err := os.Stat("../go.work"); err == nil {
-			root = absPath
-		} else {
-			absPath, _ := filepath.Abs(".")
-			root = absPath
-		}
-	}
-
-	if len(modules) == 0 {
-		return nil, "", fmt.Errorf("未在go.work中找到模块")
-	}
-
-	return modules, root, nil
+	return moduleInfoCache, cacheError
 }
 
 // 从go list -m获取模块信息
-func getModulesFromGoList() ([]ModuleInfo, string, error) {
+func getModulesFromGoList() ([]ModuleInfo, error) {
 	// 执行go list -m获取模块列表
 	cmd := exec.Command("go", "list", "-m")
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, "", fmt.Errorf("无法获取模块列表: %v", err)
+		return nil, fmt.Errorf("无法获取模块列表: %v", err)
 	}
 
 	modulePaths := strings.Split(strings.TrimSpace(string(output)), "\n")
 	if len(modulePaths) == 0 || (len(modulePaths) == 1 && modulePaths[0] == "") {
-		return nil, "", fmt.Errorf("未找到任何模块")
-	}
-
-	// 计算仓库根路径（通过公共前缀）
-	var root string
-	if len(modulePaths) == 1 {
-		// 移除最后一个路径部分，得到根路径
-		root = regexp.MustCompile(`/[^/]*$`).ReplaceAllString(modulePaths[0], "")
-	} else {
-		// 查找所有模块的公共前缀
-		commonPrefix := modulePaths[0]
-		for _, modulePath := range modulePaths[1:] {
-			// 找到当前公共前缀和当前模块的公共部分
-			for !strings.HasPrefix(modulePath, commonPrefix) {
-				// 移除公共前缀的最后一部分
-				commonPrefix = regexp.MustCompile(`/[^/]*$`).ReplaceAllString(commonPrefix, "")
-				if commonPrefix == "" {
-					return nil, "", fmt.Errorf("无法确定模块的公共根路径")
-				}
-			}
-		}
-		root = commonPrefix
+		return nil, fmt.Errorf("未找到任何模块")
 	}
 
 	// 构造ModuleInfo列表
 	var modules []ModuleInfo
 	for _, modulePath := range modulePaths {
 		// 从完整路径中提取模块名
-		var name string
-		if strings.HasPrefix(modulePath, root+"/") {
-			name = strings.TrimPrefix(modulePath, root+"/")
-		} else if modulePath == root {
-			name = "." // 根模块
-		} else {
-			// 如果没有公共前缀，使用完整路径作为名称
-			parts := strings.Split(modulePath, "/")
-			name = parts[len(parts)-1]
-		}
-		modules = append(modules, ModuleInfo{Name: name, Path: name})
+		parts := strings.Split(modulePath, "/")
+		name := parts[len(parts)-1]
+		modules = append(modules, ModuleInfo{Name: name, Path: modulePath})
 	}
 
-	return modules, root, nil
-}
-
-// getRepoRoot 获取仓库根路径
-func getRepoRoot() (string, error) {
-	_, root, err := getModuleInfo()
-	return root, err
+	return modules, nil
 }
 
 // getAllModules 获取所有本地模块
 func getAllModules() ([]string, error) {
-	modules, _, err := getModuleInfo()
+	modules, err := getModuleInfo()
 	if err != nil {
 		return nil, err
 	}
@@ -267,11 +162,20 @@ func createTag(module string, version Version, dryRun bool) error {
 }
 
 // updateModuleDependencies 使用指定版本更新所有模块的依赖版本
-func updateModuleDependencies(versions map[string]Version, repoRoot string, dryRun bool) error {
+func updateModuleDependencies(versions map[string]Version, dryRun bool) error {
 	// 获取所有模块
 	modules, err := getAllModules()
 	if err != nil {
 		return err
+	}
+
+	moduleInfoMap := make(map[string]string) // name -> path
+	moduleInfos, err := getModuleInfo()
+	if err != nil {
+		return err
+	}
+	for _, info := range moduleInfos {
+		moduleInfoMap[info.Name] = info.Path
 	}
 
 	fmt.Printf("更新所有模块间的依赖版本:\n")
@@ -297,7 +201,7 @@ func updateModuleDependencies(versions map[string]Version, repoRoot string, dryR
 			// 显示将要更新的依赖
 			for depModule, version := range versions {
 				if module != depModule {
-					fmt.Printf("[模拟]   更新依赖: %s/%s v%s\n", repoRoot, depModule, version.String())
+					fmt.Printf("[模拟]   更新依赖: %s v%s\n", moduleInfoMap[depModule], version.String())
 				}
 			}
 		} else {
@@ -305,7 +209,7 @@ func updateModuleDependencies(versions map[string]Version, repoRoot string, dryR
 			for depModule, version := range versions {
 				if module != depModule {
 					// 使用 go mod edit 更新依赖版本
-					cmd := exec.Command("go", "mod", "edit", "-require", fmt.Sprintf("%s/%s@v%s", repoRoot, depModule, version.String()))
+					cmd := exec.Command("go", "mod", "edit", "-require", fmt.Sprintf("%s@v%s", moduleInfoMap[depModule], version.String()))
 					cmd.Dir = module
 					if module == "." {
 						cmd.Dir = "."
