@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,6 +16,20 @@ const (
 	Branch    = "main"
 	ChangeLog = "CHANGELOG.md"
 )
+
+// 全局缓存变量，用于存储模块信息
+var (
+	moduleInfoCache []ModuleInfo
+	repoRootCache   string
+	cacheOnce       sync.Once
+	cacheError      error
+)
+
+// ModuleInfo 表示模块信息
+type ModuleInfo struct {
+	Name string // 模块名（无前缀）
+	Path string // 模块完整路径
+}
 
 // Version 表示语义化版本
 type Version struct {
@@ -62,44 +78,156 @@ func ParseVersion(version string) (Version, error) {
 
 // checkGitRepo 检查是否在Git仓库中
 func checkGitRepo() error {
-	if _, err := os.Stat(".git"); os.IsNotExist(err) {
+	cmd := exec.Command("git", "rev-parse", "--git-dir")
+	err := cmd.Run()
+	if err != nil {
 		return fmt.Errorf("错误：当前目录不是Git仓库根目录")
 	}
 	return nil
 }
 
-// getAllModules 获取所有本地模块
-func getAllModules() ([]string, error) {
-	// 获取仓库根路径
-	repoRoot, err := getRepoRoot()
+// getModuleInfo 获取模块信息，使用缓存确保只执行一次
+func getModuleInfo() ([]ModuleInfo, string, error) {
+	cacheOnce.Do(func() {
+		// 1. 尝试从go.work获取模块信息
+		if modules, root, err := getModulesFromGoWork(); err == nil {
+			moduleInfoCache, repoRootCache, cacheError = modules, root, nil
+			return
+		}
+
+		// 2. 如果go.work不可用，使用go list -m获取
+		moduleInfoCache, repoRootCache, cacheError = getModulesFromGoList()
+	})
+	return moduleInfoCache, repoRootCache, cacheError
+}
+
+// 从go.work获取模块信息
+func getModulesFromGoWork() ([]ModuleInfo, string, error) {
+	// 读取go.work文件
+	workData, err := os.ReadFile("../go.work")
 	if err != nil {
-		return nil, fmt.Errorf("获取仓库根路径失败: %v", err)
-	}
-
-	// 获取所有模块
-	cmd := exec.Command("go", "list", "-m")
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("无法获取模块列表: %v", err)
-	}
-
-	modules := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(modules) == 0 || (len(modules) == 1 && modules[0] == "") {
-		return nil, fmt.Errorf("未找到任何模块")
-	}
-
-	var result []string
-	for _, module := range modules {
-		// 移除模块路径中的仓库根路径前缀
-		if strings.HasPrefix(module, repoRoot+"/") {
-			relativePath := strings.TrimPrefix(module, repoRoot+"/")
-			result = append(result, relativePath)
-		} else if module == repoRoot {
-			result = append(result, ".") // 根模块
+		// 尝试在当前目录读取
+		workData, err = os.ReadFile("go.work")
+		if err != nil {
+			return nil, "", err
 		}
 	}
 
-	return result, nil
+	// 解析go.work文件
+	// 提取use指令中的模块路径
+	var modules []ModuleInfo
+	var root string
+
+	// 正则匹配use块中的模块路径
+	useRegex := regexp.MustCompile(`use\s*\((?s).*?\)`)
+	useBlock := useRegex.Find(workData)
+	if useBlock != nil {
+		// 匹配模块路径
+		moduleRegex := regexp.MustCompile(`\.\./[^\s]+|\./[^\s]+`)
+		matches := moduleRegex.FindAll(useBlock, -1)
+
+		for _, match := range matches {
+			path := string(match)
+			// 从路径中提取模块名（最后一部分）
+			parts := strings.Split(strings.TrimSpace(path), "/")
+			name := parts[len(parts)-1]
+			// 标准化路径为相对路径
+			relPath := strings.TrimPrefix(path, "./")
+			relPath = strings.TrimPrefix(relPath, "../")
+			modules = append(modules, ModuleInfo{Name: name, Path: relPath})
+		}
+
+		// 从go.work文件路径推断根路径
+		absPath, _ := filepath.Abs("..")
+		if _, err := os.Stat("../go.work"); err == nil {
+			root = absPath
+		} else {
+			absPath, _ := filepath.Abs(".")
+			root = absPath
+		}
+	}
+
+	if len(modules) == 0 {
+		return nil, "", fmt.Errorf("未在go.work中找到模块")
+	}
+
+	return modules, root, nil
+}
+
+// 从go list -m获取模块信息
+func getModulesFromGoList() ([]ModuleInfo, string, error) {
+	// 执行go list -m获取模块列表
+	cmd := exec.Command("go", "list", "-m")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, "", fmt.Errorf("无法获取模块列表: %v", err)
+	}
+
+	modulePaths := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(modulePaths) == 0 || (len(modulePaths) == 1 && modulePaths[0] == "") {
+		return nil, "", fmt.Errorf("未找到任何模块")
+	}
+
+	// 计算仓库根路径（通过公共前缀）
+	var root string
+	if len(modulePaths) == 1 {
+		// 移除最后一个路径部分，得到根路径
+		root = regexp.MustCompile(`/[^/]*$`).ReplaceAllString(modulePaths[0], "")
+	} else {
+		// 查找所有模块的公共前缀
+		commonPrefix := modulePaths[0]
+		for _, modulePath := range modulePaths[1:] {
+			// 找到当前公共前缀和当前模块的公共部分
+			for !strings.HasPrefix(modulePath, commonPrefix) {
+				// 移除公共前缀的最后一部分
+				commonPrefix = regexp.MustCompile(`/[^/]*$`).ReplaceAllString(commonPrefix, "")
+				if commonPrefix == "" {
+					return nil, "", fmt.Errorf("无法确定模块的公共根路径")
+				}
+			}
+		}
+		root = commonPrefix
+	}
+
+	// 构造ModuleInfo列表
+	var modules []ModuleInfo
+	for _, modulePath := range modulePaths {
+		// 从完整路径中提取模块名
+		var name string
+		if strings.HasPrefix(modulePath, root+"/") {
+			name = strings.TrimPrefix(modulePath, root+"/")
+		} else if modulePath == root {
+			name = "." // 根模块
+		} else {
+			// 如果没有公共前缀，使用完整路径作为名称
+			parts := strings.Split(modulePath, "/")
+			name = parts[len(parts)-1]
+		}
+		modules = append(modules, ModuleInfo{Name: name, Path: name})
+	}
+
+	return modules, root, nil
+}
+
+// getRepoRoot 获取仓库根路径
+func getRepoRoot() (string, error) {
+	_, root, err := getModuleInfo()
+	return root, err
+}
+
+// getAllModules 获取所有本地模块
+func getAllModules() ([]string, error) {
+	modules, _, err := getModuleInfo()
+	if err != nil {
+		return nil, err
+	}
+
+	// 只返回模块名（无前缀）
+	var names []string
+	for _, module := range modules {
+		names = append(names, module.Name)
+	}
+	return names, nil
 }
 
 // getCurrentVersion 获取模块的当前版本（仅从Git标签）
@@ -335,40 +463,4 @@ func pushChanges(dryRun bool) error {
 func getCurrentDate() string {
 	// 使用Go标准库替代外部命令调用，提高性能和可移植性
 	return time.Now().Format("2006-01-02")
-}
-
-// getRepoRoot 获取仓库根路径
-func getRepoRoot() (string, error) {
-	cmd := exec.Command("go", "list", "-m")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) == 0 {
-		return "", fmt.Errorf("无法获取仓库URL")
-	}
-
-	// 如果只有一个模块，直接使用它作为根路径
-	if len(lines) == 1 {
-		// 移除最后一个路径部分，得到根路径
-		repoRoot := regexp.MustCompile(`/[^/]*$`).ReplaceAllString(lines[0], "")
-		return repoRoot, nil
-	}
-
-	// 查找所有模块的公共前缀
-	commonPrefix := lines[0]
-	for _, module := range lines[1:] {
-		// 找到当前公共前缀和当前模块的公共部分
-		for !strings.HasPrefix(module, commonPrefix) {
-			// 移除公共前缀的最后一部分
-			commonPrefix = regexp.MustCompile(`/[^/]*$`).ReplaceAllString(commonPrefix, "")
-			if commonPrefix == "" {
-				return "", fmt.Errorf("无法确定模块的公共根路径")
-			}
-		}
-	}
-
-	return commonPrefix, nil
 }
