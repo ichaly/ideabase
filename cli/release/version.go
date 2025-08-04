@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -17,18 +17,12 @@ const (
 	ChangeLog = "CHANGELOG.md"
 )
 
-// 全局缓存变量，用于存储模块信息
-var (
-	moduleInfoCache []ModuleInfo
-	cacheOnce       sync.Once
-	cacheError      error
-)
-
 // ModuleInfo 表示模块信息
 type ModuleInfo struct {
-	Name string // 模块名（去除公共前缀部分）
-	Path string // 模块完整路径
-	Root string // 根路径
+	Name    string   // 模块名（去除公共前缀部分）
+	Path    string   // 模块完整路径
+	Root    string   // 根路径
+	Version *Version // 版本信息
 }
 
 // Version 表示语义化版本
@@ -39,19 +33,19 @@ type Version struct {
 }
 
 // String 返回版本字符串
-func (my Version) String() string {
+func (my *Version) String() string {
 	return fmt.Sprintf("%d.%d.%d", my.Major, my.Minor, my.Patch)
 }
 
 // Upgrade 根据类型升级版本
-func (my Version) Upgrade(upgradeType string) Version {
+func (my *Version) Upgrade(upgradeType string) *Version {
 	switch upgradeType {
 	case "major":
-		return Version{Major: my.Major + 1, Minor: 0, Patch: 0}
+		return &Version{Major: my.Major + 1, Minor: 0, Patch: 0}
 	case "minor":
-		return Version{Major: my.Major, Minor: my.Minor + 1, Patch: 0}
+		return &Version{Major: my.Major, Minor: my.Minor + 1, Patch: 0}
 	case "patch":
-		return Version{Major: my.Major, Minor: my.Minor, Patch: my.Patch + 1}
+		return &Version{Major: my.Major, Minor: my.Minor, Patch: my.Patch + 1}
 	default:
 		return my
 	}
@@ -76,40 +70,10 @@ func ParseVersion(version string) (Version, error) {
 	}, nil
 }
 
-// getModuleInfo 获取模块信息，使用缓存确保只执行一次
-func getModuleInfo() ([]ModuleInfo, error) {
-	cacheOnce.Do(func() {
-		// 执行go list -m获取模块列表
-		output, err := exec.Command("go", "list", "-m").Output()
-		if err != nil {
-			cacheError = fmt.Errorf("无法获取模块列表: %v", err)
-			return
-		}
-
-		paths := strings.Split(strings.TrimSpace(string(output)), "\n")
-		if len(paths) == 0 || (len(paths) == 1 && paths[0] == "") {
-			cacheError = fmt.Errorf("未找到任何模块")
-			return
-		}
-
-		// 查找公共前缀
-		prefix := findCommonPrefix(paths)
-		if len(prefix) == 0 {
-			cacheError = fmt.Errorf("无法确定公共前缀")
-			return
-		}
-
-		// 构造ModuleInfo列表
-		var modules []ModuleInfo
-		for _, module := range paths {
-			// 从完整路径中提取模块名并移除可能的前导斜杠
-			name := strings.TrimPrefix(strings.TrimPrefix(module, prefix), "/")
-			modules = append(modules, ModuleInfo{Name: name, Path: module, Root: prefix})
-		}
-
-		moduleInfoCache = modules
-	})
-	return moduleInfoCache, cacheError
+// getCurrentDate 获取当前日期
+func getCurrentDate() string {
+	// 使用Go标准库替代外部命令调用，提高性能和可移植性
+	return time.Now().Format("2006-01-02")
 }
 
 // findCommonPrefix 查找字符串数组的公共前缀
@@ -145,19 +109,35 @@ func findCommonPrefix(strs []string) string {
 	return base[:index]
 }
 
-// getAllModules 获取所有本地模块
-func getAllModules() ([]string, error) {
-	modules, err := getModuleInfo()
+// getAllModules 获取模块信息
+func getAllModules() (map[string]ModuleInfo, error) {
+	modules := make(map[string]ModuleInfo)
+
+	// 执行go list -m获取模块列表
+	output, err := exec.Command("go", "list", "-m").Output()
 	if err != nil {
-		return nil, err
+		return modules, fmt.Errorf("无法获取模块列表: %v", err)
 	}
 
-	// 只返回模块名
-	var names []string
-	for _, module := range modules {
-		names = append(names, module.Name)
+	paths := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(paths) == 0 || (len(paths) == 1 && paths[0] == "") {
+		return modules, fmt.Errorf("未找到任何模块")
 	}
-	return names, nil
+
+	// 查找公共前缀
+	prefix := findCommonPrefix(paths)
+	if len(prefix) == 0 {
+		return modules, fmt.Errorf("无法确定公共前缀")
+	}
+
+	// 构造ModuleInfo字典
+	for _, module := range paths {
+		// 从完整路径中提取模块名并移除可能的前导斜杠
+		name := strings.TrimPrefix(strings.TrimPrefix(module, prefix), "/")
+		modules[module] = ModuleInfo{Name: name, Path: module, Root: prefix}
+	}
+
+	return modules, nil
 }
 
 // getCurrentVersion 获取模块的当前版本（仅从Git标签）
@@ -165,9 +145,8 @@ func getCurrentVersion(module string) (Version, error) {
 	// 尝试从Git标签获取
 	tagPattern := fmt.Sprintf("*%s/v*", module)
 	cmd := exec.Command("git", "describe", "--tags", "--match", tagPattern, "--abbrev=0")
-	output, err := cmd.Output()
 
-	if err == nil && len(output) > 0 {
+	if output, err := cmd.Output(); err == nil && len(output) > 0 {
 		tag := strings.TrimSpace(string(output))
 		// 从标签中提取版本号
 		versionStr := strings.TrimPrefix(tag, tag[:strings.LastIndex(tag, "/v")+2])
@@ -179,7 +158,7 @@ func getCurrentVersion(module string) (Version, error) {
 }
 
 // createTag 创建标签
-func createTag(module string, version Version, dryRun bool) error {
+func createTag(module string, version *Version, dryRun bool) error {
 	tag := fmt.Sprintf("%s/v%s", module, version.String())
 
 	if dryRun {
@@ -197,76 +176,52 @@ func createTag(module string, version Version, dryRun bool) error {
 }
 
 // updateModuleDependencies 使用指定版本更新所有模块的依赖版本
-func updateModuleDependencies(versions map[string]Version, dryRun bool) error {
-	// 获取所有模块
-	modules, err := getAllModules()
-	if err != nil {
-		return err
-	}
-
-	moduleInfoMap := make(map[string]string) // name -> path
-	moduleInfos, err := getModuleInfo()
-	if err != nil {
-		return err
-	}
-	for _, info := range moduleInfos {
-		moduleInfoMap[info.Name] = info.Path
-	}
-
+func updateModuleDependencies(modules map[string]ModuleInfo, dryRun bool) error {
 	fmt.Printf("更新所有模块间的依赖版本:\n")
-	for module, version := range versions {
-		fmt.Printf("  %s: %s\n", module, version.String())
+	for name, info := range modules {
+		fmt.Printf("  %s: %s\n", name, info.Version.String())
 	}
 
 	// 遍历每个模块目录
-	for _, module := range modules {
-		goModPath := module + "/go.mod"
-		if module == "." {
-			goModPath = "go.mod"
-		}
+	for name, info := range modules {
+		basePath := filepath.Join(".", info.Name)
 
-		if _, err := os.Stat(goModPath); os.IsNotExist(err) {
-			fmt.Printf("警告: %s 模块中未找到 go.mod 文件\n", module)
+		if _, err := os.Stat(filepath.Join(basePath, "go.mod")); os.IsNotExist(err) {
+			fmt.Printf("警告: %s 模块中未找到 go.mod 文件\n", name)
 			continue
 		}
 
 		if dryRun {
-			fmt.Printf("[模拟] 更新 %s 模块的依赖\n", module)
+			fmt.Printf("[模拟] 更新 %s 模块的依赖\n", name)
 
 			// 显示将要更新的依赖
-			for depModule, version := range versions {
-				if module != depModule {
-					fmt.Printf("[模拟]   更新依赖: %s v%s\n", moduleInfoMap[depModule], version.String())
+			for depName, depInfo := range modules {
+				if name != depName {
+					fmt.Printf("[模拟]   更新依赖: %s v%s\n", depName, depInfo.Version.String())
 				}
 			}
 		} else {
 			// 实际更新依赖
-			for depModule, version := range versions {
-				if module != depModule {
+			for depName, depInfo := range modules {
+				if name != depName {
 					// 使用 go mod edit 更新依赖版本
-					cmd := exec.Command("go", "mod", "edit", "-require", fmt.Sprintf("%s@v%s", moduleInfoMap[depModule], version.String()))
-					cmd.Dir = module
-					if module == "." {
-						cmd.Dir = "."
-					}
+					cmd := exec.Command("go", "mod", "edit", "-require", fmt.Sprintf("%s@v%s", depName, depInfo.Version.String()))
+					cmd.Dir = basePath
 					if err := cmd.Run(); err != nil {
-						fmt.Printf("警告: 更新 %s 模块的 %s 依赖失败: %v\n", module, depModule, err)
+						fmt.Printf("警告: 更新 %s 模块的 %s 依赖失败: %v\n", name, depName, err)
 						continue
 					}
 
 					// 运行 go mod tidy
 					cmd = exec.Command("go", "mod", "tidy")
-					cmd.Dir = module
-					if module == "." {
-						cmd.Dir = "."
-					}
+					cmd.Dir = basePath
 					if err := cmd.Run(); err != nil {
 						fmt.Printf("警告: 运行 go mod tidy 失败: %v\n", err)
 					}
 				}
 			}
 
-			fmt.Printf("🔗 已更新 %s 模块的依赖\n", module)
+			fmt.Printf("🔗 已更新 %s 模块的依赖\n", name)
 		}
 	}
 
@@ -274,7 +229,7 @@ func updateModuleDependencies(versions map[string]Version, dryRun bool) error {
 }
 
 // generateChangelog 生成变更日志（使用每个模块的版本号）
-func generateChangelog(modules []string, versions map[string]Version, dryRun bool) error {
+func generateChangelog(modules map[string]ModuleInfo, dryRun bool) error {
 	changes := ""
 
 	// 为每个模块生成变更记录
@@ -298,7 +253,7 @@ func generateChangelog(modules []string, versions map[string]Version, dryRun boo
 		}
 
 		// 获取模块提交记录
-		cmd = exec.Command("git", "log", rangeStr, "--pretty=format:- %s", "--", module)
+		cmd = exec.Command("git", "log", rangeStr, "--pretty=format:- %s", "--", module.Name)
 		output, err = cmd.Output()
 		moduleChanges := ""
 		if err == nil && len(output) > 0 {
@@ -306,15 +261,12 @@ func generateChangelog(modules []string, versions map[string]Version, dryRun boo
 		}
 
 		if moduleChanges != "" {
-			changes += fmt.Sprintf("\n### %s (v%s)\n%s", module, versions[module].String(), moduleChanges)
+			changes += fmt.Sprintf("\n### %s (v%s)\n%s", module, module.Version.String(), moduleChanges)
 		}
 	}
 
-	// 使用第一个模块的版本号作为整体版本号
-	firstModuleVersion := versions[modules[0]]
-
 	// 生成Markdown内容
-	changelogEntry := fmt.Sprintf("\n## v%s (%s)%s", firstModuleVersion.String(), getCurrentDate(), changes)
+	changelogEntry := fmt.Sprintf("\n## v%s (%s)%s", module.Version.String(), getCurrentDate(), changes)
 	if changes == "" {
 		changelogEntry += "\n- 无变更记录"
 	}
@@ -345,7 +297,7 @@ func generateChangelog(modules []string, versions map[string]Version, dryRun boo
 }
 
 // commitChanges 提交版本变更
-func commitChanges(modules []string, version Version, dryRun bool) error {
+func commitChanges(version Version, dryRun bool) error {
 	message := fmt.Sprintf("chore(release): release v%s", version.String())
 
 	if dryRun {
@@ -396,10 +348,4 @@ func pushChanges(dryRun bool) error {
 
 	fmt.Println("🚀 已推送变更到仓库")
 	return nil
-}
-
-// getCurrentDate 获取当前日期
-func getCurrentDate() string {
-	// 使用Go标准库替代外部命令调用，提高性能和可移植性
-	return time.Now().Format("2006-01-02")
 }

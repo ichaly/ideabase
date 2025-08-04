@@ -45,32 +45,28 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// 1. 首先使用go list -m 获取所有模块
-	allModules, err := getAllModules()
+	releaseModules, err := getAllModules()
 	if err != nil {
 		return fmt.Errorf("获取所有模块失败: %v", err)
 	}
 
-	// 2. 如果自定义了发布模块则从所有模块中过滤出后缀相同的模块为待发布模块,否则全部模块为发布模块
-	var releaseModules []string
+	// 2. 如果自定义了发布模块则从所有模块中过滤出待发布模块,否则全部模块为发布模块
 	if len(modules) > 0 {
-		// 过滤出需要发布的模块
-		for _, module := range allModules {
-			for _, target := range modules {
-				if strings.HasSuffix(module, target) {
-					releaseModules = append(releaseModules, module)
-					break
+		for name, info := range releaseModules {
+			var exits bool
+			for _, module := range modules {
+				if info.Name == module {
+					exits = true
 				}
 			}
+			if !exits {
+				delete(releaseModules, name)
+			}
 		}
-	} else {
-		// 默认发布所有模块
-		releaseModules = allModules
 	}
 
 	// 3. 遍历所有待发布模块从git获取当前版本号,同时在当前版本号的基础上计算待发布模块的最新版本号
-	fmt.Printf("\n===[ 获取当前版本 ]===\n")
-	currentVersions := make(map[string]Version)
-	newVersions := make(map[string]Version)
+	fmt.Printf("\n===[ 计算最新版本 ]===\n")
 
 	if customVersion != "" {
 		// 使用指定的版本号
@@ -78,27 +74,19 @@ func run(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("无效的版本号格式: %v", err)
 		}
-		for _, module := range releaseModules {
-			currentVersion, err := getCurrentVersion(module)
-			if err != nil {
-				return fmt.Errorf("获取模块 %s 的当前版本失败: %v", module, err)
-			}
-			currentVersions[module] = currentVersion
-			newVersions[module] = version
-			fmt.Printf("%s: %s -> %s\n", module, currentVersion.String(), version.String())
+		for _, info := range releaseModules {
+			info.Version = &version
 		}
 		fmt.Printf("使用指定版本: %s\n", customVersion)
 	} else {
 		// 根据类型升级版本
-		for _, module := range releaseModules {
-			currentVersion, err := getCurrentVersion(module)
+		for name, info := range releaseModules {
+			currentVersion, err := getCurrentVersion(name)
 			if err != nil {
-				return fmt.Errorf("获取模块 %s 的当前版本失败: %v", module, err)
+				return fmt.Errorf("获取模块 %s 的当前版本失败: %v", info, err)
 			}
-			currentVersions[module] = currentVersion
-			newVersion := currentVersion.Upgrade(bumpType)
-			newVersions[module] = newVersion
-			fmt.Printf("%s: %s -> %s\n", module, currentVersion.String(), newVersion.String())
+			info.Version = currentVersion.Upgrade(bumpType)
+			fmt.Printf("%s: %s -> %s\n", info, currentVersion.String(), info.Version.String())
 		}
 	}
 
@@ -106,24 +94,24 @@ func run(cmd *cobra.Command, args []string) error {
 	fmt.Printf("发布模块: %v\n", releaseModules)
 
 	// 4. 使用计算好的模块版本利用 go mod edit 命令更新待发布模块的依赖版本号
-	if err := updateModuleDependencies(newVersions, dryRun); err != nil {
+	if err := updateModuleDependencies(releaseModules, dryRun); err != nil {
 		return fmt.Errorf("更新模块依赖失败: %v", err)
 	}
 
 	// 生成变更日志（使用每个模块的新版本号）
-	if err := generateChangelog(releaseModules, newVersions, dryRun); err != nil {
+	if err := generateChangelog(releaseModules, dryRun); err != nil {
 		return fmt.Errorf("生成变更日志失败: %v", err)
 	}
 
 	// 发布每个模块（使用各自的新版本号）
-	for _, module := range releaseModules {
-		if err := releaseModule(module, newVersions[module]); err != nil {
-			return fmt.Errorf("发布模块 %s 失败: %v", module, err)
+	for name, info := range releaseModules {
+		if err := releaseModule(name, info.Version); err != nil {
+			return fmt.Errorf("发布模块 %s 失败: %v", name, err)
 		}
 	}
 
-	// 提交所有变更（使用第一个模块的新版本号作为整体版本号）
-	//if err := commitChanges(releaseModules, newVersions[releaseModules[0]], dryRun); err != nil {
+	// 提交所有变更
+	//if err := commitChanges(newVersions[releaseModules[0]], dryRun); err != nil {
 	//	return fmt.Errorf("提交变更失败: %v", err)
 	//}
 
@@ -136,7 +124,7 @@ func run(cmd *cobra.Command, args []string) error {
 }
 
 // releaseModule 使用指定版本发布单个模块
-func releaseModule(module string, version Version) error {
+func releaseModule(module string, version *Version) error {
 	// 检查模块目录是否存在
 	if _, err := os.Stat(module); os.IsNotExist(err) {
 		return fmt.Errorf("模块 '%s' 不存在", module)
