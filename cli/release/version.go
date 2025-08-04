@@ -236,20 +236,23 @@ func generateChangelog(modules map[string]ModuleInfo, dryRun bool) error {
 	for _, module := range modules {
 		var rangeStr string
 
-		// 获取历史标签范围
-		cmd := exec.Command("git", "tag", "--list", fmt.Sprintf("*%s/v*", module))
+		// 构建模块的标签模式
+		tagPattern := fmt.Sprintf("%s/v*", module.Name)
+
+		// 获取最新标签
+		cmd := exec.Command("git", "describe", "--tags", "--match", tagPattern, "--abbrev=0")
 		output, err := cmd.Output()
-		if err != nil || len(output) == 0 {
-			rangeStr = "HEAD"
-		} else {
-			cmd = exec.Command("git", "describe", "--tags", "--match", fmt.Sprintf("*%s/v*", module), "--abbrev=0")
-			output, err := cmd.Output()
-			if err != nil {
-				rangeStr = "HEAD"
-			} else {
-				prevTag := strings.TrimSpace(string(output))
+
+		if err == nil && len(output) > 0 {
+			prevTag := strings.TrimSpace(string(output))
+			// 确保标签确实匹配模块
+			if strings.HasPrefix(prevTag, module.Name+"/v") {
 				rangeStr = fmt.Sprintf("%s..HEAD", prevTag)
+			} else {
+				rangeStr = "HEAD"
 			}
+		} else {
+			rangeStr = "HEAD"
 		}
 
 		// 获取模块提交记录
@@ -261,14 +264,10 @@ func generateChangelog(modules map[string]ModuleInfo, dryRun bool) error {
 		}
 
 		if moduleChanges != "" {
-			changes += fmt.Sprintf("\n### %s (v%s)\n%s", module, module.Version.String(), moduleChanges)
+			changes += fmt.Sprintf("\n### %s (v%s)\n%s", module.Name, module.Version.String(), moduleChanges)
+		} else {
+			changes += fmt.Sprintf("\n### %s (v%s)\n- 无变更记录", module.Name, module.Version.String())
 		}
-	}
-
-	// 生成Markdown内容
-	changelogEntry := fmt.Sprintf("\n## v%s (%s)%s", module.Version.String(), getCurrentDate(), changes)
-	if changes == "" {
-		changelogEntry += "\n- 无变更记录"
 	}
 
 	if !dryRun {
@@ -278,7 +277,7 @@ func generateChangelog(modules map[string]ModuleInfo, dryRun bool) error {
 		}
 		defer f.Close()
 
-		if _, err := f.WriteString(changelogEntry); err != nil {
+		if _, err := f.WriteString(changes); err != nil {
 			return fmt.Errorf("写入变更日志文件失败: %v", err)
 		}
 
