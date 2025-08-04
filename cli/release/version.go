@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -25,8 +26,9 @@ var (
 
 // ModuleInfo 表示模块信息
 type ModuleInfo struct {
-	Name string // 模块名（无前缀）
+	Name string // 模块名（去除公共前缀部分）
 	Path string // 模块完整路径
+	Root string // 根路径
 }
 
 // Version 表示语义化版本
@@ -77,37 +79,70 @@ func ParseVersion(version string) (Version, error) {
 // getModuleInfo 获取模块信息，使用缓存确保只执行一次
 func getModuleInfo() ([]ModuleInfo, error) {
 	cacheOnce.Do(func() {
-		// 只使用 go list -m 获取模块信息
-		modules, err := getModulesFromGoList()
-		moduleInfoCache, cacheError = modules, err
+		// 执行go list -m获取模块列表
+		output, err := exec.Command("go", "list", "-m").Output()
+		if err != nil {
+			cacheError = fmt.Errorf("无法获取模块列表: %v", err)
+			return
+		}
+
+		paths := strings.Split(strings.TrimSpace(string(output)), "\n")
+		if len(paths) == 0 || (len(paths) == 1 && paths[0] == "") {
+			cacheError = fmt.Errorf("未找到任何模块")
+			return
+		}
+
+		// 查找公共前缀
+		prefix := findCommonPrefix(paths)
+		if len(prefix) == 0 {
+			cacheError = fmt.Errorf("无法确定公共前缀")
+			return
+		}
+
+		// 构造ModuleInfo列表
+		var modules []ModuleInfo
+		for _, module := range paths {
+			// 从完整路径中提取模块名并移除可能的前导斜杠
+			name := strings.TrimPrefix(strings.TrimPrefix(module, prefix), "/")
+			modules = append(modules, ModuleInfo{Name: name, Path: module, Root: prefix})
+		}
+
+		moduleInfoCache = modules
 	})
 	return moduleInfoCache, cacheError
 }
 
-// 从go list -m获取模块信息
-func getModulesFromGoList() ([]ModuleInfo, error) {
-	// 执行go list -m获取模块列表
-	cmd := exec.Command("go", "list", "-m")
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("无法获取模块列表: %v", err)
+// findCommonPrefix 查找字符串数组的公共前缀
+func findCommonPrefix(strs []string) string {
+	if len(strs) == 0 {
+		return ""
 	}
 
-	modulePaths := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(modulePaths) == 0 || (len(modulePaths) == 1 && modulePaths[0] == "") {
-		return nil, fmt.Errorf("未找到任何模块")
+	// 基准字符串
+	base := strs[0]
+	index := len(base) // 默认结尾位置
+
+	// 比较其他字符串
+	for _, text := range strs[1:] {
+		i := 0
+		for i < len(base) && i < len(text) && base[i] == text[i] {
+			i++
+		}
+
+		// 确保字符边界
+		for i > 0 {
+			if utf8.RuneStart(base[i-1]) {
+				break
+			}
+			i--
+		}
+
+		if i < index {
+			index = i
+		}
 	}
 
-	// 构造ModuleInfo列表
-	var modules []ModuleInfo
-	for _, modulePath := range modulePaths {
-		// 从完整路径中提取模块名
-		parts := strings.Split(modulePath, "/")
-		name := parts[len(parts)-1]
-		modules = append(modules, ModuleInfo{Name: name, Path: modulePath})
-	}
-
-	return modules, nil
+	return base[:index]
 }
 
 // getAllModules 获取所有本地模块
@@ -117,7 +152,7 @@ func getAllModules() ([]string, error) {
 		return nil, err
 	}
 
-	// 只返回模块名（无前缀）
+	// 只返回模块名
 	var names []string
 	for _, module := range modules {
 		names = append(names, module.Name)
