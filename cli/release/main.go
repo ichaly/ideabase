@@ -61,28 +61,28 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 3. 遍历所有待发布模块从git获取当前版本号,同时在当前版本号的基础上计算待发布模块的最新版本号
+	// 3. 计算所有模块的最新版本号
 	fmt.Printf("\n===[ 计算最新版本 ]===\n")
 
+	// 提前解析自定义版本号
+	var targetVersion *Version
 	if customVersion != "" {
-		// 使用指定的版本号
-		version, err := ParseVersion(customVersion)
-		if err != nil {
+		var err error
+		if targetVersion, err = ParseVersion(customVersion); err != nil {
 			return fmt.Errorf("无效的版本号格式: %v", err)
 		}
-		for _, info := range releaseModules {
-			info.Version = &version
-		}
 		fmt.Printf("使用指定版本: %s\n", customVersion)
-	} else {
-		// 根据类型升级版本
-		for name, info := range releaseModules {
-			currentVersion, err := getCurrentVersion(name)
-			if err != nil {
-				return fmt.Errorf("获取模块 %s 的当前版本失败: %v", info, err)
-			}
-			info.Version = currentVersion.Upgrade(bumpType)
-			fmt.Printf("%s: %s -> %s\n", info.Path, currentVersion.String(), info.Version.String())
+	}
+
+	// 统一循环处理所有模块
+	for name, module := range releaseModules {
+		if targetVersion != nil {
+			module.Version = targetVersion
+		} else if currentVersion, err := getCurrentVersion(name); err != nil {
+			return fmt.Errorf("获取模块 %s 的当前版本失败: %v", name, err)
+		} else {
+			module.Version = currentVersion.Upgrade(bumpType)
+			fmt.Printf("%s: %s -> %s\n", module.Path, currentVersion.String(), module.Version.String())
 		}
 	}
 

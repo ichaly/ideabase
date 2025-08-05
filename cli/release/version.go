@@ -55,18 +55,18 @@ func (my *Version) Upgrade(upgradeType string) *Version {
 }
 
 // ParseVersion 从字符串解析版本
-func ParseVersion(version string) (Version, error) {
+func ParseVersion(version string) (*Version, error) {
 	re := regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`)
 	matches := re.FindStringSubmatch(version)
 	if len(matches) != 4 {
-		return Version{}, fmt.Errorf("无效的版本号格式: %s", version)
+		return nil, fmt.Errorf("无效的版本号格式: %s", version)
 	}
 
 	major, _ := strconv.Atoi(matches[1])
 	minor, _ := strconv.Atoi(matches[2])
 	patch, _ := strconv.Atoi(matches[3])
 
-	return Version{
+	return &Version{
 		Major: major,
 		Minor: minor,
 		Patch: patch,
@@ -144,7 +144,7 @@ func getAllModules() (map[string]*ModuleInfo, error) {
 }
 
 // getCurrentVersion 获取模块的当前版本（仅从Git标签）
-func getCurrentVersion(module string) (Version, error) {
+func getCurrentVersion(module string) (*Version, error) {
 	// 尝试从Git标签获取
 	tagPattern := fmt.Sprintf("*%s/v*", module)
 	cmd := exec.Command("git", "describe", "--tags", "--match", tagPattern, "--abbrev=0")
@@ -157,7 +157,7 @@ func getCurrentVersion(module string) (Version, error) {
 	}
 
 	// 如果没有标签，返回0.0.0
-	return Version{Major: 0, Minor: 0, Patch: 0}, nil
+	return &Version{Major: 0, Minor: 0, Patch: 0}, nil
 }
 
 // createTag 创建标签
@@ -200,14 +200,14 @@ func updateModuleDependencies(modules map[string]*ModuleInfo, dryRun bool) error
 
 			// 显示将要更新的依赖
 			for depName, depInfo := range modules {
-				if name != depName {
+				if name != depName && hasDependency(basePath, depName) {
 					fmt.Printf("[模拟]   更新依赖: %s v%s\n", depName, depInfo.Version.String())
 				}
 			}
 		} else {
 			// 实际更新依赖
 			for depName, depInfo := range modules {
-				if name != depName {
+				if name != depName && hasDependency(basePath, depName) {
 					// 使用 go mod edit 更新依赖版本
 					cmd := exec.Command("go", "mod", "edit", "-require", fmt.Sprintf("%s@v%s", depName, depInfo.Version.String()))
 					cmd.Dir = basePath
