@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/samber/lo"
@@ -41,6 +40,9 @@ func main() {
 }
 
 func run(cmd *cobra.Command, args []string) error {
+	// 获取项目根目录
+	projectRoot := getProjectRoot()
+
 	// 检查是否在Git仓库中且在正确的分支上
 	if err := checkGit(); err != nil {
 		return err
@@ -87,7 +89,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// 4. 使用计算好的模块版本利用 go mod edit 命令更新待发布模块的依赖版本号
-	if err := updateModuleDependencies(releaseModules, dryRun); err != nil {
+	if err := updateModuleDependencies(releaseModules, projectRoot, dryRun); err != nil {
 		return fmt.Errorf("更新模块依赖失败: %v", err)
 	}
 
@@ -98,7 +100,8 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// 发布每个模块（使用各自的新版本号）
 	for name, info := range releaseModules {
-		if err := releaseModule(info.Name, info.Version); err != nil {
+		fmt.Printf("\n===[ 发布 %s 模块 v%s ]===\n", info.Name, info.Version.String())
+		if err := createTag(info.Name, info.Version, dryRun); err != nil {
 			return fmt.Errorf("发布模块 %s 失败: %v", name, err)
 		}
 	}
@@ -112,25 +115,6 @@ func run(cmd *cobra.Command, args []string) error {
 	//if err := pushChanges(dryRun); err != nil {
 	//	return fmt.Errorf("推送变更失败: %v", err)
 	//}
-
-	return nil
-}
-
-// releaseModule 使用指定版本发布单个模块
-func releaseModule(module string, version *Version) error {
-	// 检查模块目录是否存在（相对于项目根目录）
-	modulePath := filepath.Join("..", "..", module)
-	if _, err := os.Stat(modulePath); os.IsNotExist(err) {
-		return fmt.Errorf("模块 '%s' 不存在", modulePath)
-	}
-
-	fmt.Printf("\n===[ 发布 %s 模块 ]===\n", module)
-	fmt.Printf("版本: %s\n", version.String())
-
-	// 执行发布步骤
-	if err := createTag(module, version, dryRun); err != nil {
-		return fmt.Errorf("创建标签失败: %v", err)
-	}
 
 	return nil
 }

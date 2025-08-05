@@ -79,6 +79,29 @@ func getCurrentDate() string {
 	return time.Now().Format("2006-01-02")
 }
 
+// getProjectRoot 获取项目根目录
+func getProjectRoot() string {
+	currentDir, _ := os.Getwd()
+	projectRoot := currentDir
+	for {
+		if _, err := os.Stat(filepath.Join(projectRoot, "go.work")); err == nil {
+			break
+		}
+		parent := filepath.Dir(projectRoot)
+		if parent == projectRoot {
+			projectRoot = currentDir
+			break
+		}
+		projectRoot = parent
+	}
+	return projectRoot
+}
+
+// getModulePath 获取模块的绝对路径
+func getModulePath(projectRoot, moduleName string) string {
+	return filepath.Join(projectRoot, moduleName)
+}
+
 // findCommonPrefix 查找字符串数组的公共前缀
 func findCommonPrefix(strs []string) string {
 	if len(strs) == 0 {
@@ -179,7 +202,7 @@ func createTag(module string, version *Version, dryRun bool) error {
 }
 
 // updateModuleDependencies 使用指定版本更新所有模块的依赖版本
-func updateModuleDependencies(modules map[string]*ModuleInfo, dryRun bool) error {
+func updateModuleDependencies(modules map[string]*ModuleInfo, projectRoot string, dryRun bool) error {
 	fmt.Printf("更新所有模块间的依赖版本:\n")
 	for name, info := range modules {
 		fmt.Printf("  %s: %s\n", name, info.Version.String())
@@ -187,8 +210,8 @@ func updateModuleDependencies(modules map[string]*ModuleInfo, dryRun bool) error
 
 	// 遍历每个模块目录
 	for name, info := range modules {
-		// 使用模块名作为目录路径（相对于项目根目录）
-		basePath := filepath.Join("..", "..", info.Name)
+		// 使用公共方法获取模块路径
+		basePath := getModulePath(projectRoot, info.Name)
 
 		if _, err := os.Stat(filepath.Join(basePath, "go.mod")); os.IsNotExist(err) {
 			fmt.Printf("警告: %s 模块中未找到 go.mod 文件\n", name)
