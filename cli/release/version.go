@@ -169,16 +169,12 @@ func getAllModules() (map[string]*ModuleInfo, error) {
 // getCurrentVersion 获取模块的当前版本（仅从Git标签）
 func getCurrentVersion(module string) (*Version, error) {
 	// 尝试从Git标签获取
-	tagPattern := fmt.Sprintf("*%s/v*", module)
-	cmd := exec.Command("git", "describe", "--tags", "--match", tagPattern, "--abbrev=0")
-
+	cmd := exec.Command("git", "describe", "--tags", "--match", fmt.Sprintf("%s/v*", module), "--abbrev=0")
 	if output, err := cmd.Output(); err == nil && len(output) > 0 {
-		tag := strings.TrimSpace(string(output))
-		// 从标签中提取版本号
-		versionStr := strings.TrimPrefix(tag, tag[:strings.LastIndex(tag, "/v")+2])
-		return ParseVersion(versionStr)
+		if tag := strings.TrimSpace(string(output)); strings.HasPrefix(tag, module+"/v") {
+			return ParseVersion(strings.TrimPrefix(tag, module+"/v"))
+		}
 	}
-
 	// 如果没有标签，返回0.0.0
 	return &Version{Major: 0, Minor: 0, Patch: 0}, nil
 }

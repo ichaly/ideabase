@@ -80,7 +80,7 @@ func run(cmd *cobra.Command, args []string) error {
 	for name, module := range releaseModules {
 		if targetVersion != nil {
 			module.Version = targetVersion
-		} else if currentVersion, err := getCurrentVersion(name); err != nil {
+		} else if currentVersion, err := getCurrentVersion(module.Name); err != nil {
 			return fmt.Errorf("获取模块 %s 的当前版本失败: %v", name, err)
 		} else {
 			module.Version = currentVersion.Upgrade(bumpType)
