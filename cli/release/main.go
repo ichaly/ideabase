@@ -87,12 +87,9 @@ func run(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("获取模块 %s 的当前版本失败: %v", info, err)
 			}
 			info.Version = currentVersion.Upgrade(bumpType)
-			fmt.Printf("%s: %s -> %s\n", info, currentVersion.String(), info.Version.String())
+			fmt.Printf("%s: %s -> %s\n", info.Path, currentVersion.String(), info.Version.String())
 		}
 	}
-
-	fmt.Printf("\n===[ 发布准备 ]===\n")
-	fmt.Printf("发布模块: %v\n", releaseModules)
 
 	// 4. 使用计算好的模块版本利用 go mod edit 命令更新待发布模块的依赖版本号
 	if err := updateModuleDependencies(releaseModules, dryRun); err != nil {
@@ -106,7 +103,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// 发布每个模块（使用各自的新版本号）
 	for name, info := range releaseModules {
-		if err := releaseModule(name, info.Version); err != nil {
+		if err := releaseModule(info.Name, info.Version); err != nil {
 			return fmt.Errorf("发布模块 %s 失败: %v", name, err)
 		}
 	}
@@ -126,9 +123,10 @@ func run(cmd *cobra.Command, args []string) error {
 
 // releaseModule 使用指定版本发布单个模块
 func releaseModule(module string, version *Version) error {
-	// 检查模块目录是否存在
-	if _, err := os.Stat(filepath.Dir("./" + module)); os.IsNotExist(err) {
-		return fmt.Errorf("模块 '%s' 不存在", module)
+	// 检查模块目录是否存在（相对于项目根目录）
+	modulePath := filepath.Join("..", "..", module)
+	if _, err := os.Stat(modulePath); os.IsNotExist(err) {
+		return fmt.Errorf("模块 '%s' 不存在", modulePath)
 	}
 
 	fmt.Printf("\n===[ 发布 %s 模块 ]===\n", module)

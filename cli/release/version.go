@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/samber/lo"
+	"golang.org/x/mod/modfile"
 )
 
 const (
@@ -184,7 +187,8 @@ func updateModuleDependencies(modules map[string]*ModuleInfo, dryRun bool) error
 
 	// 遍历每个模块目录
 	for name, info := range modules {
-		basePath := filepath.Join(".", info.Name)
+		// 使用模块名作为目录路径（相对于项目根目录）
+		basePath := filepath.Join("..", "..", info.Name)
 
 		if _, err := os.Stat(filepath.Join(basePath, "go.mod")); os.IsNotExist(err) {
 			fmt.Printf("警告: %s 模块中未找到 go.mod 文件\n", name)
@@ -264,9 +268,9 @@ func generateChangelog(modules map[string]*ModuleInfo, dryRun bool) error {
 		}
 
 		if moduleChanges != "" {
-			changes += fmt.Sprintf("\n### %s (v%s)\n%s", module.Name, module.Version.String(), moduleChanges)
+			changes += fmt.Sprintf("\n## %s v%s (%s)\n%s", module.Name, module.Version.String(), getCurrentDate(), moduleChanges)
 		} else {
-			changes += fmt.Sprintf("\n### %s (v%s)\n- 无变更记录", module.Name, module.Version.String())
+			changes += fmt.Sprintf("\n## %s v%s (%s)\n- 无变更记录", module.Name, module.Version.String(), getCurrentDate())
 		}
 	}
 
@@ -347,4 +351,16 @@ func pushChanges(dryRun bool) error {
 
 	fmt.Println("🚀 已推送变更到仓库")
 	return nil
+}
+
+// hasDependency 检查模块是否直接依赖指定的模块
+func hasDependency(path, module string) bool {
+	if content, err := os.ReadFile(filepath.Join(path, "go.mod")); err == nil {
+		if file, err := modfile.Parse("go.mod", content, nil); err == nil {
+			return lo.ContainsBy(file.Require, func(req *modfile.Require) bool {
+				return req.Mod.Path == module && !req.Indirect
+			})
+		}
+	}
+	return false
 }
