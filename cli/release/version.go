@@ -110,8 +110,8 @@ func findCommonPrefix(strs []string) string {
 }
 
 // getAllModules 获取模块信息
-func getAllModules() (map[string]ModuleInfo, error) {
-	modules := make(map[string]ModuleInfo)
+func getAllModules() (map[string]*ModuleInfo, error) {
+	modules := make(map[string]*ModuleInfo)
 
 	// 执行go list -m获取模块列表
 	output, err := exec.Command("go", "list", "-m").Output()
@@ -134,7 +134,7 @@ func getAllModules() (map[string]ModuleInfo, error) {
 	for _, module := range paths {
 		// 从完整路径中提取模块名并移除可能的前导斜杠
 		name := strings.TrimPrefix(strings.TrimPrefix(module, prefix), "/")
-		modules[module] = ModuleInfo{Name: name, Path: module, Root: prefix}
+		modules[module] = &ModuleInfo{Name: name, Path: module, Root: prefix}
 	}
 
 	return modules, nil
@@ -176,7 +176,7 @@ func createTag(module string, version *Version, dryRun bool) error {
 }
 
 // updateModuleDependencies 使用指定版本更新所有模块的依赖版本
-func updateModuleDependencies(modules map[string]ModuleInfo, dryRun bool) error {
+func updateModuleDependencies(modules map[string]*ModuleInfo, dryRun bool) error {
 	fmt.Printf("更新所有模块间的依赖版本:\n")
 	for name, info := range modules {
 		fmt.Printf("  %s: %s\n", name, info.Version.String())
@@ -229,7 +229,7 @@ func updateModuleDependencies(modules map[string]ModuleInfo, dryRun bool) error 
 }
 
 // generateChangelog 生成变更日志（使用每个模块的版本号）
-func generateChangelog(modules map[string]ModuleInfo, dryRun bool) error {
+func generateChangelog(modules map[string]*ModuleInfo, dryRun bool) error {
 	changes := ""
 
 	// 为每个模块生成变更记录
