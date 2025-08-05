@@ -204,3 +204,9 @@
 - refactor: Improve file utility functions with predefined error constants and deferred error handling
 - refactor: Improve utility functions with enhanced error handling and performance
 - chore: restructure project
+
+## log v0.0.1 (2025-08-06)
+- refactor(release): 添加项目根目录获取功能并优化模块路径处理
+- build:移除 ideabase 项目中的版本信息文件
+## utl v0.0.1 (2025-08-06)
+- build:移除 ideabase 项目中的版本信息文件

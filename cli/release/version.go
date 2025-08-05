@@ -257,66 +257,45 @@ func updateModuleDependencies(modules map[string]*ModuleInfo, projectRoot string
 
 // generateChangelog 生成变更日志（使用每个模块的版本号）
 func generateChangelog(modules map[string]*ModuleInfo, dryRun bool) error {
-	changes := ""
+	var changes strings.Builder
 
-	// 为每个模块生成变更记录
 	for _, module := range modules {
-		var rangeStr string
-
-		// 构建模块的标签模式
-		tagPattern := fmt.Sprintf("%s/v*", module.Name)
-
-		// 获取最新标签
-		cmd := exec.Command("git", "describe", "--tags", "--match", tagPattern, "--abbrev=0")
-		output, err := cmd.Output()
-
-		if err == nil && len(output) > 0 {
-			prevTag := strings.TrimSpace(string(output))
-			// 确保标签确实匹配模块
-			if strings.HasPrefix(prevTag, module.Name+"/v") {
+		// 获取Git标签范围和提交记录
+		moduleChanges, rangeStr := "", "HEAD"
+		cmd := exec.Command("git", "describe", "--tags", "--match", fmt.Sprintf("%s/v*", module.Name), "--abbrev=0")
+		if output, err := cmd.Output(); err == nil && len(output) > 0 {
+			if prevTag := strings.TrimSpace(string(output)); strings.HasPrefix(prevTag, module.Name+"/v") {
 				rangeStr = fmt.Sprintf("%s..HEAD", prevTag)
-			} else {
-				rangeStr = "HEAD"
 			}
-		} else {
-			rangeStr = "HEAD"
 		}
 
-		// 获取模块提交记录
 		cmd = exec.Command("git", "log", rangeStr, "--pretty=format:- %s", "--", module.Name)
-		output, err = cmd.Output()
-		moduleChanges := ""
-		if err == nil && len(output) > 0 {
+		if output, err := cmd.Output(); err == nil && len(output) > 0 {
 			moduleChanges = strings.TrimSpace(string(output))
 		}
 
-		if moduleChanges != "" {
-			changes += fmt.Sprintf("\n## %s v%s (%s)\n%s", module.Name, module.Version.String(), getCurrentDate(), moduleChanges)
-		} else {
-			changes += fmt.Sprintf("\n## %s v%s (%s)\n- 无变更记录", module.Name, module.Version.String(), getCurrentDate())
+		changes.WriteString(fmt.Sprintf("\n## %s v%s (%s)\n%s",
+			module.Name, module.Version.String(), getCurrentDate(),
+			lo.Ternary(moduleChanges != "", moduleChanges, "- 无变更记录")))
+	}
+
+	// 写入文件并处理Git操作
+	if f, err := os.OpenFile(ChangeLog, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644); err != nil {
+		return fmt.Errorf("无法打开变更日志文件: %v", err)
+	} else {
+		defer f.Close()
+		if _, err := f.WriteString(changes.String()); err != nil {
+			return fmt.Errorf("写入变更日志文件失败: %v", err)
 		}
 	}
 
 	if !dryRun {
-		f, err := os.OpenFile(ChangeLog, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
-		if err != nil {
-			return fmt.Errorf("无法打开变更日志文件: %v", err)
-		}
-		defer f.Close()
-
-		if _, err := f.WriteString(changes); err != nil {
-			return fmt.Errorf("写入变更日志文件失败: %v", err)
-		}
-
-		// 添加到git
-		cmd := exec.Command("git", "add", ChangeLog)
-		if err := cmd.Run(); err != nil {
+		if err := exec.Command("git", "add", ChangeLog).Run(); err != nil {
 			return fmt.Errorf("添加变更日志到git失败: %v", err)
 		}
-
 		fmt.Println("📝 更新变更日志")
 	} else {
-		fmt.Printf("[模拟] 更新变更日志 %s\n", ChangeLog)
+		fmt.Printf("[模拟] 已生成变更日志 %s（未提交到Git）\n", ChangeLog)
 	}
 
 	return nil
