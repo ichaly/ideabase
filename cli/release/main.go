@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -126,7 +127,7 @@ func run(cmd *cobra.Command, args []string) error {
 // releaseModule 使用指定版本发布单个模块
 func releaseModule(module string, version *Version) error {
 	// 检查模块目录是否存在
-	if _, err := os.Stat(module); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Dir("./" + module)); os.IsNotExist(err) {
 		return fmt.Errorf("模块 '%s' 不存在", module)
 	}
 
