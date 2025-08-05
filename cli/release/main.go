@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 )
 
@@ -51,16 +52,10 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("获取所有模块失败: %v", err)
 	}
 
-	// 2. 如果自定义了发布模块则从所有模块中过滤出待发布模块,否则全部模块为发布模块
+	// 2. 过滤指定模块
 	if len(modules) > 0 {
 		for name, info := range releaseModules {
-			var exits bool
-			for _, module := range modules {
-				if info.Name == module {
-					exits = true
-				}
-			}
-			if !exits {
+			if !lo.Contains(modules, info.Name) {
 				delete(releaseModules, name)
 			}
 		}
