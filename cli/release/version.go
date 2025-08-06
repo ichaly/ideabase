@@ -198,54 +198,50 @@ func createTag(module string, version *Version, dryRun bool) error {
 }
 
 // updateModuleDependencies 使用指定版本更新所有模块的依赖版本
-func updateModuleDependencies(modules map[string]*ModuleInfo, projectRoot string, dryRun bool) error {
+func updateDependencies(modules map[string]*ModuleInfo, projectRoot string, dryRun bool) error {
 	fmt.Printf("更新所有模块间的依赖版本:\n")
-	for name, info := range modules {
-		fmt.Printf("  %s: %s\n", name, info.Version.String())
-	}
 
-	// 遍历每个模块目录
+	// 计算依赖关系
+	dependencies := make(map[string][]string)
 	for name, info := range modules {
-		// 使用公共方法获取模块路径
 		basePath := getModulePath(projectRoot, info.Name)
-
-		if _, err := os.Stat(filepath.Join(basePath, "go.mod")); os.IsNotExist(err) {
+		content, err := os.ReadFile(filepath.Join(basePath, "go.mod"))
+		if err != nil {
 			fmt.Printf("警告: %s 模块中未找到 go.mod 文件\n", name)
 			continue
 		}
 
-		if dryRun {
-			fmt.Printf("[模拟] 更新 %s 模块的依赖\n", name)
-
-			// 显示将要更新的依赖
-			for depName, depInfo := range modules {
-				if name != depName && hasDependency(basePath, depName) {
-					fmt.Printf("[模拟]   更新依赖: %s v%s\n", depName, depInfo.Version.String())
+		if file, err := modfile.Parse("go.mod", content, nil); err == nil {
+			if deps := lo.FilterMap(file.Require, func(req *modfile.Require, _ int) (string, bool) {
+				if req.Indirect {
+					return "", false
 				}
+				return req.Mod.Path, lo.ContainsBy(lo.Values(modules), func(m *ModuleInfo) bool { return m.Path == req.Mod.Path })
+			}); len(deps) > 0 {
+				dependencies[name] = deps
 			}
-		} else {
-			// 实际更新依赖
-			for depName, depInfo := range modules {
-				if name != depName && hasDependency(basePath, depName) {
-					// 使用 go mod edit 更新依赖版本
-					cmd := exec.Command("go", "mod", "edit", "-require", fmt.Sprintf("%s@v%s", depName, depInfo.Version.String()))
-					cmd.Dir = basePath
-					if err := cmd.Run(); err != nil {
-						fmt.Printf("警告: 更新 %s 模块的 %s 依赖失败: %v\n", name, depName, err)
-						continue
-					}
-
-					// 运行 go mod tidy
-					cmd = exec.Command("go", "mod", "tidy")
-					cmd.Dir = basePath
-					if err := cmd.Run(); err != nil {
-						fmt.Printf("警告: 运行 go mod tidy 失败: %v\n", err)
-					}
-				}
-			}
-
-			fmt.Printf("🔗 已更新 %s 模块的依赖\n", name)
 		}
+	}
+
+	// 更新依赖
+	for name, deps := range dependencies {
+		fmt.Printf("%s更新 %s 模块的依赖\n", lo.Ternary(dryRun, "[模拟] ", ""), name)
+
+		basePath := getModulePath(projectRoot, modules[name].Name)
+		for _, depPath := range deps {
+			depInfo := modules[depPath]
+			if dryRun {
+				fmt.Printf("[模拟]   更新依赖: %s v%s\n", depInfo.Name, depInfo.Version.String())
+				continue
+			}
+			cmd := exec.Command("go", "mod", "edit", "-require", fmt.Sprintf("%s@v%s", depPath, depInfo.Version.String()))
+			cmd.Dir = basePath
+			if err := cmd.Run(); err != nil {
+				fmt.Printf("警告: 更新 %s 模块的 %s 依赖失败: %v\n", name, depInfo.Name, err)
+			}
+		}
+
+		fmt.Printf("%s已更新 %s 模块的依赖\n", lo.Ternary(dryRun, "[模拟] ", "🔗 "), name)
 	}
 
 	return nil
@@ -285,13 +281,11 @@ func generateChangelog(modules map[string]*ModuleInfo, dryRun bool) error {
 		}
 	}
 
+	fmt.Printf("%s\n", lo.Ternary(dryRun, "[模拟] 已生成变更日志 "+ChangeLog+"（未提交到Git）", "📝 更新变更日志"))
 	if !dryRun {
 		if err := exec.Command("git", "add", ChangeLog).Run(); err != nil {
 			return fmt.Errorf("添加变更日志到git失败: %v", err)
 		}
-		fmt.Println("📝 更新变更日志")
-	} else {
-		fmt.Printf("[模拟] 已生成变更日志 %s（未提交到Git）\n", ChangeLog)
 	}
 
 	return nil
@@ -301,25 +295,19 @@ func generateChangelog(modules map[string]*ModuleInfo, dryRun bool) error {
 func commitChanges(version Version, dryRun bool) error {
 	message := fmt.Sprintf("chore(release): release v%s", version.String())
 
+	fmt.Printf("%sgit commit -m \"%s\"\n", lo.Ternary(dryRun, "[模拟] ", ""), message)
 	if dryRun {
-		fmt.Printf("[模拟] git commit -m \"%s\"\n", message)
 		return nil
 	}
 
 	// 检查是否有需要提交的更改
-	cmd := exec.Command("git", "status", "--porcelain")
-	output, err := cmd.Output()
+	output, err := exec.Command("git", "status", "--porcelain").Output()
 	if err != nil {
 		return fmt.Errorf("检查git状态失败: %v", err)
 	}
 
-	if len(output) > 0 {
-		cmd = exec.Command("git", "commit", "-m", message)
-	} else {
-		// 如果没有更改，创建空提交
-		cmd = exec.Command("git", "commit", "--allow-empty", "-m", message)
-	}
-
+	// 如果没有更改，创建空提交
+	cmd := exec.Command("git", "commit", "-m", message, lo.Ternary(len(output) > 0, "", "--allow-empty"))
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git commit 失败: %v", err)
 	}
@@ -329,9 +317,10 @@ func commitChanges(version Version, dryRun bool) error {
 
 // pushChanges 推送变更
 func pushChanges(dryRun bool) error {
+	prefix := lo.Ternary(dryRun, "[模拟] ", "")
+	fmt.Printf("%sgit push origin %s\n", prefix, Branch)
+	fmt.Printf("%sgit push origin --tags\n", prefix)
 	if dryRun {
-		fmt.Printf("[模拟] git push origin %s\n", Branch)
-		fmt.Printf("[模拟] git push origin --tags\n")
 		return nil
 	}
 
@@ -347,18 +336,6 @@ func pushChanges(dryRun bool) error {
 		return fmt.Errorf("推送标签失败: %v", err)
 	}
 
-	fmt.Println("🚀 已推送变更到仓库")
+	fmt.Printf("%s已推送变更到仓库\n", lo.Ternary(dryRun, "[模拟] ", "🚀 "))
 	return nil
-}
-
-// hasDependency 检查模块是否直接依赖指定的模块
-func hasDependency(path, module string) bool {
-	if content, err := os.ReadFile(filepath.Join(path, "go.mod")); err == nil {
-		if file, err := modfile.Parse("go.mod", content, nil); err == nil {
-			return lo.ContainsBy(file.Require, func(req *modfile.Require) bool {
-				return req.Mod.Path == module && !req.Indirect
-			})
-		}
-	}
-	return false
 }

@@ -89,7 +89,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// 4. 使用计算好的模块版本利用 go mod edit 命令更新待发布模块的依赖版本号
-	if err := updateModuleDependencies(releaseModules, projectRoot, dryRun); err != nil {
+	if err := updateDependencies(releaseModules, projectRoot, dryRun); err != nil {
 		return fmt.Errorf("更新模块依赖失败: %v", err)
 	}
 
