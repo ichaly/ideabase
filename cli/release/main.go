@@ -116,6 +116,11 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("推送变更失败: %v", err)
 	}
 
+	// 更新工作区依赖，确保所有模块使用最新版本
+	if err := refreshWorkspaceDependencies(dryRun); err != nil {
+		return fmt.Errorf("刷新工作区依赖失败: %v", err)
+	}
+
 	return nil
 }
 

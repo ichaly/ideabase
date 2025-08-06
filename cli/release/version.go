@@ -334,3 +334,41 @@ func pushChanges(dryRun bool) error {
 	fmt.Printf("🚀 已推送变更到仓库\n")
 	return nil
 }
+
+// refreshWorkspaceDependencies 刷新工作区依赖，使用direct模式获取最新版本
+func refreshWorkspaceDependencies(dryRun bool) error {
+	fmt.Printf("\n===[ 刷新工作区依赖 ]===\n")
+	
+	if dryRun {
+		fmt.Printf("[模拟] GOPROXY=direct GOSUMDB=off go get -u ./...\n")
+		fmt.Printf("[模拟] go mod tidy\n")
+		return nil
+	}
+
+	projectRoot := getProjectRoot()
+	
+	// 使用direct模式更新所有依赖
+	fmt.Printf("🔄 使用direct模式更新依赖...\n")
+	cmd := exec.Command("go", "get", "-u", "./...")
+	cmd.Dir = projectRoot
+	cmd.Env = append(os.Environ(), "GOPROXY=direct", "GOSUMDB=off")
+	
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("警告: 依赖更新失败: %v\n", err)
+		fmt.Printf("💡 建议手动执行: GOPROXY=direct GOSUMDB=off go get -u ./...\n")
+		return nil // 不中断发布流程，只是警告
+	}
+
+	// 清理依赖
+	fmt.Printf("🧹 清理依赖...\n")
+	cmd = exec.Command("go", "mod", "tidy")
+	cmd.Dir = projectRoot
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("警告: go mod tidy失败: %v\n", err)
+		return nil // 不中断发布流程，只是警告
+	}
+
+	fmt.Printf("✅ 工作区依赖已刷新\n")
+	fmt.Printf("💡 如果遇到goproxy缓存问题，请使用: GOPROXY=direct GOSUMDB=off go get -u ./...\n")
+	return nil
+}
