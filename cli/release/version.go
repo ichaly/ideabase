@@ -335,10 +335,10 @@ func pushChanges(dryRun bool) error {
 	return nil
 }
 
-// refreshWorkspaceDependencies 刷新工作区依赖，使用direct模式获取最新版本
-func refreshWorkspaceDependencies(dryRun bool) error {
+// refreshDependencies 刷新工作区依赖，使用direct模式获取最新版本
+func refreshDependencies(dryRun bool) error {
 	fmt.Printf("\n===[ 刷新工作区依赖 ]===\n")
-	
+
 	if dryRun {
 		fmt.Printf("[模拟] GOPROXY=direct GOSUMDB=off go get -u ./...\n")
 		fmt.Printf("[模拟] go mod tidy\n")
@@ -346,13 +346,13 @@ func refreshWorkspaceDependencies(dryRun bool) error {
 	}
 
 	projectRoot := getProjectRoot()
-	
+
 	// 使用direct模式更新所有依赖
 	fmt.Printf("🔄 使用direct模式更新依赖...\n")
 	cmd := exec.Command("go", "get", "-u", "./...")
 	cmd.Dir = projectRoot
 	cmd.Env = append(os.Environ(), "GOPROXY=direct", "GOSUMDB=off")
-	
+
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("警告: 依赖更新失败: %v\n", err)
 		fmt.Printf("💡 建议手动执行: GOPROXY=direct GOSUMDB=off go get -u ./...\n")
