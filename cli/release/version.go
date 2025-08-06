@@ -241,6 +241,14 @@ func updateDependencies(modules map[string]*ModuleInfo, projectRoot string, dryR
 			}
 		}
 
+		// 将修改后的go.mod文件添加到git暂存区
+		if !dryRun {
+			goModPath := filepath.Join(basePath, "go.mod")
+			if err := exec.Command("git", "add", goModPath).Run(); err != nil {
+				fmt.Printf("警告: 添加 %s 模块的 go.mod 到git失败: %v\n", name, err)
+			}
+		}
+
 		fmt.Printf("%s已更新 %s 模块的依赖\n", lo.Ternary(dryRun, "[模拟] ", "🔗 "), name)
 	}
 
