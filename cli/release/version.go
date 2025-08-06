@@ -292,50 +292,37 @@ func generateChangelog(modules map[string]*ModuleInfo, dryRun bool) error {
 }
 
 // commitChanges 提交版本变更
-func commitChanges(version Version, dryRun bool) error {
-	message := fmt.Sprintf("chore(release): release v%s", version.String())
+func commitChanges(dryRun bool) error {
+	message := "chore(release): 发布新版本"
 
 	fmt.Printf("%sgit commit -m \"%s\"\n", lo.Ternary(dryRun, "[模拟] ", ""), message)
 	if dryRun {
 		return nil
 	}
 
-	// 检查是否有需要提交的更改
-	output, err := exec.Command("git", "status", "--porcelain").Output()
-	if err != nil {
-		return fmt.Errorf("检查git状态失败: %v", err)
-	}
-
-	// 如果没有更改，创建空提交
-	cmd := exec.Command("git", "commit", "-m", message, lo.Ternary(len(output) > 0, "", "--allow-empty"))
-	if err := cmd.Run(); err != nil {
+	// 直接提交，因为此时应该已经有文件变更（CHANGELOG.md 和 go.mod）
+	if err := exec.Command("git", "commit", "-m", message).Run(); err != nil {
 		return fmt.Errorf("git commit 失败: %v", err)
 	}
 
+	fmt.Printf("💾 已提交变更\n")
 	return nil
 }
 
 // pushChanges 推送变更
 func pushChanges(dryRun bool) error {
 	prefix := lo.Ternary(dryRun, "[模拟] ", "")
-	fmt.Printf("%sgit push origin %s\n", prefix, Branch)
-	fmt.Printf("%sgit push origin --tags\n", prefix)
+	fmt.Printf("%sgit push origin %s --follow-tags\n", prefix, Branch)
 	if dryRun {
 		return nil
 	}
 
-	// 推送分支
-	cmd := exec.Command("git", "push", "origin", Branch)
+	// 同时推送分支和标签
+	cmd := exec.Command("git", "push", "origin", Branch, "--follow-tags")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("推送分支失败: %v", err)
+		return fmt.Errorf("推送变更失败: %v", err)
 	}
 
-	// 推送标签
-	cmd = exec.Command("git", "push", "origin", "--tags")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("推送标签失败: %v", err)
-	}
-
-	fmt.Printf("%s已推送变更到仓库\n", lo.Ternary(dryRun, "[模拟] ", "🚀 "))
+	fmt.Printf("🚀 已推送变更到仓库\n")
 	return nil
 }

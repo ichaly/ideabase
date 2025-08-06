@@ -98,6 +98,11 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("生成变更日志失败: %v", err)
 	}
 
+	// 提交所有变更（在创建标签之前）
+	if err := commitChanges(dryRun); err != nil {
+		return fmt.Errorf("提交变更失败: %v", err)
+	}
+
 	// 发布每个模块（使用各自的新版本号）
 	for name, info := range releaseModules {
 		fmt.Printf("\n===[ 发布 %s 模块 v%s ]===\n", info.Name, info.Version.String())
@@ -106,15 +111,10 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 提交所有变更
-	//if err := commitChanges(newVersions[releaseModules[0]], dryRun); err != nil {
-	//	return fmt.Errorf("提交变更失败: %v", err)
-	//}
-
 	// 推送所有变更
-	//if err := pushChanges(dryRun); err != nil {
-	//	return fmt.Errorf("推送变更失败: %v", err)
-	//}
+	if err := pushChanges(dryRun); err != nil {
+		return fmt.Errorf("推送变更失败: %v", err)
+	}
 
 	return nil
 }
