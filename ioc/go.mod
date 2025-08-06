@@ -3,8 +3,8 @@ module github.com/ichaly/ideabase/ioc
 go 1.23
 
 require (
-	github.com/ichaly/ideabase/gql v0.0.0-20250410094127-5e62bdf0f20f
-	github.com/ichaly/ideabase/std v0.0.0-20250326064410-373e295423ea
+	github.com/ichaly/ideabase/gql v0.0.2
+	github.com/ichaly/ideabase/std v0.0.4
 	go.uber.org/fx v1.23.0
 )
 

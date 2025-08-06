@@ -547,3 +547,27 @@
 - feat(cli): 添加 release 工具
 - refactor(project): 重构项目模块和依赖
 - refactor: 将 app 目录重命名为 cli
+## std v0.0.4 (2025-08-07)
+- 无变更记录
+## app v0.0.4 (2025-08-07)
+- 无变更记录
+## gql v0.0.2 (2025-08-07)
+- 无变更记录
+## gtw v0.0.2 (2025-08-07)
+- 无变更记录
+## ioc v0.0.4 (2025-08-07)
+- 无变更记录
+## run v0.0.2 (2025-08-07)
+- 无变更记录
+## svc v0.0.2 (2025-08-07)
+- 无变更记录
+## utl v0.0.4 (2025-08-07)
+- 无变更记录
+## cli v0.0.2 (2025-08-07)
+- refactor(release): 重命名refreshWorkspaceDependencies为refreshDependencies
+- fix(release): 修复goproxy缓存导致的版本获取失败问题
+- refactor(release): 在更新依赖时将修改后的 go.mod 文件添加到 git 暂存区
+## cmd v0.0.4 (2025-08-07)
+- 无变更记录
+## log v0.0.4 (2025-08-07)
+- 无变更记录

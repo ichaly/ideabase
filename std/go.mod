@@ -13,8 +13,8 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gofiber/contrib/fiberzerolog v1.0.2
 	github.com/gofiber/fiber/v2 v2.52.6
-	github.com/ichaly/ideabase/log v0.0.0-20250326064410-373e295423ea
-	github.com/ichaly/ideabase/utl v0.0.0-20250228111901-475eea8d4811
+	github.com/ichaly/ideabase/log v0.0.4
+	github.com/ichaly/ideabase/utl v0.0.4
 	github.com/invzhi/next v1.1.1
 	github.com/joho/godotenv v1.5.1
 	github.com/knadh/koanf/parsers/yaml v0.1.0
