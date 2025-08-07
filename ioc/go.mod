@@ -31,8 +31,8 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/huandu/go-clone v1.7.3 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect
-	github.com/ichaly/ideabase/log v0.0.5 // indirect
-	github.com/ichaly/ideabase/utl v0.0.5 // indirect
+	github.com/ichaly/ideabase/log v0.0.6 // indirect
+	github.com/ichaly/ideabase/utl v0.0.6 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
