@@ -1902,3 +1902,6 @@
 - refactor: 优化Viper配置合并逻辑，简化错误处理
 - refactor: Enhance Viper configuration management with flexible options and robust error handling
 - chore: restructure project
+## cmd v0.0.7 (2025-08-08)
+- chore(refactor): 优化配置文件路径获取逻辑，简化代码结构
+- chore(deps): 更新 ideabase 相关依赖版本至 v0.0.6，并添加新的 sqlite3 和 mssql 驱动
