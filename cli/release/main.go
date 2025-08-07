@@ -117,7 +117,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// 更新工作区依赖，确保所有模块使用最新版本
-	if err := refreshDependencies(dryRun); err != nil {
+	if err := refreshDependencies(releaseModules, projectRoot, dryRun); err != nil {
 		return fmt.Errorf("刷新工作区依赖失败: %v", err)
 	}
 
