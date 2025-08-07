@@ -5,8 +5,8 @@ go 1.24
 toolchain go1.24.5
 
 require (
-	github.com/ichaly/ideabase/gql v0.0.1
-	github.com/ichaly/ideabase/std v0.0.1
+	github.com/ichaly/ideabase/gql v0.0.2
+	github.com/ichaly/ideabase/std v0.0.2
 	go.uber.org/fx v1.24.0
 )
 
@@ -31,8 +31,8 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/huandu/go-clone v1.7.3 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect
-	github.com/ichaly/ideabase/log v0.0.4 // indirect
-	github.com/ichaly/ideabase/utl v0.0.4 // indirect
+	github.com/ichaly/ideabase/log v0.0.5 // indirect
+	github.com/ichaly/ideabase/utl v0.0.5 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
