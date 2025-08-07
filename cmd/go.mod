@@ -5,7 +5,6 @@ go 1.24
 toolchain go1.24.5
 
 require (
-	github.com/ichaly/ideabase/cmd v0.0.5
 	github.com/ichaly/ideabase/ioc v0.0.5
 	github.com/ichaly/ideabase/utl v0.0.5
 	github.com/samber/lo v1.51.0

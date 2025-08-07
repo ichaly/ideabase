@@ -334,31 +334,3 @@ func pushChanges(dryRun bool) error {
 	fmt.Printf("🚀 已推送变更到仓库\n")
 	return nil
 }
-
-// refreshDependencies 刷新工作区依赖，优先使用本地模块
-func refreshDependencies(modules map[string]*ModuleInfo, projectRoot string, dryRun bool) error {
-	fmt.Printf("\n===[ 刷新工作区依赖 ]===\n")
-
-	if dryRun {
-		fmt.Printf("[模拟] 在各个模块目录中执行 go mod tidy\n")
-		return nil
-	}
-
-	// 在各个模块目录中执行 go mod tidy
-	fmt.Printf("🧹 清理各模块依赖...\n")
-	for _, module := range modules {
-		fmt.Printf("  - 清理 %s 模块依赖...\n", module.Name)
-
-		cmd := exec.Command("go", "mod", "tidy")
-		cmd.Dir = getModulePath(projectRoot, module.Name)
-		if err := cmd.Run(); err != nil {
-			fmt.Printf("警告: %s 模块 go mod tidy失败: %v\n", module.Name, err)
-			// 继续处理其他模块，不中断流程
-		} else {
-			fmt.Printf("  ✅ %s 模块依赖已清理\n", module.Name)
-		}
-	}
-
-	fmt.Printf("✅ 工作区依赖已刷新\n")
-	return nil
-}
