@@ -1,4 +1,4 @@
-module github.com/ichaly/ideabase/cli
+module github.com/ichaly/ideabase/cmd
 
 go 1.24
 

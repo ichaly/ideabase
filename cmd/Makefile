@@ -67,5 +67,5 @@ help:
 	@echo ""
 	@echo "For end users, it's recommended to use 'go install' instead:"
 	@for tool in $(CLI_TOOLS); do \
-		echo "  go install github.com/ichaly/ideabase/cli/$$tool@latest"; \
+		echo "  go install github.com/ichaly/ideabase/cmd/$$tool@latest"; \
 	done
