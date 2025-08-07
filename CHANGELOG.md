@@ -595,3 +595,434 @@
 - chore(deps): 更新多个依赖版本以提升稳定性和性能
 ## utl v0.0.5 (2025-08-07)
 - chore(deps): 更新多个依赖版本以提升稳定性和性能
+## gtw v0.0.1 (2025-08-07)
+- chore: 更新Go版本至1.23，并调整相关模块的go.mod文件以保持一致性
+- chore: 统一项目Go版本至1.22并更新依赖
+- chore: restructure project
+## ioc v0.0.1 (2025-08-07)
+- chore(release): 发布新版本
+- chore(deps): 更新多个依赖版本以提升稳定性和性能
+- chore(release): 发布新版本
+- build:移除 ideabase 项目中的版本信息文件
+- chore(ioc): release 0.0.2
+- chore(ioc): release 0.0.1
+- refactor(project): 重构项目模块和依赖
+- refactor: 重命名为
+- build: 添加UPX压缩选项并重构构建脚本以支持多平台编译
+- refactor: 移除Compiler类并将方言选择逻辑移至Executor
+- feat: 增强GraphQL编译器，支持方言注册和上下文对象池以优化性能
+- feat: 添加GraphQL执行器及相关配置，优化请求处理逻辑并整合数据库与缓存配置
+- refactor: 优化配置模块，使用fx.Annotate替代闭包传递Option参数，并在容器初始化中添加NewFiber提供者
+- feat: 添加Bootstrap函数和测试用例以支持插件和中间件的初始化
+- chore: 更新Go版本至1.23，并调整相关模块的go.mod文件以保持一致性
+- refactor: 重构IOC容器，添加Add和Get方法以增强依赖管理的灵活性
+- feat: 添加应用的基本结构，包括主入口、命令行工具和IOC容器，以支持后续功能开发
+## log v0.0.1 (2025-08-07)
+- chore(deps): 更新多个依赖版本以提升稳定性和性能
+- refactor(release): 添加项目根目录获取功能并优化模块路径处理
+- build:移除 ideabase 项目中的版本信息文件
+- chore(log): release 0.0.2
+- chore(log): release 0.0.1
+- chore: 更新多个模块的依赖版本，提升项目的稳定性和安全性
+- refactor: 将Default函数重命名为GetDefault并调整返回类型
+- chore: 更新Go版本至1.23，并调整相关模块的go.mod文件以保持一致性
+- feat: 支持自关联关系类型识别和处理
+- chore: 统一项目Go版本至1.22并更新依赖
+- chore: restructure project
+## utl v0.0.1 (2025-08-07)
+- chore(deps): 更新多个依赖版本以提升稳定性和性能
+- build:移除 ideabase 项目中的版本信息文件
+- chore(utl): release 0.0.2
+- chore(utl): release 0.0.1
+- feat: 新增Must函数处理错误
+- chore: 更新多个模块的依赖版本，提升项目的稳定性和安全性
+- feat: 新增JSON序列化工具函数，提供标准化的JSON解析和序列化功能
+- feat: 添加安全填充功能以支持Cookie加密中间件，优化密钥处理逻辑并增加相关测试用例
+- build: 更新模块版本并优化安装脚本
+- chore: 更新Go版本至1.23，并调整相关模块的go.mod文件以保持一致性
+- chore: 更新go.mod文件，添加新依赖项以支持项目功能扩展
+- refactor: 添加泛型函数以获取和排序map的键，提升代码复用性
+- chore: 统一项目Go版本至1.22并更新依赖
+- refactor: 用统一的键检索方法增强TeeMap
+- docs: 为工具类函数添加详细的注释文档
+- refactor: Improve file utility functions with predefined error constants and deferred error handling
+- refactor: Improve utility functions with enhanced error handling and performance
+- chore: restructure project
+## cli v0.0.1 (2025-08-07)
+- chore(refactor): 移除不再使用的 app 和 cli 模块，更新 go.work 文件以反映新的模块结构
+- refactor(release): 优化依赖刷新逻辑，支持本地模块优先更新
+- chore(release): 删除过时的变更日志文件
+- chore(deps): 更新 pflag 和 x/text 依赖版本
+- refactor(release): 重命名refreshWorkspaceDependencies为refreshDependencies
+- fix(release): 修复goproxy缓存导致的版本获取失败问题
+- refactor(release): 在更新依赖时将修改后的 go.mod 文件添加到 git 暂存区
+- refactor(release): 优化提交和推送变更逻辑，简化代码结构
+- refactor(release): 重命名更新模块依赖函数并优化依赖更新逻辑
+- refactor(release): 优化获取当前版本逻辑，简化模块名称处理
+- refactor(release): 优化变更日志生成逻辑，使用 strings.Builder 提高性能
+- refactor(release): 添加项目根目录获取功能并优化模块路径处理
+- refactor(release): 优化版本计算逻辑，统一处理模块版本更新
+- refactor(release): 使用 lo.Contains 优化模块过滤逻辑
+- refactor(release): 优化模块路径处理和版本变更日志格式
+- fix(release): 修复模块路径不存在的问题
+- refactor(cli): 将 ModuleInfo从值类型改为指针类型，减少内存拷贝
+- fix(release): 优化版本发布脚本以支持模块化版本控制
+- refactor(release): 重构发布流程并优化模块信息处理
+- feat(cli): 增强模块信息获取功能
+- feat(release): 重构发布流程并优化模块版本管理逻辑
+- feat(cli): 重构模块信息获取逻辑，支持从 go.work 和 go list -m 获取模块信息
+- refactor(release): 重构模块依赖更新和版本获取逻辑
+- fix(release): 限制发布操作只能在指定分支上执行
+- refactor(release): 重命名检查分支的函数
+- feat(release): 优化版本发布流程并支持多模块版本管理
+- build(cli): 重构 Makefile并添加 install 子命令
+- feat(cli): 添加 release 工具
+- refactor(project): 重构项目模块和依赖
+- refactor: 将 app 目录重命名为 cli
+## gql v0.0.1 (2025-08-07)
+- chore(release): 发布新版本
+- chore(deps): 更新多个依赖版本以提升稳定性和性能
+- chore(release): 发布新版本
+- feat: 新增PgSQL WHERE子句完整处理功能，支持复杂条件查询
+- feat: 统一GraphQL分页结果命名规范，将Page后缀替换为Result，并更新相关类型定义和查询接口
+- feat: 统一GraphQL输入参数命名规范，将Sort后缀替换为SortInput，并重构查询接口支持单条和多条数据统一查询
+- feat: 统一GraphQL操作命名规范，将create/update/delete操作统一为CREATE/UPDATE/DELETE常量
+- feat: 统一GraphQL输入参数命名规范，新增Update、Upsert、Insert等输入后缀，优化Mutation操作参数结构
+- feat: 提取聚合函数常量
+- feat: 单条查询添加where参数支持复杂查询
+- fix: 修复在TOTAL字段的拼接
+- feat: 统一GraphQL查询条件命名，将Filter后缀替换为Where后缀，并新增PostTag相关类型和操作
+- feat: 新增PgSQL WHERE子句完整处理功能，支持复杂条件查询
+- refactor: 优化SQL归一化功能
+- refactor: 优化关系字段JOIN子查询生成逻辑，简化字段类型判断
+- fix: 修复表两字段就不用继续循环JOIN LATERAL
+- fix: 修复配置
+- feat: 更新编译器上下文构造函数，添加meta参数支持
+- feat: 引入Hoster接口，实现Context的TableName方法
+- refactor: 添加GraphQL类型常量和后缀定义，优化代码可读性
+- refactor: 更新测试配置，调整模式为开发模式并使用utl.Root()设置应用根目录
+- refactor: 将 config.go 移至 internal 包并更新相关引用
+- refactor: 移除内置操作符的内部类型，直接使用全局Operator类型
+- refactor: 优化运算符字典构建方式，使用lo.KeyBy替代lo.Reduce
+- refactor: 重构操作符和关系类型定义
+- refactor: 优化代码组织
+- refactor: 调整文件存储位置
+- refactor: 修改多对多关系中间表名称字段
+- refactor: 将Through结构体移至relation.go文件中，优化多对多关系配置的定义
+- refactor: 统一关系模型中的字段命名，将TargetTable字段重构为TargetClass以更准确描述类关系
+- refactor: 移除中间表配置中的类名和字段信息，简化关系处理逻辑
+- refactor: 移除关系模型中的反向关系字段，简化关系处理逻辑
+- refactor: 统一关系模型中的字段命名，将Table/Column字段更名为Class/Filed以更准确描述类关系
+- refactor: 将关系模型中的类名字段重构为表名字段
+- refactor: 重构 renderer 包
+- refactor: 重构元数据加载架构，将Hoster接口替换为Tree接口，统一类节点操作方法，并调整相关加载器和测试代码
+- refactor: 调整目录结构
+- test: 修复单元测试的错误
+- refactor: 更新Compiler和Dialect结构，替换为protocol.Dialect以增强可扩展性，调整上下文管理以支持引号处理
+- feat: 添加SQL方言选择逻辑，优化Compiler构造函数以支持错误处理
+- refactor: 重构Compiler和Dialect结构，移除Dialect接口，优化SQL构建过程，增强上下文管理能力
+- feat: 添加Context结构及其方法，支持SQL编译过程中的上下文管理和参数处理
+- refactor: 更新Compiler和Executor结构，重构Build方法以返回SQL语句和参数，移除selectDialect方法并调整Executor构造函数以支持Compiler
+- feat: 添加Comment类及其字段配置，支持递归关系和虚拟字段
+- refactor: 修正单元测试的配置信息
+- docs: 删除冗余的伪代码和元数据配置文档，简化项目结构以提高可维护性和可读性。
+- refactor: 重构元数据加载模块，更新设计思想和实现架构，增强多源融合与环境自适应能力
+- test: 修整测试用例以使用新的元数据字段和表配置
+- fix: 解决覆盖模式索引丢失问题
+- refactor: 修正单元测试的正确配置
+- refactor: 更新元数据加载测试，添加Override字段并调整NewMetadata调用以使用LoaderFile选项
+- refactor: 更新metadata.dev.json文件，修正字段配置并调整测试用例以使用新的配置文件
+- refactor: 在go.mod中替换deepcopy库为go-clone库，优化类和字段的复制逻辑
+- refactor: 替换deepcopy库为go-clone库，优化类和字段的复制逻辑结局循环引用
+- refactor: 优化元数据加载测试中的类和字段验证逻辑，确保一致性和准确性
+- refactor: 在applyFieldConfig方法中添加TODO注释，考虑字段列名的使用必要性
+- refactor: 更新buildClassFromConfig方法以返回错误，增强错误处理逻辑并优化类加载过程
+- refactor: 优化normalize方法中的字段和类名处理逻辑，确保字段和类名的唯一性
+- refactor: 重构元数据加载测试，优化类和字段的验证逻辑，提升可读性和可维护性
+- refactor: 优化normalize方法中的字段和类名处理逻辑
+- refactor: 移除Metadata结构体中的DelClass、PutField、GetField和DelField方法，简化接口定义
+- refactor: 优化normalize方法，简化类和字段的处理逻辑
+- refactor: 重构applyFieldConfig方法，提取字段创建与更新逻辑为buildFieldFromConfig函数，提升代码可读性和可维护性
+- refactor: 重构Load方法，优化类加载逻辑，合并主类、覆盖类、别名类和虚拟类的处理，提升代码可读性和维护性
+- refactor: 将applyFieldFilter方法重构为ConfigLoader的接收器方法
+- refactor: 重构applyFieldConfig方法以增强字段处理逻辑的可读性和可维护性
+- refactor: 规范化字段名称处理逻辑，简化主字段与别名字段的合并逻辑，提升代码可读性
+- refactor: 优化伪代码中的字段分组与排序逻辑
+- refactor: 在Class和Field结构体中添加Original字段
+- refactor: 优化applyFieldConfig和createField函数
+- refactor: 添加applyFieldConfig重构伪代码，优化字段合成与索引处理逻辑，提升代码可读性和维护性
+- refactor: 更新Hoster接口，调整PutClass和PutField方法以接受类名和字段名参数
+- refactor: 重构Load方法，分为两次遍历以加载主类和别名类，提取构建类的逻辑为独立函数buildClassFromConfig
+- refactor: 优化normalize方法中的字段和类名处理逻辑，提取字段和类名转换为独立函数，增强配置灵活性和代码可读性
+- refactor: 更新元数据加载测试，增加对不同类定义的测试用例，验证字段属性和索引一致性
+- refactor: 更新元数据加载测试，移除不必要的LoaderConfig，简化元数据加载器的创建逻辑
+- refactor: 更新元数据加载测试，移除不必要的LoaderConfig，简化元数据加载器的创建逻辑
+- refactor: 更新ResolveMetadataPath函数，增强路径解析逻辑，支持更灵活的配置处理
+- refactor: 提取元数据文件路径解析逻辑为独立函数，简化代码结构
+- refactor: 进一步优化normalize方法中的字段和类名处理逻辑，增强对字段名和类名一致性处理的支持
+- refactor: 优化normalize方法中的类和字段处理逻辑
+- fix: 修正normalize方法中的字段名和列名比较逻辑，确保在处理别名和原始列名时的准确性
+- test: 更新元数据加载测试，修正驼峰命名配置为metadata.use-camel，并新增metadata.use-singular配置
+- test: 增加元数据加载测试，验证驼峰命名和下划线命名的字段一致性，确保在不同命名模式下的类和字段指针正确性
+- refactor: 简化NewMetadata函数中的字段初始化逻辑，优化调试模式下的文件保存路径处理
+- feat: 新增元数据加载测试，涵盖从配置、数据库和文件加载的场景，验证类和字段的指针一致性，增强测试覆盖率
+- refactor: 优化normalize方法，简化类和字段处理逻辑，增强对虚拟类和别名的支持，移除冗余的前置处理函数
+- refactor: 优化Load方法，简化类定义处理逻辑，增强对覆盖模式和别名类的支持，合并类属性更新逻辑
+- fix: 更新FileLoader的Support方法，增加对调试模式的判断，确保在非调试状态下支持文件加载
+- feat: 更新go.mod文件，移除不必要的依赖并添加deepcopy库，优化元数据加载器的字段处理逻辑，支持字段覆盖和追加模式
+- refactor: 优化Load方法，简化类定义处理逻辑，增强虚拟类和覆盖类的支持
+- refactor: 重构Loader的Support方法，移除不必要的参数
+- feat: 更新DelClass和DelField方法，返回删除的节点和字段，增强Metadata接口的功能性
+- feat: 新增DelClass、PutField、GetField和DelField方法，增强Metadata结构的功能性，支持类和字段的动态管理
+- feat：更新配置文件，新增Override字段以支持字段和类的别名覆盖模式，增强配置的灵活性和可读性。
+- refactor: 更新元数据测试，调整配置文件路径并增强节点索引验证逻辑
+- refactor: 更新元数据配置，重命名相关字段以提高可读性和一致性，调整SchemaConfig和MetadataConfig结构，增强中间表关系的处理逻辑
+- refactor: 优化PutClass和normalize方法，移除对虚拟类的表名处理逻辑，简化节点索引管理
+- refactor: 重命名processNodes为normalize，并增强其功能以支持命名规范化和关系更新，提升代码可读性和维护性
+- refactor: 重命名PutNode和GetNode方法为PutClass和GetClass，增强代码可读性
+- refactor: 增强HookedLoader支持beforeLoad和afterLoad钩子，优化节点处理逻辑
+- refactor: 优化FileLoader、MysqlLoader和PgsqlLoader的Support方法，增强配置检查逻辑
+- refactor: 移除SchemaConfig中的IncludeTables、FieldMapping和TableMapping字段，简化配置结构
+- refactor: 移除测试中手动添加原始表名索引的逻辑，简化元数据节点查找过程
+- refactor: 优化PutNode方法中的节点名称和字段名称处理逻辑，确保名称与表名和列名一致性
+- refactor: 优化Load方法中的节点添加逻辑，确保字段名称与列名一致性
+- refactor: 优化PutNode方法中的表名处理逻辑，增强驼峰命名转换的准确性
+- refactor: 优化PutNode方法，重构驼峰命名处理和索引逻辑，提升代码可读性和维护性
+- refactor: 使用策略模式重构元数据加载
+- feat: 实现从文件加载元数据的逻辑，支持读取、解析和索引处理，提升元数据管理能力
+- refactor: 在Hoster接口中新增SetVersion方法，并在baseLoader中调用以设置当前版本号
+- refactor: 将Hoster接口中的AddNode方法重命名为PutNode，提升接口一致性
+- feat: 使用策略模式加载元数据,将不同数据库的实现独立为单独的策略
+- chore: 更新多个模块的依赖版本，提升项目的稳定性和安全性
+- refactor: 重命名数据库加载器为SchemaInspector，优化元数据加载逻辑，提升代码可读性和一致性
+- refactor: 统一前缀命名规范便于归类阅读
+- test: 新增纯配置驱动的schema生成测试用例，验证元数据生成和schema内容的正确性
+- refator: 重构测试基础查询用例了,调整查询实现逻辑
+- refactor: 更新GraphQL模式和元数据，移除冗余注释，优化字段描述
+- refactor: 移除Organization相关的定义
+- test: 新增PostgreSQL方言的完整查询测试用例，涵盖基础字段查询、过滤、关系、聚合等多种场景，增强GraphQL查询的验证能力
+- refactor: 重构SQL查询构建逻辑，新增FindField和TableName方法，优化JSON构建过程
+- refactor: 移除预计算数字字符串缓存，简化整数转换逻辑，新增SQL示例文件
+- refactor: 移除GORM方言支持，重构SQL归一化处理函数
+- refactor: 移除不必要的FormatLimit方法，简化Dialect接口
+- refactor: 移除 SQL格式化和归一化功能
+- refactor: 重构 SQL 格式化功能
+- feat: 添加 SQL 格式化和归一化功能
+- test: 更新PostgreSQL方言选择查询测试用例，重构查询结构，添加GORM方言支持和SQL归一化处理，增强GraphQL查询解析的错误日志记录
+- feat: 添加性能基准测试和优化的Write方法
+- test: 增强PostgreSQL方言选择查询测试用例，添加SQL归一化处理和多种GraphQL查询场景的验证
+- test: 增强PostgreSQL方言选择查询测试用例，添加GraphQL查询解析和SQL生成逻辑
+- test: 添加PostgreSQL方言的选择查询测试用例，涵盖基本查询、过滤、关系、聚合、分页、排序等多种场景
+- refactor: 优化BuildQuery方法中的空格处理逻辑，使用SpaceAfter替代直接写入逗号以提升代码可读性
+- refactor: 将Quoted方法重命名为Quote以提升一致性，并在多个地方更新引用，优化代码可读性
+- refactor: 添加Args、SpaceBefore、SpaceAfter和QuotedWithSpace方法以增强编译器功能，移除冗余方法并优化空格处理逻辑
+- refactor: 添加QuoteIdentifier方法以支持标识符引号处理，并优化空格处理逻辑以提升代码可维护性
+- refactor: 重命名BuildQuery和BuildMutation方法的参数以提升一致性
+- refactor: 重命名方言接口方法以提升一致性，移除冗余方法并添加PostgreSQL和MySQL方言的查询构建功能
+- refactor: 更新编译器构造函数以支持方言参数，并优化项目描述文档以提升代码维护性
+- build: 添加UPX压缩选项并重构构建脚本以支持多平台编译
+- test: 更新测试用例以增强对关系字段和过滤器字段的检查
+- refactor: 重命名插件接口方法以提升语义清晰度
+- refactor: 重构代码注释和方法组织
+- refactor: 重命名请求和结果类型以增强代码可读性
+- refactor: 使用map类型变量替代RawMessage以简化代码
+- refactor: 重构GraphQL执行器以支持操作名称
+- refactor: 重构Execute方法以支持并发操作
+- refactor: 将Context重命名为Compiler以提升代码可读性
+- refactor: 移除Compiler类并将方言选择逻辑移至Executor
+- refactor: 清理代码，移除未使用的字段和函数，优化上下文结构体
+- feat: 添加mockPgsqlDialect实现，增强GraphQL自省测试功能
+- feat: 增强GraphQL编译器，支持方言注册和上下文对象池以优化性能
+- feat: 实现MySQL和PostgreSQL方言，支持SQL查询和变更操作
+- refactor: 将Dialect接口和Context结构体移动到gql包
+- feat: 添加SQL方言接口及PostgreSQL和MySQL实现，以支持多种数据库查询和变更操作
+- refactor: 优化自省查询返回类型，简化数据处理逻辑
+- refactor: 简化接口处理逻辑，增加自省的兼容性
+- feat: 添加中间表类型跳过逻辑，优化GraphQL渲染器以提升查询性能
+- refactor: 移除测试用例中的schema.show-through配置项以简化测试环境
+- feat: 添加sys前缀的数据库表结构及外键约束，增强数据模型的可扩展性
+- refactor: 修正测试用例中的schema文件路径，并调整执行器参数以提升代码一致性
+- feat: 添加GraphQL执行器及相关配置，优化请求处理逻辑并整合数据库与缓存配置
+- chore: 更新gql和std模块中的依赖项版本以保持一致性和最新状态
+- chore: 更新go.uber.org/multierr模块版本至v1.10.0以保持依赖项的最新状态
+- chore: 更新Go版本至1.23，并调整相关模块的go.mod文件以保持一致性
+- chore: 更新go.mod文件，添加新依赖项以支持项目功能扩展
+- refactor: 优化processRelations函数中的类名引用，提升代码可读性和一致性
+- refactor: 重构processRelations函数，添加辅助函数以简化关系字段信息的处理逻辑，提升代码可读性和维护性
+- refactor: 更新GraphQL模式中的注释，修正对关联的Comment、Post和Tag记录的描述以提高准确性
+- refactor: 优化processRelations函数，重构关系字段处理逻辑，提升代码可读性和维护性
+- test: 增加对元数据索引指针一致性的验证测试，确保类名和字段名索引正确指向对应对象
+- refactor: 修正GraphQL模式中的注释，确保对关联的Comment记录描述更加准确
+- refactor: 修正GraphQL模式中的注释，确保对关联的Comment和Post记录的描述更加准确
+- test: 更新数据库测试设置，使用更可靠的等待策略以确保数据库连接可用性
+- test: 增加对Post和User类型字段的验证测试，确保生成的GraphQL模式正确
+- refactor: 更新GraphQL模式，调整字段数量和渲染逻辑，提升代码可读性和维护性
+- refactor: 优化常量定义，调整操作符与标量的关系映射，提升代码可读性
+- test: 更新测试用例以使用示例GraphQL模式文件
+- refactor: 更新GraphQL模式，添加Comment和Post的关联字段，优化查询和输入类型定义，移除冗余的内省支持代码
+- refactor: 更新字段定义，将IsCollection字段重命名为IsList，优化关系字段的处理逻辑
+- refactor: 更新metadata配置文件，调整字段关系定义，优化GraphQL模式，移除冗余测试逻辑
+- refactor: 将项目中的viper配置替换为Konfig，提升配置管理一致性
+- feat: 添加Konfig配置管理器封装koanf并兼容viper
+- refactor: 精简多对多关系测试逻辑，统一关系定义验证，移除冗余的SourceRelation检查
+- refactor: 优化多对多关系测试，增强调试信息和中间表类名推导逻辑
+- refactor: 移除反向关系名称相关逻辑，简化关系处理结构
+- refactor: 重命名关系处理方法并整合逻辑，提升代码可读性和一致性
+- refactor: 重命名关系处理方法并优化逻辑，提升代码可读性和一致性
+- refactor: 重命名字段处理方法，提升代码可读性和一致性
+- refactor: 移除多余的关系处理逻辑，重命名方法减少混淆
+- feat: 增强中间表关系处理逻辑，支持动态显示与隐藏
+- refactor: 优化字符串切片比较逻辑，使用副本和排序方式比较两个字符串切片，确保比较的准确性和一致性
+- refactor: 重命名确保唯一字段名函数，简化字段名生成逻辑
+- refactor: 优化关系字段创建逻辑，简化反向关系处理
+- refactor: 删除不再使用的模板嵌入和相关初始化逻辑
+- chore: 更新依赖库和新增元数据深拷贝测试
+- refactor: 优化元数据加载逻辑，增强类的创建和更新处理
+- refactor: 简化元数据加载逻辑，优化字段过滤处理
+- refactor: 优化多对多关系创建逻辑，避免重复字段生成
+- feat: 优化类型渲染逻辑，确保类名和字段名按字母顺序处理
+- refactor: 移除不必要的虚拟字段名获取函数
+- fix: 完善Schema的渲染正确处理输出字段
+- feat: 更新元数据配置和 GraphQL Schema，增强字段和关系定义
+- fix: 修复对多关系的返回类型正确性
+- feat: 优化关联关系处理保证内存索引就是最终结构支持四种关系类型
+- feat: 更新元数据配置和 GraphQL Schema，增强类和字段定义
+- feat: 更新元数据配置文档，增强字段过滤和视图功能说明
+- feat: 新增元数据配置系统文档
+- feat: 优化元数据默认配置项
+- feat: 优化关系字段渲染和元数据配置
+- refactor: 更新元数据和 GraphQL Schema 配置
+- refactor: 优化 Renderer 写入方法，提升字符串处理性能
+- feat: 重构 GraphQL Schema 渲染器，优化代码结构和常量定义
+- feat: 优化字段生成逻辑，支持更丰富的字段配置选项
+- feat: 优化 GraphQL 过滤器和统计类型定义
+- feat: 重构 Renderer 结构，使用 strings.Builder 替代 bytes.Buffer
+- feat: 重构 GraphQL Schema 渲染器，提升类型生成和分页能力
+- feat: 新增GraphQL Schema渲染器和示例配置
+- feat: 支持表名单数转换和配置选项
+- feat: 引入 jsoniter 替换标准库 JSON 处理，优化性能和灵活性
+- feat: 优化元数据关系名称转换和测试用例
+- refactor: 清理测试用例中的冗余数据库驱动配置
+- feat: 新增组织表并优化元数据配置
+- fix: 修复多对多关系测试用例中的类名大小写问题
+- refactor: 重构数据库元数据配置和测试用例
+- feat: 完善多对多关系处理，支持中间表配置和反向关系设置
+- test: 重构元数据测试用例，简化测试逻辑和数据库加载流程
+- feat: 更新元数据配置，引入组织架构表和多对多关系虚拟字段
+- feat: 增强多对多关系检测和处理能力
+- test: 验证自关联关系的反向关系配置
+- feat: 支持自关联关系类型识别和处理
+- refactor: 移除 PostgreSQL 元数据 SQL 嵌入资源
+- refactor: 更新元数据配置结构和测试用例，优化数据类型和关系定义
+- test: 完善元数据加载测试用例，增加数据库和配置增强测试场景
+- feat: 增强元数据关系处理能力，支持双向关系映射和关系类型转换
+- chore: 删除元数据配置文件并更新测试用例以支持开发模式
+- refactor: 更新元数据配置结构以支持映射类型和简化字段转换
+- refactor: 重构元数据加载逻辑以支持更灵活的配置解析
+- refactor: 移除元数据缓存和来源相关的配置项
+- refactor: 移除元数据来源相关的枚举和配置定义
+- refactor: 简化元数据加载流程并支持开发模式动态生成元数据
+- feat: 完善元数据加载策略的注释和加载逻辑
+- refactor: 重构配置结构并简化元数据加载配置
+- refactor: 更新元数据加载源的定义和加载逻辑
+- refactor: 优化 NullableType 方法的命名
+- refactor: 优化元数据缓存默认路径配置
+- test: 支持多数据库类型的元数据测试
+- refactor: 使用结构化日志替换 fmt.Printf 和 fmt.Println
+- feat: 修改 `loadFromFile` 方法以支持完整的 Metadata 结构解析
+- refactor: 移除 Class 中的 TableNames 字段并简化表名索引逻辑
+- refactor: 重命名 GetForeignKey 方法为 FindRelation
+- refactor: 为 Field 和 Metadata 添加 JSON 标签
+- refactor: 简化元数据关系加载逻辑
+- feat: 为 Metadata 和 Class 添加自定义 JSON 序列化方法,仅导出关键字段和主要信息
+- fix: 修复原始表名的索引逻辑
+- refactor: 调整元数据加载逻辑，简化表名和字段索引处理
+- refactor: 统一使用 `Fields` 映射表进行字段名和列名索引
+- feat: 新增 Metadata JSON 序列化方法
+- feat: 增加元数据版本管理
+- refactor: 移除 metadata.go 中的 MetadataCache 结构体
+- refactor: 更新类方法中的接收器命名约定
+- feat: 优化元数据加载和缓存机制
+- refactor: 重构元数据类型和关系处理机制
+- refactor: 优化元数据加载和外键处理机制
+- refactor: 重构元数据加载和索引机制
+- feat: 在测试文件中引入 godotenv 加载 .env 文件，支持环境变量配置
+- test: 精简 PostgreSQL 测试版本配置
+- refactor: 移除 MySQL 表名正则表达式限制
+- feat: 优化 MySQL 元数据查询逻辑和安全性
+- feat: 扩展数据库测试用例
+- feat: 优化数据库元数据加载器的实现和跨数据库兼容性
+- refactor: 调整针对 PostgreSQL 版本检测的实现
+- test: 优化数据库测试容器启动和版本配置
+- test: 增加数据库加载器测试的多数据库支持
+- chore: 更新 gql 和 std 模块依赖
+- chore: 更新 Go 模块依赖和版本
+- chore: 统一项目Go版本至1.22并更新依赖
+- chore: 更新 .gitignore 配置
+- feat: 重构GraphQL编译器和执行器核心实现
+- refactor: 清理未使用的测试和编译器代码，移除冗余文件
+- refactor: 备份不再使用的内部实现文件和元数据处理代码
+- test: 修改插入操作的测试期望结果
+- chore: restructure project
+## run v0.0.1 (2025-08-07)
+- chore: 更新Go版本至1.23，并调整相关模块的go.mod文件以保持一致性
+- chore: 统一项目Go版本至1.22并更新依赖
+- chore: restructure project
+## std v0.0.1 (2025-08-07)
+- chore(release): 发布新版本
+- chore(deps): 更新多个依赖版本以提升稳定性和性能
+- chore(release): 发布新版本
+- refactor(release): 添加项目根目录获取功能并优化模块路径处理
+- build:移除 ideabase 项目中的版本信息文件
+- chore(std): release 0.0.2
+- chore(std): release 0.0.1
+- build(std): 升级 fx 和 dig 依赖版本&优化 release.sh脚本中的错误提示和信息输出
+- refactor(std): 重构 cache.go 替换 util包为 utl 包
+- refactor: 重命名为
+- chore: 更新多个模块的依赖版本，提升项目的稳定性和安全性
+- test: 添加健康检查端点并更新插件方法命名
+- refactor: 重命名插件接口方法以提升语义清晰度
+- refactor: 优化CSRF中间件配置逻辑，仅在非调试模式下启用以增强安全性
+- refactor: 更新配置文件，调整根路径注释及字段名称以提升可读性和一致性
+- feat: 添加GraphQL执行器及相关配置，优化请求处理逻辑并整合数据库与缓存配置
+- refactor: 替换为三方fiberzerolog日志中间件
+- refactor: 移除自定义的幂等性检查逻辑
+- feat: 更新Fiber应用配置，优化中间件使用，添加压缩级别解析功能及相关测试用例
+- feat: 增强Fiber应用配置，添加超时、压缩和中间件设置，优化测试用例以验证请求超时处理
+- feat: 添加配置项的持续时间解析测试用例，验证不同格式的持续时间值的正确性
+- refactor: 移除全局超时处理逻辑，简化Fiber应用配置以提升可维护性
+- feat: 添加安全填充功能以支持Cookie加密中间件，优化密钥处理逻辑并增加相关测试用例
+- feat: 添加多个中间件测试用例，包括异常恢复、CORS、请求ID、Cookie加密、压缩、ETag和日志中间件，增强代码的可测试性
+- feat: 添加Cookie加密中间件支持，更新应用配置以包含加密密钥
+- chore: 更新go.mod文件，移除直接依赖的github.com/google/uuid，添加为间接依赖以优化依赖管理
+- refactor: 重构Fiber应用配置，移除冗余的幂等性中间件实现，添加测试用例以增强代码可维护性
+- feat: 添加幂等性中间件及其配置，支持请求的唯一性处理和结果缓存
+- chore: 更新gql和std模块中的依赖项版本以保持一致性和最新状态
+- feat: 添加Bootstrap函数和测试用例以支持插件和中间件的初始化
+- chore: 更新Go版本至1.23，并调整相关模块的go.mod文件以保持一致性
+- chore: 更新go.mod文件，添加新依赖项以支持项目功能扩展
+- refactor: 移除示例配置文件，优化测试用例，增强Konfig配置管理器的功能和可维护性
+- test: 增加环境变量处理相关的单元测试，验证不同类型和优先级的环境变量加载逻辑
+- feat: 添加多种加载策略到Konfig配置管理器，支持从文件、环境变量和默认值加载配置
+- refactor: 重构Konfig配置管理器，整合配置文件监听功能，优化配置变更处理逻辑
+- refactor: 将项目中的viper配置替换为Konfig，提升配置管理一致性
+- feat: 在Konfig中添加SetDefault和SetDefaults方法，支持默认值设置与加载
+- refactor: 统一Konfig方法接收者名称为my，提升代码一致性和可读性
+- refactor: 更新Konfig构造函数，支持通过WithFilePath选项传递配置文件路径，优化配置加载逻辑
+- refactor: 移除测试中对koanf依赖的跳过逻辑，优化UnmarshalKey方法以支持配置解析
+- feat: 添加Konfig配置管理器封装koanf并兼容viper
+- feat: 添加koanf配置工具及其监视器，支持动态配置加载与环境变量管理
+- feat: 支持自关联关系类型识别和处理
+- feat: 更新配置结构并设置默认应用根目录
+- chore: 更新 gql 和 std 模块依赖
+- chore: 移除 std 模块中的本地依赖
+- chore: 更新 Go 模块依赖和版本
+- chore: 统一项目Go版本至1.22并更新依赖
+- feat: 为配置结构添加调试模式支持
+- refactor: 优化Viper配置合并逻辑，简化错误处理
+- refactor: Enhance Viper configuration management with flexible options and robust error handling
+- chore: restructure project
+## svc v0.0.1 (2025-08-07)
+- chore: 更新Go版本至1.23，并调整相关模块的go.mod文件以保持一致性
+- chore: 统一项目Go版本至1.22并更新依赖
+- chore: restructure project
