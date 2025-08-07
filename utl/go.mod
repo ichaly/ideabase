@@ -6,7 +6,7 @@ toolchain go1.24.2
 
 require (
 	github.com/json-iterator/go v1.1.12
-	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394
+	golang.org/x/exp v0.0.0-20250718183923-645b1fa84792
 )
 
 require (
