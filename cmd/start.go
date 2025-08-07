@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ichaly/ideabase/utl"
-
 	"github.com/ichaly/ideabase/ioc"
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
@@ -21,24 +19,21 @@ var runCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		configFile, _ := cmd.Flags().GetString(configFlag)
 		if configFile == "" {
-			configFile = filepath.Join(utl.Root(), "cfg", "config.yml")
+			if dir, err := os.Getwd(); err == nil {
+				configFile = filepath.Join(dir, "cfg", "config.yml")
+			}
 		}
-		fx.New(
-			ioc.Get(),
-			fx.Supply(configFile),
-		).Run()
+		fx.New(ioc.Get(), fx.Supply(configFile)).Run()
 	},
 }
 
 func init() {
-	runCmd.Flags().StringP(
-		configFlag, "c", "", "start app with config file",
-	)
+	runCmd.Flags().StringP(configFlag, "c", "", "start app with config file")
 }
 
 func Execute() {
 	if err := runCmd.Execute(); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
