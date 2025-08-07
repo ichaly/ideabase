@@ -2,7 +2,7 @@ module github.com/ichaly/ideabase/app
 
 go 1.24
 
-require github.com/ichaly/ideabase/cmd v0.0.4
+require github.com/ichaly/ideabase/cmd v0.0.5
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect

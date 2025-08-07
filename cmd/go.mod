@@ -3,8 +3,8 @@ module github.com/ichaly/ideabase/cmd
 go 1.24
 
 require (
-	github.com/ichaly/ideabase/ioc v0.0.4
-	github.com/ichaly/ideabase/utl v0.0.4
+	github.com/ichaly/ideabase/ioc v0.0.5
+	github.com/ichaly/ideabase/utl v0.0.5
 	github.com/spf13/cobra v1.9.1
 	go.uber.org/fx v1.24.0
 )

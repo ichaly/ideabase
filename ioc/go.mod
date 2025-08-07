@@ -5,8 +5,8 @@ go 1.24
 toolchain go1.24.5
 
 require (
-	github.com/ichaly/ideabase/gql v0.0.2
-	github.com/ichaly/ideabase/std v0.0.4
+	github.com/ichaly/ideabase/gql v0.0.3
+	github.com/ichaly/ideabase/std v0.0.5
 	go.uber.org/fx v1.24.0
 )
 
