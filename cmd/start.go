@@ -1,8 +1,11 @@
 package cmd
 
 import (
-	"github.com/ichaly/ideabase/utl"
+	"fmt"
+	"os"
 	"path/filepath"
+
+	"github.com/ichaly/ideabase/utl"
 
 	"github.com/ichaly/ideabase/ioc"
 	"github.com/spf13/cobra"
@@ -31,5 +34,11 @@ func init() {
 	runCmd.Flags().StringP(
 		configFlag, "c", "", "start app with config file",
 	)
-	rootCmd.AddCommand(runCmd)
+}
+
+func Execute() {
+	if err := runCmd.Execute(); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }

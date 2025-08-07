@@ -1,12 +1,17 @@
-module github.com/ichaly/ideabase/cmd
+module github.com/ichaly/ideabase/cli
 
 go 1.24
 
+toolchain go1.24.5
+
 require (
+	github.com/ichaly/ideabase/cmd v0.0.5
 	github.com/ichaly/ideabase/ioc v0.0.5
 	github.com/ichaly/ideabase/utl v0.0.5
+	github.com/samber/lo v1.51.0
 	github.com/spf13/cobra v1.9.1
 	go.uber.org/fx v1.24.0
+	golang.org/x/mod v0.26.0
 )
 
 require (
@@ -30,9 +35,9 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/huandu/go-clone v1.7.3 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect
-	github.com/ichaly/ideabase/gql v0.0.2 // indirect
-	github.com/ichaly/ideabase/log v0.0.4 // indirect
-	github.com/ichaly/ideabase/std v0.0.4 // indirect
+	github.com/ichaly/ideabase/gql v0.0.3 // indirect
+	github.com/ichaly/ideabase/log v0.0.5 // indirect
+	github.com/ichaly/ideabase/std v0.0.5 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -66,7 +71,6 @@ require (
 	github.com/redis/go-redis/v9 v9.12.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
-	github.com/samber/lo v1.51.0 // indirect
 	github.com/sony/sonyflake v1.3.0 // indirect
 	github.com/spf13/pflag v1.0.7 // indirect
 	github.com/sqids/sqids-go v0.4.1 // indirect
