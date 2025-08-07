@@ -5,8 +5,8 @@ go 1.24
 toolchain go1.24.5
 
 require (
-	github.com/ichaly/ideabase/ioc v0.0.5
-	github.com/ichaly/ideabase/utl v0.0.5
+	github.com/ichaly/ideabase/ioc v0.0.6
+	github.com/ichaly/ideabase/utl v0.0.6
 	github.com/samber/lo v1.51.0
 	github.com/spf13/cobra v1.9.1
 	go.uber.org/fx v1.24.0
@@ -87,7 +87,7 @@ require (
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.34.0 // indirect
 	golang.org/x/text v0.27.0 // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
+	google.golang.org/protobuf v1.36.7 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gorm.io/datatypes v1.2.6 // indirect
 	gorm.io/driver/mysql v1.6.0 // indirect
