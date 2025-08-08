@@ -6,7 +6,6 @@ toolchain go1.24.5
 
 require (
 	github.com/ichaly/ideabase/ioc v0.0.6
-	github.com/ichaly/ideabase/utl v0.0.6
 	github.com/samber/lo v1.51.0
 	github.com/spf13/cobra v1.9.1
 	go.uber.org/fx v1.24.0
@@ -37,6 +36,7 @@ require (
 	github.com/ichaly/ideabase/gql v0.0.6 // indirect
 	github.com/ichaly/ideabase/log v0.0.6 // indirect
 	github.com/ichaly/ideabase/std v0.0.6 // indirect
+	github.com/ichaly/ideabase/utl v0.0.6 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
