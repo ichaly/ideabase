@@ -1,6 +1,7 @@
 package utl
 
 import (
+	"io"
 	"strings"
 
 	jsoniter "github.com/json-iterator/go"
@@ -41,6 +42,10 @@ func (my ioTagExtension) UpdateStructDescriptor(sd *jsoniter.StructDescriptor) {
 
 func init() {
 	json.RegisterExtension(&ioTagExtension{})
+}
+
+func NewJSONDecoder(reader io.Reader) *jsoniter.Decoder {
+	return json.NewDecoder(reader)
 }
 
 // UnmarshalJSON 解析JSON数据到结构体
