@@ -111,7 +111,7 @@ func (my *FileLoader) Load(h protocol.Hoster) error {
 		Version string                     `json:"version"`
 	}
 
-	if err := utl.UnmarshalJSON(data, &meta); err != nil {
+	if err := utl.Unmarshal(data, &meta); err != nil {
 		log.Error().Err(err).Str("file", filePath).Msg("解析JSON失败")
 		return fmt.Errorf("解析JSON失败: %w", err)
 	}

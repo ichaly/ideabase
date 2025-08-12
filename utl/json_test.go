@@ -39,7 +39,7 @@ func TestMainNameCaseInsensitive(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var obj TestStruct
-			if err := UnmarshalJSON([]byte(tt.json), &obj); err != nil {
+			if err := Unmarshal([]byte(tt.json), &obj); err != nil {
 				t.Fatalf("解析失败: %v", err)
 			}
 			if obj.Speed != tt.want {
@@ -63,7 +63,7 @@ func TestAliases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var obj TestStruct
-			if err := UnmarshalJSON([]byte(tt.json), &obj); err != nil {
+			if err := Unmarshal([]byte(tt.json), &obj); err != nil {
 				t.Fatalf("解析失败: %v", err)
 			}
 			if obj.Wind != tt.want {
@@ -89,7 +89,7 @@ func TestMixedCaseAndAliases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var obj TestStruct
-			if err := UnmarshalJSON([]byte(tt.json), &obj); err != nil {
+			if err := Unmarshal([]byte(tt.json), &obj); err != nil {
 				t.Fatalf("解析失败: %v", err)
 			}
 			if obj.Temp != tt.want {
@@ -113,7 +113,7 @@ func TestMultipleFromOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var obj TestStruct
-			if err := UnmarshalJSON([]byte(tt.json), &obj); err != nil {
+			if err := Unmarshal([]byte(tt.json), &obj); err != nil {
 				t.Fatalf("解析失败: %v", err)
 			}
 			if obj.Humidity != tt.want {
@@ -132,7 +132,7 @@ func TestSerialization(t *testing.T) {
 		Icon:     "sunny",
 	}
 
-	data, err := MarshalJSON(obj)
+	data, err := Marshal(obj)
 	if err != nil {
 		t.Fatalf("序列化失败: %v", err)
 	}
@@ -140,10 +140,10 @@ func TestSerialization(t *testing.T) {
 	// 验证序列化结果只使用主名
 	expected := `{"speed":"10","wind":"north","temp":"25","humidity":"60","icon":"sunny"}`
 	var expectedObj, actualObj map[string]string
-	if err := UnmarshalJSON([]byte(expected), &expectedObj); err != nil {
+	if err := Unmarshal([]byte(expected), &expectedObj); err != nil {
 		t.Fatalf("解析期望结果失败: %v", err)
 	}
-	if err := UnmarshalJSON(data, &actualObj); err != nil {
+	if err := Unmarshal(data, &actualObj); err != nil {
 		t.Fatalf("解析实际结果失败: %v", err)
 	}
 
@@ -157,7 +157,7 @@ func TestSerialization(t *testing.T) {
 func TestIgnoredFields(t *testing.T) {
 	json := `{"speed":"10","ignore":"should_be_ignored"}`
 	var obj TestStruct
-	if err := UnmarshalJSON([]byte(json), &obj); err != nil {
+	if err := Unmarshal([]byte(json), &obj); err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
 
@@ -178,7 +178,7 @@ func TestEmptyAndInvalidAliases(t *testing.T) {
 
 	json := `{"field1":"test1","valid":"test3"}`
 	var obj TestEmptyAlias
-	if err := UnmarshalJSON([]byte(json), &obj); err != nil {
+	if err := Unmarshal([]byte(json), &obj); err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
 
@@ -200,7 +200,7 @@ func TestComplexJSON(t *testing.T) {
 	}`
 
 	var obj TestStruct
-	if err := UnmarshalJSON([]byte(json), &obj); err != nil {
+	if err := Unmarshal([]byte(json), &obj); err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
 

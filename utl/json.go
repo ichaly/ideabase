@@ -44,21 +44,21 @@ func init() {
 	json.RegisterExtension(&ioTagExtension{})
 }
 
-func NewJSONDecoder(reader io.Reader) *jsoniter.Decoder {
+func NewDecoder(reader io.Reader) *jsoniter.Decoder {
 	return json.NewDecoder(reader)
 }
 
-// UnmarshalJSON 解析JSON数据到结构体
-func UnmarshalJSON(data []byte, v any) error {
+// Unmarshal 解析JSON数据到结构体
+func Unmarshal(data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 
-// MarshalJSON 将结构体序列化为JSON
-func MarshalJSON(v any) ([]byte, error) {
+// Marshal 将结构体序列化为JSON
+func Marshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-// MarshalIndentJSON 将结构体序列化为格式化的JSON
-func MarshalIndentJSON(v any, prefix, indent string) ([]byte, error) {
+// MarshalIndent 将结构体序列化为格式化的JSON
+func MarshalIndent(v any, prefix, indent string) ([]byte, error) {
 	return json.MarshalIndent(v, prefix, indent)
 }

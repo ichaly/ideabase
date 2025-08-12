@@ -56,7 +56,7 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 	}
 
 	// 使用匿名结构体并直接初始化进行序列化
-	return utl.MarshalJSON(Class{
+	return utl.Marshal(Class{
 		Name:        my.Name,
 		Table:       my.Table,
 		Fields:      fields,
