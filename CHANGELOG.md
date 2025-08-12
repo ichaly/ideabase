@@ -1905,3 +1905,12 @@
 ## cmd v0.0.7 (2025-08-08)
 - chore(refactor): 优化配置文件路径获取逻辑，简化代码结构
 - chore(deps): 更新 ideabase 相关依赖版本至 v0.0.6，并添加新的 sqlite3 和 mssql 驱动
+## v0.0.8 (2025-08-12)
+### cmd
+- chore(deps): 将 ideabase/utl 依赖标记为间接依赖，并移除直接依赖项以优化模块管理
+### ioc
+- chore(deps): 更新 ideabase 相关依赖版本至 v0.0.6，并添加新的 sqlite3 和 mssql 驱动
+### std
+- chore(deps): 更新 ideabase 相关依赖版本至 v0.0.6，并添加新的 sqlite3 和 mssql 驱动
+### utl
+- feat(json): 增加 JSON 解析支持大小写不敏感及别名功能
