@@ -1914,3 +1914,22 @@
 - chore(deps): 更新 ideabase 相关依赖版本至 v0.0.6，并添加新的 sqlite3 和 mssql 驱动
 ### utl
 - feat(json): 增加 JSON 解析支持大小写不敏感及别名功能
+## gql v0.0.9 (2025-08-12)
+- refactor(std/gql/utl): 重构 JSON 编解码功能
+## run v0.0.9 (2025-08-12)
+- 无变更记录
+## svc v0.0.9 (2025-08-12)
+- 无变更记录
+## utl v0.0.9 (2025-08-12)
+- refactor(std/gql/utl): 重构 JSON 编解码功能
+- feat(utl): 添加 NewJSONDecoder 函数
+## cmd v0.0.9 (2025-08-12)
+- 无变更记录
+## gtw v0.0.9 (2025-08-12)
+- 无变更记录
+## ioc v0.0.9 (2025-08-12)
+- 无变更记录
+## log v0.0.9 (2025-08-12)
+- 无变更记录
+## std v0.0.9 (2025-08-12)
+- refactor(std/gql/utl): 重构 JSON 编解码功能
