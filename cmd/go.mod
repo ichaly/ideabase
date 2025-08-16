@@ -5,7 +5,7 @@ go 1.24
 toolchain go1.24.5
 
 require (
-	github.com/ichaly/ideabase/ioc v0.0.9
+	github.com/ichaly/ideabase/ioc v0.0.10
 	github.com/samber/lo v1.51.0
 	github.com/spf13/cobra v1.9.1
 	go.uber.org/fx v1.24.0

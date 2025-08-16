@@ -9,9 +9,9 @@ require (
 	github.com/gofiber/fiber/v2 v2.52.9
 	github.com/huandu/go-clone v1.7.3
 	github.com/iancoleman/strcase v0.3.0
-	github.com/ichaly/ideabase/log v0.0.9
-	github.com/ichaly/ideabase/std v0.0.9
-	github.com/ichaly/ideabase/utl v0.0.9
+	github.com/ichaly/ideabase/log v0.0.10
+	github.com/ichaly/ideabase/std v0.0.10
+	github.com/ichaly/ideabase/utl v0.0.10
 	github.com/jinzhu/inflection v1.0.0
 	github.com/joho/godotenv v1.5.1
 	github.com/json-iterator/go v1.1.12
