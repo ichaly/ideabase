@@ -33,10 +33,10 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/huandu/go-clone v1.7.3 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect
-	github.com/ichaly/ideabase/gql v0.0.9 // indirect
-	github.com/ichaly/ideabase/log v0.0.9 // indirect
-	github.com/ichaly/ideabase/std v0.0.9 // indirect
-	github.com/ichaly/ideabase/utl v0.0.9 // indirect
+	github.com/ichaly/ideabase/gql v0.0.10 // indirect
+	github.com/ichaly/ideabase/log v0.0.10 // indirect
+	github.com/ichaly/ideabase/std v0.0.10 // indirect
+	github.com/ichaly/ideabase/utl v0.0.10 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
