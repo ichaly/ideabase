@@ -84,7 +84,7 @@ func getExtension(c *fiber.Ctx) Extension {
 }
 
 // WrapHandler Handler包装器，统一包装响应格式
-func WrapHandler(handler func(*fiber.Ctx) (interface{}, error)) fiber.Handler {
+func WrapHandler(handler func(*fiber.Ctx) (any, error)) fiber.Handler {
 	return func(c *fiber.Ctx) (err error) {
 		// panic恢复机制
 		defer func() {
