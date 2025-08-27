@@ -18,3 +18,19 @@ func (r result[T]) Must() T {
 func Try[T any](value T, err error) result[T] {
 	return result[T]{value: value, err: err}
 }
+
+// Must 保证函数返回的错误不会为 nil，否则会 panic
+func Must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+// If 泛型三目表达式
+func If[T any](condition bool, trueValue, falseValue T) T {
+	if condition {
+		return trueValue
+	}
+	return falseValue
+}
