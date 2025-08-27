@@ -34,18 +34,3 @@ func If[T any](condition bool, trueValue, falseValue T) T {
 	}
 	return falseValue
 }
-
-func Safe[T comparable](value T, ok bool, defaultValue T, validators ...func(T) bool) (T, bool) {
-	var zero T
-	// 先检查基本条件：ok 且不是零值
-	if !ok || value == zero {
-		return defaultValue, false
-	}
-	// 再检查自定义验证器
-	for _, validator := range validators {
-		if !validator(value) {
-			return defaultValue, false
-		}
-	}
-	return value, true
-}
