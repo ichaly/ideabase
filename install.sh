@@ -68,7 +68,7 @@ echo -e "${YELLOW}安装模块依赖...${NC}"
 for MODULE in $MODULES; do
     echo -e "处理模块: ${MODULE}"
     if [ -d "$MODULE" ] && [ -f "${MODULE}/go.mod" ]; then
-        (cd "$MODULE" && go get -u ./...  && go mod tidy)
+        (cd "$MODULE" && go mod tidy && go get -u ./...)
         if [ $? -ne 0 ]; then
             echo -e "${RED}模块 ${MODULE} 依赖安装失败!${NC}"
         else

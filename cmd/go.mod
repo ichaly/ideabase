@@ -3,7 +3,7 @@ module github.com/ichaly/ideabase/cmd
 go 1.24.0
 
 require (
-	github.com/ichaly/ideabase/ioc v0.0.0-20250829092856-512f6eb5de1a
+	github.com/ichaly/ideabase/ioc v0.0.0-20250829093330-95f04fbf38b5
 	github.com/samber/lo v1.51.0
 	github.com/spf13/cobra v1.9.1
 	go.uber.org/fx v1.24.0
@@ -31,10 +31,10 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/huandu/go-clone v1.7.3 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect
-	github.com/ichaly/ideabase/gql v0.0.0-20250829092856-512f6eb5de1a // indirect
-	github.com/ichaly/ideabase/log v0.0.0-20250829092856-512f6eb5de1a // indirect
-	github.com/ichaly/ideabase/std v0.0.0-20250829092856-512f6eb5de1a // indirect
-	github.com/ichaly/ideabase/utl v0.0.0-20250829092856-512f6eb5de1a // indirect
+	github.com/ichaly/ideabase/gql v0.0.0-20250829093330-95f04fbf38b5 // indirect
+	github.com/ichaly/ideabase/log v0.0.0-20250829093330-95f04fbf38b5 // indirect
+	github.com/ichaly/ideabase/std v0.0.0-20250829093330-95f04fbf38b5 // indirect
+	github.com/ichaly/ideabase/utl v0.0.0-20250829093330-95f04fbf38b5 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -51,7 +51,6 @@ require (
 	github.com/knadh/koanf/providers/confmap v1.0.0 // indirect
 	github.com/knadh/koanf/providers/env v1.1.0 // indirect
 	github.com/knadh/koanf/providers/file v1.2.0 // indirect
-	github.com/knadh/koanf/providers/rawbytes v1.0.0 // indirect
 	github.com/knadh/koanf/v2 v2.2.2 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -68,11 +67,11 @@ require (
 	github.com/prometheus/procfs v0.17.0 // indirect
 	github.com/redis/go-redis/v9 v9.12.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/rogpeppe/go-internal v1.13.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/sony/sonyflake v1.3.0 // indirect
 	github.com/spf13/pflag v1.0.7 // indirect
 	github.com/sqids/sqids-go v0.4.1 // indirect
-	github.com/testcontainers/testcontainers-go v0.38.0 // indirect
 	github.com/tinylib/msgp v1.4.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.65.0 // indirect

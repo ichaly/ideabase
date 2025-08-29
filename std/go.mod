@@ -11,8 +11,8 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gofiber/contrib/fiberzerolog v1.0.3
 	github.com/gofiber/fiber/v2 v2.52.9
-	github.com/ichaly/ideabase/log v0.0.0-20250829092856-512f6eb5de1a
-	github.com/ichaly/ideabase/utl v0.0.0-20250829092856-512f6eb5de1a
+	github.com/ichaly/ideabase/log v0.0.0-20250829093330-95f04fbf38b5
+	github.com/ichaly/ideabase/utl v0.0.0-20250829093330-95f04fbf38b5
 	github.com/invzhi/next v1.1.1
 	github.com/joho/godotenv v1.5.1
 	github.com/knadh/koanf/parsers/yaml v1.1.0
@@ -68,6 +68,7 @@ require (
 	github.com/prometheus/common v0.65.0 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/rogpeppe/go-internal v1.13.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/tinylib/msgp v1.4.0 // indirect

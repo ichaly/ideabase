@@ -7,9 +7,9 @@ require (
 	github.com/gofiber/fiber/v2 v2.52.9
 	github.com/huandu/go-clone v1.7.3
 	github.com/iancoleman/strcase v0.3.0
-	github.com/ichaly/ideabase/log v0.0.0-20250829092856-512f6eb5de1a
-	github.com/ichaly/ideabase/std v0.0.0-20250829092856-512f6eb5de1a
-	github.com/ichaly/ideabase/utl v0.0.0-20250829092856-512f6eb5de1a
+	github.com/ichaly/ideabase/log v0.0.0-20250829093330-95f04fbf38b5
+	github.com/ichaly/ideabase/std v0.0.0-20250829093330-95f04fbf38b5
+	github.com/ichaly/ideabase/utl v0.0.0-20250829093330-95f04fbf38b5
 	github.com/jinzhu/inflection v1.0.0
 	github.com/joho/godotenv v1.5.1
 	github.com/json-iterator/go v1.1.12
@@ -71,7 +71,6 @@ require (
 	github.com/knadh/koanf/providers/confmap v1.0.0 // indirect
 	github.com/knadh/koanf/providers/env v1.1.0 // indirect
 	github.com/knadh/koanf/providers/file v1.2.0 // indirect
-	github.com/knadh/koanf/providers/rawbytes v1.0.0 // indirect
 	github.com/knadh/koanf/v2 v2.2.2 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
