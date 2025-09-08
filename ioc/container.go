@@ -18,6 +18,6 @@ func Get() fx.Option {
 func init() {
 	Add(
 		fx.Provide(std.NewFiber),
-		fx.Invoke(std.Bootstrap),
+		fx.Invoke(fx.Annotate(std.Bootstrap, fx.ParamTags(`group:"plugin"`, `group:"filter"`))),
 	)
 }

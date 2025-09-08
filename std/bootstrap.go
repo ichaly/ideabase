@@ -34,15 +34,8 @@ type Plugin interface {
 	Bind(fiber.Router)
 }
 
-// PluginGroup 依赖注入的插件集合
-type PluginGroup struct {
-	fx.In
-	Plugins []Plugin `group:"plugin"` // 功能插件
-	Filters []Plugin `group:"filter"` // 过滤器中间件
-}
-
 // Bootstrap 应用程序启动引导函数
-func Bootstrap(l fx.Lifecycle, c *Config, a *fiber.App, g PluginGroup) {
+func Bootstrap(p []Plugin, f []Plugin, l fx.Lifecycle, c *Config, a *fiber.App) {
 	if BuildTime == "" {
 		BuildTime = time.Now().Format("2006-01-02 15:04:05")
 	}
@@ -67,8 +60,7 @@ func Bootstrap(l fx.Lifecycle, c *Config, a *fiber.App, g PluginGroup) {
 	}
 
 	// 先注册过滤器再注册插件，确保过滤器先执行
-	all := append(g.Filters, g.Plugins...)
-	for _, m := range all {
+	for _, m := range append(f, p...) {
 		router := getRouter(m.Path())
 		m.Bind(router)
 	}

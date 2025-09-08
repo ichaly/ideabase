@@ -83,14 +83,8 @@ func TestBootstrap(t *testing.T) {
 	// 设置生命周期期望
 	lifecycle.On("Append", mock.Anything).Return()
 
-	// 创建符合fx.In嵌入的PluginGroup
-	pluginGroup := PluginGroup{
-		Plugins: []Plugin{plugin},
-		Filters: []Plugin{filter},
-	}
-
 	// 调用被测函数
-	Bootstrap(lifecycle, config, app, pluginGroup)
+	Bootstrap([]Plugin{plugin}, []Plugin{filter}, lifecycle, config, app)
 
 	// 验证路由是否正确设置
 	// 添加测试路由
@@ -146,14 +140,8 @@ func TestBootstrap_ComplexRoutes(t *testing.T) {
 	// 设置生命周期期望
 	lifecycle.On("Append", mock.Anything).Return()
 
-	// 创建符合fx.In嵌入的PluginGroup
-	pluginGroup := PluginGroup{
-		Plugins: []Plugin{apiPlugin, userPlugin, authPlugin, authPlugin2},
-		Filters: []Plugin{logFilter},
-	}
-
 	// 调用被测函数
-	Bootstrap(lifecycle, config, app, pluginGroup)
+	Bootstrap([]Plugin{apiPlugin, userPlugin, authPlugin, authPlugin2}, []Plugin{logFilter}, lifecycle, config, app)
 
 	// 验证所有mock对象的调用
 	apiPlugin.AssertExpectations(t)
@@ -178,13 +166,8 @@ func TestBootstrap_EmptyBasePath(t *testing.T) {
 	// 设置生命周期期望
 	lifecycle.On("Append", mock.Anything).Return()
 
-	// 创建符合fx.In嵌入的PluginGroup
-	pluginGroup := PluginGroup{
-		Plugins: []Plugin{emptyPlugin},
-	}
-
 	// 调用被测函数
-	Bootstrap(lifecycle, config, app, pluginGroup)
+	Bootstrap([]Plugin{emptyPlugin}, []Plugin{}, lifecycle, config, app)
 
 	// 验证mock对象
 	emptyPlugin.AssertExpectations(t)
