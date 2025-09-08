@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"go.uber.org/fx"
 )
 
 var (
@@ -35,7 +34,7 @@ type Plugin interface {
 }
 
 // Bootstrap 应用程序启动引导函数
-func Bootstrap(p []Plugin, f []Plugin, l fx.Lifecycle, c *Config, a *fiber.App) {
+func Bootstrap(p []Plugin, f []Plugin, l Lifecycle, c *Config, a *fiber.App) {
 	if BuildTime == "" {
 		BuildTime = time.Now().Format("2006-01-02 15:04:05")
 	}
@@ -66,19 +65,23 @@ func Bootstrap(p []Plugin, f []Plugin, l fx.Lifecycle, c *Config, a *fiber.App) 
 	}
 
 	// 添加应用生命周期钩子：启动与关闭处理
-	l.Append(fx.StartStopHook(func(ctx context.Context) {
-		// 异步启动HTTP服务器
-		go func() {
-			addr := fmt.Sprintf(":%v", c.Port)
-			if err := a.Listen(addr); err != nil && !errors.Is(err, context.Canceled) {
-				fmt.Printf("%v 启动失败: %v\n", c.Name, err)
-			}
-		}()
-	}, func(ctx context.Context) error {
-		err := a.Shutdown()
-		fmt.Printf("%v 已关闭\n", c.Name)
-		return err
-	}))
+	l.Append(
+		func(ctx context.Context) error {
+			// 异步启动HTTP服务器
+			go func() {
+				addr := fmt.Sprintf(":%v", c.Port)
+				if err := a.Listen(addr); err != nil && !errors.Is(err, context.Canceled) {
+					fmt.Printf("%v 启动失败: %v\n", c.Name, err)
+				}
+			}()
+			return nil
+		},
+		func(ctx context.Context) error {
+			err := a.Shutdown()
+			fmt.Printf("%v 已关闭\n", c.Name)
+			return err
+		},
+	)
 
 	fmt.Printf("当前版本:%s-%s 发布日期:%s\n", Version, GitCommit, BuildTime)
 }

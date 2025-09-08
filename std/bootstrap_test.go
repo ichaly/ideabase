@@ -11,7 +11,6 @@ import (
 	"github.com/ichaly/ideabase/std/internal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"go.uber.org/fx"
 )
 
 // MockPlugin 模拟插件
@@ -28,27 +27,29 @@ func (m *MockPlugin) Bind(router fiber.Router) {
 	m.Called(router)
 }
 
-// MockLifecycle 模拟fx生命周期
+// MockLifecycle 模拟生命周期
 type MockLifecycle struct {
 	mock.Mock
-	hooks []fx.Hook
+	startFuncs []func(context.Context) error
+	stopFuncs  []func(context.Context) error
 }
 
-func (m *MockLifecycle) Append(hook fx.Hook) {
-	m.Called(hook)
-	m.hooks = append(m.hooks, hook)
+func (m *MockLifecycle) Append(start, stop func(context.Context) error) {
+	m.Called(start, stop)
+	m.startFuncs = append(m.startFuncs, start)
+	m.stopFuncs = append(m.stopFuncs, stop)
 }
 
 // 执行生命周期钩子
 func (m *MockLifecycle) executeHooks(t *testing.T) {
-	for _, h := range m.hooks {
-		err := h.OnStart(context.Background())
+	for i := range m.startFuncs {
+		err := m.startFuncs[i](context.Background())
 		assert.NoError(t, err)
 
 		// 给异步操作一点时间
 		time.Sleep(10 * time.Millisecond)
 
-		err = h.OnStop(context.Background())
+		err = m.stopFuncs[i](context.Background())
 		assert.NoError(t, err)
 	}
 }
@@ -81,7 +82,7 @@ func TestBootstrap(t *testing.T) {
 	filter.On("Bind", mock.Anything).Return()
 
 	// 设置生命周期期望
-	lifecycle.On("Append", mock.Anything).Return()
+	lifecycle.On("Append", mock.AnythingOfType("func(context.Context) error"), mock.AnythingOfType("func(context.Context) error")).Return()
 
 	// 调用被测函数
 	Bootstrap([]Plugin{plugin}, []Plugin{filter}, lifecycle, config, app)
@@ -138,7 +139,7 @@ func TestBootstrap_ComplexRoutes(t *testing.T) {
 	logFilter.On("Bind", mock.Anything).Return()
 
 	// 设置生命周期期望
-	lifecycle.On("Append", mock.Anything).Return()
+	lifecycle.On("Append", mock.AnythingOfType("func(context.Context) error"), mock.AnythingOfType("func(context.Context) error")).Return()
 
 	// 调用被测函数
 	Bootstrap([]Plugin{apiPlugin, userPlugin, authPlugin, authPlugin2}, []Plugin{logFilter}, lifecycle, config, app)
@@ -164,7 +165,7 @@ func TestBootstrap_EmptyBasePath(t *testing.T) {
 	emptyPlugin.On("Bind", mock.Anything).Return()
 
 	// 设置生命周期期望
-	lifecycle.On("Append", mock.Anything).Return()
+	lifecycle.On("Append", mock.AnythingOfType("func(context.Context) error"), mock.AnythingOfType("func(context.Context) error")).Return()
 
 	// 调用被测函数
 	Bootstrap([]Plugin{emptyPlugin}, []Plugin{}, lifecycle, config, app)
