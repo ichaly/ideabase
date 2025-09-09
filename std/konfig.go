@@ -503,7 +503,7 @@ func (my *Konfig) reloadConfig() {
 }
 
 // notifyCallbacks 通知所有回调函数
-func (my *Konfig) notifyCallbacks(newK, oldK *koanf.Koanf) {
+func (my *Konfig) notifyCallbacks(newK, _ *koanf.Koanf) {
 	my.mu.RLock()
 	callbacks := make([]func(*koanf.Koanf), len(my.callbacks))
 	copy(callbacks, my.callbacks)
