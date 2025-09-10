@@ -597,4 +597,7 @@ cython_debug/
 # 依赖目录
 /vendor/
 
+# 临时目录和构建文件
+**/tmp/
+
 /out

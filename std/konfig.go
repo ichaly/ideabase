@@ -139,7 +139,7 @@ func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 		// CSRF中间件设置
 		"app.fiber.csrf_key_lookup":       "header:X-CSRF-Token",
 		"app.fiber.csrf_cookie_name":      "csrf_",
-		"app.fiber.csrf_cookie_same_site": "Strict",
+		"app.fiber.csrf_cookie_same_site": "Lax",
 		"app.fiber.csrf_expiration":       "1h",
 		// 限流中间件设置
 		"app.fiber.limiter_max":        100,

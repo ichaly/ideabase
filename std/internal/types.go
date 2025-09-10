@@ -47,10 +47,12 @@ type FiberConfig struct {
 	IdempotencyKeyHeader string        `mapstructure:"idempotency_key_header"` // 幂等性键头部
 
 	// CSRF中间件设置
+	CSRFEnabled        bool          `mapstructure:"csrf_enabled"`          // 是否启用CSRF保护
 	CSRFKeyLookup      string        `mapstructure:"csrf_key_lookup"`       // CSRF令牌查找位置
 	CSRFCookieName     string        `mapstructure:"csrf_cookie_name"`      // CSRF Cookie名称
 	CSRFCookieSameSite string        `mapstructure:"csrf_cookie_same_site"` // CSRF Cookie同源策略
 	CSRFExpiration     time.Duration `mapstructure:"csrf_expiration"`       // CSRF令牌过期时间
+	CSRFSkipPrefixes   []string      `mapstructure:"csrf_skip_prefixes"`    // 跳过CSRF检查的路径前缀
 
 	// 限流中间件设置
 	LimiterMax        int           `mapstructure:"limiter_max"`        // 请求限制数量

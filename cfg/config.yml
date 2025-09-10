@@ -1,4 +1,6 @@
+mode: prod
 app:
+  encrypt-key: go123
   debug: true
   name: "Go Next App"
   port: 8080

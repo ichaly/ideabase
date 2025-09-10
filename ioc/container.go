@@ -17,8 +17,15 @@ func Get() fx.Option {
 
 func init() {
 	Add(
-		fx.Provide(std.NewFiber),
-		fx.Provide(newAdapter),
+		fx.Provide(
+			newAdapter,
+			std.NewFiber,
+			fx.Annotate(
+				std.NewHealth,
+				fx.As(new(std.Plugin)),
+				fx.ResultTags(`group:"plugin"`),
+			),
+		),
 		fx.Invoke(fx.Annotate(std.Bootstrap, fx.ParamTags(`group:"plugin"`, `group:"filter"`))),
 	)
 }

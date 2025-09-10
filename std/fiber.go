@@ -2,6 +2,7 @@ package std
 
 import (
 	"encoding/base64"
+	"strings"
 
 	"github.com/gofiber/contrib/fiberzerolog"
 	"github.com/gofiber/fiber/v2"
@@ -55,9 +56,31 @@ func NewFiber(c *Config) *fiber.App {
 		// encryptcookie中间件需要base64编码的密钥
 		encodedKey := base64.StdEncoding.EncodeToString([]byte(paddedKey))
 
-		// 配置加密cookie中间件
+		// 配置加密cookie中间件，排除CSRF cookie
 		app.Use(encryptcookie.New(encryptcookie.Config{
-			Key: encodedKey,
+			Key:    encodedKey,
+			Except: []string{"csrf_"}, // 排除CSRF cookie
+		}))
+	}
+
+	// CSRF保护中间件 - 防止跨站请求伪造
+	if fiberConf.CSRFEnabled {
+		app.Use(csrf.New(csrf.Config{
+			KeyLookup:      fiberConf.CSRFKeyLookup,
+			CookieName:     fiberConf.CSRFCookieName,
+			CookieSameSite: fiberConf.CSRFCookieSameSite,
+			Expiration:     fiberConf.CSRFExpiration,
+			CookieSecure:   !c.IsDebug(),
+			Next: func(ctx *fiber.Ctx) bool {
+				path := ctx.Path()
+				// 检查是否匹配跳过的路径前缀
+				for _, prefix := range fiberConf.CSRFSkipPrefixes {
+					if strings.HasPrefix(path, prefix) {
+						return true // 跳过CSRF检查
+					}
+				}
+				return false
+			},
 		}))
 	}
 
@@ -71,18 +94,6 @@ func NewFiber(c *Config) *fiber.App {
 		Lifetime:  fiberConf.IdempotencyLifetime,
 		KeyHeader: fiberConf.IdempotencyKeyHeader,
 	}))
-
-	// CSRF保护中间件 - 防止跨站请求伪造
-	if !c.IsDebug() {
-		app.Use(csrf.New(csrf.Config{
-			KeyLookup:      fiberConf.CSRFKeyLookup,
-			CookieName:     fiberConf.CSRFCookieName,
-			CookieSameSite: fiberConf.CSRFCookieSameSite,
-			Expiration:     fiberConf.CSRFExpiration,
-			// 调试模式下可以关闭
-			CookieSecure: !c.IsDebug(),
-		}))
-	}
 
 	// 请求限制中间件 - 防止DoS攻击
 	app.Use(limiter.New(limiter.Config{
