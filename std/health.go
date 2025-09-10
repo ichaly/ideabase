@@ -28,7 +28,6 @@ func (my *Health) Check(c *fiber.Ctx) (any, error) {
 	return fiber.Map{
 		"status":    "ok",
 		"timestamp": time.Now().Unix(),
-		"service":   "ideabase",
 	}, nil
 }
 
@@ -48,7 +47,7 @@ func (my *Health) Readiness(c *fiber.Ctx) (any, error) {
 	// if !database.IsConnected() {
 	//     return fiber.Map{"status": "not_ready", "reason": "database disconnected"}, nil
 	// }
-	
+
 	return fiber.Map{
 		"status":    "ready",
 		"timestamp": time.Now().Unix(),
