@@ -7,6 +7,7 @@ require (
 	github.com/duke-git/lancet/v2 v2.3.7
 	github.com/eko/gocache/lib/v4 v4.2.1
 	github.com/eko/gocache/store/bigcache/v4 v4.2.2
+	github.com/eko/gocache/store/go_cache/v4 v4.2.2
 	github.com/eko/gocache/store/redis/v4 v4.2.4
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gofiber/contrib/fiberzerolog v1.0.3
@@ -21,6 +22,7 @@ require (
 	github.com/knadh/koanf/providers/file v1.2.0
 	github.com/knadh/koanf/providers/rawbytes v1.0.0
 	github.com/knadh/koanf/v2 v2.2.2
+	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/redis/go-redis/v9 v9.13.0
 	github.com/sony/sonyflake v1.3.0
 	github.com/sqids/sqids-go v0.4.1
