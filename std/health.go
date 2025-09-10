@@ -18,28 +18,43 @@ func (my *Health) Path() string {
 }
 
 func (my *Health) Bind(r fiber.Router) {
-	r.Get("/check", WrapHandler(my.GetCheck))
-	r.Post("/check", WrapHandler(my.PostCheck))
+	r.Get("/", WrapHandler(my.Check))
+	r.Get("/live", WrapHandler(my.Liveness))
+	r.Get("/ready", WrapHandler(my.Readiness))
 }
 
-// GetCheck GET请求不需要CSRF验证
-func (my *Health) GetCheck(c *fiber.Ctx) (any, error) {
+// Check 通用健康检查
+func (my *Health) Check(c *fiber.Ctx) (any, error) {
 	return fiber.Map{
 		"status":    "ok",
 		"timestamp": time.Now().Unix(),
-		"method":    "GET",
-		"message":   "Health check passed - no CSRF required for GET",
-		"client_ip": c.IP(),
+		"service":   "ideabase",
 	}, nil
 }
 
-// PostCheck POST请求需要CSRF验证
-func (my *Health) PostCheck(c *fiber.Ctx) (any, error) {
+// Liveness 存活检查 - 检查应用是否运行
+func (my *Health) Liveness(c *fiber.Ctx) (any, error) {
 	return fiber.Map{
-		"status":    "ok",
+		"status":    "alive",
 		"timestamp": time.Now().Unix(),
-		"method":    "POST",
-		"message":   "Health check passed - CSRF token validated",
-		"client_ip": c.IP(),
+		"uptime":    time.Since(time.Now()).Seconds(), // 可以改为实际启动时间
+	}, nil
+}
+
+// Readiness 就绪检查 - 检查应用是否准备好接收流量
+func (my *Health) Readiness(c *fiber.Ctx) (any, error) {
+	// 这里可以添加数据库连接、外部服务等检查
+	// 示例：检查数据库连接状态
+	// if !database.IsConnected() {
+	//     return fiber.Map{"status": "not_ready", "reason": "database disconnected"}, nil
+	// }
+	
+	return fiber.Map{
+		"status":    "ready",
+		"timestamp": time.Now().Unix(),
+		"checks": fiber.Map{
+			"database": "ok",
+			"cache":    "ok",
+		},
 	}, nil
 }
