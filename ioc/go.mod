@@ -1,10 +1,10 @@
 module github.com/ichaly/ideabase/ioc
 
-go 1.24.0
+go 1.25
 
 require (
-	github.com/ichaly/ideabase/gql v0.0.0-20250829093330-95f04fbf38b5
-	github.com/ichaly/ideabase/std v0.0.0-20250829093330-95f04fbf38b5
+	github.com/ichaly/ideabase/gql v0.0.0-20250910060550-1a26786ccae6
+	github.com/ichaly/ideabase/std v0.0.0-20250910060550-1a26786ccae6
 	go.uber.org/fx v1.24.0
 )
 
@@ -29,8 +29,8 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/huandu/go-clone v1.7.3 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect
-	github.com/ichaly/ideabase/log v0.0.0-20250909020834-33c2979306f1 // indirect
-	github.com/ichaly/ideabase/utl v0.0.0-20250829093330-95f04fbf38b5 // indirect
+	github.com/ichaly/ideabase/log v0.0.0-20250910060550-1a26786ccae6 // indirect
+	github.com/ichaly/ideabase/utl v0.0.0-20250910060550-1a26786ccae6 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
@@ -82,7 +82,7 @@ require (
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.36.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
-	google.golang.org/protobuf v1.36.8 // indirect
+	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gorm.io/datatypes v1.2.6 // indirect
 	gorm.io/driver/mysql v1.6.0 // indirect

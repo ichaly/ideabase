@@ -1,6 +1,6 @@
 module github.com/ichaly/ideabase/std
 
-go 1.24.0
+go 1.25
 
 require (
 	github.com/allegro/bigcache/v3 v3.1.0
@@ -11,8 +11,8 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gofiber/contrib/fiberzerolog v1.0.3
 	github.com/gofiber/fiber/v2 v2.52.9
-	github.com/ichaly/ideabase/log v0.0.0-20250909020834-33c2979306f1
-	github.com/ichaly/ideabase/utl v0.0.0-20250909013957-ce6093f83a15
+	github.com/ichaly/ideabase/log v0.0.0-20250910060550-1a26786ccae6
+	github.com/ichaly/ideabase/utl v0.0.0-20250910060550-1a26786ccae6
 	github.com/invzhi/next v1.1.1
 	github.com/joho/godotenv v1.5.1
 	github.com/knadh/koanf/parsers/yaml v1.1.0
@@ -80,7 +80,7 @@ require (
 	golang.org/x/exp v0.0.0-20250819193227-8b4c13bb791b // indirect
 	golang.org/x/sys v0.36.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
-	google.golang.org/protobuf v1.36.8 // indirect
+	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
