@@ -132,7 +132,7 @@ func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 		"app.fiber.write_timeout": "10s",
 		"app.fiber.idle_timeout":  "120s",
 		// 压缩中间件设置
-		"app.fiber.compress_level": "levelDefault",
+		"app.fiber.compress_level": "levelBestSpeed",
 		// 幂等性中间件设置
 		"app.fiber.idempotency_lifetime":   "24h",
 		"app.fiber.idempotency_key_header": "X-Idempotency-Key",
