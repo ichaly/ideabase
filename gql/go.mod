@@ -7,9 +7,9 @@ require (
 	github.com/gofiber/fiber/v2 v2.52.9
 	github.com/huandu/go-clone v1.7.3
 	github.com/iancoleman/strcase v0.3.0
-	github.com/ichaly/ideabase/log v0.0.0-20250910060550-1a26786ccae6
-	github.com/ichaly/ideabase/std v0.0.0-20250910060550-1a26786ccae6
-	github.com/ichaly/ideabase/utl v0.0.0-20250910060550-1a26786ccae6
+	github.com/ichaly/ideabase/log v0.0.0-20250911015313-7f92d45b5072
+	github.com/ichaly/ideabase/std v0.0.0-20250911015313-7f92d45b5072
+	github.com/ichaly/ideabase/utl v0.0.0-20250911015313-7f92d45b5072
 	github.com/jinzhu/inflection v1.0.0
 	github.com/joho/godotenv v1.5.1
 	github.com/json-iterator/go v1.1.12
@@ -47,6 +47,7 @@ require (
 	github.com/ebitengine/purego v0.8.4 // indirect
 	github.com/eko/gocache/lib/v4 v4.2.1 // indirect
 	github.com/eko/gocache/store/bigcache/v4 v4.2.2 // indirect
+	github.com/eko/gocache/store/go_cache/v4 v4.2.2 // indirect
 	github.com/eko/gocache/store/redis/v4 v4.2.4 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
@@ -92,6 +93,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
+	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -100,7 +102,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
-	github.com/redis/go-redis/v9 v9.13.0 // indirect
+	github.com/redis/go-redis/v9 v9.14.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/shirou/gopsutil/v4 v4.25.5 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
@@ -121,7 +123,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.37.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.7.1 // indirect
 	go.uber.org/mock v0.6.0 // indirect
-	go.yaml.in/yaml/v2 v2.4.2 // indirect
+	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/exp v0.0.0-20250819193227-8b4c13bb791b // indirect
