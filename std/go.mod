@@ -12,8 +12,8 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gofiber/contrib/fiberzerolog v1.0.3
 	github.com/gofiber/fiber/v2 v2.52.9
-	github.com/ichaly/ideabase/log v0.0.0-20250910060550-1a26786ccae6
-	github.com/ichaly/ideabase/utl v0.0.0-20250910060550-1a26786ccae6
+	github.com/ichaly/ideabase/log v0.0.0-20250911015313-7f92d45b5072
+	github.com/ichaly/ideabase/utl v0.0.0-20250911015313-7f92d45b5072
 	github.com/invzhi/next v1.1.1
 	github.com/joho/godotenv v1.5.1
 	github.com/knadh/koanf/parsers/yaml v1.1.0
@@ -23,7 +23,7 @@ require (
 	github.com/knadh/koanf/providers/rawbytes v1.0.0
 	github.com/knadh/koanf/v2 v2.2.2
 	github.com/patrickmn/go-cache v2.1.0+incompatible
-	github.com/redis/go-redis/v9 v9.13.0
+	github.com/redis/go-redis/v9 v9.14.0
 	github.com/sony/sonyflake v1.3.0
 	github.com/sqids/sqids-go v0.4.1
 	github.com/stretchr/testify v1.11.1
@@ -76,7 +76,7 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.65.0 // indirect
 	go.uber.org/mock v0.6.0 // indirect
-	go.yaml.in/yaml/v2 v2.4.2 // indirect
+	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/exp v0.0.0-20250819193227-8b4c13bb791b // indirect
