@@ -2,30 +2,29 @@ package ioc
 
 import (
 	"github.com/ichaly/ideabase/std"
-	"go.uber.org/fx"
 )
 
-var options []fx.Option
+var options []Option
 
-func Add(args ...fx.Option) {
+func Add(args ...Option) {
 	options = append(options, args...)
 }
 
-func Get() fx.Option {
-	return fx.Options(options...)
+func Get() Option {
+	return Options(options...)
 }
 
 func init() {
 	Add(
-		fx.Provide(
+		Provide(
 			newAdapter,
 			std.NewFiber,
-			fx.Annotate(
+			Annotate(
 				std.NewHealth,
-				fx.As(new(std.Plugin)),
-				fx.ResultTags(`group:"plugin"`),
+				As(new(std.Plugin)),
+				ResultTags(`group:"plugin"`),
 			),
 		),
-		fx.Invoke(fx.Annotate(std.Bootstrap, fx.ParamTags(`group:"plugin"`, `group:"filter"`))),
+		Invoke(Annotate(std.Bootstrap, ParamTags(`group:"plugin"`, `group:"filter"`))),
 	)
 }
