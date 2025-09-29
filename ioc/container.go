@@ -6,8 +6,9 @@ import (
 
 var options []Option
 
-func Add(args ...Option) {
+func Add(args ...Option) struct{} {
 	options = append(options, args...)
+	return struct{}{}
 }
 
 func Get() Option {
