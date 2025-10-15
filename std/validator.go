@@ -53,9 +53,10 @@ type TranslatorFunc func(locale string) (ut.Translator, error)
 
 // NewValidator 创建带默认语言（简体中文）的校验器实例
 func NewValidator() (*Validator, error) {
+	enLocale, zhLocale := en.New(), zh.New()
 	v := &Validator{
 		validate:      validator.New(),
-		universal:     ut.New(en.New(), zh.New()),
+		universal:     ut.New(enLocale, enLocale, zhLocale),
 		translators:   make(map[string]ut.Translator),
 		defaultLocale: LocaleChinese,
 		registered:    make(map[string]bool),
