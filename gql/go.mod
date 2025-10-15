@@ -47,9 +47,9 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ebitengine/purego v0.8.4 // indirect
 	github.com/eko/gocache/lib/v4 v4.2.2 // indirect
-	github.com/eko/gocache/store/bigcache/v4 v4.2.2 // indirect
-	github.com/eko/gocache/store/go_cache/v4 v4.2.2 // indirect
-	github.com/eko/gocache/store/redis/v4 v4.2.4 // indirect
+	github.com/eko/gocache/store/bigcache/v4 v4.2.3 // indirect
+	github.com/eko/gocache/store/go_cache/v4 v4.2.3 // indirect
+	github.com/eko/gocache/store/redis/v4 v4.2.5 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -104,7 +104,6 @@ require (
 	github.com/prometheus/common v0.67.1 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
 	github.com/redis/go-redis/v9 v9.14.0 // indirect
-	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/shirou/gopsutil/v4 v4.25.5 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/sony/sonyflake v1.3.0 // indirect
@@ -127,7 +126,7 @@ require (
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.43.0 // indirect
-	golang.org/x/exp v0.0.0-20251002181428-27f1f14c8bb9 // indirect
+	golang.org/x/exp v0.0.0-20251009144603-d2f985daa21b // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.30.0 // indirect

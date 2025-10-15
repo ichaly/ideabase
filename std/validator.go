@@ -2,6 +2,7 @@ package std
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -15,9 +16,9 @@ import (
 
 const (
 	// LocaleEnglish 英文语言码
-	LocaleEnglish = "en_us"
+	LocaleEnglish = "en"
 	// LocaleChinese 中文语言码
-	LocaleChinese = "zh_cn"
+	LocaleChinese = "zh"
 )
 
 // ValidationError 校验错误信息集合
@@ -67,6 +68,15 @@ func NewValidator() (*Validator, error) {
 	if err := v.RegisterTranslation(LocaleChinese, zhTranslations.RegisterDefaultTranslations); err != nil {
 		return nil, err
 	}
+
+	// 先取 label 标签若为空，则退回到结构体字段原名。
+	// 这样一来，当校验失败时，错误信息里的字段名会更贴近接口返回或业务描述，避免直接暴露 Go 字段名。
+	v.validate.RegisterTagNameFunc(func(field reflect.StructField) string {
+		if label := strings.TrimSpace(field.Tag.Get("label")); label != "" {
+			return label
+		}
+		return field.Name
+	})
 
 	return v, nil
 }
