@@ -10,6 +10,9 @@ require (
 	github.com/eko/gocache/store/go_cache/v4 v4.2.2
 	github.com/eko/gocache/store/redis/v4 v4.2.4
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/go-playground/locales v0.14.1
+	github.com/go-playground/universal-translator v0.18.1
+	github.com/go-playground/validator/v10 v10.28.0
 	github.com/gofiber/contrib/fiberzerolog v1.0.3
 	github.com/gofiber/fiber/v2 v2.52.9
 	github.com/ichaly/ideabase/log v0.0.0-20250911081141-c954ce572aca
