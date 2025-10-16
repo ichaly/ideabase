@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"hash/crc32"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -39,11 +40,25 @@ func Hash(key string) int {
 // Root 返回项目的根目录路径
 // 通过获取当前文件的运行时信息来定位项目根目录
 func Root() string {
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		return ""
+	if env := strings.TrimSpace(os.Getenv("APP_ROOT")); env != "" {
+		if abs, err := filepath.Abs(env); err == nil {
+			return abs
+		}
 	}
-	return filepath.Dir(filepath.Dir(filename))
+
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Dir(exe)
+	}
+
+	if _, file, _, ok := runtime.Caller(0); ok {
+		return filepath.Dir(filepath.Dir(file))
+	}
+
+	return "."
 }
 
 // RandomCode 生成指定长度的随机数字字符串

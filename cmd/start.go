@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/ichaly/ideabase/ioc"
+	"github.com/ichaly/ideabase/utl"
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
 )
@@ -19,9 +20,7 @@ var runCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		configFile, _ := cmd.Flags().GetString(configFlag)
 		if configFile == "" {
-			if dir, err := os.Getwd(); err == nil {
-				configFile = filepath.Join(dir, "cfg", "config.yml")
-			}
+			configFile = filepath.Join(utl.Root(), "cfg", "config.yml")
 		}
 		fx.New(ioc.Get(), fx.Supply(configFile)).Run()
 	},
