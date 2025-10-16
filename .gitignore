@@ -601,3 +601,4 @@ cython_debug/
 **/tmp/
 
 /out
+/.claude/

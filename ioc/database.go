@@ -18,6 +18,10 @@ func init() {
 				Group:  "gorm",
 				Target: std.NewCache,
 			},
+			fx.Annotated{
+				Group:  "gorm",
+				Target: std.NewAudited,
+			},
 			fx.Annotate(
 				std.NewDatabase,
 				fx.ParamTags(``, `group:"gorm"`, `group:"entity"`),
