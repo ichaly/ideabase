@@ -41,6 +41,9 @@ func (my *Exception) Error() string {
 
 // With 为Exception添加扩展字段，支持链式调用
 func (my *Exception) With(key string, value interface{}) *Exception {
+	if value == nil {
+		return my
+	}
 	if my.Extensions == nil {
 		my.Extensions = make(Extension)
 	}
@@ -48,17 +51,56 @@ func (my *Exception) With(key string, value interface{}) *Exception {
 	return my
 }
 
-// NewException 创建错误实例，简洁命名
-func NewException(statusCode int, message string, details ...string) *Exception {
+// NewException 创建错误实例，支持可选错误对象及附加扩展。
+// 若第三个参数是 error，将被视为基础错误，其余参数可为字符串、map、Extension等。
+func NewException(statusCode int, message string, params ...any) *Exception {
 	ex := &Exception{
 		Message:    message,
 		statusCode: statusCode,
+		Extensions: make(Extension),
+	}
+	merge := func(values map[string]any) {
+		if len(values) == 0 {
+			return
+		}
+		for k, v := range values {
+			ex.Extensions[k] = v
+		}
 	}
 
-	// 设置可选的详情到错误级别的Extensions
-	if len(details) > 0 && details[0] != "" {
-		ex.Extensions = make(Extension)
-		ex.Extensions["details"] = details[0]
+	addDetail := func(text string) {
+		if text == "" {
+			return
+		}
+		ex.Extensions["details"] = text
+	}
+
+	mergeCarrier := func(err error) {
+		if err == nil {
+			return
+		}
+		if carrier, ok := err.(interface{ Extensions() Extension }); ok && carrier.Extensions() != nil {
+			merge(carrier.Extensions())
+			return
+		}
+		addDetail(err.Error())
+	}
+
+	for _, arg := range params {
+		switch v := arg.(type) {
+		case nil:
+			continue
+		case string:
+			addDetail(v)
+		case Extension:
+			merge(map[string]any(v))
+		case map[string]any:
+			merge(v)
+		case error:
+			mergeCarrier(v)
+		default:
+			addDetail(fmt.Sprint(v))
+		}
 	}
 
 	return ex
@@ -105,13 +147,12 @@ func WrapHandler(handler func(*fiber.Ctx) (any, error)) fiber.Handler {
 			}
 			var fe *fiber.Error
 			if errors.As(err, &fe) {
-				return c.Status(fe.Code).JSON(Result{Errors: []*Exception{NewException(fe.Code, fe.Message)}})
+				return c.Status(fe.Code).JSON(Result{Errors: []*Exception{NewException(fe.Code, fe.Message, fe)}})
 			}
 			return c.Status(fiber.StatusInternalServerError).JSON(Result{
-				Errors: []*Exception{NewException(fiber.StatusInternalServerError, "内部服务器错误", err.Error())},
+				Errors: []*Exception{NewException(fiber.StatusInternalServerError, "内部服务器错误", err)},
 			})
 		}
-
 		// 成功响应
 		return c.Status(fiber.StatusOK).JSON(Result{Data: data, Extensions: getExtension(c)})
 	}
