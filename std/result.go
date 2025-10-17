@@ -35,17 +35,17 @@ type Location struct {
 	Column int `json:"column"`
 }
 
-func (e *Exception) Error() string {
-	return e.Message
+func (my *Exception) Error() string {
+	return my.Message
 }
 
 // With 为Exception添加扩展字段，支持链式调用
-func (e *Exception) With(key string, value interface{}) *Exception {
-	if e.Extensions == nil {
-		e.Extensions = make(Extension)
+func (my *Exception) With(key string, value interface{}) *Exception {
+	if my.Extensions == nil {
+		my.Extensions = make(Extension)
 	}
-	e.Extensions[key] = value
-	return e
+	my.Extensions[key] = value
+	return my
 }
 
 // NewException 创建错误实例，简洁命名
