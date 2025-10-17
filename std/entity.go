@@ -66,7 +66,10 @@ type AuditorEntity struct {
 	DeletedBy *Id `gorm:"comment:删除人;" json:",omitempty"`
 }
 
-func GetUserFromContext(ctx context.Context) (interface{}, bool) {
+func AuditedContextUser(ctx context.Context) (*Id, bool) {
+	if ctx == nil {
+		return nil, false
+	}
 	val, ok := ctx.Value(UserContextKey).(string)
 	if !ok || val == "" {
 		return nil, false
@@ -75,5 +78,18 @@ func GetUserFromContext(ctx context.Context) (interface{}, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return &num, ok
+	// 返回命名类型 *Id，避免直接使用基础类型造成反射赋值 panic
+	id := Id(num)
+	return &id, true
+}
+
+// WithAuditedUser 将用户 ID 写入上下文，便于审计插件获取当前操作人
+func WithAuditedUser(ctx context.Context, id *Id) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if id == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, UserContextKey, strconv.FormatUint(uint64(*id), 10))
 }

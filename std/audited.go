@@ -39,36 +39,36 @@ func (my Audited) beforeCreate(db *gorm.DB) {
 	if db.Error != nil || db.Statement.Schema == nil {
 		return
 	}
-
-	dest := db.Statement.Dest
-	if dest == nil {
+	if db.Statement.Dest == nil {
+		// 没有写入目标，直接返回避免空指针
 		return
 	}
-
+	now := my.now(db)
 	if db.Statement.Context != nil {
-		if user, ok := GetUserFromContext(db.Statement.Context); ok {
-			my.setFieldForEntity(dest, "CreatedBy", user)
+		if user, ok := AuditedContextUser(db.Statement.Context); ok {
+			my.setValue(db, "CreatedBy", user)
+			my.setValue(db, "UpdatedBy", user)
 		}
 	}
-
-	if my.hasField(dest, "CreatedAt") {
-		my.setFieldForEntity(dest, "CreatedAt", time.Now())
-	}
+	// 创建时保持 Created/Updated 成对写入，便于后续审计
+	my.setValue(db, "CreatedAt", now)
+	my.setValue(db, "UpdatedAt", now)
 }
 
 func (my Audited) beforeUpdate(db *gorm.DB) {
 	if db.Error != nil || db.Statement.Schema == nil {
 		return
 	}
-
+	now := my.now(db)
 	if db.Statement.Context != nil {
-		if user, ok := GetUserFromContext(db.Statement.Context); ok {
+		if user, ok := AuditedContextUser(db.Statement.Context); ok {
+			// 使用 SetColumn 保持 gorm 的字段切换与钩子行为
 			db.Statement.SetColumn("UpdatedBy", user, true)
 		}
 	}
-
 	if db.Statement.Schema.LookUpField("UpdatedAt") != nil {
-		db.Statement.SetColumn("UpdatedAt", time.Now(), true)
+		// UpdatedAt 同样通过 Statement 写入，确保更新语句包含该列
+		db.Statement.SetColumn("UpdatedAt", now, true)
 	}
 }
 
@@ -77,21 +77,23 @@ func (my Audited) beforeDelete(db *gorm.DB) {
 		return
 	}
 
+	// 仅对包含软删字段的模型执行审计处理
 	if my.hasSoftDeleteField(db.Statement.Schema) {
-		now := time.Now()
-
+		now := my.now(db)
 		deletedAtField := db.Statement.Schema.LookUpField("DeletedAt")
 		if deletedAtField != nil {
+			// 软删除时间依赖 GORM 自动构造的 update set
 			db.Statement.SetColumn("DeletedAt", now, true)
 		}
 
 		if db.Statement.Context != nil {
-			if user, ok := GetUserFromContext(db.Statement.Context); ok {
+			if user, ok := AuditedContextUser(db.Statement.Context); ok {
 				db.Statement.SetColumn("DeletedBy", user, true)
 			}
 		}
 
-		if !db.Statement.Unscoped {
+		if !db.Statement.Unscoped && deletedAtField != nil {
+			// 未开启 Unscoped 时才注入过滤条件
 			SoftDeleteQueryClause{Field: deletedAtField}.ModifyStatement(db.Statement)
 		}
 
@@ -104,116 +106,73 @@ func (my Audited) beforeQuery(db *gorm.DB) {
 		return
 	}
 
-	// 如果没有设置 Unscoped，且模型有软删除字段，则自动添加过滤条件
 	if !db.Statement.Unscoped && my.hasSoftDeleteField(db.Statement.Schema) {
-		deletedAtField := db.Statement.Schema.LookUpField("DeletedAt")
-		if deletedAtField != nil {
-			// 检查是否已经设置了 soft_delete_enabled 子句
-			if _, ok := db.Statement.Clauses["soft_delete_enabled"]; !ok {
-				// 处理现有的 WHERE 子句
-				if c, ok := db.Statement.Clauses["WHERE"]; ok {
-					if where, ok := c.Expression.(clause.Where); ok && len(where.Exprs) >= 1 {
-						// 检查是否有单个 OR 条件需要转换为 AND
-						for _, expr := range where.Exprs {
-							if orCond, ok := expr.(clause.OrConditions); ok && len(orCond.Exprs) == 1 {
-								where.Exprs = []clause.Expression{clause.And(where.Exprs...)}
-								c.Expression = where
-								db.Statement.Clauses["WHERE"] = c
-								break
-							}
-						}
-					}
-				}
-
-				// 添加软删除过滤条件
-				db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{
-					clause.Eq{Column: clause.Column{Table: clause.CurrentTable, Name: "deleted_at"}, Value: nil},
-				}})
-				db.Statement.Clauses["soft_delete_enabled"] = clause.Clause{}
-			}
+		if deletedAtField := db.Statement.Schema.LookUpField("DeletedAt"); deletedAtField != nil {
+			// 复用软删 QueryClause，保持查询过滤一致
+			SoftDeleteQueryClause{Field: deletedAtField}.ModifyStatement(db.Statement)
 		}
 	}
 }
 
-func (my Audited) setFieldForEntity(dest interface{}, fieldName string, value interface{}) {
-	destValue := reflect.ValueOf(dest)
-	if destValue.Kind() == reflect.Ptr {
-		destValue = destValue.Elem()
-	}
-
-	if destValue.Kind() != reflect.Struct {
+func (my Audited) setValue(db *gorm.DB, fieldName string, value interface{}) {
+	stmt := db.Statement
+	if stmt == nil || stmt.Schema == nil {
 		return
 	}
-
-	// 遍历所有字段，包括嵌入的结构体
-	for i := 0; i < destValue.NumField(); i++ {
-		field := destValue.Type().Field(i)
-		fieldValue := destValue.Field(i)
-
-		// 处理嵌入字段
-		if field.Anonymous {
-			if fieldValue.Kind() == reflect.Ptr {
-				if fieldValue.IsNil() {
-					fieldValue.Set(reflect.New(fieldValue.Type().Elem()))
-				}
-				fieldValue = fieldValue.Elem()
-			}
-			if fieldValue.Kind() == reflect.Struct {
-				my.setFieldForEntity(fieldValue.Addr().Interface(), fieldName, value)
-				continue
-			}
-		}
-
-		// 检查字段名是否匹配
-		if field.Name == fieldName && fieldValue.IsValid() && fieldValue.CanSet() {
-			if fieldValue.Kind() == reflect.Ptr {
-				if fieldValue.IsNil() {
-					fieldValue.Set(reflect.New(fieldValue.Type().Elem()))
-				}
-				targetValue := reflect.ValueOf(value)
-				if targetValue.Kind() == reflect.Ptr {
-					fieldValue.Elem().Set(targetValue.Elem())
-				} else {
-					fieldValue.Elem().Set(targetValue)
-				}
-			} else {
-				targetValue := reflect.ValueOf(value)
-				if targetValue.Kind() == reflect.Ptr {
-					fieldValue.Set(targetValue.Elem())
-				} else {
-					fieldValue.Set(targetValue)
-				}
-			}
-		}
+	// 借助 Schema 查找字段，保持与 GORM 的字段映射一致（含嵌套与命名类型）
+	field := stmt.Schema.LookUpField(fieldName)
+	if field == nil {
+		// 模型未定义该字段，忽略即可
+		return
 	}
+	my.assignSchemaValue(stmt, field, stmt.ReflectValue, value)
 }
 
-func (my Audited) hasField(dest interface{}, fieldName string) bool {
-	destValue := reflect.ValueOf(dest)
-	if destValue.Kind() == reflect.Ptr {
-		destValue = destValue.Elem()
+func (my Audited) assignSchemaValue(stmt *gorm.Statement, field *schema.Field, target reflect.Value, value interface{}) {
+	if !target.IsValid() {
+		return
 	}
-
-	if destValue.Kind() != reflect.Struct {
-		return false
-	}
-
-	for i := 0; i < destValue.NumField(); i++ {
-		field := destValue.Type().Field(i)
-		if field.Anonymous {
-			if my.hasField(destValue.Field(i).Addr().Interface(), fieldName) {
-				return true
+	switch target.Kind() {
+	case reflect.Ptr:
+		if target.IsNil() {
+			if !target.CanSet() {
+				// 只读指针无法赋值，直接跳过
+				return
 			}
+			target.Set(reflect.New(target.Type().Elem()))
 		}
-		if field.Name == fieldName {
-			return true
+		my.assignSchemaValue(stmt, field, target.Elem(), value)
+	case reflect.Struct:
+		// 统一使用 Field.Set，利用 GORM 内置的类型转换与命名类型支持
+		if err := field.Set(stmt.Context, target, value); err != nil {
+			_ = stmt.AddError(err)
 		}
+	case reflect.Slice, reflect.Array:
+		// slices/arrays 逐个赋值以兼容批量 Insert/Update
+		for i := 0; i < target.Len(); i++ {
+			my.assignSchemaValue(stmt, field, target.Index(i), value)
+		}
+	default:
+		// 其他类型不会出现（例如 map），因此无需特殊处理
 	}
-	return false
 }
 
 func (my Audited) hasSoftDeleteField(s *schema.Schema) bool {
+	// 是否存在 DeletedAt 字段，用于判定软删能力
 	return s.LookUpField("DeletedAt") != nil
+}
+
+func (my Audited) now(db *gorm.DB) time.Time {
+	switch {
+	case db != nil && db.Statement != nil && db.Statement.DB != nil && db.Statement.DB.NowFunc != nil:
+		// 优先使用当前 statement 上下文配置的 NowFunc（事务/Session 级别）
+		return db.Statement.DB.NowFunc()
+	case db != nil && db.NowFunc != nil:
+		return db.NowFunc()
+	default:
+		// 回退到标准库时间，避免因为 NowFunc 被覆盖导致空指针
+		return time.Now()
+	}
 }
 
 // SoftDeleteQueryClause 软删除查询子句
@@ -221,6 +180,10 @@ type SoftDeleteQueryClause struct {
 	Field *schema.Field
 }
 
+// 这里保留 GORM clause.Interface 的完整方法签名，原因：
+// 1. 与官方 soft_delete 实现保持同构，方便阅读/对照；
+// 2. 日后若改为注册到 GORM 的 QueryClauses 流程，可直接复用；
+// 3. 当前仅在 ModifyStatement 中生效，其余方法按接口要求留空。
 func (my SoftDeleteQueryClause) Name() string {
 	return ""
 }
@@ -232,10 +195,37 @@ func (my SoftDeleteQueryClause) MergeClause(*clause.Clause) {
 }
 
 func (my SoftDeleteQueryClause) ModifyStatement(stmt *gorm.Statement) {
-	if _, ok := stmt.Clauses["soft_delete_enabled"]; !ok && !stmt.Statement.Unscoped {
-		stmt.AddClause(clause.Where{Exprs: []clause.Expression{
-			clause.Eq{Column: clause.Column{Table: clause.CurrentTable, Name: "deleted_at"}, Value: nil},
-		}})
-		stmt.Clauses["soft_delete_enabled"] = clause.Clause{}
+	if stmt == nil {
+		// Statement 缺失时无法注入过滤条件
+		return
 	}
+	unscoped := stmt.Statement != nil && stmt.Statement.Unscoped
+	if _, ok := stmt.Clauses["soft_delete_enabled"]; ok || unscoped {
+		// 已处理或显式 Unscoped，保持调用方期望
+		return
+	}
+	// 同步 GORM 原生软删除行为：单个 OR 条件需要转 AND 才能继续追加约束
+	if c, ok := stmt.Clauses["WHERE"]; ok {
+		if where, ok := c.Expression.(clause.Where); ok && len(where.Exprs) >= 1 {
+			for _, expr := range where.Exprs {
+				if orCond, ok := expr.(clause.OrConditions); ok && len(orCond.Exprs) == 1 {
+					where.Exprs = []clause.Expression{clause.And(where.Exprs...)}
+					c.Expression = where
+					stmt.Clauses["WHERE"] = c
+					break
+				}
+			}
+		}
+	}
+	column := "deleted_at"
+	if my.Field != nil && my.Field.DBName != "" {
+		// Schema 提供的列名优先，以支持自定义 tag
+		column = my.Field.DBName
+	}
+	// 使用实际列名，兼容自定义 gorm tag
+	stmt.AddClause(clause.Where{Exprs: []clause.Expression{
+		clause.Eq{Column: clause.Column{Table: clause.CurrentTable, Name: column}, Value: nil},
+	}})
+	// 打标避免重复注入
+	stmt.Clauses["soft_delete_enabled"] = clause.Clause{}
 }
