@@ -119,15 +119,13 @@ func (my *Validator) RegisterTranslation(trans locales.Translator, register func
 	}
 
 	my.mutex.Lock()
+	defer my.mutex.Unlock()
 	if err := my.universal.AddTranslator(trans, true); err != nil {
-		my.mutex.Unlock()
 		return err
 	}
 	if _, ok := my.registered[locale]; ok {
-		my.mutex.Unlock()
 		return nil
 	}
-	my.mutex.Unlock()
 
 	translator, found := my.universal.GetTranslator(locale)
 	if !found {
@@ -138,9 +136,7 @@ func (my *Validator) RegisterTranslation(trans locales.Translator, register func
 		return err
 	}
 
-	my.mutex.Lock()
 	my.registered[locale] = struct{}{}
-	my.mutex.Unlock()
 	return nil
 }
 
@@ -194,22 +190,17 @@ func (my *Validator) translateRawError(payload any, rawErr error) error {
 	if !ok {
 		return rawErr
 	}
-	my.mutex.RLock()
-	locale := my.defaultLocale
-	my.mutex.RUnlock()
-	translator, found := my.universal.GetTranslator(locale)
+	translator, found := my.loadDefaultTranslator()
 	if !found {
 		return rawErr
 	}
 	fieldLookup := buildFieldLookup(payload)
 	fields := make([]FieldError, 0, len(errs))
-	messages := make([]string, 0, len(errs))
 	for _, fe := range errs {
 		message := fe.Translate(translator)
 		if message == "" {
 			message = fe.Error()
 		}
-		messages = append(messages, message)
 
 		fieldName := fe.StructField()
 		if alias, ok := fieldLookup[fieldName]; ok {
@@ -231,16 +222,12 @@ func (my *Validator) toValidationError(payload any, rawErr error) error {
 	if !ok {
 		return &ValidationError{detail: rawErr.Error(), err: rawErr}
 	}
-	my.mutex.RLock()
-	locale := my.defaultLocale
-	my.mutex.RUnlock()
-	translator, found := my.universal.GetTranslator(locale)
+	translator, found := my.loadDefaultTranslator()
 	if !found {
 		return &ValidationError{detail: rawErr.Error(), err: rawErr}
 	}
 	fieldLookup := buildFieldLookup(payload)
 	fields := make([]FieldError, 0, len(errs))
-	messages := make([]string, 0, len(errs))
 	for _, fe := range errs {
 		message := fe.Error()
 		if translator != nil {
@@ -248,7 +235,6 @@ func (my *Validator) toValidationError(payload any, rawErr error) error {
 				message = translated
 			}
 		}
-		messages = append(messages, message)
 
 		fieldName := fe.StructField()
 		if alias, ok := fieldLookup[fieldName]; ok {
@@ -289,4 +275,11 @@ func buildFieldLookup(payload any) map[string]string {
 		result[field.Name] = jsonKey
 	}
 	return result
+}
+
+func (my *Validator) loadDefaultTranslator() (ut.Translator, bool) {
+	my.mutex.RLock()
+	locale := my.defaultLocale
+	my.mutex.RUnlock()
+	return my.universal.GetTranslator(locale)
 }
