@@ -64,9 +64,8 @@ func (my *ValidationError) Extensions() Extension {
 type Validator struct {
 	validate      *validator.Validate
 	universal     *ut.UniversalTranslator
-	translators   map[string]ut.Translator
 	defaultLocale string
-	registered    map[string]bool
+	registered    map[string]struct{}
 	mutex         sync.RWMutex
 }
 
@@ -76,16 +75,15 @@ func NewValidator() (*Validator, error) {
 	v := &Validator{
 		validate:      validator.New(),
 		universal:     ut.New(enLocale, enLocale, zhLocale),
-		translators:   make(map[string]ut.Translator),
 		defaultLocale: LocaleChinese,
-		registered:    make(map[string]bool),
+		registered:    make(map[string]struct{}),
 	}
 
 	// 注册默认翻译
-	if err := v.RegisterTranslation(LocaleEnglish, enTranslations.RegisterDefaultTranslations); err != nil {
+	if err := v.RegisterTranslation(enLocale, enTranslations.RegisterDefaultTranslations); err != nil {
 		return nil, err
 	}
-	if err := v.RegisterTranslation(LocaleChinese, zhTranslations.RegisterDefaultTranslations); err != nil {
+	if err := v.RegisterTranslation(zhLocale, zhTranslations.RegisterDefaultTranslations); err != nil {
 		return nil, err
 	}
 
@@ -106,59 +104,54 @@ func (my *Validator) RegisterValidation(tag string, fn validator.Func, callValid
 	return my.validate.RegisterValidation(tag, fn, callValidationEvenIfNull...)
 }
 
-// RegisterTranslation 注册指定语言的翻译函数
-func (my *Validator) RegisterTranslation(locale string, register func(*validator.Validate, ut.Translator) error) error {
-	translator, err := my.ensureTranslator(locale)
-	if err != nil {
+// RegisterTranslation 注册指定语言翻译，必要时自动挂载 translator。
+func (my *Validator) RegisterTranslation(trans locales.Translator, register func(*validator.Validate, ut.Translator) error) error {
+	if trans == nil {
+		return fmt.Errorf("validator: translator 不能为空")
+	}
+	if register == nil {
+		return fmt.Errorf("validator: register 函数不能为空")
+	}
+
+	locale := strings.TrimSpace(trans.Locale())
+	if locale == "" {
+		return fmt.Errorf("validator: translator locale 不能为空")
+	}
+
+	my.mutex.Lock()
+	if err := my.universal.AddTranslator(trans, true); err != nil {
+		my.mutex.Unlock()
 		return err
 	}
-	my.mutex.RLock()
-	if my.registered[translator.Locale()] {
-		my.mutex.RUnlock()
+	if _, ok := my.registered[locale]; ok {
+		my.mutex.Unlock()
 		return nil
 	}
-	my.mutex.RUnlock()
+	my.mutex.Unlock()
+
+	translator, found := my.universal.GetTranslator(locale)
+	if !found {
+		return fmt.Errorf("validator: 未支持的语言代码 %q", locale)
+	}
 
 	if err := register(my.validate, translator); err != nil {
 		return err
 	}
 
 	my.mutex.Lock()
-	my.registered[translator.Locale()] = true
+	my.registered[locale] = struct{}{}
 	my.mutex.Unlock()
-	return nil
-}
-
-// Translator 获取指定语言的翻译器
-func (my *Validator) Translator(locale string) (ut.Translator, error) {
-	return my.ensureTranslator(locale)
-}
-
-// AddTranslator 注册新的语言翻译器，便于后续调用 RegisterTranslation。
-// override 为 true 时会覆盖同名 translator。
-func (my *Validator) AddTranslator(trans locales.Translator, override bool) error {
-	if trans == nil {
-		return fmt.Errorf("validator: translator 不能为空")
-	}
-	my.mutex.Lock()
-	defer my.mutex.Unlock()
-	if err := my.universal.AddTranslator(trans, override); err != nil {
-		return err
-	}
-	locale := strings.ToLower(trans.Locale())
-	delete(my.translators, locale)
-	delete(my.registered, locale)
 	return nil
 }
 
 // SetDefaultLocale 设置默认语言
 func (my *Validator) SetDefaultLocale(locale string) error {
-	locale = normalizeLocale(locale)
+	locale = strings.TrimSpace(locale)
 	if locale == "" {
 		return fmt.Errorf("validator: 语言代码不能为空")
 	}
-	if _, err := my.ensureTranslator(locale); err != nil {
-		return err
+	if _, found := my.universal.GetTranslator(locale); !found {
+		return fmt.Errorf("validator: 未支持的语言代码 %q", locale)
 	}
 	my.mutex.Lock()
 	defer my.mutex.Unlock()
@@ -201,8 +194,11 @@ func (my *Validator) translateRawError(payload any, rawErr error) error {
 	if !ok {
 		return rawErr
 	}
-	translator, transErr := my.Translator(my.defaultLocale)
-	if transErr != nil {
+	my.mutex.RLock()
+	locale := my.defaultLocale
+	my.mutex.RUnlock()
+	translator, found := my.universal.GetTranslator(locale)
+	if !found {
 		return rawErr
 	}
 	fieldLookup := buildFieldLookup(payload)
@@ -235,8 +231,11 @@ func (my *Validator) toValidationError(payload any, rawErr error) error {
 	if !ok {
 		return &ValidationError{detail: rawErr.Error(), err: rawErr}
 	}
-	translator, transErr := my.Translator(my.defaultLocale)
-	if transErr != nil {
+	my.mutex.RLock()
+	locale := my.defaultLocale
+	my.mutex.RUnlock()
+	translator, found := my.universal.GetTranslator(locale)
+	if !found {
 		return &ValidationError{detail: rawErr.Error(), err: rawErr}
 	}
 	fieldLookup := buildFieldLookup(payload)
@@ -258,41 +257,6 @@ func (my *Validator) toValidationError(payload any, rawErr error) error {
 		fields = append(fields, FieldError{Field: fieldName, Message: message})
 	}
 	return &ValidationError{fields: fields, detail: rawErr.Error(), err: rawErr}
-}
-
-func (my *Validator) ensureTranslator(locale string) (ut.Translator, error) {
-	locale = normalizeLocale(locale)
-	if locale == "" {
-		my.mutex.RLock()
-		locale = my.defaultLocale
-		my.mutex.RUnlock()
-	}
-
-	my.mutex.RLock()
-	translator, ok := my.translators[locale]
-	my.mutex.RUnlock()
-	if ok {
-		return translator, nil
-	}
-
-	translator, found := my.universal.GetTranslator(locale)
-	if !found {
-		return nil, fmt.Errorf("validator: 未支持的语言代码 %q", locale)
-	}
-
-	my.mutex.Lock()
-	my.translators[locale] = translator
-	my.mutex.Unlock()
-	return translator, nil
-}
-
-func normalizeLocale(locale string) string {
-	locale = strings.TrimSpace(locale)
-	if locale == "" {
-		return ""
-	}
-	locale = strings.ReplaceAll(locale, "-", "_")
-	return strings.ToLower(locale)
 }
 
 func buildFieldLookup(payload any) map[string]string {
