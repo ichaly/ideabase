@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/go-playground/locales"
 	"github.com/go-playground/locales/en"
 	"github.com/go-playground/locales/zh"
 	ut "github.com/go-playground/universal-translator"
@@ -21,15 +22,42 @@ const (
 	LocaleChinese = "zh"
 )
 
-// ValidationError 校验错误信息集合
-type ValidationError struct {
-	Messages []string
-	Raw      validator.ValidationErrors
+// FieldError 字段级错误信息
+type FieldError struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
 }
 
-// Error 返回错误描述
-func (my ValidationError) Error() string {
-	return strings.Join(my.Messages, "; ")
+// ValidationError 封装后的校验错误
+type ValidationError struct {
+	fields []FieldError
+	detail string
+	err    error
+}
+
+func (my *ValidationError) Error() string {
+	if my.detail != "" {
+		return my.detail
+	}
+	if my.err != nil {
+		return my.err.Error()
+	}
+	return "参数校验失败"
+}
+
+func (my *ValidationError) Unwrap() error { return my.err }
+
+func (my *ValidationError) Extensions() Extension {
+	if my == nil {
+		return nil
+	}
+	ext := make(Extension)
+	if len(my.fields) > 0 {
+		for _, f := range my.fields {
+			ext[f.Field] = f.Message
+		}
+	}
+	return ext
 }
 
 // Validator 公共校验器，封装了 go-playground/validator 并支持多语言翻译
@@ -41,15 +69,6 @@ type Validator struct {
 	registered    map[string]bool
 	mutex         sync.RWMutex
 }
-
-// ValidateStructFunc 校验结构体方法签名
-type ValidateStructFunc func(locale string, target any) error
-
-// ValidateVarFunc 校验字段方法签名
-type ValidateVarFunc func(locale string, field any, tag string) error
-
-// TranslatorFunc 翻译器获取方法签名
-type TranslatorFunc func(locale string) (ut.Translator, error)
 
 // NewValidator 创建带默认语言（简体中文）的校验器实例
 func NewValidator() (*Validator, error) {
@@ -110,25 +129,26 @@ func (my *Validator) RegisterTranslation(locale string, register func(*validator
 	return nil
 }
 
-// Struct 校验结构体并返回国际化后的错误
-func (my *Validator) Struct(target any) error {
-	if err := my.validate.Struct(target); err != nil {
-		return my.translateError(my.defaultLocale, err)
-	}
-	return nil
-}
-
-// Var 校验单个字段并返回国际化后的错误
-func (my *Validator) Var(field any, tag string) error {
-	if err := my.validate.Var(field, tag); err != nil {
-		return my.translateError(my.defaultLocale, err)
-	}
-	return nil
-}
-
 // Translator 获取指定语言的翻译器
 func (my *Validator) Translator(locale string) (ut.Translator, error) {
 	return my.ensureTranslator(locale)
+}
+
+// AddTranslator 注册新的语言翻译器，便于后续调用 RegisterTranslation。
+// override 为 true 时会覆盖同名 translator。
+func (my *Validator) AddTranslator(trans locales.Translator, override bool) error {
+	if trans == nil {
+		return fmt.Errorf("validator: translator 不能为空")
+	}
+	my.mutex.Lock()
+	defer my.mutex.Unlock()
+	if err := my.universal.AddTranslator(trans, override); err != nil {
+		return err
+	}
+	locale := strings.ToLower(trans.Locale())
+	delete(my.translators, locale)
+	delete(my.registered, locale)
+	return nil
 }
 
 // SetDefaultLocale 设置默认语言
@@ -144,6 +164,100 @@ func (my *Validator) SetDefaultLocale(locale string) error {
 	defer my.mutex.Unlock()
 	my.defaultLocale = locale
 	return nil
+}
+
+// Struct 校验结构体并返回国际化后的错误
+func (my *Validator) Struct(target any) error {
+	if err := my.validate.Struct(target); err != nil {
+		return my.translateRawError(target, err)
+	}
+	return nil
+}
+
+// Var 校验单个字段并返回国际化后的错误
+func (my *Validator) Var(field any, tag string) error {
+	if err := my.validate.Var(field, tag); err != nil {
+		return my.translateRawError(nil, err)
+	}
+	return nil
+}
+
+// Check 执行结构体校验并返回高阶错误，业务侧只需判空。
+func (my *Validator) Check(payload any) error {
+	if err := my.Struct(payload); err != nil {
+		return my.toValidationError(payload, err)
+	}
+	return nil
+}
+
+func (my *Validator) translateRawError(payload any, rawErr error) error {
+	if rawErr == nil {
+		return nil
+	}
+	if _, ok := rawErr.(*ValidationError); ok {
+		return rawErr
+	}
+	errs, ok := rawErr.(validator.ValidationErrors)
+	if !ok {
+		return rawErr
+	}
+	translator, transErr := my.Translator(my.defaultLocale)
+	if transErr != nil {
+		return rawErr
+	}
+	fieldLookup := buildFieldLookup(payload)
+	fields := make([]FieldError, 0, len(errs))
+	messages := make([]string, 0, len(errs))
+	for _, fe := range errs {
+		message := fe.Translate(translator)
+		if message == "" {
+			message = fe.Error()
+		}
+		messages = append(messages, message)
+
+		fieldName := fe.StructField()
+		if alias, ok := fieldLookup[fieldName]; ok {
+			fieldName = alias
+		}
+		fields = append(fields, FieldError{Field: fieldName, Message: message})
+	}
+	return &ValidationError{fields: fields, detail: rawErr.Error(), err: rawErr}
+}
+
+func (my *Validator) toValidationError(payload any, rawErr error) error {
+	if rawErr == nil {
+		return nil
+	}
+	if ve, ok := rawErr.(*ValidationError); ok {
+		return ve
+	}
+	errs, ok := rawErr.(validator.ValidationErrors)
+	if !ok {
+		return &ValidationError{detail: rawErr.Error(), err: rawErr}
+	}
+	translator, transErr := my.Translator(my.defaultLocale)
+	if transErr != nil {
+		return &ValidationError{detail: rawErr.Error(), err: rawErr}
+	}
+	fieldLookup := buildFieldLookup(payload)
+	fields := make([]FieldError, 0, len(errs))
+	messages := make([]string, 0, len(errs))
+	for _, fe := range errs {
+		message := fe.Error()
+		if translator != nil {
+			if translated := fe.Translate(translator); translated != "" {
+				message = translated
+			}
+		}
+		messages = append(messages, message)
+
+		fieldName := fe.StructField()
+		if alias, ok := fieldLookup[fieldName]; ok {
+			fieldName = alias
+		}
+		fields = append(fields, FieldError{Field: fieldName, Message: message})
+	}
+	return &ValidationError{fields: fields, detail: rawErr.Error(), err: rawErr}
 }
 
 func (my *Validator) ensureTranslator(locale string) (ut.Translator, error) {
@@ -172,27 +286,6 @@ func (my *Validator) ensureTranslator(locale string) (ut.Translator, error) {
 	return translator, nil
 }
 
-func (my *Validator) translateError(locale string, err error) error {
-	validationErrors, ok := err.(validator.ValidationErrors)
-	if !ok {
-		return err
-	}
-
-	translator, transErr := my.ensureTranslator(locale)
-	if transErr != nil {
-		return transErr
-	}
-
-	messages := make([]string, 0, len(validationErrors))
-	for _, fieldErr := range validationErrors {
-		messages = append(messages, fieldErr.Translate(translator))
-	}
-	return ValidationError{
-		Messages: messages,
-		Raw:      validationErrors,
-	}
-}
-
 func normalizeLocale(locale string) string {
 	locale = strings.TrimSpace(locale)
 	if locale == "" {
@@ -200,4 +293,36 @@ func normalizeLocale(locale string) string {
 	}
 	locale = strings.ReplaceAll(locale, "-", "_")
 	return strings.ToLower(locale)
+}
+
+func buildFieldLookup(payload any) map[string]string {
+	if payload == nil {
+		return nil
+	}
+
+	typ := reflect.TypeOf(payload)
+	for typ.Kind() == reflect.Ptr {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		return nil
+	}
+
+	result := make(map[string]string, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if field.PkgPath != "" {
+			continue
+		}
+		jsonKey := field.Tag.Get("json")
+		if idx := strings.Index(jsonKey, ","); idx >= 0 {
+			jsonKey = jsonKey[:idx]
+		}
+		if jsonKey == "" || jsonKey == "-" {
+			name := field.Name
+			jsonKey = strings.ToLower(name[:1]) + name[1:]
+		}
+		result[field.Name] = jsonKey
+	}
+	return result
 }
