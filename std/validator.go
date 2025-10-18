@@ -145,7 +145,7 @@ func (my *Validator) RegisterTranslation(trans locales.Translator, register func
 	}
 
 	if msg, ok := defaultGeneralMessages[locale]; ok {
-		if err := addGeneralMessage(translator, msg); err != nil {
+		if err := translator.Add(generalMessageKey, msg, true); err != nil {
 			return err
 		}
 	}
@@ -279,14 +279,6 @@ func (my *Validator) RegisterGeneralMessage(locale, message string) error {
 	my.mutex.RUnlock()
 	if !found {
 		return fmt.Errorf("validator: 未注册语言代码 %q", locale)
-	}
-	return addGeneralMessage(translator, message)
-}
-
-func addGeneralMessage(translator ut.Translator, message string) error {
-	message = strings.TrimSpace(message)
-	if message == "" {
-		return nil
 	}
 	return translator.Add(generalMessageKey, message, true)
 }
