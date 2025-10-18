@@ -1,6 +1,7 @@
 package std
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -179,70 +180,72 @@ func (my *Validator) Check(payload any) error {
 	return nil
 }
 
-func (my *Validator) translateRawError(payload any, rawErr error) error {
-	if rawErr == nil {
+func (my *Validator) translateRawError(payload any, raw error) error {
+	if raw == nil {
 		return nil
 	}
-	if _, ok := rawErr.(*ValidationError); ok {
-		return rawErr
+	var err *ValidationError
+	if errors.As(raw, &err) {
+		return raw
 	}
-	errs, ok := rawErr.(validator.ValidationErrors)
-	if !ok {
-		return rawErr
+	var errs validator.ValidationErrors
+	if !errors.As(raw, &errs) {
+		return raw
 	}
 	translator, found := my.loadDefaultTranslator()
 	if !found {
-		return rawErr
+		return raw
 	}
 	fieldLookup := buildFieldLookup(payload)
 	fields := make([]FieldError, 0, len(errs))
-	for _, fe := range errs {
-		message := fe.Translate(translator)
+	for _, e := range errs {
+		message := e.Translate(translator)
 		if message == "" {
-			message = fe.Error()
+			message = e.Error()
 		}
 
-		fieldName := fe.StructField()
+		fieldName := e.StructField()
 		if alias, ok := fieldLookup[fieldName]; ok {
 			fieldName = alias
 		}
 		fields = append(fields, FieldError{Field: fieldName, Message: message})
 	}
-	return &ValidationError{fields: fields, detail: rawErr.Error(), err: rawErr}
+	return &ValidationError{fields: fields, detail: raw.Error(), err: raw}
 }
 
-func (my *Validator) toValidationError(payload any, rawErr error) error {
-	if rawErr == nil {
+func (my *Validator) toValidationError(payload any, raw error) error {
+	if raw == nil {
 		return nil
 	}
-	if ve, ok := rawErr.(*ValidationError); ok {
-		return ve
+	var err *ValidationError
+	if errors.As(raw, &err) {
+		return err
 	}
-	errs, ok := rawErr.(validator.ValidationErrors)
-	if !ok {
-		return &ValidationError{detail: rawErr.Error(), err: rawErr}
+	var errs validator.ValidationErrors
+	if !errors.As(raw, &errs) {
+		return &ValidationError{detail: raw.Error(), err: raw}
 	}
 	translator, found := my.loadDefaultTranslator()
 	if !found {
-		return &ValidationError{detail: rawErr.Error(), err: rawErr}
+		return &ValidationError{detail: raw.Error(), err: raw}
 	}
 	fieldLookup := buildFieldLookup(payload)
 	fields := make([]FieldError, 0, len(errs))
-	for _, fe := range errs {
-		message := fe.Error()
+	for _, e := range errs {
+		message := e.Error()
 		if translator != nil {
-			if translated := fe.Translate(translator); translated != "" {
+			if translated := e.Translate(translator); translated != "" {
 				message = translated
 			}
 		}
 
-		fieldName := fe.StructField()
+		fieldName := e.StructField()
 		if alias, ok := fieldLookup[fieldName]; ok {
 			fieldName = alias
 		}
 		fields = append(fields, FieldError{Field: fieldName, Message: message})
 	}
-	return &ValidationError{fields: fields, detail: rawErr.Error(), err: rawErr}
+	return &ValidationError{fields: fields, detail: raw.Error(), err: raw}
 }
 
 func buildFieldLookup(payload any) map[string]string {
