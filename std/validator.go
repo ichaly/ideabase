@@ -38,14 +38,14 @@ type FieldError struct {
 
 // ValidationError 封装后的校验错误
 type ValidationError struct {
-	fields []FieldError
-	detail string
-	err    error
+	fields  []FieldError
+	message string
+	err     error
 }
 
 func (my *ValidationError) Error() string {
-	if my.detail != "" {
-		return my.detail
+	if my.message != "" {
+		return my.message
 	}
 	if my.err != nil {
 		return my.err.Error()
@@ -198,7 +198,7 @@ func (my *Validator) Check(payload any) error {
 		if errors.As(err, &e) {
 			return e
 		}
-		return &ValidationError{detail: err.Error(), err: err}
+		return &ValidationError{message: err.Error(), err: err}
 	}
 	return nil
 }
@@ -222,10 +222,7 @@ func buildFieldLookup(payload any) map[string]string {
 		if field.PkgPath != "" {
 			continue
 		}
-		jsonKey := field.Tag.Get("json")
-		if idx := strings.Index(jsonKey, ","); idx >= 0 {
-			jsonKey = jsonKey[:idx]
-		}
+		jsonKey, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		if jsonKey == "" || jsonKey == "-" {
 			name := field.Name
 			jsonKey = strings.ToLower(name[:1]) + name[1:]
@@ -234,31 +231,26 @@ func buildFieldLookup(payload any) map[string]string {
 	}
 	return result
 }
-
-func (my *Validator) loadDefaultTranslator() (ut.Translator, bool) {
-	my.mutex.RLock()
-	locale := my.defaultLocale
-	my.mutex.RUnlock()
-	return my.universal.GetTranslator(locale)
-}
-
 func (my *Validator) translateError(payload any, raw error) (*ValidationError, bool) {
 	var errs validator.ValidationErrors
 	if !errors.As(raw, &errs) {
 		return nil, false
 	}
-	translator, found := my.loadDefaultTranslator()
+
+	my.mutex.RLock()
+	locale := my.defaultLocale
+	my.mutex.RUnlock()
+
+	translator, found := my.universal.GetTranslator(locale)
 	if !found {
 		return nil, false
 	}
 	fieldLookup := buildFieldLookup(payload)
 	fields := make([]FieldError, 0, len(errs))
 	for _, e := range errs {
-		message := e.Error()
-		if translator != nil {
-			if translated := e.Translate(translator); translated != "" {
-				message = translated
-			}
+		message := e.Translate(translator)
+		if message == "" {
+			message = e.Error()
 		}
 
 		fieldName := e.StructField()
@@ -268,7 +260,7 @@ func (my *Validator) translateError(payload any, raw error) (*ValidationError, b
 		fields = append(fields, FieldError{Field: fieldName, Message: message})
 	}
 	message, _ := translator.T(generalMessageKey)
-	return &ValidationError{fields: fields, detail: message, err: raw}, true
+	return &ValidationError{fields: fields, message: message, err: raw}, true
 }
 
 // RegisterGeneralMessage 注册顶层错误提示的翻译，便于国际化默认错误描述。
