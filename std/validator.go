@@ -21,7 +21,14 @@ const (
 	LocaleEnglish = "en"
 	// LocaleChinese 中文语言码
 	LocaleChinese = "zh"
+
+	generalMessageKey = "__validation_error"
 )
+
+var defaultGeneralMessages = map[string]string{
+	LocaleEnglish: "validation failed",
+	LocaleChinese: "参数校验错误",
+}
 
 // FieldError 字段级错误信息
 type FieldError struct {
@@ -135,6 +142,12 @@ func (my *Validator) RegisterTranslation(trans locales.Translator, register func
 
 	if err := register(my.validate, translator); err != nil {
 		return err
+	}
+
+	if msg, ok := defaultGeneralMessages[locale]; ok {
+		if err := addGeneralMessage(translator, msg); err != nil {
+			return err
+		}
 	}
 
 	my.registered[locale] = struct{}{}
@@ -254,5 +267,34 @@ func (my *Validator) translateError(payload any, raw error) (*ValidationError, b
 		}
 		fields = append(fields, FieldError{Field: fieldName, Message: message})
 	}
-	return &ValidationError{fields: fields, detail: raw.Error(), err: raw}, true
+	message, _ := translator.T(generalMessageKey)
+	return &ValidationError{fields: fields, detail: message, err: raw}, true
+}
+
+// RegisterGeneralMessage 注册顶层错误提示的翻译，便于国际化默认错误描述。
+func (my *Validator) RegisterGeneralMessage(locale, message string) error {
+	locale = strings.TrimSpace(locale)
+	if locale == "" {
+		return fmt.Errorf("validator: 语言代码不能为空")
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return fmt.Errorf("validator: 翻译内容不能为空")
+	}
+
+	my.mutex.RLock()
+	translator, found := my.universal.GetTranslator(locale)
+	my.mutex.RUnlock()
+	if !found {
+		return fmt.Errorf("validator: 未注册语言代码 %q", locale)
+	}
+	return addGeneralMessage(translator, message)
+}
+
+func addGeneralMessage(translator ut.Translator, message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return nil
+	}
+	return translator.Add(generalMessageKey, message, true)
 }
