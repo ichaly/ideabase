@@ -159,7 +159,10 @@ func (my *Validator) SetDefaultLocale(locale string) error {
 // Struct 校验结构体并返回国际化后的错误
 func (my *Validator) Struct(target any) error {
 	if err := my.validate.Struct(target); err != nil {
-		return my.translateRawError(target, err)
+		if converted, ok := my.translateError(target, err); ok {
+			return converted.err
+		}
+		return err
 	}
 	return nil
 }
@@ -167,7 +170,10 @@ func (my *Validator) Struct(target any) error {
 // Var 校验单个字段并返回国际化后的错误
 func (my *Validator) Var(field any, tag string) error {
 	if err := my.validate.Var(field, tag); err != nil {
-		return my.translateRawError(nil, err)
+		if converted, ok := my.translateError(nil, err); ok {
+			return converted.err
+		}
+		return err
 	}
 	return nil
 }
@@ -175,77 +181,13 @@ func (my *Validator) Var(field any, tag string) error {
 // Check 执行结构体校验并返回高阶错误，业务侧只需判空。
 func (my *Validator) Check(payload any) error {
 	if err := my.Struct(payload); err != nil {
-		return my.toValidationError(payload, err)
+		var e *ValidationError
+		if errors.As(err, &e) {
+			return e
+		}
+		return &ValidationError{detail: err.Error(), err: err}
 	}
 	return nil
-}
-
-func (my *Validator) translateRawError(payload any, raw error) error {
-	if raw == nil {
-		return nil
-	}
-	var err *ValidationError
-	if errors.As(raw, &err) {
-		return raw
-	}
-	var errs validator.ValidationErrors
-	if !errors.As(raw, &errs) {
-		return raw
-	}
-	translator, found := my.loadDefaultTranslator()
-	if !found {
-		return raw
-	}
-	fieldLookup := buildFieldLookup(payload)
-	fields := make([]FieldError, 0, len(errs))
-	for _, e := range errs {
-		message := e.Translate(translator)
-		if message == "" {
-			message = e.Error()
-		}
-
-		fieldName := e.StructField()
-		if alias, ok := fieldLookup[fieldName]; ok {
-			fieldName = alias
-		}
-		fields = append(fields, FieldError{Field: fieldName, Message: message})
-	}
-	return &ValidationError{fields: fields, detail: raw.Error(), err: raw}
-}
-
-func (my *Validator) toValidationError(payload any, raw error) error {
-	if raw == nil {
-		return nil
-	}
-	var err *ValidationError
-	if errors.As(raw, &err) {
-		return err
-	}
-	var errs validator.ValidationErrors
-	if !errors.As(raw, &errs) {
-		return &ValidationError{detail: raw.Error(), err: raw}
-	}
-	translator, found := my.loadDefaultTranslator()
-	if !found {
-		return &ValidationError{detail: raw.Error(), err: raw}
-	}
-	fieldLookup := buildFieldLookup(payload)
-	fields := make([]FieldError, 0, len(errs))
-	for _, e := range errs {
-		message := e.Error()
-		if translator != nil {
-			if translated := e.Translate(translator); translated != "" {
-				message = translated
-			}
-		}
-
-		fieldName := e.StructField()
-		if alias, ok := fieldLookup[fieldName]; ok {
-			fieldName = alias
-		}
-		fields = append(fields, FieldError{Field: fieldName, Message: message})
-	}
-	return &ValidationError{fields: fields, detail: raw.Error(), err: raw}
 }
 
 func buildFieldLookup(payload any) map[string]string {
@@ -285,4 +227,32 @@ func (my *Validator) loadDefaultTranslator() (ut.Translator, bool) {
 	locale := my.defaultLocale
 	my.mutex.RUnlock()
 	return my.universal.GetTranslator(locale)
+}
+
+func (my *Validator) translateError(payload any, raw error) (*ValidationError, bool) {
+	var errs validator.ValidationErrors
+	if !errors.As(raw, &errs) {
+		return nil, false
+	}
+	translator, found := my.loadDefaultTranslator()
+	if !found {
+		return nil, false
+	}
+	fieldLookup := buildFieldLookup(payload)
+	fields := make([]FieldError, 0, len(errs))
+	for _, e := range errs {
+		message := e.Error()
+		if translator != nil {
+			if translated := e.Translate(translator); translated != "" {
+				message = translated
+			}
+		}
+
+		fieldName := e.StructField()
+		if alias, ok := fieldLookup[fieldName]; ok {
+			fieldName = alias
+		}
+		fields = append(fields, FieldError{Field: fieldName, Message: message})
+	}
+	return &ValidationError{fields: fields, detail: raw.Error(), err: raw}, true
 }
