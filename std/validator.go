@@ -60,10 +60,8 @@ func (my *ValidationError) Extensions() Extension {
 		return nil
 	}
 	ext := make(Extension)
-	if len(my.fields) > 0 {
-		for _, f := range my.fields {
-			ext[f.Field] = f.Message
-		}
+	for _, f := range my.fields {
+		ext[f.Field] = f.Message
 	}
 	return ext
 }
@@ -173,7 +171,7 @@ func (my *Validator) SetDefaultLocale(locale string) error {
 func (my *Validator) Struct(target any) error {
 	if err := my.validate.Struct(target); err != nil {
 		if converted, ok := my.translateError(target, err); ok {
-			return converted.err
+			return converted
 		}
 		return err
 	}
@@ -184,7 +182,7 @@ func (my *Validator) Struct(target any) error {
 func (my *Validator) Var(field any, tag string) error {
 	if err := my.validate.Var(field, tag); err != nil {
 		if converted, ok := my.translateError(nil, err); ok {
-			return converted.err
+			return converted
 		}
 		return err
 	}
@@ -260,6 +258,13 @@ func (my *Validator) translateError(payload any, raw error) (*ValidationError, b
 		fields = append(fields, FieldError{Field: fieldName, Message: message})
 	}
 	message, _ := translator.T(generalMessageKey)
+	if message == "" {
+		if fallback, ok := defaultGeneralMessages[locale]; ok {
+			message = fallback
+		} else {
+			message = raw.Error()
+		}
+	}
 	return &ValidationError{fields: fields, message: message, err: raw}, true
 }
 

@@ -1,7 +1,6 @@
 package std
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -81,31 +80,6 @@ func (my *Exception) WithError(err error) *Exception {
 		my.Message = err.Error()
 	}
 	return my
-}
-
-// MarshalJSON 自定义序列化以包含 code 字段
-func (my *Exception) MarshalJSON() ([]byte, error) {
-	if my == nil {
-		return []byte("null"), nil
-	}
-	type alias Exception
-	payload := map[string]any{
-		"code": my.statusCode,
-	}
-	a := (*alias)(my)
-	if a.Message != "" {
-		payload["message"] = a.Message
-	}
-	if len(a.Locations) > 0 {
-		payload["locations"] = a.Locations
-	}
-	if len(a.Path) > 0 {
-		payload["path"] = a.Path
-	}
-	if len(a.Extensions) > 0 {
-		payload["extensions"] = a.Extensions
-	}
-	return json.Marshal(payload)
 }
 
 // extensionsKey Context中存储扩展信息的键
