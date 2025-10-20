@@ -33,8 +33,7 @@ type Validator struct {
 }
 
 func NewValidator() (*Validator, error) {
-	enLocale := en.New()
-	zhLocale := zh.New()
+	enLocale, zhLocale := en.New(), zh.New()
 
 	my := &Validator{
 		validate:      validator.New(),
@@ -129,38 +128,35 @@ func (my *Validator) wrapValidationError(raw error) (error, bool) {
 		return nil, false
 	}
 
-	general := strings.TrimSpace(raw.Error())
+	message := strings.TrimSpace(raw.Error())
 	if translator != nil {
 		if msg, err := translator.T(generalMessageKey); err == nil && strings.TrimSpace(msg) != "" {
-			general = strings.TrimSpace(msg)
+			message = strings.TrimSpace(msg)
 		}
 	} else {
 		if locale == LocaleEnglish {
-			general = "validation failed"
+			message = "validation failed"
 		} else if locale == LocaleChinese {
-			general = "参数校验失败"
+			message = "参数校验失败"
 		}
 	}
 
 	return &translatedErrors{
 		ValidationErrors: append(validator.ValidationErrors(nil), errs...),
-		general:          general,
+		message:          message,
 		translator:       translator,
 	}, true
 }
 
 type translatedErrors struct {
 	validator.ValidationErrors
-	general    string
+	message    string
 	translator ut.Translator
 }
 
 func (my *translatedErrors) Error() string {
-	if my == nil {
-		return ""
-	}
-	if strings.TrimSpace(my.general) != "" {
-		return my.general
+	if strings.TrimSpace(my.message) != "" {
+		return my.message
 	}
 	return "参数校验失败"
 }
@@ -172,11 +168,11 @@ func (my *translatedErrors) Extensions() Extension {
 
 	ext := make(Extension, len(my.ValidationErrors)+1)
 	items := make([]map[string]string, 0, len(my.ValidationErrors))
-	for _, fe := range my.ValidationErrors {
-		field := strcase.ToLowerCamel(fe.StructField())
-		message := strings.TrimSpace(fe.Error())
+	for _, e := range my.ValidationErrors {
+		field := strcase.ToLowerCamel(e.StructField())
+		message := strings.TrimSpace(e.Error())
 		if my.translator != nil {
-			if msg := strings.TrimSpace(fe.Translate(my.translator)); msg != "" {
+			if msg := strings.TrimSpace(e.Translate(my.translator)); msg != "" {
 				message = msg
 			}
 		}
