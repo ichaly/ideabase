@@ -155,10 +155,7 @@ type translatedErrors struct {
 }
 
 func (my *translatedErrors) Error() string {
-	if strings.TrimSpace(my.message) != "" {
-		return my.message
-	}
-	return "参数校验失败"
+	return my.message
 }
 
 func (my *translatedErrors) Extensions() Extension {
@@ -166,26 +163,25 @@ func (my *translatedErrors) Extensions() Extension {
 		return nil
 	}
 
-	ext := make(Extension, len(my.ValidationErrors)+1)
-	items := make([]map[string]string, 0, len(my.ValidationErrors))
+	var ext Extension
 	for _, e := range my.ValidationErrors {
-		field := strcase.ToLowerCamel(e.StructField())
-		message := strings.TrimSpace(e.Error())
+		field := strings.TrimSpace(strcase.ToLowerCamel(e.StructField()))
+		if field == "" {
+			continue
+		}
+		msg := strings.TrimSpace(e.Error())
 		if my.translator != nil {
-			if msg := strings.TrimSpace(e.Translate(my.translator)); msg != "" {
-				message = msg
+			if translated := strings.TrimSpace(e.Translate(my.translator)); translated != "" {
+				msg = translated
 			}
 		}
-		items = append(items, map[string]string{"field": field, "message": message})
-		if field != "" {
-			if _, ok := ext[field]; !ok {
-				ext[field] = message
-			}
+		if msg == "" {
+			continue
 		}
+		if ext == nil {
+			ext = make(Extension)
+		}
+		ext[field] = msg
 	}
-	if len(items) == 0 {
-		return nil
-	}
-	ext["errors"] = items
 	return ext
 }
