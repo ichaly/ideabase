@@ -49,21 +49,36 @@ func NewValidator() (*Validator, error) {
 		return field.Name
 	})
 
-	if err := my.registerLocale(enLocale, enTranslations.RegisterDefaultTranslations); err != nil {
+	if err := my.registerLocale(enLocale, enTranslations.RegisterDefaultTranslations, WithGeneralMessage("validation failed")); err != nil {
 		return nil, err
 	}
-	if err := my.registerLocale(zhLocale, zhTranslations.RegisterDefaultTranslations); err != nil {
+	if err := my.registerLocale(zhLocale, zhTranslations.RegisterDefaultTranslations, WithGeneralMessage("参数校验失败")); err != nil {
 		return nil, err
 	}
 
 	return my, nil
 }
 
-func (my *Validator) RegisterTranslation(trans locales.Translator, register func(*validator.Validate, ut.Translator) error) error {
+type TranslationOption func(*Validator, string, ut.Translator) error
+
+func WithGeneralMessage(message string) TranslationOption {
+	msg := strings.TrimSpace(message)
+	return func(v *Validator, locale string, translator ut.Translator) error {
+		if locale == "" || msg == "" {
+			return nil
+		}
+		if translator != nil {
+			return translator.Add(generalMessageKey, msg, true)
+		}
+		return nil
+	}
+}
+
+func (my *Validator) RegisterTranslation(trans locales.Translator, register func(*validator.Validate, ut.Translator) error, opts ...TranslationOption) error {
 	if trans == nil || register == nil {
 		return fmt.Errorf("validator: translator 与 register 不能为空")
 	}
-	return my.registerLocale(trans, register)
+	return my.registerLocale(trans, register, opts...)
 }
 
 func (my *Validator) Validate(out any) error {
@@ -88,7 +103,7 @@ func (my *Validator) run(fn func() error) error {
 	return nil
 }
 
-func (my *Validator) registerLocale(trans locales.Translator, register func(*validator.Validate, ut.Translator) error) error {
+func (my *Validator) registerLocale(trans locales.Translator, register func(*validator.Validate, ut.Translator) error, opts ...TranslationOption) error {
 	locale := strings.TrimSpace(trans.Locale())
 	if locale == "" {
 		return fmt.Errorf("validator: translator locale 不能为空")
@@ -110,6 +125,16 @@ func (my *Validator) registerLocale(trans locales.Translator, register func(*val
 	if err := register(my.validate, translator); err != nil {
 		return err
 	}
+
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(my, locale, translator); err != nil {
+			return err
+		}
+	}
+
 	my.registered[locale] = struct{}{}
 	return nil
 }
@@ -132,12 +157,6 @@ func (my *Validator) wrapValidationError(raw error) (error, bool) {
 	if translator != nil {
 		if msg, err := translator.T(generalMessageKey); err == nil && strings.TrimSpace(msg) != "" {
 			message = strings.TrimSpace(msg)
-		}
-	} else {
-		if locale == LocaleEnglish {
-			message = "validation failed"
-		} else if locale == LocaleChinese {
-			message = "参数校验失败"
 		}
 	}
 
