@@ -32,7 +32,7 @@ func init() {
 
 func Execute() {
 	if err := runCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
