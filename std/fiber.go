@@ -23,17 +23,18 @@ import (
 )
 
 // NewFiber 创建并配置一个新的fiber应用实例
-func NewFiber(c *Config) *fiber.App {
+func NewFiber(c *Config, v *Validator) *fiber.App {
 	// 获取Fiber配置（由konfig默认加载）
 	fiberConf := c.Fiber
 
 	// 创建fiber应用
 	app := fiber.New(fiber.Config{
-		AppName:      c.Name,
-		ServerHeader: fiberConf.ServerHeader,
-		ReadTimeout:  fiberConf.ReadTimeout,
-		WriteTimeout: fiberConf.WriteTimeout,
-		IdleTimeout:  fiberConf.IdleTimeout,
+		AppName:         c.Name,
+		ReadTimeout:     fiberConf.ReadTimeout,
+		IdleTimeout:     fiberConf.IdleTimeout,
+		WriteTimeout:    fiberConf.WriteTimeout,
+		ServerHeader:    fiberConf.ServerHeader,
+		StructValidator: v,
 	})
 
 	// 注册基础中间件

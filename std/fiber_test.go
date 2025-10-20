@@ -18,11 +18,9 @@ func mockConfig(name string, mode string, port string) *Config {
 			Name: name,
 			Port: port,
 			Fiber: &internal.FiberConfig{
-				ReadTimeout:       5 * time.Second,
-				WriteTimeout:      5 * time.Second,
-				IdleTimeout:       5 * time.Second,
-				LivenessEndpoint:  "/health/live",
-				ReadinessEndpoint: "/health/ready",
+				ReadTimeout:  5 * time.Second,
+				WriteTimeout: 5 * time.Second,
+				IdleTimeout:  5 * time.Second,
 			},
 		},
 		Mode: mode,
@@ -35,7 +33,7 @@ func TestNewFiber_Development(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 检查应用是否创建成功
 	assert.NotNil(t, app, "应用实例不应为空")
@@ -60,7 +58,7 @@ func TestNewFiber_Production(t *testing.T) {
 	cfg := mockConfig("TestApp", "production", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 检查应用是否创建成功
 	assert.NotNil(t, app, "应用实例不应为空")
@@ -72,7 +70,7 @@ func TestHealthCheck(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 测试存活检测端点
 	req := httptest.NewRequest(http.MethodGet, "/health/live", nil)
@@ -97,7 +95,7 @@ func TestRequestTimeout(t *testing.T) {
 	cfg.Fiber.ReadTimeout = 1 * time.Second
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 添加一个会超时的路由
 	app.Get("/timeout", func(c fiber.Ctx) error {
@@ -133,7 +131,7 @@ func TestIdempotency(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 添加一个测试路由
 	app.Post("/idempotent", func(c fiber.Ctx) error {
@@ -146,7 +144,7 @@ func TestIdempotency(t *testing.T) {
 	req.Header.Set("X-Idempotency-Key", idempotencyKey)
 
 	// 执行第一次请求，使用测试客户端
-	resp, err := app.Test(req, -1) // 使用-1禁用请求超时
+	resp, err := app.Test(req, fiber.TestConfig{Timeout: 0}) // Timeout 为0表示禁用超时
 
 	// 检查请求是否成功执行，但不强制检查状态码，因为测试环境中可能无法完全模拟中间件行为
 	assert.NoError(t, err, "第一次幂等性请求应成功执行")
@@ -157,7 +155,7 @@ func TestIdempotency(t *testing.T) {
 
 	// 执行第二次请求（使用同一个幂等性键）
 	// 在实际测试环境中，由于内存存储的限制，可能无法真正验证幂等性
-	resp2, err := app.Test(req, -1)
+	resp2, err := app.Test(req, fiber.TestConfig{Timeout: 0})
 	assert.NoError(t, err, "第二次幂等性请求应成功执行")
 
 	// 检查是否有有效响应
@@ -170,7 +168,7 @@ func TestRateLimiter(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 添加测试路由
 	app.Get("/limited", func(c fiber.Ctx) error {
@@ -193,7 +191,7 @@ func TestCSRF(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 添加测试路由
 	app.Post("/csrf-protected", func(c fiber.Ctx) error {
@@ -218,7 +216,7 @@ func TestRecover(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 添加一个会引发panic的路由
 	app.Get("/panic", func(c fiber.Ctx) error {
@@ -240,7 +238,7 @@ func TestCORS(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 添加测试路由
 	app.Get("/cors-test", func(c fiber.Ctx) error {
@@ -276,7 +274,7 @@ func TestRequestID(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 添加测试路由，返回请求ID
 	app.Get("/request-id", func(c fiber.Ctx) error {
@@ -308,7 +306,7 @@ func TestEncryptCookie(t *testing.T) {
 	cfg.EncryptKey = "test-integration-key"
 
 	// 使用NewFiber创建应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 添加一个路由来观察cookie是否被加密
 	app.Get("/cookie-test", func(c fiber.Ctx) error {
@@ -344,7 +342,7 @@ func TestEncryptCookie(t *testing.T) {
 	cfgNoEncrypt := mockConfig("TestApp", "development", "8080")
 	cfgNoEncrypt.EncryptKey = "" // 不设置加密密钥
 
-	appNoEncrypt := NewFiber(cfgNoEncrypt)
+	appNoEncrypt := NewFiber(cfgNoEncrypt, nil)
 	appNoEncrypt.Get("/plain", func(c fiber.Ctx) error {
 		c.Cookie(&fiber.Cookie{
 			Name:  "plain-cookie",
@@ -365,7 +363,7 @@ func TestCompress(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 添加返回大量文本的路由
 	app.Get("/compress", func(c fiber.Ctx) error {
@@ -391,7 +389,7 @@ func TestETag(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 添加返回固定内容的路由
 	app.Get("/etag", func(c fiber.Ctx) error {
@@ -424,7 +422,7 @@ func TestLogger(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 
 	// 创建Fiber应用
-	app := NewFiber(cfg)
+	app := NewFiber(cfg, nil)
 
 	// 添加测试路由
 	app.Get("/logger-test", func(c fiber.Ctx) error {
