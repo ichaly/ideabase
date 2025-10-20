@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gofiber/fiber/v2/middleware/compress"
+	"github.com/gofiber/fiber/v3/middleware/compress"
 )
 
 // AppConfig 应用程序配置信息

@@ -6,7 +6,7 @@ import (
 	"maps"
 	"runtime/debug"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 // Result GraphQL风格的统一响应结构
@@ -86,7 +86,7 @@ func (my *Exception) WithError(err error) *Exception {
 const extensionsKey = "response_extensions"
 
 // SetExtension 在Handler中设置响应扩展字段
-func SetExtension(c *fiber.Ctx, key string, value interface{}) {
+func SetExtension(c fiber.Ctx, key string, value interface{}) {
 	extensions, _ := c.Locals(extensionsKey).(Extension)
 	if extensions == nil {
 		extensions = make(Extension)
@@ -96,14 +96,14 @@ func SetExtension(c *fiber.Ctx, key string, value interface{}) {
 }
 
 // getExtension 从Context获取扩展信息
-func getExtension(c *fiber.Ctx) Extension {
+func getExtension(c fiber.Ctx) Extension {
 	ext, _ := c.Locals(extensionsKey).(Extension)
 	return ext
 }
 
 // WrapHandler Handler包装器，统一包装响应格式
-func WrapHandler(handler func(*fiber.Ctx) (any, error)) fiber.Handler {
-	return func(c *fiber.Ctx) (err error) {
+func WrapHandler(handler func(fiber.Ctx) (any, error)) fiber.Handler {
+	return func(c fiber.Ctx) (err error) {
 		// panic恢复机制
 		defer func() {
 			if r := recover(); r != nil {

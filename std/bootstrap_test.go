@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/std/internal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -89,7 +89,7 @@ func TestBootstrap(t *testing.T) {
 
 	// 验证路由是否正确设置
 	// 添加测试路由
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		return c.SendString("测试成功")
 	})
 
@@ -175,7 +175,7 @@ func TestBootstrap_EmptyBasePath(t *testing.T) {
 	lifecycle.AssertExpectations(t)
 
 	// 验证路由是否正确设置
-	app.Get("/", func(c *fiber.Ctx) error {
+	app.Get("/", func(c fiber.Ctx) error {
 		return c.SendString("根路径")
 	})
 

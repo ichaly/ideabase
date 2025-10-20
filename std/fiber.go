@@ -3,19 +3,20 @@ package std
 import (
 	"encoding/base64"
 	"strings"
+	"time"
 
-	"github.com/gofiber/contrib/fiberzerolog"
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/compress"
-	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/csrf"
-	"github.com/gofiber/fiber/v2/middleware/encryptcookie"
-	"github.com/gofiber/fiber/v2/middleware/etag"
-	"github.com/gofiber/fiber/v2/middleware/healthcheck"
-	"github.com/gofiber/fiber/v2/middleware/idempotency"
-	"github.com/gofiber/fiber/v2/middleware/limiter"
-	"github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/gofiber/fiber/v2/middleware/requestid"
+	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/compress"
+	"github.com/gofiber/fiber/v3/middleware/cors"
+	"github.com/gofiber/fiber/v3/middleware/csrf"
+	"github.com/gofiber/fiber/v3/middleware/encryptcookie"
+	"github.com/gofiber/fiber/v3/middleware/etag"
+	"github.com/gofiber/fiber/v3/middleware/healthcheck"
+	"github.com/gofiber/fiber/v3/middleware/idempotency"
+	"github.com/gofiber/fiber/v3/middleware/limiter"
+	"github.com/gofiber/fiber/v3/middleware/recover"
+	"github.com/gofiber/fiber/v3/middleware/requestid"
+	"github.com/rs/zerolog"
 
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/utl"
@@ -118,9 +119,33 @@ func NewFiber(c *Config) *fiber.App {
 
 	// 调试模式下添加日志
 	if c.IsDebug() {
-		app.Use(fiberzerolog.New(fiberzerolog.Config{
-			Logger: log.GetDefault(),
-		}))
+		app.Use(func(ctx *fiber.Ctx) error {
+			start := time.Now()
+			err := ctx.Next()
+
+			status := ctx.Response().StatusCode()
+			logger := log.GetDefault()
+			var evt *zerolog.Event
+			switch {
+			case err != nil:
+				evt = logger.Error().Err(err)
+			case status >= fiber.StatusBadRequest:
+				evt = logger.Warn()
+			default:
+				evt = logger.Info()
+			}
+
+			evt.
+				Str("method", ctx.Method()).
+				Str("path", ctx.Path()).
+				Int("status", status).
+				Str("ip", ctx.IP()).
+				Dur("latency", time.Since(start)).
+				Str("user-agent", ctx.Get(fiber.HeaderUserAgent)).
+				Msg("fiber request")
+
+			return err
+		})
 	}
 
 	return app

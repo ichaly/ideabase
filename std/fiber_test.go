@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/std/internal"
 	"github.com/stretchr/testify/assert"
 )
@@ -41,7 +41,7 @@ func TestNewFiber_Development(t *testing.T) {
 	assert.NotNil(t, app, "应用实例不应为空")
 
 	// 添加测试路由
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		return c.SendString("test")
 	})
 
@@ -100,7 +100,7 @@ func TestRequestTimeout(t *testing.T) {
 	app := NewFiber(cfg)
 
 	// 添加一个会超时的路由
-	app.Get("/timeout", func(c *fiber.Ctx) error {
+	app.Get("/timeout", func(c fiber.Ctx) error {
 		// 睡眠时间超过读取超时时间
 		time.Sleep(2 * time.Second)
 		return c.SendString("这不应该返回")
@@ -136,7 +136,7 @@ func TestIdempotency(t *testing.T) {
 	app := NewFiber(cfg)
 
 	// 添加一个测试路由
-	app.Post("/idempotent", func(c *fiber.Ctx) error {
+	app.Post("/idempotent", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"processed": true})
 	})
 
@@ -173,7 +173,7 @@ func TestRateLimiter(t *testing.T) {
 	app := NewFiber(cfg)
 
 	// 添加测试路由
-	app.Get("/limited", func(c *fiber.Ctx) error {
+	app.Get("/limited", func(c fiber.Ctx) error {
 		return c.SendString("ok")
 	})
 
@@ -196,7 +196,7 @@ func TestCSRF(t *testing.T) {
 	app := NewFiber(cfg)
 
 	// 添加测试路由
-	app.Post("/csrf-protected", func(c *fiber.Ctx) error {
+	app.Post("/csrf-protected", func(c fiber.Ctx) error {
 		return c.SendString("protected")
 	})
 
@@ -221,7 +221,7 @@ func TestRecover(t *testing.T) {
 	app := NewFiber(cfg)
 
 	// 添加一个会引发panic的路由
-	app.Get("/panic", func(c *fiber.Ctx) error {
+	app.Get("/panic", func(c fiber.Ctx) error {
 		panic("测试异常恢复")
 	})
 
@@ -243,7 +243,7 @@ func TestCORS(t *testing.T) {
 	app := NewFiber(cfg)
 
 	// 添加测试路由
-	app.Get("/cors-test", func(c *fiber.Ctx) error {
+	app.Get("/cors-test", func(c fiber.Ctx) error {
 		return c.SendString("cors-enabled")
 	})
 
@@ -279,7 +279,7 @@ func TestRequestID(t *testing.T) {
 	app := NewFiber(cfg)
 
 	// 添加测试路由，返回请求ID
-	app.Get("/request-id", func(c *fiber.Ctx) error {
+	app.Get("/request-id", func(c fiber.Ctx) error {
 		return c.SendString(c.GetRespHeader("X-Request-ID"))
 	})
 
@@ -311,7 +311,7 @@ func TestEncryptCookie(t *testing.T) {
 	app := NewFiber(cfg)
 
 	// 添加一个路由来观察cookie是否被加密
-	app.Get("/cookie-test", func(c *fiber.Ctx) error {
+	app.Get("/cookie-test", func(c fiber.Ctx) error {
 		c.Cookie(&fiber.Cookie{
 			Name:  "integration-test",
 			Value: "plain-text",
@@ -345,7 +345,7 @@ func TestEncryptCookie(t *testing.T) {
 	cfgNoEncrypt.EncryptKey = "" // 不设置加密密钥
 
 	appNoEncrypt := NewFiber(cfgNoEncrypt)
-	appNoEncrypt.Get("/plain", func(c *fiber.Ctx) error {
+	appNoEncrypt.Get("/plain", func(c fiber.Ctx) error {
 		c.Cookie(&fiber.Cookie{
 			Name:  "plain-cookie",
 			Value: "plain-value",
@@ -368,7 +368,7 @@ func TestCompress(t *testing.T) {
 	app := NewFiber(cfg)
 
 	// 添加返回大量文本的路由
-	app.Get("/compress", func(c *fiber.Ctx) error {
+	app.Get("/compress", func(c fiber.Ctx) error {
 		// 返回较大的内容触发压缩
 		largeText := "test content " + string(make([]byte, 2000))
 		return c.SendString(largeText)
@@ -394,7 +394,7 @@ func TestETag(t *testing.T) {
 	app := NewFiber(cfg)
 
 	// 添加返回固定内容的路由
-	app.Get("/etag", func(c *fiber.Ctx) error {
+	app.Get("/etag", func(c fiber.Ctx) error {
 		return c.SendString("etag-test-content")
 	})
 
@@ -427,7 +427,7 @@ func TestLogger(t *testing.T) {
 	app := NewFiber(cfg)
 
 	// 添加测试路由
-	app.Get("/logger-test", func(c *fiber.Ctx) error {
+	app.Get("/logger-test", func(c fiber.Ctx) error {
 		return c.SendString("logged")
 	})
 

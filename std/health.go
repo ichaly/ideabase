@@ -3,7 +3,7 @@ package std
 import (
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 type Health struct {
@@ -24,7 +24,7 @@ func (my *Health) Bind(r fiber.Router) {
 }
 
 // Check 通用健康检查
-func (my *Health) Check(c *fiber.Ctx) (any, error) {
+func (my *Health) Check(c fiber.Ctx) (any, error) {
 	return fiber.Map{
 		"status":    "ok",
 		"timestamp": time.Now().Unix(),
@@ -32,7 +32,7 @@ func (my *Health) Check(c *fiber.Ctx) (any, error) {
 }
 
 // Liveness 存活检查 - 检查应用是否运行
-func (my *Health) Liveness(c *fiber.Ctx) (any, error) {
+func (my *Health) Liveness(c fiber.Ctx) (any, error) {
 	return fiber.Map{
 		"status":    "alive",
 		"timestamp": time.Now().Unix(),
@@ -41,7 +41,7 @@ func (my *Health) Liveness(c *fiber.Ctx) (any, error) {
 }
 
 // Readiness 就绪检查 - 检查应用是否准备好接收流量
-func (my *Health) Readiness(c *fiber.Ctx) (any, error) {
+func (my *Health) Readiness(c fiber.Ctx) (any, error) {
 	// 这里可以添加数据库连接、外部服务等检查
 	// 示例：检查数据库连接状态
 	// if !database.IsConnected() {

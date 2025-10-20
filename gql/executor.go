@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/duke-git/lancet/v2/strutil"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -118,10 +118,10 @@ func (my *Executor) Bind(r fiber.Router) {
 // 使用示例:
 //
 //	app.Post("/graphql", executor.Handler)
-func (my *Executor) Handler(c *fiber.Ctx) error {
+func (my *Executor) Handler(c fiber.Ctx) error {
 	// 解析请求
 	var req gqlQuery
-	if err := c.BodyParser(&req); err != nil {
+	if err := c.Bind().Body(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"errors": []gqlerror.Error{*gqlerror.Wrap(err)},
 		})
