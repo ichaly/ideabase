@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/extractors"
 	"github.com/gofiber/fiber/v3/middleware/compress"
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/csrf"
 	"github.com/gofiber/fiber/v3/middleware/encryptcookie"
 	"github.com/gofiber/fiber/v3/middleware/etag"
-	"github.com/gofiber/fiber/v3/middleware/healthcheck"
 	"github.com/gofiber/fiber/v3/middleware/idempotency"
 	"github.com/gofiber/fiber/v3/middleware/limiter"
 	"github.com/gofiber/fiber/v3/middleware/recover"
@@ -27,22 +27,14 @@ func NewFiber(c *Config) *fiber.App {
 	// 获取Fiber配置（由konfig默认加载）
 	fiberConf := c.Fiber
 
-	// 创建fiber应用配置
-	config := fiber.Config{
+	// 创建fiber应用
+	app := fiber.New(fiber.Config{
 		AppName:      c.Name,
 		ServerHeader: fiberConf.ServerHeader,
 		ReadTimeout:  fiberConf.ReadTimeout,
 		WriteTimeout: fiberConf.WriteTimeout,
 		IdleTimeout:  fiberConf.IdleTimeout,
-	}
-
-	// 生产模式下调整配置
-	if !c.IsDebug() {
-		config.DisableStartupMessage = true
-	}
-
-	// 创建fiber应用
-	app := fiber.New(config)
+	})
 
 	// 注册基础中间件
 	app.Use(requestid.New()) // 请求ID中间件
@@ -66,14 +58,15 @@ func NewFiber(c *Config) *fiber.App {
 
 	// CSRF保护中间件 - 防止跨站请求伪造
 	if fiberConf.CSRFEnabled {
+		extractor := buildCSRFExtractor(fiberConf.CSRFKeyLookup, fiberConf.CSRFCookieName)
 		app.Use(csrf.New(csrf.Config{
-			KeyLookup:      fiberConf.CSRFKeyLookup,
 			CookieName:     fiberConf.CSRFCookieName,
 			CookieSameSite: fiberConf.CSRFCookieSameSite,
-			Expiration:     fiberConf.CSRFExpiration,
+			IdleTimeout:    fiberConf.CSRFExpiration,
 			CookieSecure:   !c.IsDebug(),
-			Next: func(ctx *fiber.Ctx) bool {
-				path := ctx.Path()
+			Extractor:      extractor,
+			Next: func(c fiber.Ctx) bool {
+				path := c.Path()
 				// 检查是否匹配跳过的路径前缀
 				for _, prefix := range fiberConf.CSRFSkipPrefixes {
 					if strings.HasPrefix(path, prefix) {
@@ -100,10 +93,10 @@ func NewFiber(c *Config) *fiber.App {
 	app.Use(limiter.New(limiter.Config{
 		Max:        fiberConf.LimiterMax, // 最大请求数
 		Expiration: fiberConf.LimiterExpiration,
-		KeyGenerator: func(c *fiber.Ctx) string {
+		KeyGenerator: func(c fiber.Ctx) string {
 			return c.IP() // 基于IP的限制
 		},
-		LimitReached: func(c *fiber.Ctx) error {
+		LimitReached: func(c fiber.Ctx) error {
 			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
 				"status":  "error",
 				"message": "请求过于频繁，请稍后再试",
@@ -111,19 +104,13 @@ func NewFiber(c *Config) *fiber.App {
 		},
 	}))
 
-	// 健康检查中间件
-	app.Use(healthcheck.New(healthcheck.Config{
-		LivenessEndpoint:  fiberConf.LivenessEndpoint,
-		ReadinessEndpoint: fiberConf.ReadinessEndpoint,
-	}))
-
 	// 调试模式下添加日志
 	if c.IsDebug() {
-		app.Use(func(ctx *fiber.Ctx) error {
+		app.Use(func(c fiber.Ctx) error {
 			start := time.Now()
-			err := ctx.Next()
+			err := c.Next()
 
-			status := ctx.Response().StatusCode()
+			status := c.Response().StatusCode()
 			logger := log.GetDefault()
 			var evt *zerolog.Event
 			switch {
@@ -136,12 +123,12 @@ func NewFiber(c *Config) *fiber.App {
 			}
 
 			evt.
-				Str("method", ctx.Method()).
-				Str("path", ctx.Path()).
+				Str("method", c.Method()).
+				Str("path", c.Path()).
 				Int("status", status).
-				Str("ip", ctx.IP()).
+				Str("ip", c.IP()).
 				Dur("latency", time.Since(start)).
-				Str("user-agent", ctx.Get(fiber.HeaderUserAgent)).
+				Str("user-agent", c.Get(fiber.HeaderUserAgent)).
 				Msg("fiber request")
 
 			return err
@@ -149,4 +136,51 @@ func NewFiber(c *Config) *fiber.App {
 	}
 
 	return app
+}
+
+func buildCSRFExtractor(expr, cookieName string) extractors.Extractor {
+	if expr == "" {
+		return extractors.FromHeader(csrf.HeaderName)
+	}
+
+	parts := strings.SplitN(expr, ":", 2)
+	source := strings.ToLower(strings.TrimSpace(parts[0]))
+	key := ""
+	if len(parts) > 1 {
+		key = strings.TrimSpace(parts[1])
+	}
+
+	switch source {
+	case "header":
+		if key == "" {
+			key = csrf.HeaderName
+		}
+		return extractors.FromHeader(key)
+	case "query":
+		if key == "" {
+			key = "csrf"
+		}
+		return extractors.FromQuery(key)
+	case "param", "params":
+		if key == "" {
+			key = "csrf"
+		}
+		return extractors.FromParam(key)
+	case "form":
+		if key == "" {
+			key = "_csrf"
+		}
+		return extractors.FromForm(key)
+	case "cookie":
+		if key == "" {
+			key = cookieName
+			if key == "" {
+				key = csrf.ConfigDefault.CookieName
+			}
+		}
+		return extractors.FromCookie(key)
+	default:
+		// 如果格式不符合预期，则回退到将表达式作为Header名称处理
+		return extractors.FromHeader(strings.TrimSpace(expr))
+	}
 }

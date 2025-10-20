@@ -144,9 +144,6 @@ func NewKonfig(opts ...KonfigOption) (*Konfig, error) {
 		// 限流中间件设置
 		"app.fiber.limiter_max":        100,
 		"app.fiber.limiter_expiration": "1m",
-		// 健康检查中间件设置
-		"app.fiber.liveness_endpoint":  "/health/live",
-		"app.fiber.readiness_endpoint": "/health/ready",
 	}
 
 	// 创建Konfig实例

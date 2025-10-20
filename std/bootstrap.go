@@ -70,7 +70,11 @@ func Bootstrap(p []Plugin, f []Plugin, l Lifecycle, c *Config, a *fiber.App) {
 			// 异步启动HTTP服务器
 			go func() {
 				addr := fmt.Sprintf(":%v", c.Port)
-				if err := a.Listen(addr); err != nil && !errors.Is(err, context.Canceled) {
+				var listenCfg []fiber.ListenConfig
+				if !c.IsDebug() {
+					listenCfg = append(listenCfg, fiber.ListenConfig{DisableStartupMessage: true})
+				}
+				if err := a.Listen(addr, listenCfg...); err != nil && !errors.Is(err, context.Canceled) {
 					fmt.Printf("%v 启动失败: %v\n", c.Name, err)
 				}
 			}()

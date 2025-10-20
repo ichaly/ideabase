@@ -57,10 +57,6 @@ type FiberConfig struct {
 	// 限流中间件设置
 	LimiterMax        int           `mapstructure:"limiter_max"`        // 请求限制数量
 	LimiterExpiration time.Duration `mapstructure:"limiter_expiration"` // 限制窗口时间
-
-	// 健康检查中间件设置
-	LivenessEndpoint  string `mapstructure:"liveness_endpoint"`  // 存活检查端点
-	ReadinessEndpoint string `mapstructure:"readiness_endpoint"` // 就绪检查端点
 }
 
 // CompressLevel 自定义的压缩级别类型
