@@ -9,15 +9,18 @@ import (
 	"github.com/gofiber/fiber/v3"
 )
 
+// extensionsKey Context中存储扩展信息的键
+const extensionsKey = "response_extensions"
+
+// Extension GraphQL扩展信息的统一类型
+type Extension map[string]interface{}
+
 // Result GraphQL风格的统一响应结构
 type Result struct {
 	Data       interface{}  `json:"data,omitempty"`       // 响应数据，成功时存在
 	Errors     []*Exception `json:"errors,omitempty"`     // 错误信息，失败时存在
 	Extensions Extension    `json:"extensions,omitempty"` // 根级别扩展信息，可选
 }
-
-// Extension GraphQL扩展信息的统一类型
-type Extension map[string]interface{}
 
 // Exception 统一的异常结构，符合GraphQL错误标准
 type Exception struct {
@@ -52,11 +55,6 @@ func (my *Exception) With(key string, value interface{}) *Exception {
 	return my
 }
 
-// NewException 创建异常实例，仅设置状态码
-func NewException(statusCode int) *Exception {
-	return &Exception{statusCode: statusCode}
-}
-
 // WithMessage 设置错误消息，返回自身便于链式调用
 func (my *Exception) WithMessage(message string) *Exception {
 	if message != "" {
@@ -82,8 +80,10 @@ func (my *Exception) WithError(err error) *Exception {
 	return my
 }
 
-// extensionsKey Context中存储扩展信息的键
-const extensionsKey = "response_extensions"
+// NewException 创建异常实例，仅设置状态码
+func NewException(statusCode int) *Exception {
+	return &Exception{statusCode: statusCode}
+}
 
 // SetExtension 在Handler中设置响应扩展字段
 func SetExtension(c fiber.Ctx, key string, value interface{}) {
