@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"sync"
 
 	"github.com/go-playground/locales"
 	"github.com/go-playground/locales/en"
@@ -18,9 +17,8 @@ import (
 )
 
 const (
-	LocaleEnglish = "en"
-	LocaleChinese = "zh"
-
+	LocaleEnglish     = "en"
+	LocaleChinese     = "zh"
 	generalMessageKey = "__validation_error"
 )
 
@@ -28,8 +26,6 @@ type Validator struct {
 	validate      *validator.Validate
 	universal     *ut.UniversalTranslator
 	defaultLocale string
-	registered    map[string]struct{}
-	mutex         sync.RWMutex
 }
 
 func NewValidator() (*Validator, error) {
@@ -39,7 +35,6 @@ func NewValidator() (*Validator, error) {
 		validate:      validator.New(),
 		universal:     ut.New(enLocale, enLocale, zhLocale),
 		defaultLocale: LocaleChinese,
-		registered:    make(map[string]struct{}),
 	}
 
 	my.validate.RegisterTagNameFunc(func(field reflect.StructField) string {
@@ -49,52 +44,27 @@ func NewValidator() (*Validator, error) {
 		return field.Name
 	})
 
-	if err := my.registerLocale(enLocale, enTranslations.RegisterDefaultTranslations, WithGeneralMessage("validation failed")); err != nil {
+	if err := my.registerLocale(enLocale, enTranslations.RegisterDefaultTranslations, "validation failed"); err != nil {
 		return nil, err
 	}
-	if err := my.registerLocale(zhLocale, zhTranslations.RegisterDefaultTranslations, WithGeneralMessage("参数校验失败")); err != nil {
+	if err := my.registerLocale(zhLocale, zhTranslations.RegisterDefaultTranslations, "参数校验失败"); err != nil {
 		return nil, err
 	}
 
 	return my, nil
 }
 
-type TranslationOption func(*Validator, string, ut.Translator) error
-
-func WithGeneralMessage(message string) TranslationOption {
-	msg := strings.TrimSpace(message)
-	return func(v *Validator, locale string, translator ut.Translator) error {
-		if locale == "" || msg == "" {
-			return nil
-		}
-		if translator != nil {
-			return translator.Add(generalMessageKey, msg, true)
-		}
-		return nil
-	}
-}
-
-func (my *Validator) RegisterTranslation(trans locales.Translator, register func(*validator.Validate, ut.Translator) error, opts ...TranslationOption) error {
+func (my *Validator) RegisterTranslation(trans locales.Translator, register func(*validator.Validate, ut.Translator) error, generalMessage ...string) error {
 	if trans == nil || register == nil {
 		return fmt.Errorf("validator: translator 与 register 不能为空")
 	}
-	return my.registerLocale(trans, register, opts...)
+	return my.registerLocale(trans, register, generalMessage...)
 }
 
-func (my *Validator) Validate(out any) error {
-	return my.Struct(out)
-}
+func (my *Validator) Validate(out any) error { return my.Struct(out) }
 
 func (my *Validator) Struct(payload any) error {
-	return my.run(func() error { return my.validate.Struct(payload) })
-}
-
-func (my *Validator) Var(field any, tag string) error {
-	return my.run(func() error { return my.validate.Var(field, tag) })
-}
-
-func (my *Validator) run(fn func() error) error {
-	if err := fn(); err != nil {
+	if err := my.validate.Struct(payload); err != nil {
 		if translated, ok := my.wrapValidationError(err); ok {
 			return translated
 		}
@@ -103,18 +73,19 @@ func (my *Validator) run(fn func() error) error {
 	return nil
 }
 
-func (my *Validator) registerLocale(trans locales.Translator, register func(*validator.Validate, ut.Translator) error, opts ...TranslationOption) error {
+func (my *Validator) Var(field any, tag string) error {
+	if err := my.validate.Var(field, tag); err != nil {
+		if translated, ok := my.wrapValidationError(err); ok {
+			return translated
+		}
+		return err
+	}
+	return nil
+}
+
+func (my *Validator) registerLocale(trans locales.Translator, register func(*validator.Validate, ut.Translator) error, generalMessage ...string) error {
 	locale := strings.TrimSpace(trans.Locale())
-	if locale == "" {
-		return fmt.Errorf("validator: translator locale 不能为空")
-	}
 
-	my.mutex.Lock()
-	defer my.mutex.Unlock()
-
-	if _, exists := my.registered[locale]; exists {
-		return nil
-	}
 	if err := my.universal.AddTranslator(trans, true); err != nil {
 		return err
 	}
@@ -126,16 +97,14 @@ func (my *Validator) registerLocale(trans locales.Translator, register func(*val
 		return err
 	}
 
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		if err := opt(my, locale, translator); err != nil {
-			return err
+	if len(generalMessage) > 0 {
+		if msg := strings.TrimSpace(generalMessage[0]); msg != "" {
+			if err := translator.Add(generalMessageKey, msg, true); err != nil {
+				return err
+			}
 		}
 	}
 
-	my.registered[locale] = struct{}{}
 	return nil
 }
 
@@ -145,18 +114,15 @@ func (my *Validator) wrapValidationError(raw error) (error, bool) {
 		return nil, false
 	}
 
-	my.mutex.RLock()
-	locale := my.defaultLocale
-	my.mutex.RUnlock()
-	translator, ok := my.universal.GetTranslator(locale)
+	translator, ok := my.universal.GetTranslator(my.defaultLocale)
 	if !ok {
 		return nil, false
 	}
 
 	message := strings.TrimSpace(raw.Error())
-	if translator != nil {
-		if msg, err := translator.T(generalMessageKey); err == nil && strings.TrimSpace(msg) != "" {
-			message = strings.TrimSpace(msg)
+	if msg, err := translator.T(generalMessageKey); err == nil {
+		if translated := strings.TrimSpace(msg); translated != "" {
+			message = translated
 		}
 	}
 
@@ -173,16 +139,14 @@ type translatedErrors struct {
 	translator ut.Translator
 }
 
-func (my *translatedErrors) Error() string {
-	return my.message
-}
+func (my *translatedErrors) Error() string { return my.message }
 
 func (my *translatedErrors) Extensions() Extension {
 	if my == nil || len(my.ValidationErrors) == 0 {
 		return nil
 	}
 
-	var ext Extension
+	ext := make(Extension)
 	for _, e := range my.ValidationErrors {
 		field := strings.TrimSpace(strcase.ToLowerCamel(e.StructField()))
 		if field == "" {
@@ -196,9 +160,6 @@ func (my *translatedErrors) Extensions() Extension {
 		}
 		if msg == "" {
 			continue
-		}
-		if ext == nil {
-			ext = make(Extension)
 		}
 		ext[field] = msg
 	}
