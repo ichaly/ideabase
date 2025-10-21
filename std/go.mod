@@ -14,6 +14,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.1
 	github.com/go-playground/validator/v10 v10.28.0
 	github.com/gofiber/fiber/v3 v3.0.0-rc.2
+	github.com/iancoleman/strcase v0.3.0
 	github.com/ichaly/ideabase/log v0.0.0-20250911081141-c954ce572aca
 	github.com/ichaly/ideabase/utl v0.0.0-20250911081141-c954ce572aca
 	github.com/invzhi/next v1.1.1
@@ -27,9 +28,9 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/redis/go-redis/v9 v9.14.1
 	github.com/rs/zerolog v1.34.0
+	github.com/samber/lo v1.52.0
 	github.com/sony/sonyflake v1.3.0
 	github.com/sqids/sqids-go v0.4.1
-	github.com/samber/lo v1.52.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.17.0
 	gorm.io/datatypes v1.2.7
@@ -58,7 +59,7 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/klauspost/compress v1.18.1 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
