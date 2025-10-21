@@ -17,6 +17,7 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/recover"
 	"github.com/gofiber/fiber/v3/middleware/requestid"
 	"github.com/rs/zerolog"
+	"github.com/samber/lo"
 
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/utl"
@@ -104,6 +105,20 @@ func NewFiber(c *Config, v *Validator) *fiber.App {
 			})
 		},
 	}))
+
+	// 统一响应格式中间件
+	skips := lo.FilterMap(fiberConf.ResultSkipRoutes, func(item string, _ int) (string, bool) {
+		trimmed := strings.TrimSpace(item)
+		return trimmed, trimmed != ""
+	})
+	options := lo.Ternary(len(skips) > 0, []ResultMiddlewareOption{
+		WithResultSkipper(func(route *fiber.Route) bool {
+			return route != nil && lo.ContainsBy(skips, func(prefix string) bool {
+				return strings.HasPrefix(route.Path, prefix)
+			})
+		}),
+	}, []ResultMiddlewareOption(nil))
+	app.Use(ResultMiddleware(options...))
 
 	// 调试模式下添加日志
 	if c.IsDebug() {

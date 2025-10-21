@@ -54,6 +54,9 @@ type FiberConfig struct {
 	CSRFExpiration     time.Duration `mapstructure:"csrf_expiration"`       // CSRF令牌过期时间
 	CSRFSkipPrefixes   []string      `mapstructure:"csrf_skip_prefixes"`    // 跳过CSRF检查的路径前缀
 
+	// 统一返回中间件设置
+	ResultSkipRoutes []string `mapstructure:"result_skip_routes"` // 跳过统一响应的路由路径
+
 	// 限流中间件设置
 	LimiterMax        int           `mapstructure:"limiter_max"`        // 请求限制数量
 	LimiterExpiration time.Duration `mapstructure:"limiter_expiration"` // 限制窗口时间
