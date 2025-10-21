@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/go-playground/locales/de"
+	deTranslations "github.com/go-playground/validator/v10/translations/de"
 	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/require"
 )
@@ -12,16 +14,23 @@ func TestValidatorErrorSerializedResult(t *testing.T) {
 	v, err := NewValidator()
 	require.NoError(t, err)
 
+	const localeGerman = "de"
+
+	err = v.RegisterTranslation(de.New(), deTranslations.RegisterDefaultTranslations, "Validierung fehlgeschlagen")
+	require.NoError(t, err)
+
+	v.defaultLocale = localeGerman
+
 	type payload struct {
-		Username string `validate:"required" label:"用户名"`
-		Age      int    `validate:"gte=18" label:"年龄"`
+		Username string `validate:"required" label:"Benutzername"`
+		Age      int    `validate:"gte=18" label:"Alter"`
 	}
 
 	gotErr := v.Struct(payload{Age: 16})
 	require.Error(t, gotErr)
 
 	ex := NewException(fiber.StatusBadRequest).
-		WithMessage("请求参数错误").
+		WithMessage("Ungültige Anfrageparameter").
 		WithError(gotErr)
 
 	res := Result{Errors: []*Exception{ex}}
@@ -49,7 +58,7 @@ func TestValidatorErrorSerializedResult(t *testing.T) {
 
 	firstError, ok := errorsSlice[0].(map[string]interface{})
 	require.True(t, ok)
-	require.Equal(t, "请求参数错误", firstError["message"])
+	require.Equal(t, "Ungültige Anfrageparameter", firstError["message"])
 
 	extensions, ok := firstError["extensions"].(map[string]interface{})
 	require.True(t, ok)
@@ -60,11 +69,11 @@ func TestValidatorErrorSerializedResult(t *testing.T) {
 
 	usernameMsg, ok := extensions["username"].(string)
 	require.True(t, ok)
-	require.Equal(t, "用户名为必填字段", usernameMsg)
+	require.Equal(t, "Benutzername ist ein Pflichtfeld", usernameMsg)
 
 	ageMsg, ok := extensions["age"].(string)
 	require.True(t, ok)
-	require.Equal(t, "年龄必须大于或等于18", ageMsg)
+	require.Equal(t, "Alter muss 18 oder größer sein", ageMsg)
 }
 
 func TestValidatorGeneralMessageTranslation(t *testing.T) {
@@ -84,4 +93,16 @@ func TestValidatorGeneralMessageTranslation(t *testing.T) {
 	msg, err = translator.T(generalMessageKey)
 	require.NoError(t, err)
 	require.Equal(t, "validation failed", msg)
+
+	const localeGerman = "de"
+
+	err = v.RegisterTranslation(de.New(), deTranslations.RegisterDefaultTranslations, "Validierung fehlgeschlagen")
+	require.NoError(t, err)
+
+	translator, ok = v.universal.GetTranslator(localeGerman)
+	require.True(t, ok, "应该在注册后获取德语翻译")
+
+	msg, err = translator.T(generalMessageKey)
+	require.NoError(t, err)
+	require.Equal(t, "Validierung fehlgeschlagen", msg)
 }
