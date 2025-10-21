@@ -72,6 +72,10 @@ func TestHealthCheck(t *testing.T) {
 	// 创建Fiber应用
 	app := NewFiber(cfg, nil)
 
+	// 注册健康检查插件
+	health := NewHealth()
+	health.Bind(app.Group(health.Path()))
+
 	// 测试存活检测端点
 	req := httptest.NewRequest(http.MethodGet, "/health/live", nil)
 	resp, err := app.Test(req)

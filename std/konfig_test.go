@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ichaly/ideabase/utl"
 	"github.com/knadh/koanf/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -843,14 +844,14 @@ unique:
 }
 
 func TestEnvVarWithDotEnv(t *testing.T) {
-	// 获取当前工作目录
-	currentDir, err := os.Getwd()
-	require.NoError(t, err)
-
 	// 保存当前.env文件(如果存在)
-	envPath := filepath.Join(filepath.Dir(currentDir), ".env")
+	rootDir := utl.Root()
+	envPath := filepath.Join(rootDir, ".env")
 	envExists := false
-	var originalEnv []byte
+	var (
+		originalEnv []byte
+		err         error
+	)
 
 	if _, err := os.Stat(envPath); err == nil {
 		envExists = true
@@ -1006,7 +1007,7 @@ func TestKonfigDurationParsing(t *testing.T) {
 	// 创建临时配置文件，包含duration类型的配置项
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
-	
+
 	configContent := `
 timeout:
   short: 5s
