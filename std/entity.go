@@ -2,7 +2,6 @@ package std
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/duke-git/lancet/v2/convertor"
@@ -66,30 +65,23 @@ type AuditorEntity struct {
 	DeletedBy *Id `gorm:"comment:删除人;" json:",omitempty"`
 }
 
-func AuditedContextUser(ctx context.Context) (*Id, bool) {
+func GetAuditUser(ctx context.Context) Id {
 	if ctx == nil {
-		return nil, false
+		return 0
 	}
-	val, ok := ctx.Value(UserContextKey).(string)
-	if !ok || val == "" {
-		return nil, false
+	if id, ok := ctx.Value(UserContextKey).(Id); ok {
+		return id
 	}
-	num, err := strconv.ParseUint(val, 10, 64)
-	if err != nil {
-		return nil, false
-	}
-	// 返回命名类型 *Id，避免直接使用基础类型造成反射赋值 panic
-	id := Id(num)
-	return &id, true
+	return 0
 }
 
-// WithAuditedUser 将用户 ID 写入上下文，便于审计插件获取当前操作人
-func WithAuditedUser(ctx context.Context, id *Id) context.Context {
+// SetAuditUser 将用户 ID 写入上下文，供审计插件获取当前操作人
+func SetAuditUser(ctx context.Context, id Id) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if id == nil {
+	if id == 0 {
 		return ctx
 	}
-	return context.WithValue(ctx, UserContextKey, strconv.FormatUint(uint64(*id), 10))
+	return context.WithValue(ctx, UserContextKey, id)
 }
