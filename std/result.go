@@ -18,6 +18,7 @@ type Extension map[string]interface{}
 
 // Result GraphQL风格的统一响应结构
 type Result struct {
+	Code       int          `json:"code"`
 	Data       interface{}  `json:"data,omitempty"`
 	Errors     []*Exception `json:"errors,omitempty"`
 	Extensions Extension    `json:"extensions,omitempty"`
@@ -182,18 +183,17 @@ func respondPanic(c fiber.Ctx, r interface{}) error {
 }
 
 func respondSuccess(c fiber.Ctx, status int, data interface{}) error {
-	res := Result{Data: data}
 	if status <= 0 {
 		status = fiber.StatusOK
 	}
-	return c.Status(status).JSON(res)
+	return c.Status(status).JSON(Result{Code: status, Data: data})
 }
 
 func writeErrors(c fiber.Ctx, status int, exceptions ...*Exception) error {
 	if status <= 0 {
 		status = fiber.StatusInternalServerError
 	}
-	return c.Status(status).JSON(Result{Errors: exceptions})
+	return c.Status(status).JSON(Result{Code: status, Errors: exceptions})
 }
 
 func shouldSkip(skipper ResultSkipper, route *fiber.Route) bool {
@@ -225,7 +225,7 @@ func parsePayload(body []byte) (interface{}, bool) {
 	wrapped := true
 	for key := range obj {
 		switch key {
-		case "data", "errors", "extensions":
+		case "code", "data", "errors", "extensions":
 		default:
 			wrapped = false
 			break
