@@ -13,9 +13,10 @@ import (
 )
 
 func NewDatabase(c *Config, p []gorm.Plugin, e []interface{}) (*gorm.DB, error) {
+	prepareStmt := c.Database.Dialect == "mysql" || !c.IsDebug()
 	db, err := gorm.Open(
 		buildDialect(c.Database),
-		&gorm.Config{PrepareStmt: true, Logger: logger.Default.LogMode(logger.Info)},
+		&gorm.Config{PrepareStmt: prepareStmt, Logger: logger.Default.LogMode(logger.Info)},
 	)
 	if err != nil {
 		return nil, err
