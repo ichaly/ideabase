@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/json-iterator/go v1.1.12
-	golang.org/x/exp v0.0.0-20251017212417-90e834f514db
+	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546
 )
 
 require (
