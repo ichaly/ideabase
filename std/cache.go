@@ -4,11 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/ichaly/ideabase/utl"
 	"time"
 
 	"github.com/eko/gocache/lib/v4/cache"
 	"github.com/eko/gocache/lib/v4/store"
+	"github.com/ichaly/ideabase/utl"
 	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
@@ -22,6 +22,10 @@ type Cache struct {
 	Cache       *cache.Cache[string]
 	exp         time.Duration
 	keyGenerate func(*gorm.DB) string
+}
+type cachePayload struct {
+	RowsAffected int64       `json:"rows_affected"`
+	Data         interface{} `json:"data"`
 }
 
 // Name `gorm.Plugin` implements.
@@ -62,9 +66,8 @@ func (my Cache) query(db *gorm.DB) {
 	cacheKey := my.keyGenerate(db)
 
 	// get from cache
-	val, err := my.Cache.Get(db.Statement.Context, cacheKey)
-	if err == nil {
-		if err = utl.Unmarshal([]byte(val), db.Statement.Dest); err == nil {
+	if val, err := my.Cache.Get(db.Statement.Context, cacheKey); err == nil {
+		if my.loadFromCache(db, []byte(val)) {
 			return
 		}
 	}
@@ -73,9 +76,15 @@ func (my Cache) query(db *gorm.DB) {
 	my.queryFromDB(db, cacheKey)
 
 	// add to cache
-	if res, err := utl.Marshal(db.Statement.Dest); err == nil {
-		_ = my.Cache.Set(db.Statement.Context, cacheKey, string(res), store.WithExpiration(my.exp), store.WithTags([]string{db.Statement.Table}))
+	encoded, err := utl.Marshal(cachePayload{RowsAffected: db.RowsAffected, Data: db.Statement.Dest})
+	if err != nil {
+		return
 	}
+	_ = my.Cache.Set(
+		db.Statement.Context, cacheKey, string(encoded),
+		store.WithExpiration(my.exp),
+		store.WithTags([]string{db.Statement.Table}),
+	)
 }
 
 func (my Cache) afterUpdate(db *gorm.DB) {
@@ -108,4 +117,27 @@ func (my Cache) queryFromDB(db *gorm.DB, cacheKey string) {
 		_ = rows.Close()
 	}(rows)
 	gorm.Scan(rows, db, 0)
+}
+
+func (my Cache) loadFromCache(db *gorm.DB, raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+
+	payload := cachePayload{Data: db.Statement.Dest}
+	if payload.Data == nil {
+		return false
+	}
+
+	if err := utl.Unmarshal(raw, &payload); err != nil {
+		return false
+	}
+
+	db.RowsAffected = payload.RowsAffected
+	db.Statement.RowsAffected = payload.RowsAffected
+	if db.Statement.Result != nil {
+		db.Statement.Result.RowsAffected = payload.RowsAffected
+	}
+
+	return true
 }
