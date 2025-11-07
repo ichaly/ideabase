@@ -16,12 +16,11 @@ COPY . .
 RUN set -eux; \
     GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo Unknown)"; \
     BUILD_TIME="$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || echo 1970-01-01T00:00:00)"; \
-    LD_FLAGS="-w -s \
-        -X github.com/ichaly/ideabase/std.Version=${VERSION:-V0.0.0} \
-        -X github.com/ichaly/ideabase/std.GitCommit=${GIT_COMMIT} \
-        -X github.com/ichaly/ideabase/std.BuildTime=${BUILD_TIME}"; \
     go build -trimpath \
-        -ldflags "$LD_FLAGS" \
+        -ldflags "-w -s \
+            -X github.com/ichaly/ideabase/std.Version=${VERSION:-V0.0.0} \
+            -X github.com/ichaly/ideabase/std.GitCommit=${GIT_COMMIT} \
+            -X github.com/ichaly/ideabase/std.BuildTime=${BUILD_TIME}" \
         -o /out/main ./main.go
 
 FROM ${BASE_ALPINE_IMAGE}
