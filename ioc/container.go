@@ -40,36 +40,8 @@ func Bind(ctor any, opts ...Option) struct{} {
 		panic("ioc: Bind expects a constructor function")
 	}
 
-	o := &option{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(o)
-		}
-	}
-
-	if len(o.paramTags) > fnType.NumIn() {
-		panic(fmt.Sprintf("ioc: In() tags count %d exceeds constructor parameters %d", len(o.paramTags), fnType.NumIn()))
-	}
-	if len(o.resultTags) > 0 && len(o.resultTags) != fnType.NumOut() {
-		panic(fmt.Sprintf("ioc: Out() tags count %d mismatch constructor results %d", len(o.resultTags), fnType.NumOut()))
-	}
-
-	var anns []Annotation
-	if len(o.paramTags) > 0 {
-		tags := make([]string, fnType.NumIn())
-		copy(tags, o.paramTags)
-		anns = append(anns, fx.ParamTags(tags...))
-	}
-	if len(o.resultTags) > 0 {
-		anns = append(anns, fx.ResultTags(o.resultTags...))
-	}
-	anns = append(anns, o.extra...)
-
-	if len(anns) == 0 {
-		options = append(options, fx.Provide(ctor))
-	} else {
-		options = append(options, fx.Provide(fx.Annotate(ctor, anns...)))
-	}
+	anns := collectAnnotations(fnType, true, "Bind", opts...)
+	options = append(options, fx.Provide(fx.Annotate(ctor, anns...)))
 	return struct{}{}
 }
 
@@ -80,33 +52,8 @@ func Invoke(fn any, opts ...Option) struct{} {
 		panic("ioc: Invoke expects a function")
 	}
 
-	o := &option{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(o)
-		}
-	}
-
-	if len(o.resultTags) > 0 {
-		panic("ioc: Invoke does not support Out() options")
-	}
-	if len(o.paramTags) > fnType.NumIn() {
-		panic(fmt.Sprintf("ioc: In() tags count %d exceeds function parameters %d", len(o.paramTags), fnType.NumIn()))
-	}
-
-	var anns []Annotation
-	if len(o.paramTags) > 0 {
-		tags := make([]string, fnType.NumIn())
-		copy(tags, o.paramTags)
-		anns = append(anns, fx.ParamTags(tags...))
-	}
-	anns = append(anns, o.extra...)
-
-	if len(anns) == 0 {
-		options = append(options, fx.Invoke(fn))
-	} else {
-		options = append(options, fx.Invoke(fx.Annotate(fn, anns...)))
-	}
+	anns := collectAnnotations(fnType, false, "Invoke", opts...)
+	options = append(options, fx.Invoke(fx.Annotate(fn, anns...)))
 	return struct{}{}
 }
 
@@ -168,4 +115,34 @@ func normalizeTag(tag string) string {
 		return tag
 	}
 	return `group:"` + tag + `"`
+}
+
+func collectAnnotations(fnType reflect.Type, allowResult bool, name string, opts ...Option) []Annotation {
+	opt := &option{}
+	for _, o := range opts {
+		if o != nil {
+			o(opt)
+		}
+	}
+
+	var anns []Annotation
+	if len(opt.paramTags) > 0 {
+		if len(opt.paramTags) > fnType.NumIn() {
+			panic(fmt.Sprintf("ioc: %s In() tags count %d exceeds %d parameters", name, len(opt.paramTags), fnType.NumIn()))
+		}
+		// fx.ParamTags 需要与形参数量相同的切片，复制后可填补空缺并避免底层数组被后续 Option 修改。
+		tags := make([]string, fnType.NumIn())
+		copy(tags, opt.paramTags)
+		anns = append(anns, fx.ParamTags(tags...))
+	}
+	if len(opt.resultTags) > 0 && allowResult {
+		if len(opt.resultTags) != fnType.NumOut() {
+			panic(fmt.Sprintf("ioc: %s Out() tags count %d mismatch %d results", name, len(opt.resultTags), fnType.NumOut()))
+		}
+		anns = append(anns, fx.ResultTags(opt.resultTags...))
+	}
+	if len(opt.extra) > 0 {
+		anns = append(anns, opt.extra...)
+	}
+	return anns
 }
