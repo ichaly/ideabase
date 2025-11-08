@@ -36,7 +36,7 @@ type Plugin interface {
 // Bootstrap 应用程序启动引导函数
 func Bootstrap(p []Plugin, f []Plugin, l Lifecycle, c *Config, a *fiber.App) {
 	if BuildTime == "" {
-		BuildTime = time.Now().Format("2006-01-02 15:04:05")
+		BuildTime = time.Now().Format("2006-01-02T15:04:05")
 	}
 
 	// 初始化根路由

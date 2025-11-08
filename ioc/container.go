@@ -1,31 +1,171 @@
 package ioc
 
 import (
+	"fmt"
+	"reflect"
+	"strings"
+
 	"github.com/ichaly/ideabase/std"
+	"go.uber.org/fx"
 )
 
-var options []Option
+// Annotation 对 fx.Annotation 的别名，供业务调用避免直接依赖 fx。
+type Annotation = fx.Annotation
 
-func Add(args ...Option) struct{} {
-	options = append(options, args...)
+var options []fx.Option
+
+func Get() fx.Option {
+	return fx.Options(options...)
+}
+
+var (
+	_ = Bind(newAdapter)
+	_ = Bind(std.NewFiber)
+	_ = Bind(std.NewHealth, As[std.Plugin](), Out("plugin"))
+	_ = Invoke(std.Bootstrap, In("plugin", "filter"))
+)
+
+type option struct {
+	paramTags  []string
+	resultTags []string
+	extra      []Annotation
+}
+
+type Option func(*option)
+
+// Bind 统一注册入口，减少重复书写 fx.Provide。
+func Bind(ctor any, opts ...Option) struct{} {
+	fnType := reflect.TypeOf(ctor)
+	if fnType == nil || fnType.Kind() != reflect.Func {
+		panic("ioc: Bind expects a constructor function")
+	}
+
+	o := &option{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(o)
+		}
+	}
+
+	if len(o.paramTags) > fnType.NumIn() {
+		panic(fmt.Sprintf("ioc: In() tags count %d exceeds constructor parameters %d", len(o.paramTags), fnType.NumIn()))
+	}
+	if len(o.resultTags) > 0 && len(o.resultTags) != fnType.NumOut() {
+		panic(fmt.Sprintf("ioc: Out() tags count %d mismatch constructor results %d", len(o.resultTags), fnType.NumOut()))
+	}
+
+	var anns []Annotation
+	if len(o.paramTags) > 0 {
+		tags := make([]string, fnType.NumIn())
+		copy(tags, o.paramTags)
+		anns = append(anns, fx.ParamTags(tags...))
+	}
+	if len(o.resultTags) > 0 {
+		anns = append(anns, fx.ResultTags(o.resultTags...))
+	}
+	anns = append(anns, o.extra...)
+
+	if len(anns) == 0 {
+		options = append(options, fx.Provide(ctor))
+	} else {
+		options = append(options, fx.Provide(fx.Annotate(ctor, anns...)))
+	}
 	return struct{}{}
 }
 
-func Get() Option {
-	return Options(options...)
+// Invoke 统一触发入口，支持 In/With 等注解。
+func Invoke(fn any, opts ...Option) struct{} {
+	fnType := reflect.TypeOf(fn)
+	if fnType == nil || fnType.Kind() != reflect.Func {
+		panic("ioc: Invoke expects a function")
+	}
+
+	o := &option{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(o)
+		}
+	}
+
+	if len(o.resultTags) > 0 {
+		panic("ioc: Invoke does not support Out() options")
+	}
+	if len(o.paramTags) > fnType.NumIn() {
+		panic(fmt.Sprintf("ioc: In() tags count %d exceeds function parameters %d", len(o.paramTags), fnType.NumIn()))
+	}
+
+	var anns []Annotation
+	if len(o.paramTags) > 0 {
+		tags := make([]string, fnType.NumIn())
+		copy(tags, o.paramTags)
+		anns = append(anns, fx.ParamTags(tags...))
+	}
+	anns = append(anns, o.extra...)
+
+	if len(anns) == 0 {
+		options = append(options, fx.Invoke(fn))
+	} else {
+		options = append(options, fx.Invoke(fx.Annotate(fn, anns...)))
+	}
+	return struct{}{}
 }
 
-func init() {
-	Add(
-		Provide(
-			newAdapter,
-			std.NewFiber,
-			Annotate(
-				std.NewHealth,
-				As(new(std.Plugin)),
-				ResultTags(`group:"plugin"`),
-			),
-		),
-		Invoke(Annotate(std.Bootstrap, ParamTags(`group:"plugin"`, `group:"filter"`))),
-	)
+// Entity 将类型注册到 entity 分组。
+func Entity[T any](factory ...func() T) struct{} {
+	var ctor func() any
+	if len(factory) > 0 && factory[0] != nil {
+		f := factory[0]
+		ctor = func() any { return f() }
+	} else {
+		ctor = func() any {
+			var v T
+			return v
+		}
+	}
+	options = append(options, fx.Provide(fx.Annotated{Group: "entity", Target: ctor}))
+	return struct{}{}
+}
+
+// As 结果转换为接口类型。
+func As[T any]() Option {
+	return func(o *option) {
+		var zero T
+		o.extra = append(o.extra, fx.As(&zero))
+	}
+}
+
+// In 配置参数 Tags。
+func In(tags ...string) Option {
+	return func(o *option) {
+		for _, t := range tags {
+			o.paramTags = append(o.paramTags, normalizeTag(t))
+		}
+	}
+}
+
+// Out 配置结果 Tags。
+func Out(tags ...string) Option {
+	return func(o *option) {
+		for _, t := range tags {
+			o.resultTags = append(o.resultTags, normalizeTag(t))
+		}
+	}
+}
+
+// With 附加自定义 fx.Annotation，例如 fx.As / fx.Name。
+func With(anns ...Annotation) Option {
+	return func(o *option) {
+		o.extra = append(o.extra, anns...)
+	}
+}
+
+func normalizeTag(tag string) string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return ""
+	}
+	if strings.Contains(tag, ":") {
+		return tag
+	}
+	return `group:"` + tag + `"`
 }

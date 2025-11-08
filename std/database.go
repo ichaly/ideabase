@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-func NewDatabase(c *Config, p []gorm.Plugin, e []interface{}) (*gorm.DB, error) {
+func NewDatabase(c *Config, e []interface{}, p []gorm.Plugin) (*gorm.DB, error) {
 	prepareStmt := c.Database.Dialect == "mysql" || !c.IsDebug()
 	db, err := gorm.Open(
 		buildDialect(c.Database),

@@ -1,15 +1,6 @@
 package ioc
 
-import (
-	"github.com/ichaly/ideabase/std"
-	"go.uber.org/fx"
-)
+import "github.com/ichaly/ideabase/std"
 
 // 校验器模块
-func init() {
-	Add(fx.Module("validator",
-		fx.Provide(
-			std.NewValidator,
-		),
-	))
-}
+var _ = Bind(std.NewValidator)

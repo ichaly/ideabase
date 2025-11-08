@@ -22,7 +22,7 @@ var runCmd = &cobra.Command{
 		if configFile == "" {
 			configFile = filepath.Join(utl.Root(), "cfg", "config.yml")
 		}
-		fx.New(ioc.Get(), fx.Supply(configFile)).Run()
+		fx.New(ioc.Get(), fx.Supply(configFile), fx.NopLogger).Run()
 	},
 }
 

@@ -1,31 +1,12 @@
 package ioc
 
-import (
-	"github.com/ichaly/ideabase/std"
-	"go.uber.org/fx"
-)
+import "github.com/ichaly/ideabase/std"
 
 // 数据库模块
-func init() {
-	Add(fx.Module("database",
-		fx.Provide(
-			std.NewStorage,
-			fx.Annotated{
-				Group:  "gorm",
-				Target: std.NewSonyFlake,
-			},
-			fx.Annotated{
-				Group:  "gorm",
-				Target: std.NewCache,
-			},
-			fx.Annotated{
-				Group:  "gorm",
-				Target: std.NewAudited,
-			},
-			fx.Annotate(
-				std.NewDatabase,
-				fx.ParamTags(``, `group:"gorm"`, `group:"entity"`),
-			),
-		),
-	))
-}
+var (
+	_ = Bind(std.NewStorage)
+	_ = Bind(std.NewSonyFlake, Out("gorm"))
+	_ = Bind(std.NewCache, Out("gorm"))
+	_ = Bind(std.NewAudited, Out("gorm"))
+	_ = Bind(std.NewDatabase, In("", "entity", "gorm"))
+)
