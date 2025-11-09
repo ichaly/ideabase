@@ -19,33 +19,29 @@ var (
 var options []fx.Option
 
 type bootOption struct {
-	supplies []any
+	opts []fx.Option
 }
 
 type BootOption func(*bootOption)
 
 // Run 构建并启动容器，支持可选的启动参数。
 func Run(opts ...BootOption) {
-	buildApp(opts...).Run()
-}
-
-func buildApp(opts ...BootOption) *fx.App {
-	config := &bootOption{}
+	cfg := &bootOption{}
 	for _, opt := range opts {
 		if opt != nil {
-			opt(config)
+			opt(cfg)
 		}
 	}
 
-	var fxOpts []fx.Option
+	fxOpts := make([]fx.Option, 0, len(options)+len(cfg.opts)+1)
 	if len(options) > 0 {
 		fxOpts = append(fxOpts, fx.Options(options...))
 	}
-	if len(config.supplies) > 0 {
-		fxOpts = append(fxOpts, fx.Supply(config.supplies...))
+	if len(cfg.opts) > 0 {
+		fxOpts = append(fxOpts, cfg.opts...)
 	}
 	fxOpts = append(fxOpts, fx.NopLogger)
-	return fx.New(fxOpts...)
+	fx.New(fxOpts...).Run()
 }
 
 type bindOption struct {
@@ -135,7 +131,10 @@ func With(anns ...Annotation) BindOption {
 // Supply 在容器启动时注入即时值。
 func Supply(values ...any) BootOption {
 	return func(o *bootOption) {
-		o.supplies = append(o.supplies, values...)
+		if len(values) == 0 {
+			return
+		}
+		o.opts = append(o.opts, fx.Supply(values...))
 	}
 }
 
