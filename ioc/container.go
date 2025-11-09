@@ -9,15 +9,6 @@ import (
 	"go.uber.org/fx"
 )
 
-// Annotation 对 fx.Annotation 的别名，供业务调用避免直接依赖 fx。
-type Annotation = fx.Annotation
-
-var options []fx.Option
-
-func Get() fx.Option {
-	return fx.Options(options...)
-}
-
 var (
 	_ = Bind(newAdapter)
 	_ = Bind(std.NewFiber)
@@ -25,16 +16,51 @@ var (
 	_ = Invoke(std.Bootstrap, In("plugin", "filter"))
 )
 
-type option struct {
+var options []fx.Option
+
+type bootOption struct {
+	supplies []any
+}
+
+type BootOption func(*bootOption)
+
+// Run 构建并启动容器，支持可选的启动参数。
+func Run(opts ...BootOption) {
+	buildApp(opts...).Run()
+}
+
+func buildApp(opts ...BootOption) *fx.App {
+	config := &bootOption{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(config)
+		}
+	}
+
+	var fxOpts []fx.Option
+	if len(options) > 0 {
+		fxOpts = append(fxOpts, fx.Options(options...))
+	}
+	if len(config.supplies) > 0 {
+		fxOpts = append(fxOpts, fx.Supply(config.supplies...))
+	}
+	fxOpts = append(fxOpts, fx.NopLogger)
+	return fx.New(fxOpts...)
+}
+
+type bindOption struct {
 	paramTags  []string
 	resultTags []string
 	extra      []Annotation
 }
 
-type Option func(*option)
+type BindOption func(*bindOption)
+
+// Annotation 对 fx.Annotation 的别名，供业务调用避免直接依赖 fx。
+type Annotation = fx.Annotation
 
 // Bind 统一注册入口，减少重复书写 fx.Provide。
-func Bind(ctor any, opts ...Option) struct{} {
+func Bind(ctor any, opts ...BindOption) struct{} {
 	fnType := reflect.TypeOf(ctor)
 	if fnType == nil || fnType.Kind() != reflect.Func {
 		panic("ioc: Bind expects a constructor function")
@@ -46,7 +72,7 @@ func Bind(ctor any, opts ...Option) struct{} {
 }
 
 // Invoke 统一触发入口，支持 In/With 等注解。
-func Invoke(fn any, opts ...Option) struct{} {
+func Invoke(fn any, opts ...BindOption) struct{} {
 	fnType := reflect.TypeOf(fn)
 	if fnType == nil || fnType.Kind() != reflect.Func {
 		panic("ioc: Invoke expects a function")
@@ -74,16 +100,16 @@ func Entity[T any](factory ...func() T) struct{} {
 }
 
 // As 结果转换为接口类型。
-func As[T any]() Option {
-	return func(o *option) {
+func As[T any]() BindOption {
+	return func(o *bindOption) {
 		var zero T
 		o.extra = append(o.extra, fx.As(&zero))
 	}
 }
 
 // In 配置参数 Tags。
-func In(tags ...string) Option {
-	return func(o *option) {
+func In(tags ...string) BindOption {
+	return func(o *bindOption) {
 		for _, t := range tags {
 			o.paramTags = append(o.paramTags, normalizeTag(t))
 		}
@@ -91,8 +117,8 @@ func In(tags ...string) Option {
 }
 
 // Out 配置结果 Tags。
-func Out(tags ...string) Option {
-	return func(o *option) {
+func Out(tags ...string) BindOption {
+	return func(o *bindOption) {
 		for _, t := range tags {
 			o.resultTags = append(o.resultTags, normalizeTag(t))
 		}
@@ -100,9 +126,16 @@ func Out(tags ...string) Option {
 }
 
 // With 附加自定义 fx.Annotation，例如 fx.As / fx.Name。
-func With(anns ...Annotation) Option {
-	return func(o *option) {
+func With(anns ...Annotation) BindOption {
+	return func(o *bindOption) {
 		o.extra = append(o.extra, anns...)
+	}
+}
+
+// Supply 在容器启动时注入即时值。
+func Supply(values ...any) BootOption {
+	return func(o *bootOption) {
+		o.supplies = append(o.supplies, values...)
 	}
 }
 
@@ -117,8 +150,8 @@ func normalizeTag(tag string) string {
 	return `group:"` + tag + `"`
 }
 
-func collectAnnotations(fnType reflect.Type, allowResult bool, name string, opts ...Option) []Annotation {
-	opt := &option{}
+func collectAnnotations(fnType reflect.Type, allowResult bool, name string, opts ...BindOption) []Annotation {
+	opt := &bindOption{}
 	for _, o := range opts {
 		if o != nil {
 			o(opt)
@@ -130,7 +163,7 @@ func collectAnnotations(fnType reflect.Type, allowResult bool, name string, opts
 		if len(opt.paramTags) > fnType.NumIn() {
 			panic(fmt.Sprintf("ioc: %s In() tags count %d exceeds %d parameters", name, len(opt.paramTags), fnType.NumIn()))
 		}
-		// fx.ParamTags 需要与形参数量相同的切片，复制后可填补空缺并避免底层数组被后续 Option 修改。
+		// fx.ParamTags 需要与形参数量相同的切片，复制后可填补空缺并避免底层数组被后续 BindOption 修改。
 		tags := make([]string, fnType.NumIn())
 		copy(tags, opt.paramTags)
 		anns = append(anns, fx.ParamTags(tags...))

@@ -8,7 +8,6 @@ import (
 	"github.com/ichaly/ideabase/ioc"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/spf13/cobra"
-	"go.uber.org/fx"
 )
 
 const configFlag = "config"
@@ -22,7 +21,7 @@ var runCmd = &cobra.Command{
 		if configFile == "" {
 			configFile = filepath.Join(utl.Root(), "cfg", "config.yml")
 		}
-		fx.New(ioc.Get(), fx.Supply(configFile), fx.NopLogger).Run()
+		ioc.Run(ioc.Supply(configFile))
 	},
 }
 
