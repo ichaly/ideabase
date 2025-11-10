@@ -2,9 +2,10 @@ package std
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
 
-	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/sqids/sqids-go"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -18,14 +19,29 @@ type userContextKeyType struct{}
 
 type Id uint64
 
-func (my Id) ID() {}
-
-func (my Id) String() string {
-	str, err := ShortId.Encode([]uint64{uint64(my)})
-	if err != nil {
-		return convertor.ToString(my)
+func (my Id) MarshalJSON() ([]byte, error) {
+	if str, err := ShortId.Encode([]uint64{uint64(my)}); err == nil {
+		return strconv.AppendQuote(nil, str), nil
 	}
-	return str
+	return strconv.AppendQuote(nil, strconv.FormatUint(uint64(my), 10)), nil
+}
+
+func (my *Id) UnmarshalJSON(data []byte) error {
+	parse := func(token string) (uint64, error) {
+		if token == "" || token == "null" {
+			return 0, nil
+		}
+		if decoded := ShortId.Decode(token); len(decoded) > 0 {
+			return decoded[0], nil
+		}
+		return strconv.ParseUint(token, 10, 64)
+	}
+	val, err := parse(strings.Trim(string(data), "\" \t\r\n"))
+	if err != nil {
+		return err
+	}
+	*my = Id(val)
+	return nil
 }
 
 type Description interface {
