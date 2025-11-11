@@ -4,7 +4,6 @@ go 1.25.0
 
 require (
 	github.com/allegro/bigcache/v3 v3.1.0
-	github.com/duke-git/lancet/v2 v2.3.8
 	github.com/eko/gocache/lib/v4 v4.2.2
 	github.com/eko/gocache/store/bigcache/v4 v4.2.3
 	github.com/eko/gocache/store/go_cache/v4 v4.2.3

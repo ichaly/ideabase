@@ -39,29 +39,11 @@ func Bootstrap(p []Plugin, f []Plugin, l Lifecycle, c *Config, a *fiber.App) {
 		BuildTime = time.Now().Format("2006-01-02T15:04:05")
 	}
 
-	// 初始化根路由
-	routers["/"] = a
-
-	// 获取或创建路由组，避免重复创建
-	getRouter := func(basePath string) fiber.Router {
-		// 规范化路径：将多个连续斜杠替换为单个，并确保路径以/结尾
-		base := fmt.Sprintf("%s/", strings.TrimRight(reg.ReplaceAllString(basePath, "/"), "/"))
-
-		// 优先使用缓存的路由组
-		if r, exists := routers[base]; exists {
-			return r
-		}
-
-		// 创建新路由组并缓存
-		r := a.Group(base)
-		routers[base] = r
-		return r
-	}
-
 	// 先注册过滤器再注册插件，确保过滤器先执行
 	for _, m := range append(f, p...) {
-		router := getRouter(m.Path())
-		m.Bind(router)
+		// 规范化路径：将多个连续斜杠替换为单个，并确保路径以/结尾
+		base := fmt.Sprintf("%s/", strings.TrimRight(reg.ReplaceAllString(m.Path(), "/"), "/"))
+		m.Bind(a.Group(base))
 	}
 
 	// 添加应用生命周期钩子：启动与关闭处理
