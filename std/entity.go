@@ -54,8 +54,8 @@ type General struct {
 	State     int8              `gorm:"index;comment:状态;" json:"state"`
 	Weight    int8              `gorm:"comment:权重;" json:"weight"`
 	Remark    datatypes.JSONMap `gorm:"comment:备注" json:"remark,omitempty"`
-	CreatedAt *Timestamp        `gorm:"comment:创建时间;autoCreateTime" json:"createdAt,omitempty"`
-	UpdatedAt *Timestamp        `gorm:"comment:更新时间;autoUpdateTime" json:"updatedAt,omitempty"`
+	CreatedAt *DataTime         `gorm:"comment:创建时间;autoCreateTime" json:"createdAt,omitempty"`
+	UpdatedAt *DataTime         `gorm:"comment:更新时间;autoUpdateTime" json:"updatedAt,omitempty"`
 }
 
 type Entity struct {
@@ -72,7 +72,7 @@ type AuditorEntity struct {
 
 type DeletedEntity struct {
 	AuditorEntity `mapstructure:",squash"`
-	DeletedAt     Timestamp `gorm:"index;comment:逻辑删除;" json:"deletedAt,omitempty"`
+	DeletedAt     FlagTime `gorm:"index;comment:逻辑删除;" json:"deletedAt,omitempty"`
 }
 
 func GetAuditUser(ctx context.Context) Id {

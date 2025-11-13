@@ -1,8 +1,7 @@
 package std
 
 import (
-	"database/sql/driver"
-	"fmt"
+	"database/sql"
 	"strconv"
 	"strings"
 	"time"
@@ -12,81 +11,70 @@ import (
 
 const timeLayout = "2006-01-02 15:04:05"
 
-type Timestamp struct {
+type DataTime struct {
+	sql.NullTime
+}
+
+type FlagTime struct {
 	gorm.DeletedAt
 }
 
-func (my Timestamp) MarshalJSON() ([]byte, error) {
-	if !my.Valid || my.Time.IsZero() {
-		return []byte("null"), nil
-	}
-	return strconv.AppendQuote(nil, my.Time.Format(timeLayout)), nil
+func (my DataTime) MarshalJSON() ([]byte, error) {
+	return encodeTime(my.Valid, my.Time), nil
 }
 
-func (my *Timestamp) UnmarshalJSON(data []byte) error {
+func (my *DataTime) UnmarshalJSON(data []byte) error {
 	if my == nil {
 		return nil
 	}
-	parsed, err := parseTimeToken(strings.Trim(string(data), "\" \t\r\n"))
+	parsed, err := parseTime(data)
 	if err != nil {
 		return err
 	}
-	my.set(parsed)
+	assignTime(&my.Valid, &my.Time, parsed)
 	return nil
 }
 
-func (my Timestamp) Value() (driver.Value, error) {
-	if !my.Valid || my.Time.IsZero() {
-		return nil, nil
-	}
-	return my.Time, nil
+func (my FlagTime) MarshalJSON() ([]byte, error) {
+	return encodeTime(my.Valid, my.Time), nil
 }
 
-func (my *Timestamp) Scan(value any) error {
+func (my *FlagTime) UnmarshalJSON(data []byte) error {
 	if my == nil {
-		return fmt.Errorf("std.Timestamp: Scan on nil pointer")
+		return nil
 	}
-	switch v := value.(type) {
-	case time.Time:
-		my.set(v)
-	case []byte:
-		parsed, err := parseTimeToken(strings.TrimSpace(string(v)))
-		if err != nil {
-			return err
-		}
-		my.set(parsed)
-	case string:
-		parsed, err := parseTimeToken(strings.TrimSpace(v))
-		if err != nil {
-			return err
-		}
-		my.set(parsed)
-	case nil:
-		my.set(time.Time{})
-	default:
-		return fmt.Errorf("std.Timestamp: unsupported Scan type %T", value)
+	parsed, err := parseTime(data)
+	if err != nil {
+		return err
 	}
+	assignTime(&my.Valid, &my.Time, parsed)
 	return nil
 }
 
-func (Timestamp) GormDataType() string { return "time" }
-
-func (my *Timestamp) set(val time.Time) {
-	if my == nil {
-		return
-	}
-	if val.IsZero() {
-		my.Time = time.Time{}
-		my.Valid = false
-		return
-	}
-	my.Time = val
-	my.Valid = true
-}
-
-func parseTimeToken(token string) (time.Time, error) {
+func parseTime(data []byte) (time.Time, error) {
+	token := strings.Trim(string(data), "\" \t\r\n")
 	if token == "" || token == "null" {
 		return time.Time{}, nil
 	}
 	return time.ParseInLocation(timeLayout, token, time.Local)
+}
+
+func encodeTime(valid bool, t time.Time) []byte {
+	if !valid || t.IsZero() {
+		return []byte("null")
+	}
+	return strconv.AppendQuote(nil, t.Format(timeLayout))
+}
+
+func assignTime(valid *bool, target *time.Time, val time.Time) {
+	if valid == nil || target == nil {
+		return
+	}
+	if val.IsZero() {
+		*target = time.Time{}
+		*valid = false
+		return
+	}
+	*target = val
+	*valid = true
 }
