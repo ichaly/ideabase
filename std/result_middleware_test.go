@@ -25,6 +25,7 @@ func TestResultMiddlewareSuccess(t *testing.T) {
 
 	var result Result
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, "", result.Message)
 
 	data, ok := result.Data.(map[string]interface{})
 	require.True(t, ok)
@@ -47,6 +48,7 @@ func TestResultMiddlewareError(t *testing.T) {
 
 	var result Result
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, "bad request", result.Message)
 	require.Nil(t, result.Data)
 	require.Len(t, result.Errors, 1)
 	require.Equal(t, "bad request", result.Errors[0].Message)
@@ -87,6 +89,7 @@ func TestResultMiddlewarePanic(t *testing.T) {
 
 	var result Result
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, "服务器内部错误", result.Message)
 	require.Nil(t, result.Data)
 	require.Len(t, result.Errors, 1)
 	require.Equal(t, "服务器内部错误", result.Errors[0].Message)

@@ -21,6 +21,7 @@ type Result struct {
 	Code       int          `json:"code"`
 	Data       interface{}  `json:"data,omitempty"`
 	Errors     []*Exception `json:"errors,omitempty"`
+	Message    string       `json:"message,omitempty"`
 	Extensions Extension    `json:"extensions,omitempty"`
 }
 
@@ -32,6 +33,8 @@ type Exception struct {
 	Extensions Extension     `json:"extensions,omitempty"`
 
 	statusCode int
+	prompt     string
+	fromError  bool
 }
 
 // Location GraphQL错误位置信息
@@ -63,15 +66,19 @@ func (my *Exception) WithError(err error) *Exception {
 			}
 		}
 	}
-	if my.Message == "" && err != nil {
+	if err != nil {
 		my.Message = err.Error()
+		my.fromError = true
 	}
 	return my
 }
 
 func (my *Exception) WithMessage(message string) *Exception {
 	if message != "" {
-		my.Message = message
+		my.prompt = message
+		if !my.fromError {
+			my.Message = message
+		}
 	}
 	return my
 }
@@ -146,28 +153,8 @@ func ResultMiddleware(options ...ResultMiddlewareOption) fiber.Handler {
 }
 
 func respondError(c fiber.Ctx, err error) error {
-	var exception *Exception
-	if errors.As(err, &exception) {
-		code := exception.statusCode
-		if code == 0 {
-			code = fiber.StatusInternalServerError
-		}
-		return writeErrors(c, code, exception)
-	}
-
-	var fe *fiber.Error
-	if errors.As(err, &fe) {
-		exception = NewException(fe.Code).WithMessage(fe.Message).WithError(err)
-		return writeErrors(c, fe.Code, exception)
-	}
-
-	if _, ok := err.(interface{ Extensions() Extension }); ok {
-		exception = NewException(fiber.StatusBadRequest).WithMessage(err.Error()).WithError(err)
-		return writeErrors(c, fiber.StatusBadRequest, exception)
-	}
-
-	exception = NewException(fiber.StatusInternalServerError).WithMessage("内部服务器错误").WithError(err)
-	return writeErrors(c, fiber.StatusInternalServerError, exception)
+	status, exceptions := normalizeErrors(err)
+	return writeErrors(c, status, exceptions...)
 }
 
 func respondPanic(c fiber.Ctx, r interface{}) error {
@@ -186,14 +173,57 @@ func respondSuccess(c fiber.Ctx, status int, data interface{}) error {
 	if status <= 0 {
 		status = fiber.StatusOK
 	}
-	return c.Status(status).JSON(Result{Code: status, Data: data})
+	return c.Status(status).JSON(Result{Code: status, Message: "", Data: data})
 }
 
 func writeErrors(c fiber.Ctx, status int, exceptions ...*Exception) error {
 	if status <= 0 {
 		status = fiber.StatusInternalServerError
 	}
-	return c.Status(status).JSON(Result{Code: status, Errors: exceptions})
+	msg := pickMessage(exceptions)
+	return c.Status(status).JSON(Result{Code: status, Message: msg, Errors: exceptions})
+}
+
+func pickMessage(exceptions []*Exception) string {
+	for _, ex := range exceptions {
+		if ex == nil {
+			continue
+		}
+		if ex.prompt != "" {
+			return ex.prompt
+		}
+		if ex.Message != "" {
+			return ex.Message
+		}
+	}
+	return ""
+}
+
+func normalizeErrors(err error) (int, []*Exception) {
+	var exception *Exception
+	if errors.As(err, &exception) {
+		return normalizeStatus(exception.statusCode, fiber.StatusInternalServerError), []*Exception{exception}
+	}
+
+	var fe *fiber.Error
+	if errors.As(err, &fe) {
+		return fe.Code, []*Exception{NewException(fe.Code).WithMessage(fe.Message).WithError(err)}
+	}
+
+	if _, ok := err.(interface{ Extensions() Extension }); ok {
+		exception = NewException(fiber.StatusBadRequest).WithError(err)
+		return fiber.StatusBadRequest, []*Exception{exception}
+	}
+
+	exception = NewException(fiber.StatusInternalServerError).WithError(err)
+	return fiber.StatusInternalServerError, []*Exception{exception}
+}
+
+func normalizeStatus(status, fallback int) int {
+	if status <= 0 {
+		return fallback
+	}
+	return status
 }
 
 func shouldSkip(skipper ResultSkipper, route *fiber.Route) bool {
@@ -222,17 +252,19 @@ func parsePayload(body []byte) (interface{}, bool) {
 		return payload, false
 	}
 
-	wrapped := true
+	wrapped, hasCode := true, false
 	for key := range obj {
 		switch key {
-		case "code", "data", "errors", "extensions":
+		case "code":
+			hasCode = true
+		case "message", "data", "errors", "extensions":
 		default:
 			wrapped = false
 			break
 		}
 	}
 
-	if wrapped {
+	if wrapped && hasCode {
 		return nil, true
 	}
 	return obj, false
