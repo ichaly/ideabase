@@ -61,6 +61,38 @@ func (my *Validator) RegisterTranslation(trans locales.Translator, register func
 	return my.registerLocale(trans, register, generalMessage...)
 }
 
+// RegisterValidation 注册自定义校验规则并可选择性添加通用提示。
+func (my *Validator) RegisterValidation(tag string, fn validator.Func, message ...string) error {
+	if my == nil || my.validate == nil || fn == nil || strings.TrimSpace(tag) == "" {
+		return fmt.Errorf("validator: tag 与函数不能为空")
+	}
+	if err := my.validate.RegisterValidation(tag, fn); err != nil {
+		return err
+	}
+	tpl := strings.TrimSpace(strings.Join(message, ""))
+	if tpl == "" {
+		tpl = "{0}校验失败"
+	}
+	tpl = strings.ReplaceAll(tpl, "{field}", "{0}")
+	register := func(trans ut.Translator) error {
+		return my.validate.RegisterTranslation(tag, trans,
+			func(ut ut.Translator) error { return ut.Add(tag, tpl, true) },
+			func(ut ut.Translator, fe validator.FieldError) string {
+				if text, err := ut.T(tag, fe.Field()); err == nil {
+					return text
+				}
+				return fe.Field()
+			},
+		)
+	}
+	for _, locale := range []string{LocaleEnglish, LocaleChinese} {
+		if trans, ok := my.universal.GetTranslator(locale); ok {
+			_ = register(trans)
+		}
+	}
+	return nil
+}
+
 func (my *Validator) Validate(out any) error { return my.Struct(out) }
 
 func (my *Validator) Struct(payload any) error {
