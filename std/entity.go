@@ -51,7 +51,7 @@ type Primary struct {
 }
 
 type General struct {
-	State     int8              `gorm:"index;comment:状态;" json:"state"`
+	State     int8              `gorm:"index;comment:状态;default:1" json:"state"`
 	Weight    int8              `gorm:"comment:权重;" json:"weight"`
 	Remark    datatypes.JSONMap `gorm:"comment:备注" json:"remark,omitempty"`
 	CreatedAt *DataTime         `gorm:"comment:创建时间;autoCreateTime" json:"createdAt,omitempty"`
