@@ -7,8 +7,7 @@ require (
 	github.com/ichaly/ideabase/utl v0.0.0-20250911081141-c954ce572aca
 	github.com/samber/lo v1.52.0
 	github.com/spf13/cobra v1.10.1
-	go.uber.org/fx v1.24.0
-	golang.org/x/mod v0.29.0
+	golang.org/x/mod v0.30.0
 )
 
 require (
@@ -31,11 +30,14 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/gofiber/contrib/fiberzerolog v1.0.3 // indirect
 	github.com/gofiber/fiber/v2 v2.52.9 // indirect
+	github.com/gofiber/fiber/v3 v3.0.0-rc.3 // indirect
+	github.com/gofiber/schema v1.6.0 // indirect
+	github.com/gofiber/utils/v2 v2.0.0-rc.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/huandu/go-clone v1.7.3 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect
-	github.com/ichaly/ideabase/gql v0.0.0-20250911081141-c954ce572aca // indirect
-	github.com/ichaly/ideabase/log v0.0.0-20250911081141-c954ce572aca // indirect
+	github.com/ichaly/ideabase/gql v0.0.0-20251113093442-dbb8e5c747c8 // indirect
+	github.com/ichaly/ideabase/log v0.0.0-20251125090855-62e90c744433 // indirect
 	github.com/ichaly/ideabase/std v0.0.0-20250911081141-c954ce572aca // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
@@ -66,9 +68,9 @@ require (
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.67.2 // indirect
+	github.com/prometheus/common v0.67.4 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
-	github.com/redis/go-redis/v9 v9.16.0 // indirect
+	github.com/redis/go-redis/v9 v9.17.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/sony/sonyflake v1.3.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
@@ -78,15 +80,17 @@ require (
 	github.com/valyala/fasthttp v1.68.0 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.31 // indirect
 	go.uber.org/dig v1.19.0 // indirect
+	go.uber.org/fx v1.24.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.43.0 // indirect
-	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
-	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/sys v0.37.0 // indirect
-	golang.org/x/text v0.30.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/exp v0.0.0-20251125195548-87e1e737ad39 // indirect
+	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/sync v0.18.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gorm.io/datatypes v1.2.7 // indirect

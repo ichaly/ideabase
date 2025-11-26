@@ -19,7 +19,7 @@ var requestGroup singleflight.Group
 type keyCacheContext struct{}
 
 type Cache struct {
-	Cache       *cache.Cache[string]
+	Cache       *cache.Cache[[]byte]
 	exp         time.Duration
 	keyGenerate func(*gorm.DB) string
 }
@@ -31,7 +31,7 @@ type cachePayload struct {
 // Name `gorm.Plugin` implements.
 func (my Cache) Name() string { return "gorm-cache" }
 
-func NewCache(s *cache.Cache[string]) gorm.Plugin {
+func NewCache(s *cache.Cache[[]byte]) gorm.Plugin {
 	return Cache{s, 30 * time.Minute, func(db *gorm.DB) string {
 		return fmt.Sprintf(
 			"sql:%s",
@@ -67,7 +67,7 @@ func (my Cache) query(db *gorm.DB) {
 
 	// get from cache
 	if val, err := my.Cache.Get(db.Statement.Context, cacheKey); err == nil {
-		if my.loadFromCache(db, []byte(val)) {
+		if my.loadFromCache(db, val) {
 			return
 		}
 	}
@@ -81,7 +81,7 @@ func (my Cache) query(db *gorm.DB) {
 		return
 	}
 	_ = my.Cache.Set(
-		db.Statement.Context, cacheKey, string(encoded),
+		db.Statement.Context, cacheKey, encoded,
 		store.WithExpiration(my.exp),
 		store.WithTags([]string{db.Statement.Table}),
 	)
