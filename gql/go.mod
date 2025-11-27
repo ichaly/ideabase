@@ -4,12 +4,12 @@ go 1.25.0
 
 require (
 	github.com/duke-git/lancet/v2 v2.3.8
-	github.com/gofiber/fiber/v3 v3.0.0-rc.2
+	github.com/gofiber/fiber/v3 v3.0.0-rc.3
 	github.com/huandu/go-clone v1.7.3
 	github.com/iancoleman/strcase v0.3.0
-	github.com/ichaly/ideabase/log v0.0.0-20250911081141-c954ce572aca
-	github.com/ichaly/ideabase/std v0.0.0-20250911081141-c954ce572aca
-	github.com/ichaly/ideabase/utl v0.0.0-20250911081141-c954ce572aca
+	github.com/ichaly/ideabase/log v0.0.0-20251126161412-c2d8ec6949de
+	github.com/ichaly/ideabase/std v0.0.0-20251126161412-c2d8ec6949de
+	github.com/ichaly/ideabase/utl v0.0.0-20251126161412-c2d8ec6949de
 	github.com/jinzhu/inflection v1.0.0
 	github.com/joho/godotenv v1.5.1
 	github.com/json-iterator/go v1.1.12
@@ -33,8 +33,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/clipperhouse/stringish v0.1.1 // indirect
-	github.com/clipperhouse/uax29/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
@@ -49,19 +47,20 @@ require (
 	github.com/ebitengine/purego v0.8.4 // indirect
 	github.com/eko/gocache/lib/v4 v4.2.2 // indirect
 	github.com/eko/gocache/store/bigcache/v4 v4.2.3 // indirect
-	github.com/eko/gocache/store/go_cache/v4 v4.2.3 // indirect
 	github.com/eko/gocache/store/redis/v4 v4.2.5 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.11 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
+	github.com/go-playground/locales v0.14.1 // indirect
+	github.com/go-playground/universal-translator v0.18.1 // indirect
+	github.com/go-playground/validator/v10 v10.28.0 // indirect
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
-	github.com/gofiber/contrib/fiberzerolog v1.0.3 // indirect
-	github.com/gofiber/fiber/v2 v2.52.9 // indirect
 	github.com/gofiber/schema v1.6.0 // indirect
-	github.com/gofiber/utils/v2 v2.0.0-rc.1 // indirect
+	github.com/gofiber/utils/v2 v2.0.0-rc.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
@@ -77,11 +76,11 @@ require (
 	github.com/knadh/koanf/providers/env v1.1.0 // indirect
 	github.com/knadh/koanf/providers/file v1.2.0 // indirect
 	github.com/knadh/koanf/v2 v2.3.0 // indirect
+	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
@@ -97,16 +96,15 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
-	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.67.2 // indirect
+	github.com/prometheus/common v0.67.4 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
-	github.com/redis/go-redis/v9 v9.16.0 // indirect
+	github.com/redis/go-redis/v9 v9.17.1 // indirect
 	github.com/shirou/gopsutil/v4 v4.25.5 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/sony/sonyflake v1.3.0 // indirect
@@ -127,12 +125,12 @@ require (
 	go.opentelemetry.io/proto/otlp v1.7.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.43.0 // indirect
-	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
-	golang.org/x/net v0.46.0 // indirect
-	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/sys v0.37.0 // indirect
-	golang.org/x/text v0.30.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/exp v0.0.0-20251125195548-87e1e737ad39 // indirect
+	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/sync v0.18.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

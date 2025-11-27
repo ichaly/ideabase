@@ -6,7 +6,6 @@ require (
 	github.com/allegro/bigcache/v3 v3.1.0
 	github.com/eko/gocache/lib/v4 v4.2.2
 	github.com/eko/gocache/store/bigcache/v4 v4.2.3
-	github.com/eko/gocache/store/go_cache/v4 v4.2.3
 	github.com/eko/gocache/store/redis/v4 v4.2.5
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-playground/locales v0.14.1
@@ -14,8 +13,8 @@ require (
 	github.com/go-playground/validator/v10 v10.28.0
 	github.com/gofiber/fiber/v3 v3.0.0-rc.3
 	github.com/iancoleman/strcase v0.3.0
-	github.com/ichaly/ideabase/log v0.0.0-20251125090855-62e90c744433
-	github.com/ichaly/ideabase/utl v0.0.0-20251125090855-62e90c744433
+	github.com/ichaly/ideabase/log v0.0.0-20251126161412-c2d8ec6949de
+	github.com/ichaly/ideabase/utl v0.0.0-20251126161412-c2d8ec6949de
 	github.com/invzhi/next v1.1.1
 	github.com/joho/godotenv v1.5.1
 	github.com/knadh/koanf/parsers/yaml v1.1.0
@@ -24,7 +23,6 @@ require (
 	github.com/knadh/koanf/providers/file v1.2.0
 	github.com/knadh/koanf/providers/rawbytes v1.0.0
 	github.com/knadh/koanf/v2 v2.3.0
-	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/redis/go-redis/v9 v9.17.1
 	github.com/rs/zerolog v1.34.0
 	github.com/samber/lo v1.52.0
