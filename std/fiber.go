@@ -2,10 +2,12 @@ package std
 
 import (
 	"encoding/base64"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/binder"
 	"github.com/gofiber/fiber/v3/extractors"
 	"github.com/gofiber/fiber/v3/middleware/compress"
 	"github.com/gofiber/fiber/v3/middleware/cors"
@@ -27,6 +29,24 @@ import (
 func NewFiber(c *Config, v *Validator) *fiber.App {
 	// 获取Fiber配置（由konfig默认加载）
 	fiberConf := c.Fiber
+
+	// 为查询/路径绑定注册自定义解码器，支持 std.Id 短码
+	binder.SetParserDecoder(binder.ParserConfig{
+		SetAliasTag:       "json",
+		IgnoreUnknownKeys: true,
+		ZeroEmpty:         true,
+		ParserType: []binder.ParserType{
+			{
+				CustomType: Id(0),
+				Converter: func(value string) reflect.Value {
+					if id, err := parseIdToken(value); err == nil {
+						return reflect.ValueOf(id)
+					}
+					return reflect.Value{}
+				},
+			},
+		},
+	})
 
 	// 创建fiber应用
 	app := fiber.New(fiber.Config{

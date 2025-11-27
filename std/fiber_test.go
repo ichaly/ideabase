@@ -27,6 +27,62 @@ func mockConfig(name string, mode string, port string) *Config {
 	}
 }
 
+func TestNewFiber_BindShortId(t *testing.T) {
+	cfg := mockConfig("TestApp", "development", "8080")
+	validator, err := NewValidator()
+	assert.NoError(t, err)
+	app := NewFiber(cfg, validator)
+
+	encoded, err := ShortId.Encode([]uint64{123})
+	assert.NoError(t, err)
+
+	var captured Id
+	app.Get("/bind-id", func(c fiber.Ctx) error {
+		var req struct {
+			Id Id `query:"id"`
+		}
+		if err := c.Bind().All(&req); err != nil {
+			return err
+		}
+		captured = req.Id
+		return c.SendStatus(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/bind-id?id="+encoded, nil)
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, Id(123), captured)
+}
+
+func TestNewFiber_BindShortIdFromParam(t *testing.T) {
+	cfg := mockConfig("TestApp", "development", "8080")
+	validator, err := NewValidator()
+	assert.NoError(t, err)
+	app := NewFiber(cfg, validator)
+
+	encoded, err := ShortId.Encode([]uint64{456})
+	assert.NoError(t, err)
+
+	var captured Id
+	app.Get("/bind-id/:id", func(c fiber.Ctx) error {
+		var req struct {
+			Id Id `uri:"id"`
+		}
+		if err := c.Bind().All(&req); err != nil {
+			return err
+		}
+		captured = req.Id
+		return c.SendStatus(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/bind-id/"+encoded, nil)
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, Id(456), captured)
+}
+
 // TestNewFiber_Development 测试开发环境下的Fiber应用配置
 func TestNewFiber_Development(t *testing.T) {
 	// 创建开发环境配置

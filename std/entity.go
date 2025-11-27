@@ -25,21 +25,36 @@ func (my Id) MarshalJSON() ([]byte, error) {
 }
 
 func (my *Id) UnmarshalJSON(data []byte) error {
-	parse := func(token string) (uint64, error) {
-		if token == "" || token == "null" {
-			return 0, nil
-		}
-		if decoded := ShortId.Decode(token); len(decoded) > 0 {
-			return decoded[0], nil
-		}
-		return strconv.ParseUint(token, 10, 64)
-	}
-	val, err := parse(strings.Trim(string(data), "\" \t\r\n"))
+	val, err := parseIdToken(strings.Trim(string(data), "\" \t\r\n"))
 	if err != nil {
 		return err
 	}
-	*my = Id(val)
+	*my = val
 	return nil
+}
+
+func (my *Id) UnmarshalText(text []byte) error {
+	val, err := parseIdToken(string(text))
+	if err != nil {
+		return err
+	}
+	*my = val
+	return nil
+}
+
+func parseIdToken(token string) (Id, error) {
+	token = strings.TrimSpace(token)
+	if token == "" || token == "null" {
+		return 0, nil
+	}
+	if decoded := ShortId.Decode(token); len(decoded) > 0 {
+		return Id(decoded[0]), nil
+	}
+	val, err := strconv.ParseUint(token, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return Id(val), nil
 }
 
 type Description interface {
