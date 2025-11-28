@@ -62,8 +62,10 @@ func (my Audited) beforeUpdate(db *gorm.DB) {
 	now := my.now(db)
 	if db.Statement.Context != nil {
 		if id := GetAuditUser(db.Statement.Context); id > 0 {
-			// 使用 SetColumn 保持 gorm 的字段切换与钩子行为
-			db.Statement.SetColumn("UpdatedBy", &id, true)
+			if field := db.Statement.Schema.LookUpField("UpdatedBy"); field != nil {
+				// 使用 SetColumn 保持 gorm 的字段切换与钩子行为
+				db.Statement.SetColumn(field.Name, &id, true)
+			}
 		}
 	}
 	if db.Statement.Schema.LookUpField("UpdatedAt") != nil {
@@ -88,7 +90,9 @@ func (my Audited) beforeDelete(db *gorm.DB) {
 
 		if db.Statement.Context != nil {
 			if id := GetAuditUser(db.Statement.Context); id > 0 {
-				db.Statement.SetColumn("DeletedBy", &id, true)
+				if field := db.Statement.Schema.LookUpField("DeletedBy"); field != nil {
+					db.Statement.SetColumn(field.Name, &id, true)
+				}
 			}
 		}
 
