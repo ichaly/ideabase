@@ -3,8 +3,8 @@ module github.com/ichaly/ideabase/cmd
 go 1.25.0
 
 require (
-	github.com/ichaly/ideabase/ioc v0.0.0-20251126161412-c2d8ec6949de
-	github.com/ichaly/ideabase/utl v0.0.0-20251126161412-c2d8ec6949de
+	github.com/ichaly/ideabase/ioc v0.0.0-20251128165345-9c049ede2441
+	github.com/ichaly/ideabase/utl v0.0.0-20251128165345-9c049ede2441
 	github.com/samber/lo v1.52.0
 	github.com/spf13/cobra v1.10.1
 	golang.org/x/mod v0.30.0
@@ -35,9 +35,9 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/huandu/go-clone v1.7.3 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect
-	github.com/ichaly/ideabase/gql v0.0.0-20251126161412-c2d8ec6949de // indirect
-	github.com/ichaly/ideabase/log v0.0.0-20251126161412-c2d8ec6949de // indirect
-	github.com/ichaly/ideabase/std v0.0.0-20251126161412-c2d8ec6949de // indirect
+	github.com/ichaly/ideabase/gql v0.0.0-20251128165345-9c049ede2441 // indirect
+	github.com/ichaly/ideabase/log v0.0.0-20251128165345-9c049ede2441 // indirect
+	github.com/ichaly/ideabase/std v0.0.0-20251128165345-9c049ede2441 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
