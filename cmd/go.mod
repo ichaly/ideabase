@@ -3,8 +3,8 @@ module github.com/ichaly/ideabase/cmd
 go 1.25.0
 
 require (
-	github.com/ichaly/ideabase/ioc v0.0.0-20251128165345-9c049ede2441
-	github.com/ichaly/ideabase/utl v0.0.0-20251128165345-9c049ede2441
+	github.com/ichaly/ideabase/ioc v0.0.0-20251130141330-c5eb2e597f0f
+	github.com/ichaly/ideabase/utl v0.0.0-20251130141330-c5eb2e597f0f
 	github.com/samber/lo v1.52.0
 	github.com/spf13/cobra v1.10.1
 	golang.org/x/mod v0.30.0
@@ -35,9 +35,9 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/huandu/go-clone v1.7.3 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect
-	github.com/ichaly/ideabase/gql v0.0.0-20251128165345-9c049ede2441 // indirect
-	github.com/ichaly/ideabase/log v0.0.0-20251128165345-9c049ede2441 // indirect
-	github.com/ichaly/ideabase/std v0.0.0-20251128165345-9c049ede2441 // indirect
+	github.com/ichaly/ideabase/gql v0.0.0-20251130141330-c5eb2e597f0f // indirect
+	github.com/ichaly/ideabase/log v0.0.0-20251130141330-c5eb2e597f0f // indirect
+	github.com/ichaly/ideabase/std v0.0.0-20251130141330-c5eb2e597f0f // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -48,7 +48,7 @@ require (
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.1 // indirect
+	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/knadh/koanf/parsers/yaml v1.1.0 // indirect
 	github.com/knadh/koanf/providers/confmap v1.0.0 // indirect
@@ -68,7 +68,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.4 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
-	github.com/redis/go-redis/v9 v9.17.1 // indirect
+	github.com/redis/go-redis/v9 v9.17.2 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/sony/sonyflake v1.3.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect

@@ -5,11 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
-	"time"
 
-	bigcachelib "github.com/allegro/bigcache/v3"
-	gocachelib "github.com/eko/gocache/lib/v4/cache"
-	gocachestore "github.com/eko/gocache/store/bigcache/v4"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -60,12 +56,10 @@ func TestCacheSecondLoadShouldReturnData(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	big, err := bigcachelib.NewBigCache(bigcachelib.DefaultConfig(10 * time.Minute))
+	store, err := NewStorage(&Config{})
 	require.NoError(t, err)
 
-	err = db.Use(NewCache(gocachelib.New[[]byte](
-		gocachestore.NewBigcache(big),
-	)))
+	err = db.Use(NewCache(store))
 	require.NoError(t, err)
 
 	require.NoError(t, db.AutoMigrate(&cacheUser{}))

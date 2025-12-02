@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/eko/gocache/lib/v4/cache"
-	"github.com/eko/gocache/lib/v4/store"
 	"github.com/ichaly/ideabase/utl"
 	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
@@ -19,7 +17,7 @@ var requestGroup singleflight.Group
 type keyCacheContext struct{}
 
 type Cache struct {
-	Cache       *cache.Cache[[]byte]
+	Storage     *Storage
 	exp         time.Duration
 	keyGenerate func(*gorm.DB) string
 }
@@ -31,7 +29,7 @@ type cachePayload struct {
 // Name `gorm.Plugin` implements.
 func (my Cache) Name() string { return "gorm-cache" }
 
-func NewCache(s *cache.Cache[[]byte]) gorm.Plugin {
+func NewCache(s *Storage) gorm.Plugin {
 	return Cache{s, 30 * time.Minute, func(db *gorm.DB) string {
 		return fmt.Sprintf(
 			"sql:%s",
@@ -66,7 +64,7 @@ func (my Cache) query(db *gorm.DB) {
 	cacheKey := my.keyGenerate(db)
 
 	// get from cache
-	if val, err := my.Cache.Get(db.Statement.Context, cacheKey); err == nil {
+	if val, err := my.Storage.Get(db.Statement.Context, cacheKey); err == nil {
 		if my.loadFromCache(db, val) {
 			return
 		}
@@ -80,10 +78,10 @@ func (my Cache) query(db *gorm.DB) {
 	if err != nil {
 		return
 	}
-	_ = my.Cache.Set(
+	_ = my.Storage.Set(
 		db.Statement.Context, cacheKey, encoded,
-		store.WithExpiration(my.exp),
-		store.WithTags([]string{db.Statement.Table}),
+		WithExpiration(my.exp),
+		WithTags([]string{db.Statement.Table}),
 	)
 }
 
@@ -93,7 +91,7 @@ func (my Cache) afterUpdate(db *gorm.DB) {
 		return
 	}
 
-	if err := my.Cache.Invalidate(db.Statement.Context, store.WithInvalidateTags([]string{db.Statement.Table})); err != nil {
+	if err := my.Storage.Invalidate(db.Statement.Context, WithInvalidateTags([]string{db.Statement.Table})); err != nil {
 		_ = db.AddError(err)
 	}
 }
