@@ -1,6 +1,7 @@
 package std
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -89,6 +90,23 @@ func (my *Validator) RegisterValidation(tag string, fn validator.Func, message .
 		if trans, ok := my.universal.GetTranslator(locale); ok {
 			_ = register(trans)
 		}
+	}
+	return nil
+}
+
+func (my *Validator) RegisterStructValidationCtx(fn validator.StructLevelFuncCtx, types ...any) {
+	if my == nil || my.validate == nil || fn == nil {
+		return
+	}
+	my.validate.RegisterStructValidationCtx(fn, types...)
+}
+
+func (my *Validator) StructCtx(ctx context.Context, payload any) error {
+	if err := my.validate.StructCtx(ctx, payload); err != nil {
+		if translated, ok := my.wrapValidationError(err); ok {
+			return translated
+		}
+		return err
 	}
 	return nil
 }
