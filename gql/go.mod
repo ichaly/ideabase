@@ -7,9 +7,9 @@ require (
 	github.com/gofiber/fiber/v3 v3.0.0-rc.3
 	github.com/huandu/go-clone v1.7.3
 	github.com/iancoleman/strcase v0.3.0
-	github.com/ichaly/ideabase/log v0.0.0-20251130141330-c5eb2e597f0f
-	github.com/ichaly/ideabase/std v0.0.0-20251130141330-c5eb2e597f0f
-	github.com/ichaly/ideabase/utl v0.0.0-20251130141330-c5eb2e597f0f
+	github.com/ichaly/ideabase/log v0.0.0-20251204163130-4c05525f7f92
+	github.com/ichaly/ideabase/std v0.0.0-20251204163130-4c05525f7f92
+	github.com/ichaly/ideabase/utl v0.0.0-20251204163130-4c05525f7f92
 	github.com/jinzhu/inflection v1.0.0
 	github.com/joho/godotenv v1.5.1
 	github.com/json-iterator/go v1.1.12
@@ -39,11 +39,13 @@ require (
 	github.com/containerd/platforms v0.2.1 // indirect
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/dgraph-io/ristretto/v2 v2.3.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/docker v28.2.2+incompatible // indirect
 	github.com/docker/go-connections v0.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.8.4 // indirect
 	github.com/eko/gocache/lib/v4 v4.2.2 // indirect
 	github.com/eko/gocache/store/bigcache/v4 v4.2.3 // indirect
@@ -60,7 +62,7 @@ require (
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/gofiber/schema v1.6.0 // indirect
-	github.com/gofiber/utils/v2 v2.0.0-rc.2 // indirect
+	github.com/gofiber/utils/v2 v2.0.0-rc.3 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
@@ -109,7 +111,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/sony/sonyflake v1.3.0 // indirect
 	github.com/sqids/sqids-go v0.4.1 // indirect
-	github.com/tinylib/msgp v1.5.0 // indirect
+	github.com/tinylib/msgp v1.6.1 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
