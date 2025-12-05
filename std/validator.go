@@ -51,6 +51,9 @@ func NewValidator() (*Validator, error) {
 	if err := my.registerLocale(zhLocale, zhTranslations.RegisterDefaultTranslations, "参数校验失败"); err != nil {
 		return nil, err
 	}
+	if err := my.RegisterValidation("enum", enumValidation, "{field}取值不合法"); err != nil {
+		return nil, err
+	}
 
 	return my, nil
 }
@@ -92,6 +95,32 @@ func (my *Validator) RegisterValidation(tag string, fn validator.Func, message .
 		}
 	}
 	return nil
+}
+
+func enumValidation(fl validator.FieldLevel) bool {
+	v := fl.Field()
+	for {
+		if !v.IsValid() {
+			return false
+		}
+		if v.CanInterface() {
+			if e, ok := v.Interface().(Enum); ok {
+				return e.Valid()
+			}
+		}
+		if v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				return false
+			}
+			v = v.Elem()
+			continue
+		}
+		if v.CanAddr() {
+			v = v.Addr()
+			continue
+		}
+		return false
+	}
 }
 
 func (my *Validator) RegisterStructValidationCtx(fn validator.StructLevelFuncCtx, types ...any) {
