@@ -51,7 +51,31 @@ func NewValidator() (*Validator, error) {
 	if err := my.registerLocale(zhLocale, zhTranslations.RegisterDefaultTranslations, "参数校验失败"); err != nil {
 		return nil, err
 	}
-	if err := my.RegisterValidation("enum", enumValidation, "{field}取值不合法"); err != nil {
+	if err := my.RegisterValidation("enum", func(fl validator.FieldLevel) bool {
+		v := fl.Field()
+		for {
+			if !v.IsValid() {
+				return false
+			}
+			if v.CanInterface() {
+				if e, ok := v.Interface().(Enum); ok {
+					return e.Valid()
+				}
+			}
+			if v.Kind() == reflect.Pointer {
+				if v.IsNil() {
+					return false
+				}
+				v = v.Elem()
+				continue
+			}
+			if v.CanAddr() {
+				v = v.Addr()
+				continue
+			}
+			return false
+		}
+	}, "{field}取值不合法"); err != nil {
 		return nil, err
 	}
 
@@ -97,32 +121,6 @@ func (my *Validator) RegisterValidation(tag string, fn validator.Func, message .
 	return nil
 }
 
-func enumValidation(fl validator.FieldLevel) bool {
-	v := fl.Field()
-	for {
-		if !v.IsValid() {
-			return false
-		}
-		if v.CanInterface() {
-			if e, ok := v.Interface().(Enum); ok {
-				return e.Valid()
-			}
-		}
-		if v.Kind() == reflect.Pointer {
-			if v.IsNil() {
-				return false
-			}
-			v = v.Elem()
-			continue
-		}
-		if v.CanAddr() {
-			v = v.Addr()
-			continue
-		}
-		return false
-	}
-}
-
 func (my *Validator) RegisterStructValidationCtx(fn validator.StructLevelFuncCtx, types ...any) {
 	if my == nil || my.validate == nil || fn == nil {
 		return
@@ -131,6 +129,7 @@ func (my *Validator) RegisterStructValidationCtx(fn validator.StructLevelFuncCtx
 }
 
 func (my *Validator) StructCtx(ctx context.Context, payload any) error {
+	trimSpaces(payload)
 	if err := my.validate.StructCtx(ctx, payload); err != nil {
 		if translated, ok := my.wrapValidationError(err); ok {
 			return translated
@@ -143,6 +142,7 @@ func (my *Validator) StructCtx(ctx context.Context, payload any) error {
 func (my *Validator) Validate(out any) error { return my.Struct(out) }
 
 func (my *Validator) Struct(payload any) error {
+	trimSpaces(payload)
 	if err := my.validate.Struct(payload); err != nil {
 		if translated, ok := my.wrapValidationError(err); ok {
 			return translated
@@ -243,4 +243,51 @@ func (my *translatedErrors) Extensions() Extension {
 		ext[field] = msg
 	}
 	return ext
+}
+
+// trimSpaces 统一裁剪结构体里所有可写字符串字段，支持 trim:"-" 跳过
+func trimSpaces(target any) {
+	if target == nil {
+		return
+	}
+	val := reflect.ValueOf(target)
+	trimValueWithTag(val, nil)
+}
+
+func trimValueWithTag(val reflect.Value, sf *reflect.StructField) {
+	if !val.IsValid() {
+		return
+	}
+
+	// 如果标记了 trim:"-" 则跳过当前字段
+	if sf != nil && sf.Tag.Get("trim") == "-" {
+		return
+	}
+
+	switch val.Kind() {
+	case reflect.Ptr:
+		if val.IsNil() {
+			return
+		}
+		trimValueWithTag(val.Elem(), sf)
+	case reflect.Struct:
+		typ := val.Type()
+		for i := 0; i < val.NumField(); i++ {
+			field := val.Field(i)
+			fieldType := typ.Field(i)
+			// 跳过不可写的字符串字段（私有字段）
+			if field.Kind() == reflect.String && !field.CanSet() {
+				continue
+			}
+			trimValueWithTag(field, &fieldType)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < val.Len(); i++ {
+			trimValueWithTag(val.Index(i), sf)
+		}
+	case reflect.String:
+		if val.CanSet() {
+			val.SetString(strings.TrimSpace(val.String()))
+		}
+	}
 }
