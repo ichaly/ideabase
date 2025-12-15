@@ -56,6 +56,8 @@ func NewFiber(c *Config, v *Validator) *fiber.App {
 		WriteTimeout:    fiberConf.WriteTimeout,
 		ServerHeader:    fiberConf.ServerHeader,
 		StructValidator: v,
+		JSONEncoder:     fiberJSON.Marshal,
+		JSONDecoder:     fiberJSON.Unmarshal,
 	})
 
 	// 注册基础中间件

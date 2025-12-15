@@ -1,6 +1,7 @@
 package std
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,7 +34,7 @@ func TestNewFiber_BindShortId(t *testing.T) {
 	assert.NoError(t, err)
 	app := NewFiber(cfg, validator)
 
-	encoded, err := ShortId.Encode([]uint64{123})
+	encoded, err := shortId.Encode([]uint64{123})
 	assert.NoError(t, err)
 
 	var captured Id
@@ -61,7 +62,7 @@ func TestNewFiber_BindShortIdFromParam(t *testing.T) {
 	assert.NoError(t, err)
 	app := NewFiber(cfg, validator)
 
-	encoded, err := ShortId.Encode([]uint64{456})
+	encoded, err := shortId.Encode([]uint64{456})
 	assert.NoError(t, err)
 
 	var captured Id
@@ -81,6 +82,27 @@ func TestNewFiber_BindShortIdFromParam(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, Id(456), captured)
+}
+
+func TestNewFiber_JSONEncoderShortId(t *testing.T) {
+	cfg := mockConfig("TestApp", "development", "8080")
+	app := NewFiber(cfg, nil)
+
+	encoded, err := shortId.Encode([]uint64{123})
+	assert.NoError(t, err)
+
+	app.Get("/json-id", func(c fiber.Ctx) error {
+		return c.JSON(fiber.Map{"id": Id(123)})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/json-id", nil)
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	b, err := io.ReadAll(resp.Body)
+	assert.NoError(t, err)
+	assert.Contains(t, string(b), "\"id\":\""+encoded+"\"")
 }
 
 // TestNewFiber_Development 测试开发环境下的Fiber应用配置

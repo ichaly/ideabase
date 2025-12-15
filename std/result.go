@@ -67,7 +67,11 @@ func (my *Exception) WithError(err error) *Exception {
 		}
 	}
 	if err != nil {
-		my.Message = err.Error()
+		// 如果调用方已通过 WithMessage 明确指定了对外展示文案，则不要用底层错误覆盖它。
+		// 这样既能保留友好提示，也能通过 Extensions 携带字段级校验信息等细节。
+		if my.Message == "" {
+			my.Message = err.Error()
+		}
 		my.fromError = true
 	}
 	return my

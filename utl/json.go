@@ -7,8 +7,16 @@ import (
 	jsoniter "github.com/json-iterator/go"
 )
 
+// NewJSON 返回一个继承项目扩展能力的 jsoniter API 实例。
+// 说明：不要直接复用全局实例去做“场景化”扩展（例如仅 HTTP 输出 shortId），而应基于此创建独立实例。
+func NewJSON() jsoniter.API {
+	api := jsoniter.ConfigCompatibleWithStandardLibrary
+	api.RegisterExtension(&ioTagExtension{})
+	return api
+}
+
 // 使用项目标准的json序列化
-var json = jsoniter.ConfigCompatibleWithStandardLibrary
+var json = NewJSON()
 
 type ioTagExtension struct{ jsoniter.DummyExtension }
 
@@ -38,10 +46,6 @@ func (my ioTagExtension) UpdateStructDescriptor(sd *jsoniter.StructDescriptor) {
 			}
 		}
 	}
-}
-
-func init() {
-	json.RegisterExtension(&ioTagExtension{})
 }
 
 func NewDecoder(reader io.Reader) *jsoniter.Decoder {
