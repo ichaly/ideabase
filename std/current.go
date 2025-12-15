@@ -1,7 +1,6 @@
 package std
 
 import (
-	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -18,15 +17,16 @@ func AuthExtract(claims jwt.MapClaims) (Id, error) {
 	if claims == nil {
 		return 0, errors.New("令牌负载为空")
 	}
-	payload := struct {
-		Sub Id `json:"sub"`
-	}{}
-	if data, err := json.Marshal(claims); err != nil {
-		return 0, errors.New("令牌负载序列化失败")
-	} else if err = json.Unmarshal(data, &payload); err != nil || payload.Sub == 0 {
+
+	token, err := claims.GetSubject()
+	if err != nil || strings.TrimSpace(token) == "" {
+		return 0, errors.New("主体标识缺失")
+	}
+	var id Id
+	if err := (&id).Decode(token); err != nil || id == 0 {
 		return 0, errors.New("主体标识解析失败")
 	}
-	return payload.Sub, nil
+	return id, nil
 }
 
 // AuthPersist 将用户标识写入 Fiber locals 与上下文供后续审计、授权使用。

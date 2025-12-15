@@ -25,8 +25,21 @@ import (
 	"github.com/ichaly/ideabase/utl"
 )
 
+// FiberOption 用于在创建 Fiber App 时对 fiber.Config 做增量定制。
+type FiberOption func(*fiber.Config)
+
+// WithFiberErrorHandler 定制 Fiber 的 ErrorHandler（常用于单元测试或特殊错误格式需求）。
+func WithFiberErrorHandler(handler fiber.ErrorHandler) FiberOption {
+	return func(cfg *fiber.Config) {
+		if cfg == nil {
+			return
+		}
+		cfg.ErrorHandler = handler
+	}
+}
+
 // NewFiber 创建并配置一个新的fiber应用实例
-func NewFiber(c *Config, v *Validator) *fiber.App {
+func NewFiber(c *Config, v *Validator, opts ...FiberOption) *fiber.App {
 	// 获取Fiber配置（由konfig默认加载）
 	fiberConf := c.Fiber
 
@@ -49,7 +62,7 @@ func NewFiber(c *Config, v *Validator) *fiber.App {
 	})
 
 	// 创建fiber应用
-	app := fiber.New(fiber.Config{
+	conf := fiber.Config{
 		AppName:         c.Name,
 		ReadTimeout:     fiberConf.ReadTimeout,
 		IdleTimeout:     fiberConf.IdleTimeout,
@@ -58,7 +71,13 @@ func NewFiber(c *Config, v *Validator) *fiber.App {
 		StructValidator: v,
 		JSONEncoder:     fiberJSON.Marshal,
 		JSONDecoder:     fiberJSON.Unmarshal,
-	})
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&conf)
+		}
+	}
+	app := fiber.New(conf)
 
 	// 注册基础中间件
 	app.Use(requestid.New()) // 请求ID中间件

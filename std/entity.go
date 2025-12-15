@@ -2,6 +2,7 @@ package std
 
 import (
 	"context"
+	"strconv"
 
 	"gorm.io/datatypes"
 )
@@ -43,6 +44,28 @@ type AuditorEntity struct {
 type DeletedEntity struct {
 	AuditorEntity `mapstructure:",squash"`
 	DeletedAt     FlagTime `gorm:"index;comment:逻辑删除;" json:"deletedAt,omitempty"`
+}
+
+// Encode 将内部数字 ID 编码为可在外部场景（如 JWT）稳定传输的字符串。
+// 这里使用 shortId 字符串，避免跨语言 number/float64 精度丢失。
+func (my Id) Encode() string {
+	if my == 0 {
+		return ""
+	}
+	if str, err := shortId.Encode([]uint64{uint64(my)}); err == nil {
+		return str
+	}
+	return strconv.FormatUint(uint64(my), 10)
+}
+
+// Decode 将外部传入的 token（十进制字符串或 shortId）解析回内部数字 ID。
+func (my *Id) Decode(token string) error {
+	id, err := parseIdToken(token)
+	if err != nil {
+		return err
+	}
+	*my = id
+	return nil
 }
 
 func GetAuditUser(ctx context.Context) Id {
