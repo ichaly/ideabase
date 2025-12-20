@@ -45,6 +45,9 @@ func NewDatabase(c *Config, e []interface{}, p []gorm.Plugin) (*gorm.DB, error) 
 			if err != nil {
 				return nil, err
 			}
+			if err = migrateEntity(tx, v); err != nil {
+				return nil, err
+			}
 		}
 	}
 	sqlDb, _ := db.DB()
