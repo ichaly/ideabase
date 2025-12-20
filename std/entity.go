@@ -25,7 +25,7 @@ type General struct {
 	State     int8              `gorm:"index;comment:状态;default:1" json:"state"`
 	Weight    int8              `gorm:"comment:权重;" json:"weight"`
 	Remark    datatypes.JSONMap `gorm:"comment:备注" json:"remark,omitempty"`
-	CreatedAt *DataTime         `gorm:"comment:创建时间;autoCreateTime" json:"createdAt,omitempty"`
+	CreatedAt *DataTime         `gorm:"index;comment:创建时间;autoCreateTime" json:"createdAt,omitempty"`
 	UpdatedAt *DataTime         `gorm:"comment:更新时间;autoUpdateTime" json:"updatedAt,omitempty"`
 }
 
@@ -36,7 +36,7 @@ type Entity struct {
 
 type AuditorEntity struct {
 	Entity    `mapstructure:",squash"`
-	CreatedBy *Id `gorm:"comment:创建人;" json:"createdBy,omitempty"`
+	CreatedBy *Id `gorm:"index;comment:创建人;" json:"createdBy,omitempty"`
 	UpdatedBy *Id `gorm:"comment:更新人;" json:"updatedBy,omitempty"`
 	DeletedBy *Id `gorm:"comment:删除人;" json:"deletedBy,omitempty"`
 }
