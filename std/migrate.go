@@ -2,6 +2,7 @@ package std
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 
 	"gorm.io/gorm"
@@ -37,7 +38,11 @@ type Migratable interface {
 func migrateComment(db *gorm.DB, entity any) error {
 	d, ok := entity.(Describer)
 	if !ok {
-		return nil
+		entity = asPtr(entity)
+		d, ok = entity.(Describer)
+		if !ok {
+			return nil
+		}
 	}
 	desc := strings.TrimSpace(d.Description())
 	if desc == "" {
@@ -54,9 +59,23 @@ func migrateComment(db *gorm.DB, entity any) error {
 func migrateEntity(db *gorm.DB, entity any) error {
 	m, ok := entity.(Migratable)
 	if !ok {
-		return nil
+		entity = asPtr(entity)
+		m, ok = entity.(Migratable)
+		if !ok {
+			return nil
+		}
 	}
 	return m.Migrate(db, db.Dialector.Name())
+}
+
+func asPtr(v any) any {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() || rv.Kind() == reflect.Ptr {
+		return v
+	}
+	p := reflect.New(rv.Type())
+	p.Elem().Set(rv)
+	return p.Interface()
 }
 
 // execAll 顺序执行 SQL 切片，空 SQL 会被跳过。
