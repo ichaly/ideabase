@@ -13,10 +13,6 @@ type userContextKeyType struct{}
 
 type Id uint64
 
-type Description interface {
-	Description() string
-}
-
 type Primary struct {
 	Id Id `gorm:"primary_key;comment:主键;next:sonyflake;" json:"id,omitempty"`
 }
