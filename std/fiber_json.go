@@ -47,6 +47,10 @@ type idShortEncoder struct{}
 
 func (idShortEncoder) Encode(ptr unsafe.Pointer, stream *jsoniter.Stream) {
 	id := *(*Id)(ptr)
+	if id == 0 {
+		stream.WriteNil()
+		return
+	}
 	if str, err := shortId.Encode([]uint64{uint64(id)}); err == nil {
 		stream.WriteString(str)
 		return
