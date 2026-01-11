@@ -5,20 +5,20 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/ichaly/ideabase/bus/types"
+	"github.com/ichaly/ideabase/bus/providers"
 	"github.com/ichaly/ideabase/log"
 )
 
 // MemoryBus 本地内存实现的 Bus
 // 生产级可用：使用 RWMutex 保证并发安全
 type MemoryBus struct {
-	handlers map[string][]types.Handler
+	handlers map[string][]providers.Handler
 	mu       sync.RWMutex
 }
 
 func NewMemoryBus() *MemoryBus {
 	return &MemoryBus{
-		handlers: make(map[string][]types.Handler),
+		handlers: make(map[string][]providers.Handler),
 	}
 }
 
@@ -44,14 +44,14 @@ func (my *MemoryBus) Publish(ctx context.Context, topic string, payload any) err
 		return nil
 	}
 
-	snapshot := make([]types.Handler, len(handlers))
+	snapshot := make([]providers.Handler, len(handlers))
 	copy(snapshot, handlers)
 	my.mu.RUnlock()
 
 	// 2. 异步执行
 	go func() {
 		for _, handler := range snapshot {
-			go func(h types.Handler) {
+			go func(h providers.Handler) {
 				if err := h(context.Background(), body); err != nil {
 					log.Warn().Err(err).Str("topic", topic).Msg("MemoryBus handler error")
 				}
@@ -61,7 +61,7 @@ func (my *MemoryBus) Publish(ctx context.Context, topic string, payload any) err
 	return nil
 }
 
-func (my *MemoryBus) Subscribe(ctx context.Context, topic string, handler types.Handler) error {
+func (my *MemoryBus) Subscribe(ctx context.Context, topic string, handler providers.Handler) error {
 	my.mu.Lock()
 	defer my.mu.Unlock()
 

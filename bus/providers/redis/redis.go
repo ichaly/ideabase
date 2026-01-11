@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/ichaly/ideabase/bus/types"
+	"github.com/ichaly/ideabase/bus/providers"
 	"github.com/ichaly/ideabase/log"
 	"github.com/redis/go-redis/v9"
 )
@@ -15,7 +15,7 @@ import (
 type RedisBus struct {
 	rdb      *redis.Client
 	pubsub   *redis.PubSub
-	handlers map[string][]types.Handler
+	handlers map[string][]providers.Handler
 	mu       sync.RWMutex
 	once     sync.Once
 }
@@ -23,7 +23,7 @@ type RedisBus struct {
 func NewRedisBus(rdb *redis.Client) *RedisBus {
 	return &RedisBus{
 		rdb:      rdb,
-		handlers: make(map[string][]types.Handler),
+		handlers: make(map[string][]providers.Handler),
 	}
 }
 
@@ -43,7 +43,7 @@ func (my *RedisBus) Publish(ctx context.Context, topic string, payload any) erro
 	return my.rdb.Publish(ctx, topic, body).Err()
 }
 
-func (my *RedisBus) Subscribe(ctx context.Context, topic string, handler types.Handler) error {
+func (my *RedisBus) Subscribe(ctx context.Context, topic string, handler providers.Handler) error {
 	my.mu.Lock()
 	defer my.mu.Unlock()
 
@@ -75,13 +75,13 @@ func (my *RedisBus) dispatchLoop() {
 			continue
 		}
 		// 复制 Handler 列表以释放锁
-		activeHandlers := make([]types.Handler, len(handlers))
+		activeHandlers := make([]providers.Handler, len(handlers))
 		copy(activeHandlers, handlers)
 		my.mu.RUnlock()
 
 		// 异步分发
 		for _, h := range activeHandlers {
-			go func(handler types.Handler, payload string) {
+			go func(handler providers.Handler, payload string) {
 				if err := handler(context.Background(), []byte(payload)); err != nil {
 					log.Warn().Err(err).Str("topic", msg.Channel).Msg("RedisBus handler error")
 				}

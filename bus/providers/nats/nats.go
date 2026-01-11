@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/ichaly/ideabase/bus/types"
+	"github.com/ichaly/ideabase/bus/providers"
 	"github.com/ichaly/ideabase/log"
 	"github.com/nats-io/nats.go"
 )
@@ -39,7 +39,7 @@ func (my *NatsBus) Publish(ctx context.Context, topic string, payload any) error
 	return my.nc.Publish(topic, body)
 }
 
-func (my *NatsBus) Subscribe(ctx context.Context, topic string, handler types.Handler) error {
+func (my *NatsBus) Subscribe(ctx context.Context, topic string, handler providers.Handler) error {
 	_, err := my.nc.Subscribe(topic, func(msg *nats.Msg) {
 		go func(data []byte) {
 			if err := handler(context.Background(), data); err != nil {

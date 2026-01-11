@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ichaly/ideabase/bus/types"
+	"github.com/ichaly/ideabase/bus/providers"
 	"github.com/ichaly/ideabase/log"
 	"github.com/jackc/pgx/v5"
 	"gorm.io/driver/postgres"
@@ -21,7 +21,7 @@ type PostgresBus struct {
 	dsn string
 
 	listenConn *pgx.Conn
-	handlers   map[string][]types.Handler
+	handlers   map[string][]providers.Handler
 	lock       sync.Mutex
 
 	wakeUpCancel context.CancelFunc
@@ -41,7 +41,7 @@ func NewPostgresBus(db *gorm.DB) *PostgresBus {
 	bus := &PostgresBus{
 		db:       db,
 		dsn:      dsn,
-		handlers: make(map[string][]types.Handler),
+		handlers: make(map[string][]providers.Handler),
 	}
 
 	if dsn != "" {
@@ -67,7 +67,7 @@ func (my *PostgresBus) Publish(ctx context.Context, topic string, payload any) e
 	return my.db.Exec("SELECT pg_notify(?, ?)", topic, string(body)).Error
 }
 
-func (my *PostgresBus) Subscribe(ctx context.Context, topic string, handler types.Handler) error {
+func (my *PostgresBus) Subscribe(ctx context.Context, topic string, handler providers.Handler) error {
 	if my.dsn == "" {
 		return errors.New("PostgresBus DSN invalid")
 	}
@@ -145,12 +145,12 @@ func (my *PostgresBus) runListen() error {
 
 		my.lock.Lock()
 		handlers := my.handlers[notification.Channel]
-		activeHandlers := make([]types.Handler, len(handlers))
+		activeHandlers := make([]providers.Handler, len(handlers))
 		copy(activeHandlers, handlers)
 		my.lock.Unlock()
 
 		for _, h := range activeHandlers {
-			go func(handler types.Handler, payload string) {
+			go func(handler providers.Handler, payload string) {
 				if err := handler(context.Background(), []byte(payload)); err != nil {
 					log.Warn().Err(err).Str("topic", notification.Channel).Msg("PostgresBus handler error")
 				}
