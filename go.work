@@ -1,6 +1,7 @@
 go 1.25.0
 
 use (
+	./bus
 	./cmd
 	./gql
 	./gtw
@@ -10,5 +11,4 @@ use (
 	./std
 	./svc
 	./utl
-	./bus
 )
