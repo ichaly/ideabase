@@ -2,6 +2,7 @@ package ioc
 
 import (
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 
@@ -40,7 +41,9 @@ func Run(opts ...BootOption) {
 	if len(cfg.opts) > 0 {
 		fxOpts = append(fxOpts, cfg.opts...)
 	}
-	fxOpts = append(fxOpts, fx.NopLogger)
+	if os.Getenv("FX_LOG") != "true" {
+		fxOpts = append(fxOpts, fx.NopLogger)
+	}
 	fx.New(fxOpts...).Run()
 }
 
