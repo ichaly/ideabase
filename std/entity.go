@@ -3,8 +3,6 @@ package std
 import (
 	"context"
 	"strconv"
-
-	"gorm.io/datatypes"
 )
 
 var UserContextKey = userContextKeyType{}
@@ -18,11 +16,11 @@ type Primary struct {
 }
 
 type General struct {
-	State     int8              `gorm:"index;comment:状态;default:1" json:"state"`
-	Weight    int8              `gorm:"comment:权重;" json:"weight"`
-	Remark    datatypes.JSONMap `gorm:"comment:备注" json:"remark,omitempty"`
-	CreatedAt *DataTime         `gorm:"index;comment:创建时间;autoCreateTime" json:"createdAt,omitempty"`
-	UpdatedAt *DataTime         `gorm:"comment:更新时间;autoUpdateTime" json:"updatedAt,omitempty"`
+	State     int8      `gorm:"index;comment:状态;default:1" json:"state"`
+	Weight    int8      `gorm:"comment:权重;" json:"weight"`
+	Remark    any       `gorm:"serializer:json;type:jsonb;comment:备注" json:"remark,omitempty"`
+	CreatedAt *DataTime `gorm:"index;comment:创建时间;autoCreateTime" json:"createdAt,omitempty"`
+	UpdatedAt *DataTime `gorm:"comment:更新时间;autoUpdateTime" json:"updatedAt,omitempty"`
 }
 
 type Entity struct {
