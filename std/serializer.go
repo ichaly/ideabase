@@ -45,19 +45,25 @@ func (my *GsonSerializer) Value(ctx context.Context, field *schema.Field, dst re
 		return nil, nil
 	}
 
-	// Treat empty string (trimmed) as nil
-	if str, ok := fieldValue.(string); ok {
-		if value := strings.TrimSpace(str); value == "" {
+	val := reflect.ValueOf(fieldValue)
+	// Dereference pointers to check for nil and get actual value
+	for val.Kind() == reflect.Ptr {
+		if val.IsNil() {
+			return nil, nil
+		}
+		val = val.Elem()
+	}
+
+	// Treat empty/whitespace-only string as nil
+	if val.Kind() == reflect.String {
+		if str := strings.TrimSpace(val.String()); str == "" {
 			return nil, nil
 		} else {
-			fieldValue = value
+			// Marshal the trimmed string
+			return json.Marshal(str)
 		}
 	}
 
-	value := reflect.ValueOf(fieldValue)
-	if value.Kind() == reflect.Ptr && value.IsNil() {
-		return nil, nil
-	}
-
+	// For other types, marshal the original value
 	return json.Marshal(fieldValue)
 }
