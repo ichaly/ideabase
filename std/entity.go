@@ -3,6 +3,8 @@ package std
 import (
 	"context"
 	"strconv"
+
+	"gorm.io/gorm"
 )
 
 var UserContextKey = userContextKeyType{}
@@ -21,6 +23,13 @@ type General struct {
 	Remark    any       `gorm:"type:jsonb;serializer:gson;comment:备注" json:"remark,omitempty"`
 	CreatedAt *DataTime `gorm:"index;comment:创建时间;autoCreateTime" json:"createdAt,omitempty"`
 	UpdatedAt *DataTime `gorm:"comment:更新时间;autoUpdateTime" json:"updatedAt,omitempty"`
+}
+
+func (my *General) BeforeSave(tx *gorm.DB) error {
+	if my.Remark == nil {
+		my.Remark = ""
+	}
+	return nil
 }
 
 type Entity struct {
