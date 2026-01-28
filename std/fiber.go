@@ -59,11 +59,11 @@ func NewFiber(c *Config, v *Validator, opts ...FiberOption) *fiber.App {
 				},
 			},
 			{
-				CustomType: DataTime{},
+				CustomType: DateTime{},
 				Converter: func(value string) reflect.Value {
 					t, present, err := parseTimeToken(value)
 					if err == nil && present {
-						var dt DataTime
+						var dt DateTime
 						assignTime(&dt.Valid, &dt.Time, t)
 						return reflect.ValueOf(dt)
 					}
@@ -71,11 +71,11 @@ func NewFiber(c *Config, v *Validator, opts ...FiberOption) *fiber.App {
 				},
 			},
 			{
-				CustomType: (*DataTime)(nil),
+				CustomType: (*DateTime)(nil),
 				Converter: func(value string) reflect.Value {
 					t, present, err := parseTimeToken(value)
 					if err == nil && present {
-						dt := new(DataTime)
+						dt := new(DateTime)
 						assignTime(&dt.Valid, &dt.Time, t)
 						return reflect.ValueOf(dt)
 					}

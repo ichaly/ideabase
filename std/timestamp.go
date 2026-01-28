@@ -19,7 +19,7 @@ var timeLayouts = [...]string{
 	"2006-01-02",
 }
 
-type DataTime struct {
+type DateTime struct {
 	sql.NullTime
 }
 
@@ -27,11 +27,11 @@ type FlagTime struct {
 	gorm.DeletedAt
 }
 
-func (my DataTime) MarshalJSON() ([]byte, error) {
+func (my DateTime) MarshalJSON() ([]byte, error) {
 	return encodeTime(my.Valid, my.Time), nil
 }
 
-func (my *DataTime) UnmarshalJSON(data []byte) error {
+func (my *DateTime) UnmarshalJSON(data []byte) error {
 	if my == nil {
 		return nil
 	}

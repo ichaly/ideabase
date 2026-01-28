@@ -21,8 +21,8 @@ type General struct {
 	State     int8      `gorm:"index;comment:状态;default:1" json:"state"`
 	Weight    int8      `gorm:"comment:权重;" json:"weight"`
 	Remark    any       `gorm:"type:jsonb;serializer:gson;comment:备注" json:"remark,omitempty"`
-	CreatedAt *DataTime `gorm:"index;comment:创建时间;autoCreateTime" json:"createdAt,omitempty"`
-	UpdatedAt *DataTime `gorm:"comment:更新时间;autoUpdateTime" json:"updatedAt,omitempty"`
+	CreatedAt *DateTime `gorm:"index;comment:创建时间;autoCreateTime" json:"createdAt,omitempty"`
+	UpdatedAt *DateTime `gorm:"comment:更新时间;autoUpdateTime" json:"updatedAt,omitempty"`
 }
 
 func (my *General) BeforeSave(tx *gorm.DB) error {
