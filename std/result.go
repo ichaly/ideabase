@@ -34,7 +34,7 @@ type Exception struct {
 
 	statusCode int
 	prompt     string
-	fromError  bool
+	cause      error
 }
 
 // Location GraphQL错误位置信息
@@ -44,6 +44,14 @@ type Location struct {
 }
 
 func (my *Exception) Error() string { return my.Message }
+
+func unwrapException(err error) *Exception {
+	var ex *Exception
+	if errors.As(err, &ex) {
+		return ex
+	}
+	return nil
+}
 
 func (my *Exception) With(key string, value interface{}) *Exception {
 	if value == nil {
@@ -57,8 +65,12 @@ func (my *Exception) With(key string, value interface{}) *Exception {
 }
 
 func (my *Exception) WithError(err error) *Exception {
-	var ex *Exception
-	if errors.As(err, &ex) {
+	if err == nil {
+		return my
+	}
+	if ex := unwrapException(err); ex != nil {
+		ex.cause = ex
+		ex.resolveMessage()
 		return ex
 	}
 	if carrier, ok := err.(interface{ Extensions() Extension }); ok {
@@ -70,25 +82,27 @@ func (my *Exception) WithError(err error) *Exception {
 			}
 		}
 	}
-	if err != nil {
-		// 如果调用方已通过 WithMessage 明确指定了对外展示文案，则不要用底层错误覆盖它。
-		// 这样既能保留友好提示，也能通过 Extensions 携带字段级校验信息等细节。
-		if my.Message == "" {
-			my.Message = err.Error()
-		}
-		my.fromError = true
-	}
+	my.cause = err
+	my.resolveMessage()
 	return my
 }
 
 func (my *Exception) WithMessage(message string) *Exception {
 	if message != "" {
 		my.prompt = message
-		if !my.fromError {
-			my.Message = message
-		}
+		my.resolveMessage()
 	}
 	return my
+}
+
+func (my *Exception) resolveMessage() {
+	if my.cause != nil {
+		my.Message = my.cause.Error()
+		return
+	}
+	if my.prompt != "" {
+		my.Message = my.prompt
+	}
 }
 
 // NewException 创建异常实例
@@ -194,13 +208,7 @@ func writeErrors(c fiber.Ctx, status int, exceptions ...*Exception) error {
 
 func pickMessage(exceptions []*Exception) string {
 	for _, ex := range exceptions {
-		if ex == nil {
-			continue
-		}
-		if ex.prompt != "" {
-			return ex.prompt
-		}
-		if ex.Message != "" {
+		if ex != nil && ex.Message != "" {
 			return ex.Message
 		}
 	}
