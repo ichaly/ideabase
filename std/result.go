@@ -57,6 +57,10 @@ func (my *Exception) With(key string, value interface{}) *Exception {
 }
 
 func (my *Exception) WithError(err error) *Exception {
+	var ex *Exception
+	if errors.As(err, &ex) {
+		return ex
+	}
 	if carrier, ok := err.(interface{ Extensions() Extension }); ok {
 		if ext := carrier.Extensions(); len(ext) > 0 {
 			if my.Extensions == nil {
