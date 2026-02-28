@@ -1,141 +1,118 @@
 package std
 
 import (
-	"context"
-	"database/sql"
-	"fmt"
+	"errors"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/ichaly/ideabase/utl"
-	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
 )
 
-var requestGroup singleflight.Group
+type cacheEntry struct {
+	Rows int64       `json:"r"`
+	Data interface{} `json:"d"`
+}
 
-type keyCacheContext struct{}
-
+// Cache is a GORM plugin that caches SELECT results by SQL fingerprint
+// and invalidates by table name on any write (create/update/delete).
 type Cache struct {
-	Storage     *Storage
-	exp         time.Duration
-	keyGenerate func(*gorm.DB) string
+	store *Storage
+	ttl   time.Duration
 }
-type cachePayload struct {
-	RowsAffected int64       `json:"rows_affected"`
-	Data         interface{} `json:"data"`
-}
-
-// Name `gorm.Plugin` implements.
-func (my Cache) Name() string { return "gorm-cache" }
 
 func NewCache(s *Storage) gorm.Plugin {
-	return Cache{s, 30 * time.Minute, func(db *gorm.DB) string {
-		return fmt.Sprintf(
-			"sql:%s",
-			utl.MD5(db.Dialector.Explain(db.Statement.SQL.String(), db.Statement.Vars...)),
-		)
-	}}
+	return &Cache{store: s, ttl: 30 * time.Minute}
 }
 
-// Initialize `gorm.Plugin` implements.
-func (my Cache) Initialize(db *gorm.DB) error {
-	if err := db.Callback().Query().Replace("gorm:query", my.query); err != nil {
-		return err
-	}
-	if err := db.Callback().Create().After("gorm:create").Register(my.Name()+":after_create", my.afterUpdate); err != nil {
-		return err
-	}
-	if err := db.Callback().Update().After("gorm:update").Register(my.Name()+":after_update", my.afterUpdate); err != nil {
-		return err
-	}
-	if err := db.Callback().Delete().After("gorm:delete").Register(my.Name()+":after_delete", my.afterUpdate); err != nil {
-		return err
-	}
-	return nil
+func (my *Cache) Name() string { return "gorm:cache" }
+
+func (my *Cache) Initialize(db *gorm.DB) error {
+	name := my.Name()
+	return errors.Join(
+		db.Callback().Query().Replace("gorm:query", my.query),
+		db.Callback().Create().After("gorm:create").Register(name+":create", my.purge),
+		db.Callback().Update().After("gorm:update").Register(name+":update", my.purge),
+		db.Callback().Delete().After("gorm:delete").Register(name+":delete", my.purge),
+	)
 }
 
-// query replace gorm:query
-func (my Cache) query(db *gorm.DB) {
+// key returns an MD5-based cache key from the fully-rendered SQL.
+func (my *Cache) key(db *gorm.DB) string {
+	return "sql:" + utl.MD5(db.Dialector.Explain(db.Statement.SQL.String(), db.Statement.Vars...))
+}
+
+// joinRe extracts the table name immediately after any JOIN keyword.
+var joinRe = regexp.MustCompile(`(?i)\bJOIN\s+["\x60]?(\w+)`)
+
+// tag returns the base table name, stripping any alias.
+// e.g. "cms_channel_lineage cl" → "cms_channel_lineage"
+func tag(db *gorm.DB) string {
+	t := db.Statement.Table
+	if i := strings.IndexByte(t, ' '); i > 0 {
+		return t[:i]
+	}
+	return t
+}
+
+// tags returns the main table tag plus all JOIN table tags extracted from the SQL.
+func tags(db *gorm.DB) []string {
+	seen := map[string]struct{}{}
+	add := func(t string) {
+		if t != "" {
+			seen[t] = struct{}{}
+		}
+	}
+	add(tag(db))
+	for _, m := range joinRe.FindAllStringSubmatch(db.Statement.SQL.String(), -1) {
+		add(m[1])
+	}
+	result := make([]string, 0, len(seen))
+	for t := range seen {
+		result = append(result, t)
+	}
+	return result
+}
+
+func (my *Cache) query(db *gorm.DB) {
 	if db.DryRun || db.Error != nil {
 		return
 	}
 	callbacks.BuildQuerySQL(db)
-	cacheKey := my.keyGenerate(db)
+	key := my.key(db)
 
-	// get from cache
-	if val, err := my.Storage.Get(db.Statement.Context, cacheKey); err == nil {
-		if my.loadFromCache(db, val) {
+	if raw, err := my.store.Get(db.Statement.Context, key); err == nil {
+		entry := cacheEntry{Data: db.Statement.Dest}
+		if utl.Unmarshal(raw, &entry) == nil {
+			db.RowsAffected = entry.Rows
+			db.Statement.RowsAffected = entry.Rows
 			return
 		}
 	}
 
-	// get from db
-	my.queryFromDB(db, cacheKey)
-
-	// add to cache
-	encoded, err := utl.Marshal(cachePayload{RowsAffected: db.RowsAffected, Data: db.Statement.Dest})
-	if err != nil {
-		return
-	}
-	_ = my.Storage.Set(
-		db.Statement.Context, cacheKey, encoded,
-		WithExpiration(my.exp),
-		WithTags([]string{db.Statement.Table}),
+	rows, err := db.Statement.ConnPool.QueryContext(
+		db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...,
 	)
-}
-
-func (my Cache) afterUpdate(db *gorm.DB) {
-	total := db.Statement.RowsAffected
-	if total <= 0 {
-		return
-	}
-
-	if err := my.Storage.Invalidate(db.Statement.Context, WithInvalidateTags([]string{db.Statement.Table})); err != nil {
-		_ = db.AddError(err)
-	}
-}
-
-func (my Cache) queryFromDB(db *gorm.DB, cacheKey string) {
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	var val interface{}
-	val, err, _ = requestGroup.Do(cacheKey, func() (interface{}, error) {
-		db.Statement.Context = context.WithValue(db.Statement.Context, keyCacheContext{}, 1)
-		return db.Statement.ConnPool.QueryContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...)
-	})
-	rows = val.(*sql.Rows)
 	if err != nil {
 		_ = db.AddError(err)
 		return
 	}
-	defer func(rows *sql.Rows) {
-		_ = rows.Close()
-	}(rows)
+	defer func() { _ = rows.Close() }()
 	gorm.Scan(rows, db, 0)
+
+	if db.Error != nil {
+		return
+	}
+	if encoded, err := utl.Marshal(cacheEntry{Rows: db.RowsAffected, Data: db.Statement.Dest}); err == nil {
+		_ = my.store.Set(db.Statement.Context, key, encoded, WithExpiration(my.ttl), WithTags(tags(db)))
+	}
 }
 
-func (my Cache) loadFromCache(db *gorm.DB, raw []byte) bool {
-	if len(raw) == 0 {
-		return false
+func (my *Cache) purge(db *gorm.DB) {
+	if db.Error != nil || db.Statement.Table == "" {
+		return
 	}
-
-	payload := cachePayload{Data: db.Statement.Dest}
-	if payload.Data == nil {
-		return false
-	}
-
-	if err := utl.Unmarshal(raw, &payload); err != nil {
-		return false
-	}
-
-	db.RowsAffected = payload.RowsAffected
-	db.Statement.RowsAffected = payload.RowsAffected
-	if db.Statement.Result != nil {
-		db.Statement.Result.RowsAffected = payload.RowsAffected
-	}
-
-	return true
+	_ = my.store.Invalidate(db.Statement.Context, WithInvalidateTags([]string{tag(db)}))
 }
