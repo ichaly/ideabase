@@ -50,7 +50,7 @@ func (my *blockConn) QueryRowContext(ctx context.Context, query string, args ...
 	return my.DB.QueryRowContext(ctx, query, args...)
 }
 
-func openTestDB(t *testing.T) *gorm.DB {
+func openTestDB(t testing.TB) *gorm.DB {
 	t.Helper()
 	dsn := "file:" + t.Name() + "?mode=memory&cache=private"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
@@ -144,6 +144,47 @@ func TestCacheInvalidatesOnDelete(t *testing.T) {
 	var updated []cacheUser
 	require.NoError(t, db.Find(&updated).Error)
 	require.Len(t, updated, 1, "删除后缓存应失效，查询应返回最新数据")
+}
+
+func BenchmarkCacheHit(b *testing.B) {
+	db := openTestDB(b)
+
+	store, _ := NewStorage(&Config{})
+	_ = db.Use(NewCache(store))
+	_ = db.AutoMigrate(&cacheUser{})
+	for i := 1; i <= 100; i++ {
+		_ = db.Create(&cacheUser{ID: int64(i), Name: "user"}).Error
+	}
+
+	// 预热缓存
+	var warmup []cacheUser
+	_ = db.Find(&warmup).Error
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var list []cacheUser
+		_ = db.Find(&list).Error
+	}
+}
+
+func BenchmarkCacheMiss(b *testing.B) {
+	db := openTestDB(b)
+
+	store, _ := NewStorage(&Config{})
+	_ = db.Use(NewCache(store))
+	_ = db.AutoMigrate(&cacheUser{})
+	for i := 1; i <= 100; i++ {
+		_ = db.Create(&cacheUser{ID: int64(i), Name: "user"}).Error
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		// 每次用不同 offset 绕过缓存，模拟 miss
+		var list []cacheUser
+		_ = db.Offset(i % 10).Find(&list).Error
+	}
 }
 
 func TestExtractTags(t *testing.T) {

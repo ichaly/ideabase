@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -18,6 +17,28 @@ type cacheEntry struct {
 	Rows int64           `json:"r"`
 	Data json.RawMessage `json:"d"`
 	Tags []string        `json:"t"`
+}
+
+// cacheTagsKey 是存放额外 tag 的 context key，用私有类型避免与其他包冲突。
+type cacheTagsKey struct{}
+
+// WithCacheTags 向 context 注入额外的表名 tag，用于正则无法覆盖的场景（子查询、CTE 等）。
+// 注入的 tag 会在 SET 时与自动提取的 tag 合并，确保相关写操作能正确失效缓存。
+//
+// 用法：
+//
+//	ctx = std.WithCacheTags(ctx, "cms_lineage", "cms_channel")
+//	db.WithContext(ctx).Find(&list)
+func WithCacheTags(ctx context.Context, tags ...string) context.Context {
+	return context.WithValue(ctx, cacheTagsKey{}, tags)
+}
+
+// contextTags 从 context 中读取手动注入的额外 tag，不存在时返回 nil。
+func contextTags(ctx context.Context) []string {
+	if v, ok := ctx.Value(cacheTagsKey{}).([]string); ok {
+		return v
+	}
+	return nil
 }
 
 // Cache 是基于表名 tag 的 GORM 查询缓存插件。
@@ -156,7 +177,6 @@ func (my *Cache) query(db *gorm.DB) {
 			// 必须分两步：若 Data 是 interface{}，JSON 无法感知目标类型，
 			// 会还原成 map/[]interface{}；用 RawMessage 保留字节再反序列化到具体类型才能正确还原。
 			if utl.Unmarshal(entry.Data, db.Statement.Dest) == nil {
-				fmt.Printf("[cache] HIT  tags=%v key=%s\n", entry.Tags, key)
 				db.RowsAffected = entry.Rows
 				db.Statement.RowsAffected = entry.Rows
 				return
@@ -178,11 +198,22 @@ func (my *Cache) query(db *gorm.DB) {
 		return
 	}
 	if data, err := utl.Marshal(db.Statement.Dest); err == nil {
-		// tags 在 SQL 完整构建后提取一次，随缓存条目存储，后续 HIT 直接复用
+		// 自动从 SQL 提取 tag，再合并 context 中手动注入的额外 tag
+		// 手动 tag 用于正则无法覆盖的场景（子查询别名、CTE 等）
 		t := extractTags(db.Statement.SQL.String())
+		if extra := contextTags(db.Statement.Context); len(extra) > 0 {
+			seen := make(map[string]struct{}, len(t)+len(extra))
+			for _, v := range t {
+				seen[v] = struct{}{}
+			}
+			for _, v := range extra {
+				if _, ok := seen[v]; !ok {
+					t = append(t, v)
+				}
+			}
+		}
 		entry := cacheEntry{Rows: db.RowsAffected, Data: data, Tags: t}
 		if encoded, err := utl.Marshal(entry); err == nil {
-			fmt.Printf("[cache] SET  tags=%v key=%s\n", t, key)
 			_ = my.store.Set(db.Statement.Context, key, encoded, WithExpiration(my.ttl), WithTags(t))
 		}
 	}
@@ -198,6 +229,5 @@ func (my *Cache) purge(db *gorm.DB) {
 		return
 	}
 	t := purgeTag(db)
-	fmt.Printf("[cache] PURGE tag=%s\n", t)
 	_ = my.store.Invalidate(context.Background(), WithInvalidateTags([]string{t}))
 }
