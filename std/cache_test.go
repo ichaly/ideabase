@@ -50,11 +50,18 @@ func (my *blockConn) QueryRowContext(ctx context.Context, query string, args ...
 	return my.DB.QueryRowContext(ctx, query, args...)
 }
 
-func TestCacheSecondLoadShouldReturnData(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
+func openTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := "file:" + t.Name() + "?mode=memory&cache=private"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	require.NoError(t, err)
+	return db
+}
+
+func TestCacheSecondLoadShouldReturnData(t *testing.T) {
+	db := openTestDB(t)
 
 	store, err := NewStorage(&Config{})
 	require.NoError(t, err)
@@ -84,4 +91,103 @@ func TestCacheSecondLoadShouldReturnData(t *testing.T) {
 	err = db.Find(&cached).Error
 	require.NoError(t, err, "缓存读取失败时会继续访问数据库导致报错")
 	require.Len(t, cached, 1, "第二次命中缓存仍然返回空数据")
+}
+
+func TestCacheInvalidatesOnWrite(t *testing.T) {
+	db := openTestDB(t)
+
+	store, err := NewStorage(&Config{})
+	require.NoError(t, err)
+
+	err = db.Use(NewCache(store))
+	require.NoError(t, err)
+
+	require.NoError(t, db.AutoMigrate(&cacheUser{}))
+	require.NoError(t, db.Create(&cacheUser{ID: 1, Name: "Tom"}).Error)
+
+	// 第一次查询写入缓存
+	var first []cacheUser
+	require.NoError(t, db.Find(&first).Error)
+	require.Len(t, first, 1)
+
+	// 写入新记录，触发 purge 清空缓存
+	require.NoError(t, db.Create(&cacheUser{ID: 2, Name: "Jerry"}).Error)
+
+	// 缓存已失效，再次查询应命中数据库，拿到最新 2 条
+	var updated []cacheUser
+	require.NoError(t, db.Find(&updated).Error)
+	require.Len(t, updated, 2, "写入后缓存应失效，查询应返回最新数据")
+}
+
+func TestCacheInvalidatesOnDelete(t *testing.T) {
+	db := openTestDB(t)
+
+	store, err := NewStorage(&Config{})
+	require.NoError(t, err)
+
+	err = db.Use(NewCache(store))
+	require.NoError(t, err)
+
+	require.NoError(t, db.AutoMigrate(&cacheUser{}))
+	require.NoError(t, db.Create(&cacheUser{ID: 1, Name: "Tom"}).Error)
+	require.NoError(t, db.Create(&cacheUser{ID: 2, Name: "Jerry"}).Error)
+
+	// 第一次查询写入缓存
+	var first []cacheUser
+	require.NoError(t, db.Find(&first).Error)
+	require.Len(t, first, 2)
+
+	// 删除一条记录，触发 purge 清空缓存
+	require.NoError(t, db.Delete(&cacheUser{}, 2).Error)
+
+	// 缓存已失效，再次查询应拿到最新 1 条
+	var updated []cacheUser
+	require.NoError(t, db.Find(&updated).Error)
+	require.Len(t, updated, 1, "删除后缓存应失效，查询应返回最新数据")
+}
+
+func TestExtractTags(t *testing.T) {
+	cases := []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{
+			name: "普通查询",
+			sql:  `SELECT * FROM users WHERE id = 1`,
+			want: []string{"users"},
+		},
+		{
+			name: "带别名",
+			sql:  `SELECT * FROM cms_channel_lineage cl JOIN cms_lineage l ON l.id = cl.lineage_id`,
+			want: []string{"cms_channel_lineage", "cms_lineage"},
+		},
+		{
+			name: "子查询",
+			sql:  `SELECT * FROM (SELECT id FROM cms_lineage WHERE state = 1) sub`,
+			want: []string{"cms_lineage"},
+		},
+		{
+			name: "CTE",
+			sql:  `WITH cte AS (SELECT id FROM cms_lineage) SELECT * FROM cte`,
+			want: []string{"cms_lineage"},
+		},
+		{
+			name: "CTE 加 JOIN",
+			sql:  `WITH cte AS (SELECT id FROM cms_lineage) SELECT * FROM cte JOIN cms_channel c ON c.id = 1`,
+			want: []string{"cms_lineage", "cms_channel"},
+		},
+		{
+			name: "嵌套子查询",
+			sql:  `SELECT * FROM (SELECT * FROM (SELECT id FROM orders) t1) t2`,
+			want: []string{"orders"},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := extractTags(c.sql)
+			require.ElementsMatch(t, c.want, got)
+		})
+	}
 }
