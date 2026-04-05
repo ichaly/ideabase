@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"github.com/ichaly/ideabase/bus/providers"
@@ -57,8 +58,10 @@ func (my *RedisBus) Subscribe(ctx context.Context, topic string, handler provide
 	// 注册 Handler
 	my.handlers[topic] = append(my.handlers[topic], handler)
 
-	// 动态增加订阅 Topics
-	// Go-Redis 的 Subscribe 是累计追加的，安全
+	// 含通配符时使用 PSubscribe，否则 Subscribe
+	if strings.Contains(topic, "*") {
+		return my.pubsub.PSubscribe(ctx, topic)
+	}
 	return my.pubsub.Subscribe(ctx, topic)
 }
 
@@ -67,17 +70,19 @@ func (my *RedisBus) dispatchLoop() {
 	ch := my.pubsub.Channel()
 
 	for msg := range ch {
-		// 获取订阅该 Topic 的所有 Handler
 		my.mu.RLock()
-		handlers, ok := my.handlers[msg.Channel]
-		if !ok {
-			my.mu.RUnlock()
+		// 精确匹配
+		var activeHandlers []providers.Handler
+		activeHandlers = append(activeHandlers, my.handlers[msg.Channel]...)
+		// PSubscribe 的消息通过 Pattern 字段匹配
+		if msg.Pattern != "" && msg.Pattern != msg.Channel {
+			activeHandlers = append(activeHandlers, my.handlers[msg.Pattern]...)
+		}
+		my.mu.RUnlock()
+
+		if len(activeHandlers) == 0 {
 			continue
 		}
-		// 复制 Handler 列表以释放锁
-		activeHandlers := make([]providers.Handler, len(handlers))
-		copy(activeHandlers, handlers)
-		my.mu.RUnlock()
 
 		// 异步分发
 		for _, h := range activeHandlers {

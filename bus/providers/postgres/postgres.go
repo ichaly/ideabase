@@ -144,9 +144,12 @@ func (my *PostgresBus) runListen() error {
 		}
 
 		my.lock.Lock()
-		handlers := my.handlers[notification.Channel]
-		activeHandlers := make([]providers.Handler, len(handlers))
-		copy(activeHandlers, handlers)
+		var activeHandlers []providers.Handler
+		for pattern, handlers := range my.handlers {
+			if providers.MatchTopic(pattern, notification.Channel) {
+				activeHandlers = append(activeHandlers, handlers...)
+			}
+		}
 		my.lock.Unlock()
 
 		for _, h := range activeHandlers {

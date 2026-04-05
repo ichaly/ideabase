@@ -36,17 +36,19 @@ func (my *MemoryBus) Publish(ctx context.Context, topic string, payload any) err
 		}
 	}
 
-	// 1. 获取订阅者快照 (避免在锁内执行耗时操作)
+	// 1. 获取所有匹配的订阅者快照
 	my.mu.RLock()
-	handlers, ok := my.handlers[topic]
-	if !ok || len(handlers) == 0 {
-		my.mu.RUnlock()
+	var snapshot []providers.Handler
+	for pattern, handlers := range my.handlers {
+		if providers.MatchTopic(pattern, topic) {
+			snapshot = append(snapshot, handlers...)
+		}
+	}
+	my.mu.RUnlock()
+
+	if len(snapshot) == 0 {
 		return nil
 	}
-
-	snapshot := make([]providers.Handler, len(handlers))
-	copy(snapshot, handlers)
-	my.mu.RUnlock()
 
 	// 2. 异步执行
 	go func() {

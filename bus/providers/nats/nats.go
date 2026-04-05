@@ -3,6 +3,8 @@ package nats
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"time"
 
 	"github.com/ichaly/ideabase/bus/providers"
 	"github.com/ichaly/ideabase/log"
@@ -18,11 +20,19 @@ func NewNatsBus(url string) (*NatsBus, error) {
 	if url == "" {
 		url = nats.DefaultURL
 	}
-	nc, err := nats.Connect(url)
+	nc, err := nats.Connect(url,
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(2*time.Second),
+	)
 	if err != nil {
 		return nil, err
 	}
 	return &NatsBus{nc: nc}, nil
+}
+
+// natsTopic 将冒号分隔的 topic 转为 NATS 的点分隔格式
+func natsTopic(topic string) string {
+	return strings.ReplaceAll(topic, ":", ".")
 }
 
 func (my *NatsBus) Publish(ctx context.Context, topic string, payload any) error {
@@ -36,11 +46,11 @@ func (my *NatsBus) Publish(ctx context.Context, topic string, payload any) error
 			return err
 		}
 	}
-	return my.nc.Publish(topic, body)
+	return my.nc.Publish(natsTopic(topic), body)
 }
 
 func (my *NatsBus) Subscribe(ctx context.Context, topic string, handler providers.Handler) error {
-	_, err := my.nc.Subscribe(topic, func(msg *nats.Msg) {
+	_, err := my.nc.Subscribe(natsTopic(topic), func(msg *nats.Msg) {
 		go func(data []byte) {
 			if err := handler(context.Background(), data); err != nil {
 				log.Warn().Err(err).Str("topic", topic).Msg("NatsBus handler error")
