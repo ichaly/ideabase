@@ -12,8 +12,9 @@ type AppConfig struct {
 	Name       string       `mapstructure:"name"`        // 应用名称
 	Port       string       `mapstructure:"port"`        // 服务端口
 	Root       string       `mapstructure:"root"`        // 应用根目录路径
-	Cache      *DataSource  `mapstructure:"cache"`       // 缓存数据源配置
-	Database   *DataSource  `mapstructure:"database"`    // 数据库配置信息
+	Database   string       `mapstructure:"database"`    // 数据库 URL, 如: postgres://user:pass@host:5432/db?sslmode=disable
+	Redis      string       `mapstructure:"redis"`       // Redis URL, 如: redis://:pass@host:6379/0, redis-cluster://h1:6379,h2:6379, redis-sentinel://s1:26379/master
+	Nats       string       `mapstructure:"nats"`        // NATS URL, 如: nats://user:pass@host:4222
 	EncryptKey string       `mapstructure:"encrypt-key"` // Cookie加密密钥
 	Fiber      *FiberConfig `mapstructure:"fiber"`       // Fiber框架配置
 }

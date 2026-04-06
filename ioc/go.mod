@@ -3,10 +3,12 @@ module github.com/ichaly/ideabase/ioc
 go 1.25.0
 
 require (
-	github.com/ichaly/ideabase/bus v0.0.0-20260110145933-e564f1aca14f
 	github.com/ichaly/ideabase/gql v0.0.0-20260110145933-e564f1aca14f
 	github.com/ichaly/ideabase/std v0.0.0-20260110145933-e564f1aca14f
+	github.com/nats-io/nats.go v1.48.0
+	github.com/redis/go-redis/v9 v9.17.2
 	go.uber.org/fx v1.24.0
+	gorm.io/gorm v1.31.1
 )
 
 require (

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ichaly/ideabase/std/cache"
+	_ "github.com/ichaly/ideabase/std/cache/memory"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -63,10 +65,10 @@ func openTestDB(t testing.TB) *gorm.DB {
 func TestCacheSecondLoadShouldReturnData(t *testing.T) {
 	db := openTestDB(t)
 
-	store, err := NewStorage(&Config{})
+	store, err := cache.New(nil)
 	require.NoError(t, err)
 
-	err = db.Use(NewCache(store))
+	err = db.Use(NewGormCache(store))
 	require.NoError(t, err)
 
 	require.NoError(t, db.AutoMigrate(&cacheUser{}))
@@ -96,10 +98,10 @@ func TestCacheSecondLoadShouldReturnData(t *testing.T) {
 func TestCacheInvalidatesOnWrite(t *testing.T) {
 	db := openTestDB(t)
 
-	store, err := NewStorage(&Config{})
+	store, err := cache.New(nil)
 	require.NoError(t, err)
 
-	err = db.Use(NewCache(store))
+	err = db.Use(NewGormCache(store))
 	require.NoError(t, err)
 
 	require.NoError(t, db.AutoMigrate(&cacheUser{}))
@@ -122,10 +124,10 @@ func TestCacheInvalidatesOnWrite(t *testing.T) {
 func TestCacheInvalidatesOnDelete(t *testing.T) {
 	db := openTestDB(t)
 
-	store, err := NewStorage(&Config{})
+	store, err := cache.New(nil)
 	require.NoError(t, err)
 
-	err = db.Use(NewCache(store))
+	err = db.Use(NewGormCache(store))
 	require.NoError(t, err)
 
 	require.NoError(t, db.AutoMigrate(&cacheUser{}))
@@ -149,8 +151,8 @@ func TestCacheInvalidatesOnDelete(t *testing.T) {
 func BenchmarkCacheHit(b *testing.B) {
 	db := openTestDB(b)
 
-	store, _ := NewStorage(&Config{})
-	_ = db.Use(NewCache(store))
+	store, _ := cache.New(nil)
+	_ = db.Use(NewGormCache(store))
 	_ = db.AutoMigrate(&cacheUser{})
 	for i := 1; i <= 100; i++ {
 		_ = db.Create(&cacheUser{ID: int64(i), Name: "user"}).Error
@@ -171,8 +173,8 @@ func BenchmarkCacheHit(b *testing.B) {
 func BenchmarkCacheMiss(b *testing.B) {
 	db := openTestDB(b)
 
-	store, _ := NewStorage(&Config{})
-	_ = db.Use(NewCache(store))
+	store, _ := cache.New(nil)
+	_ = db.Use(NewGormCache(store))
 	_ = db.AutoMigrate(&cacheUser{})
 	for i := 1; i <= 100; i++ {
 		_ = db.Create(&cacheUser{ID: int64(i), Name: "user"}).Error
