@@ -102,7 +102,21 @@ func TestNewFiber_JSONEncoderShortId(t *testing.T) {
 
 	b, err := io.ReadAll(resp.Body)
 	assert.NoError(t, err)
-	assert.Contains(t, string(b), "\"id\":\""+encoded+"\"")
+	assert.Contains(t, string(b), "\"id\":\""+idTokenPrefix+encoded+"\"")
+}
+
+func TestParseIdToken_PreferSqidsThenNumber(t *testing.T) {
+	encoded, err := shortId.Encode([]uint64{10})
+	assert.NoError(t, err)
+	assert.Equal(t, "98", encoded)
+
+	id, err := decodeIdToken(idTokenPrefix + "98")
+	assert.NoError(t, err)
+	assert.Equal(t, Id(10), id)
+
+	id, err = decodeIdToken("98")
+	assert.NoError(t, err)
+	assert.Equal(t, Id(98), id)
 }
 
 // TestNewFiber_Development 测试开发环境下的Fiber应用配置

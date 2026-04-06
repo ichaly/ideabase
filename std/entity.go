@@ -55,7 +55,7 @@ func (my Id) Encode() string {
 	if my == 0 {
 		return ""
 	}
-	if str, err := shortId.Encode([]uint64{uint64(my)}); err == nil {
+	if str, err := encodeIdToken(my); err == nil {
 		return str
 	}
 	return strconv.FormatUint(uint64(my), 10)
@@ -63,7 +63,7 @@ func (my Id) Encode() string {
 
 // Decode 将外部传入的 token（十进制字符串或 shortId）解析回内部数字 ID。
 func (my *Id) Decode(token string) error {
-	id, err := parseIdToken(token)
+	id, err := decodeIdToken(token)
 	if err != nil {
 		return err
 	}

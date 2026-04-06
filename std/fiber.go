@@ -52,7 +52,7 @@ func NewFiber(c *Config, v *Validator, opts ...FiberOption) *fiber.App {
 			{
 				CustomType: Id(0),
 				Converter: func(value string) reflect.Value {
-					if id, err := parseIdToken(value); err == nil {
+					if id, err := decodeIdToken(value); err == nil {
 						return reflect.ValueOf(id)
 					}
 					return reflect.Value{}

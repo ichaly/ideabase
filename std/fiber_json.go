@@ -13,18 +13,31 @@ import (
 )
 
 var shortId, _ = sqids.New()
+var idTokenPrefix = "sq_"
 
-func parseIdToken(token string) (Id, error) {
+func encodeIdToken(id Id) (string, error) {
+	str, err := shortId.Encode([]uint64{uint64(id)})
+	if err != nil {
+		return "", err
+	}
+	return idTokenPrefix + str, nil
+}
+
+func decodeIdToken(token string) (Id, error) {
 	token = strings.TrimSpace(token)
 	if token == "" || token == "null" {
 		return 0, nil
 	}
-	// 数字优先：避免 "123" 被误解为可解码的 shortId
+	if strings.HasPrefix(token, idTokenPrefix) {
+		short := strings.TrimPrefix(token, idTokenPrefix)
+		if decoded := shortId.Decode(short); len(decoded) > 0 {
+			return Id(decoded[0]), nil
+		}
+		return 0, strconv.ErrSyntax
+	}
+	// 回退十进制数字，兼容历史直接传递数据库 ID 的请求
 	if v, err := strconv.ParseUint(token, 10, 64); err == nil {
 		return Id(v), nil
-	}
-	if decoded := shortId.Decode(token); len(decoded) > 0 {
-		return Id(decoded[0]), nil
 	}
 	return 0, strconv.ErrSyntax
 }
@@ -51,7 +64,7 @@ func (idShortEncoder) Encode(ptr unsafe.Pointer, stream *jsoniter.Stream) {
 		stream.WriteNil()
 		return
 	}
-	if str, err := shortId.Encode([]uint64{uint64(id)}); err == nil {
+	if str, err := encodeIdToken(id); err == nil {
 		stream.WriteString(str)
 		return
 	}
@@ -73,7 +86,7 @@ func (idShortDecoder) Decode(ptr unsafe.Pointer, iter *jsoniter.Iterator) {
 		*(*Id)(ptr) = Id(iter.ReadUint64())
 	case jsoniter.StringValue:
 		token := iter.ReadString()
-		id, err := parseIdToken(token)
+		id, err := decodeIdToken(token)
 		if err != nil {
 			iter.ReportError("std.Id", err.Error())
 			return
