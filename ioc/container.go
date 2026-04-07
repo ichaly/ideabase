@@ -41,7 +41,7 @@ func Run(opts ...BootOption) {
 	if len(cfg.opts) > 0 {
 		fxOpts = append(fxOpts, cfg.opts...)
 	}
-	if os.Getenv("FX_LOG") != "true" {
+	if os.Getenv("FX_LOG") == "false" {
 		fxOpts = append(fxOpts, fx.NopLogger)
 	}
 	fx.New(fxOpts...).Run()
