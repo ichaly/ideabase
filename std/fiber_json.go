@@ -13,7 +13,7 @@ import (
 )
 
 var shortId, _ = sqids.New()
-var idTokenPrefix = "sq_"
+var idTokenPrefix = "~"
 
 func encodeIdToken(id Id) (string, error) {
 	str, err := shortId.Encode([]uint64{uint64(id)})
