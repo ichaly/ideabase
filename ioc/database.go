@@ -11,6 +11,7 @@ var (
 	_ = Bind(std.NewRedis)
 	_ = Bind(cache.New, In(`optional:"true"`))
 	_ = Bind(event.New, In(`optional:"true"`, `optional:"true"`))
+	_ = Bind(event.NewBus)
 	_ = Bind(std.NewGormCache, Out("gorm"))
 	_ = Bind(std.NewSonyFlake, Out("gorm"))
 	_ = Bind(std.NewAudited, Out("gorm"))
