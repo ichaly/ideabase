@@ -17,7 +17,7 @@ import (
 // 使用: import _ "github.com/ichaly/ideabase/std/event/postgres"
 // 复用 *gorm.DB 连接的 LISTEN/NOTIFY
 func init() {
-	event.Register("postgres", func(conn any) (event.Event, error) {
+	event.Register("postgres", func(conn any) (event.Transport, error) {
 		db, ok := conn.(*gorm.DB)
 		if !ok {
 			return nil, fmt.Errorf("event/postgres: requires *gorm.DB, got %T", conn)

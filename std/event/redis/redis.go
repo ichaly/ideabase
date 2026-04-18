@@ -13,7 +13,7 @@ import (
 
 // 使用: import _ "github.com/ichaly/ideabase/std/event/redis"
 func init() {
-	event.Register("redis", func(conn any) (event.Event, error) {
+	event.Register("redis", func(conn any) (event.Transport, error) {
 		rdb, ok := conn.(goredis.UniversalClient)
 		if !ok {
 			return nil, fmt.Errorf("event/redis: requires redis.UniversalClient, got %T", conn)

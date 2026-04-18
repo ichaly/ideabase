@@ -10,7 +10,7 @@ import (
 
 // 使用: import _ "github.com/ichaly/ideabase/std/event/memory"
 func init() {
-	event.Register("memory", func(conn any) (event.Event, error) {
+	event.Register("memory", func(conn any) (event.Transport, error) {
 		return &memoryEvent{handlers: make(map[string][]event.Handler)}, nil
 	})
 }
