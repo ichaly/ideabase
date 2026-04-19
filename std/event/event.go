@@ -21,8 +21,6 @@ type Bus struct {
 	d driver.Driver
 }
 
-func (my *Bus) Close() error { return my.d.Close() }
-
 var current struct {
 	name    string
 	factory driver.Factory
