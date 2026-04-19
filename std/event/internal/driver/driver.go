@@ -4,7 +4,10 @@
 // 以及 *event.Bus 访问。
 package driver
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // Handler 订阅回调，收到的是 provider 发来的原始字节载荷。
 type Handler func(ctx context.Context, payload []byte) error
@@ -18,3 +21,22 @@ type Driver interface {
 
 // Factory 由 provider init 阶段注册，event.New 按激活 provider 调用。
 type Factory func(conn any) (Driver, error)
+
+// MatchTopic 检查 topic 是否匹配 pattern（`*` 匹配一个冒号分隔段）。
+// 供 memory/postgres 这类需要在应用层做通配符分发的 provider 复用。
+func MatchTopic(pattern, topic string) bool {
+	if pattern == topic {
+		return true
+	}
+	pp := strings.Split(pattern, ":")
+	tp := strings.Split(topic, ":")
+	if len(pp) != len(tp) {
+		return false
+	}
+	for i := range pp {
+		if pp[i] != "*" && pp[i] != tp[i] {
+			return false
+		}
+	}
+	return true
+}

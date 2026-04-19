@@ -9,6 +9,7 @@ import (
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std/event"
 	"github.com/ichaly/ideabase/std/event/internal/driver"
+	"github.com/ichaly/ideabase/utl"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -32,7 +33,7 @@ type redisEvent struct {
 }
 
 func (my *redisEvent) Publish(ctx context.Context, topic string, payload any) error {
-	body, err := event.Marshal(payload)
+	body, err := utl.Marshal(payload)
 	if err != nil {
 		return err
 	}

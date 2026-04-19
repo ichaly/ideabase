@@ -3,7 +3,6 @@ package event
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std/event/internal/driver"
@@ -72,26 +71,3 @@ func Subscribe[T any](ctx context.Context, bus *Bus, topic string, handler func(
 	})
 }
 
-// Marshal 序列化 payload，供各 provider 复用；
-// 与 Subscribe[T] 的 utl.Unmarshal 对称，统一走 JSON。
-func Marshal(payload any) ([]byte, error) {
-	return utl.Marshal(payload)
-}
-
-// MatchTopic 检查 topic 是否匹配 pattern（`*` 匹配一个冒号分隔段）。
-func MatchTopic(pattern, topic string) bool {
-	if pattern == topic {
-		return true
-	}
-	pp := strings.Split(pattern, ":")
-	tp := strings.Split(topic, ":")
-	if len(pp) != len(tp) {
-		return false
-	}
-	for i := range pp {
-		if pp[i] != "*" && pp[i] != tp[i] {
-			return false
-		}
-	}
-	return true
-}

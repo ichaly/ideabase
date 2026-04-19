@@ -10,6 +10,7 @@ import (
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std/event"
 	"github.com/ichaly/ideabase/std/event/internal/driver"
+	"github.com/ichaly/ideabase/utl"
 	"github.com/jackc/pgx/v5"
 	pgdriver "gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -51,7 +52,7 @@ func newPostgresEvent(db *gorm.DB) *postgresEvent {
 }
 
 func (my *postgresEvent) Publish(ctx context.Context, topic string, payload any) error {
-	body, err := event.Marshal(payload)
+	body, err := utl.Marshal(payload)
 	if err != nil {
 		return err
 	}
@@ -137,7 +138,7 @@ func (my *postgresEvent) runListen() error {
 		my.lock.Lock()
 		var active []driver.Handler
 		for pattern, handlers := range my.handlers {
-			if event.MatchTopic(pattern, notification.Channel) {
+			if driver.MatchTopic(pattern, notification.Channel) {
 				active = append(active, handlers...)
 			}
 		}

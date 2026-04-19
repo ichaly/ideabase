@@ -7,6 +7,7 @@ import (
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std/event"
 	"github.com/ichaly/ideabase/std/event/internal/driver"
+	"github.com/ichaly/ideabase/utl"
 )
 
 // Package memory 提供 in-process 同步分发的事件 bus。
@@ -24,14 +25,14 @@ type memoryEvent struct {
 }
 
 func (my *memoryEvent) Publish(ctx context.Context, topic string, payload any) error {
-	body, err := event.Marshal(payload)
+	body, err := utl.Marshal(payload)
 	if err != nil {
 		return err
 	}
 	my.mu.RLock()
 	var snapshot []driver.Handler
 	for pattern, handlers := range my.handlers {
-		if event.MatchTopic(pattern, topic) {
+		if driver.MatchTopic(pattern, topic) {
 			snapshot = append(snapshot, handlers...)
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std/event"
 	"github.com/ichaly/ideabase/std/event/internal/driver"
+	"github.com/ichaly/ideabase/utl"
 	gonats "github.com/nats-io/nats.go"
 )
 
@@ -28,7 +29,7 @@ type natsEvent struct {
 }
 
 func (my *natsEvent) Publish(_ context.Context, topic string, payload any) error {
-	body, err := event.Marshal(payload)
+	body, err := utl.Marshal(payload)
 	if err != nil {
 		return err
 	}
