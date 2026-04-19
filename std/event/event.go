@@ -17,6 +17,10 @@ type Bus struct {
 	d driver.Driver
 }
 
+// Topic 绑定一条 bus 主题到其载荷类型。底层是 string，可直接作日志字段/配置 key；
+// Publish/Subscribe 借类型参数在编译期校验 topic↔payload 形状一致。
+type Topic[T any] string
+
 var current struct {
 	name    string
 	factory driver.Factory
@@ -53,18 +57,19 @@ func New(rdb redis.UniversalClient, nc *nats.Conn, db *gorm.DB) (*Bus, error) {
 	return &Bus{d: d}, nil
 }
 
-// Publish 类型化发布。
-func Publish[T any](ctx context.Context, bus *Bus, topic string, payload T) error {
-	return bus.d.Publish(ctx, topic, payload)
+// Publish 类型化发布，topic 的类型参数必须与 payload 类型一致。
+func Publish[T any](ctx context.Context, bus *Bus, topic Topic[T], payload T) error {
+	return bus.d.Publish(ctx, string(topic), payload)
 }
 
 // Subscribe 类型化订阅，字节载荷自动按 T 反序列化。
 // 反序列化失败打日志丢弃，不回传 driver，避免坏载荷阻塞业务总线（R12 语义）。
-func Subscribe[T any](ctx context.Context, bus *Bus, topic string, handler func(context.Context, T) error) error {
-	return bus.d.Subscribe(ctx, topic, func(c context.Context, data []byte) error {
+func Subscribe[T any](ctx context.Context, bus *Bus, topic Topic[T], handler func(context.Context, T) error) error {
+	name := string(topic)
+	return bus.d.Subscribe(ctx, name, func(c context.Context, data []byte) error {
 		var payload T
 		if err := utl.Unmarshal(data, &payload); err != nil {
-			log.Error().Err(err).Str("topic", topic).Msg("event: drop malformed payload")
+			log.Error().Err(err).Str("topic", name).Msg("event: drop malformed payload")
 			return nil
 		}
 		return handler(c, payload)
