@@ -6,11 +6,12 @@ import (
 
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std/event"
+	"github.com/ichaly/ideabase/std/event/internal/driver"
 )
 
 // 使用: import _ "github.com/ichaly/ideabase/std/event/memory"
 func init() {
-	event.Register("memory", func(conn any) (event.Transport, error) {
+	event.Register("memory", func(conn any) (driver.Driver, error) {
 		return &memoryEvent{handlers: make(map[string][]event.Handler)}, nil
 	})
 }

@@ -7,13 +7,14 @@ import (
 
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std/event"
+	"github.com/ichaly/ideabase/std/event/internal/driver"
 	gonats "github.com/nats-io/nats.go"
 )
 
 // 使用: import _ "github.com/ichaly/ideabase/std/event/nats"
 // URL: nats://user:pass@host:4222
 func init() {
-	event.Register("nats", func(conn any) (event.Transport, error) {
+	event.Register("nats", func(conn any) (driver.Driver, error) {
 		nc, ok := conn.(*gonats.Conn)
 		if !ok {
 			return nil, fmt.Errorf("event/nats: requires *nats.Conn, got %T", conn)

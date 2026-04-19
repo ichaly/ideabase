@@ -9,6 +9,7 @@ import (
 
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std/event"
+	"github.com/ichaly/ideabase/std/event/internal/driver"
 	"github.com/jackc/pgx/v5"
 	pgdriver "gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -17,7 +18,7 @@ import (
 // 使用: import _ "github.com/ichaly/ideabase/std/event/postgres"
 // 复用 *gorm.DB 连接的 LISTEN/NOTIFY
 func init() {
-	event.Register("postgres", func(conn any) (event.Transport, error) {
+	event.Register("postgres", func(conn any) (driver.Driver, error) {
 		db, ok := conn.(*gorm.DB)
 		if !ok {
 			return nil, fmt.Errorf("event/postgres: requires *gorm.DB, got %T", conn)

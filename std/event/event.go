@@ -13,11 +13,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// Handler 订阅回调签名，测试 mock 可直接引用。
 type Handler = driver.Handler
-
-// Transport 是底层传输契约，仅由 provider 实现、由 ioc/测试用于构造 *Bus。
-// 业务代码不应直接持有或调用此类型，发布订阅一律走 Publish[T]/Subscribe[T]。
-type Transport = driver.Driver
 
 // Bus 业务层入口，发布/订阅走 Publish[T]/Subscribe[T]。
 type Bus struct {
@@ -40,8 +37,8 @@ func Register(name string, f driver.Factory) {
 	current.factory = f
 }
 
-// New 由 ioc 调用实例化 Transport，业务代码不直接使用；*Bus 通过 NewBus 包装。
-func New(rdb redis.UniversalClient, nc *nats.Conn, db *gorm.DB) (Transport, error) {
+// New 由 ioc 调用实例化底层 driver，业务代码不直接使用；*Bus 通过 NewBus 包装。
+func New(rdb redis.UniversalClient, nc *nats.Conn, db *gorm.DB) (driver.Driver, error) {
 	if current.factory == nil {
 		return nil, fmt.Errorf("event: no provider registered, import a provider package")
 	}
@@ -57,9 +54,9 @@ func New(rdb redis.UniversalClient, nc *nats.Conn, db *gorm.DB) (Transport, erro
 	return current.factory(conn)
 }
 
-// NewBus 把 ioc 提供的 Transport 包装为业务层 *Bus。
-func NewBus(t Transport) *Bus {
-	return &Bus{d: t}
+// NewBus 把 ioc 提供的 driver 包装为业务层 *Bus。
+func NewBus(d driver.Driver) *Bus {
+	return &Bus{d: d}
 }
 
 // Publish 类型化发布。
