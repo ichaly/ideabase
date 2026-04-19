@@ -80,22 +80,10 @@ func Subscribe[T any](ctx context.Context, bus *Bus, topic string, handler func(
 	})
 }
 
-// SubscribeRaw 绕过类型化解码，回调直接拿到字节载荷。
-// 仅用于通配符主题或载荷形态不固定的场景；业务事件一律走 Subscribe[T]。
-func SubscribeRaw(ctx context.Context, bus *Bus, topic string, handler Handler) error {
-	return bus.d.Subscribe(ctx, topic, handler)
-}
-
-// Marshal 序列化 payload，供各 provider 复用。
+// Marshal 序列化 payload，供各 provider 复用；
+// 与 Subscribe[T] 的 utl.Unmarshal 对称，统一走 JSON。
 func Marshal(payload any) ([]byte, error) {
-	switch v := payload.(type) {
-	case []byte:
-		return v, nil
-	case string:
-		return []byte(v), nil
-	default:
-		return utl.Marshal(payload)
-	}
+	return utl.Marshal(payload)
 }
 
 // MatchTopic 检查 topic 是否匹配 pattern（`*` 匹配一个冒号分隔段）。
