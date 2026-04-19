@@ -35,7 +35,7 @@ func (my *natsEvent) Publish(_ context.Context, topic string, payload any) error
 	return my.nc.Publish(natsTopic(topic), body)
 }
 
-func (my *natsEvent) Subscribe(_ context.Context, topic string, handler event.Handler) error {
+func (my *natsEvent) Subscribe(_ context.Context, topic string, handler driver.Handler) error {
 	_, err := my.nc.Subscribe(natsTopic(topic), func(msg *gonats.Msg) {
 		go func(data []byte) {
 			if err := handler(context.Background(), data); err != nil {

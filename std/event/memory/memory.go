@@ -9,25 +9,27 @@ import (
 	"github.com/ichaly/ideabase/std/event/internal/driver"
 )
 
+// Package memory 提供 in-process 同步分发的事件 bus。
+// 需要异步请用 nats/redis provider，或在 handler 内自行 `go func`。
 // 使用: import _ "github.com/ichaly/ideabase/std/event/memory"
 func init() {
 	event.Register("memory", func(conn any) (driver.Driver, error) {
-		return &memoryEvent{handlers: make(map[string][]event.Handler)}, nil
+		return &memoryEvent{handlers: make(map[string][]driver.Handler)}, nil
 	})
 }
 
 type memoryEvent struct {
-	handlers map[string][]event.Handler
+	handlers map[string][]driver.Handler
 	mu       sync.RWMutex
 }
 
-func (my *memoryEvent) Publish(_ context.Context, topic string, payload any) error {
+func (my *memoryEvent) Publish(ctx context.Context, topic string, payload any) error {
 	body, err := event.Marshal(payload)
 	if err != nil {
 		return err
 	}
 	my.mu.RLock()
-	var snapshot []event.Handler
+	var snapshot []driver.Handler
 	for pattern, handlers := range my.handlers {
 		if event.MatchTopic(pattern, topic) {
 			snapshot = append(snapshot, handlers...)
@@ -35,16 +37,14 @@ func (my *memoryEvent) Publish(_ context.Context, topic string, payload any) err
 	}
 	my.mu.RUnlock()
 	for _, h := range snapshot {
-		go func(handler event.Handler) {
-			if err := handler(context.Background(), body); err != nil {
-				log.Warn().Err(err).Str("topic", topic).Msg("memory event handler error")
-			}
-		}(h)
+		if err := h(ctx, body); err != nil {
+			log.Warn().Err(err).Str("topic", topic).Msg("memory event handler error")
+		}
 	}
 	return nil
 }
 
-func (my *memoryEvent) Subscribe(_ context.Context, topic string, handler event.Handler) error {
+func (my *memoryEvent) Subscribe(_ context.Context, topic string, handler driver.Handler) error {
 	my.mu.Lock()
 	defer my.mu.Unlock()
 	my.handlers[topic] = append(my.handlers[topic], handler)

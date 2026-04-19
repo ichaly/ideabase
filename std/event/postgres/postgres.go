@@ -30,7 +30,7 @@ func init() {
 type postgresEvent struct {
 	db       *gorm.DB
 	dsn      string
-	handlers map[string][]event.Handler
+	handlers map[string][]driver.Handler
 	lock     sync.Mutex
 	cancel   context.CancelFunc
 	stop     context.Context
@@ -43,7 +43,7 @@ func newPostgresEvent(db *gorm.DB) *postgresEvent {
 		dsn = d.Config.DSN
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &postgresEvent{db: db, dsn: dsn, handlers: make(map[string][]event.Handler), stop: ctx, stopFunc: cancel}
+	e := &postgresEvent{db: db, dsn: dsn, handlers: make(map[string][]driver.Handler), stop: ctx, stopFunc: cancel}
 	if dsn != "" {
 		go e.listenLoop()
 	}
@@ -58,7 +58,7 @@ func (my *postgresEvent) Publish(ctx context.Context, topic string, payload any)
 	return my.db.Exec("SELECT pg_notify(?, ?)", topic, string(body)).Error
 }
 
-func (my *postgresEvent) Subscribe(_ context.Context, topic string, handler event.Handler) error {
+func (my *postgresEvent) Subscribe(_ context.Context, topic string, handler driver.Handler) error {
 	if my.dsn == "" {
 		return errors.New("event/postgres: DSN not available")
 	}
@@ -135,7 +135,7 @@ func (my *postgresEvent) runListen() error {
 		}
 
 		my.lock.Lock()
-		var active []event.Handler
+		var active []driver.Handler
 		for pattern, handlers := range my.handlers {
 			if event.MatchTopic(pattern, notification.Channel) {
 				active = append(active, handlers...)
@@ -144,7 +144,7 @@ func (my *postgresEvent) runListen() error {
 		my.lock.Unlock()
 
 		for _, h := range active {
-			go func(handler event.Handler, data string) {
+			go func(handler driver.Handler, data string) {
 				if err := handler(context.Background(), []byte(data)); err != nil {
 					log.Warn().Err(err).Str("topic", notification.Channel).Msg("postgres event handler error")
 				}
