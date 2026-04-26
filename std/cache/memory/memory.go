@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -19,13 +20,18 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
-		return &memoryCache{cache: c, tags: &tagIndex{data: make(map[string]map[string]time.Time)}}, nil
+		return &memoryCache{
+			cache: c,
+			tags:  &tagIndex{data: make(map[string]map[string]time.Time)},
+			locks: &lockTable{data: make(map[string]lockEntry)},
+		}, nil
 	})
 }
 
 type memoryCache struct {
 	cache *ristretto.Cache[string, []byte]
 	tags  *tagIndex
+	locks *lockTable
 }
 
 func (my *memoryCache) Get(_ context.Context, key string) ([]byte, error) {
@@ -55,6 +61,49 @@ func (my *memoryCache) Flush(_ context.Context, tags ...string) error {
 		my.cache.Del(key)
 	}
 	return nil
+}
+
+func (my *memoryCache) TryLock(_ context.Context, key, owner string, ttl time.Duration) (bool, error) {
+	if owner == "" || ttl <= 0 {
+		return false, errors.New("cache: TryLock requires non-empty owner and positive ttl")
+	}
+	return my.locks.tryAcquire(key, owner, ttl), nil
+}
+
+func (my *memoryCache) Unlock(_ context.Context, key, owner string) error {
+	my.locks.release(key, owner)
+	return nil
+}
+
+// lockEntry 一条锁记录；expires 用于 TTL 兜底，超过即视为过期可被抢占。
+type lockEntry struct {
+	owner   string
+	expires time.Time
+}
+
+// lockTable 所有锁的集中表；单 mutex 保护，锁数量在系统级 mutex 量级（数十～数百），无需分片。
+type lockTable struct {
+	mu   sync.Mutex
+	data map[string]lockEntry
+}
+
+func (my *lockTable) tryAcquire(key, owner string, ttl time.Duration) bool {
+	my.mu.Lock()
+	defer my.mu.Unlock()
+	now := time.Now()
+	if e, ok := my.data[key]; ok && e.expires.After(now) {
+		return false
+	}
+	my.data[key] = lockEntry{owner: owner, expires: now.Add(ttl)}
+	return true
+}
+
+func (my *lockTable) release(key, owner string) {
+	my.mu.Lock()
+	defer my.mu.Unlock()
+	if e, ok := my.data[key]; ok && e.owner == owner {
+		delete(my.data, key)
+	}
 }
 
 // tagIndex — tag 到 key 的索引，记录过期时间用于清理

@@ -54,6 +54,20 @@ func (my *redisCache) Del(ctx context.Context, keys ...string) error {
 	return my.rdb.Unlink(ctx, keys...).Err()
 }
 
+func (my *redisCache) TryLock(ctx context.Context, key, owner string, ttl time.Duration) (bool, error) {
+	if owner == "" || ttl <= 0 {
+		return false, errors.New("cache: TryLock requires non-empty owner and positive ttl")
+	}
+	return my.rdb.SetNX(ctx, key, owner, ttl).Result()
+}
+
+// unlockScript 原子 check-and-del：仅当当前 value 仍是 owner 时才删，避免误删别人续过的锁。
+const unlockScript = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`
+
+func (my *redisCache) Unlock(ctx context.Context, key, owner string) error {
+	return my.rdb.Eval(ctx, unlockScript, []string{key}, owner).Err()
+}
+
 func (my *redisCache) Flush(ctx context.Context, tags ...string) error {
 	if len(tags) == 0 {
 		return nil
