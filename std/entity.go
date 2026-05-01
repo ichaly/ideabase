@@ -14,7 +14,9 @@ type userContextKeyType struct{}
 type Id uint64
 
 type Primary struct {
-	Id Id `gorm:"primary_key;comment:主键;next:sonyflake;" json:"id,omitempty"`
+	// autoIncrement:false: 主键由 sonyflake 应用层生成,关闭 GORM 默认自增。
+	// 同时让分区表 ent 可直接 embed Primary 后再叠加 primaryKey 字段构成复合 PK。
+	Id Id `gorm:"primary_key;autoIncrement:false;comment:主键;next:sonyflake;" json:"id,omitempty"`
 }
 
 type General struct {
