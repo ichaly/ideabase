@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"runtime/debug"
 	"sync"
 
 	"github.com/ichaly/ideabase/log"
@@ -38,11 +39,28 @@ func (my *memoryEvent) Publish(ctx context.Context, topic string, payload any) e
 	}
 	my.mu.RUnlock()
 	for _, h := range snapshot {
-		if err := h(ctx, body); err != nil {
-			log.Warn().Err(err).Str("topic", topic).Msg("memory event handler error")
-		}
+		my.invoke(ctx, topic, body, h)
 	}
 	return nil
+}
+
+// invoke 单 handler 调用 + recover 兜底:
+// handler panic 转 log.Error 含 stack,不传播到 publisher;
+// handler 返 error 走 log.Warn tolerant;
+// 一个 handler 失败不影响后续 handler 收到同一事件。
+func (my *memoryEvent) invoke(ctx context.Context, topic string, body []byte, h driver.Handler) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Interface("panic", r).
+				Str("topic", topic).
+				Bytes("stack", debug.Stack()).
+				Msg("memory event handler panic recovered")
+		}
+	}()
+	if err := h(ctx, body); err != nil {
+		log.Warn().Err(err).Str("topic", topic).Msg("memory event handler error")
+	}
 }
 
 func (my *memoryEvent) Subscribe(_ context.Context, topic string, handler driver.Handler) error {
