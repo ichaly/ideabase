@@ -44,8 +44,10 @@ func NewDatabase(e []interface{}, p []gorm.Plugin, c *Config) (*gorm.DB, error) 
 	if c.IsDebug() {
 		for _, v := range e {
 			tx := db
-			if err = tx.AutoMigrate(v); err != nil {
-				return nil, err
+			if !skipAutoMigrate(v) {
+				if err = tx.AutoMigrate(v); err != nil {
+					return nil, err
+				}
 			}
 			if err = migrateComment(tx, v); err != nil {
 				return nil, err

@@ -30,6 +30,25 @@ type Migratable interface {
 	Migrate(db *gorm.DB, dialect string) error
 }
 
+// NoAutoMigrate 标记实体跳过 GORM AutoMigrate；只走 Migrate 钩子完整接管 DDL。
+//
+// 用于分区表 / 自定义存储引擎 / 方言差异极大的场景：让实体在 Migrate 钩子里
+// 自己 CREATE TABLE，避免 AutoMigrate 先建普通表造成的"再 DROP 重建"复杂逻辑。
+type NoAutoMigrate interface {
+	NoAutoMigrate()
+}
+
+// skipAutoMigrate 检查实体是否实现了 NoAutoMigrate 接口（支持值/指针）。
+func skipAutoMigrate(v any) bool {
+	if _, ok := v.(NoAutoMigrate); ok {
+		return true
+	}
+	if _, ok := asPtr(v).(NoAutoMigrate); ok {
+		return true
+	}
+	return false
+}
+
 // migrateComment 为实现了 Describer 的实体写入“表注释”。
 //
 // 为什么不再用 gorm:table_options：
