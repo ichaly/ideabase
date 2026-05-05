@@ -49,10 +49,12 @@ func NewDatabase(e []interface{}, p []gorm.Plugin, c *Config) (*gorm.DB, error) 
 					return nil, err
 				}
 			}
-			if err = migrateComment(tx, v); err != nil {
+			// 先 migrateEntity 让 NoAutoMigrate 实体在 Migrate 钩子里完成建表，
+			// 再 migrateComment 写表注释，避免分区表场景下 COMMENT 时表尚未存在。
+			if err = migrateEntity(tx, v); err != nil {
 				return nil, err
 			}
-			if err = migrateEntity(tx, v); err != nil {
+			if err = migrateComment(tx, v); err != nil {
 				return nil, err
 			}
 		}
