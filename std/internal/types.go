@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/compress"
 )
 
@@ -39,6 +40,12 @@ type FiberConfig struct {
 	ReadTimeout  time.Duration `mapstructure:"read_timeout"`  // 读取超时时间
 	WriteTimeout time.Duration `mapstructure:"write_timeout"` // 写入超时时间
 	ServerHeader string        `mapstructure:"server_header"` // 服务器响应头
+
+	// 代理 IP 设置
+	ProxyHeader        string                 `mapstructure:"proxy_header"`         // 可信代理透传真实 IP 的请求头
+	TrustProxy         bool                   `mapstructure:"trust_proxy"`          // 是否启用可信代理
+	TrustProxyConfig   fiber.TrustProxyConfig `mapstructure:"trust_proxy_config"`   // 可信代理来源配置
+	EnableIPValidation bool                   `mapstructure:"enable_ip_validation"` // 是否校验代理头内的 IP
 
 	// 压缩中间件设置
 	CompressLevel CompressLevel `mapstructure:"compress_level"` // 压缩级别

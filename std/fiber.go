@@ -87,14 +87,18 @@ func NewFiber(c *Config, v *Validator, opts ...FiberOption) *fiber.App {
 
 	// 创建fiber应用
 	conf := fiber.Config{
-		AppName:         c.Name,
-		ReadTimeout:     fiberConf.ReadTimeout,
-		IdleTimeout:     fiberConf.IdleTimeout,
-		WriteTimeout:    fiberConf.WriteTimeout,
-		ServerHeader:    fiberConf.ServerHeader,
-		StructValidator: v,
-		JSONEncoder:     fiberJSON.Marshal,
-		JSONDecoder:     fiberJSON.Unmarshal,
+		AppName:            c.Name,
+		ReadTimeout:        fiberConf.ReadTimeout,
+		IdleTimeout:        fiberConf.IdleTimeout,
+		WriteTimeout:       fiberConf.WriteTimeout,
+		ServerHeader:       fiberConf.ServerHeader,
+		ProxyHeader:        fiberConf.ProxyHeader,
+		TrustProxy:         fiberConf.TrustProxy,
+		TrustProxyConfig:   fiberConf.TrustProxyConfig,
+		EnableIPValidation: fiberConf.EnableIPValidation,
+		StructValidator:    v,
+		JSONEncoder:        fiberJSON.Marshal,
+		JSONDecoder:        fiberJSON.Unmarshal,
 	}
 	for _, opt := range opts {
 		if opt != nil {

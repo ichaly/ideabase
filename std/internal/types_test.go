@@ -3,11 +3,13 @@ package internal
 import (
 	"testing"
 
+	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/compress"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestCompressLevel_KoanfIntegration 测试在Koanf中使用CompressLevel
@@ -75,4 +77,32 @@ func TestCompressLevel_KoanfIntegration(t *testing.T) {
 			assert.Equal(t, compress.Level(cfg.Level), tc.expected)
 		})
 	}
+}
+
+func TestFiberConfigProxy_KoanfIntegration(t *testing.T) {
+	k := koanf.New(".")
+	err := k.Load(rawbytes.Provider([]byte(`
+proxy_header: X-Forwarded-For
+trust_proxy: true
+enable_ip_validation: true
+trust_proxy_config:
+  proxies:
+    - 172.18.0.0/16
+  private: true
+  loopback: true
+`)), yaml.Parser())
+	require.NoError(t, err)
+
+	var cfg FiberConfig
+	err = k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
+		Tag: "mapstructure",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, fiber.HeaderXForwardedFor, cfg.ProxyHeader)
+	assert.True(t, cfg.TrustProxy)
+	assert.True(t, cfg.EnableIPValidation)
+	assert.Equal(t, []string{"172.18.0.0/16"}, cfg.TrustProxyConfig.Proxies)
+	assert.True(t, cfg.TrustProxyConfig.Private)
+	assert.True(t, cfg.TrustProxyConfig.Loopback)
 }
