@@ -98,7 +98,7 @@ func (my *_DialectSuite) TestDistinctAndJsonb() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id"
-						FROM (SELECT "sys_user"."id" FROM sys_user WHERE "sys_user"."metadata" @> $1::jsonb) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id" FROM sys_user WHERE jsonb_contains("sys_user"."metadata", $1::jsonb)) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},

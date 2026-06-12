@@ -133,41 +133,56 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	}
 
 	sr := func() *compiler.Context { return ctx.Quote(`__sr_`, u.index) }
-
-	// items聚合：游标模式剔除辅助列、按行号FILTER并保持显示顺序
-	ctx.Write(`SELECT JSONB_BUILD_OBJECT('`, protocol.ITEMS, `', COALESCE(JSONB_AGG(`)
-	if page == nil {
-		ctx.Write(`TO_JSONB(`)
-		sr().Write(`.*)`)
-		if hasTotal {
-			ctx.Write(` - '__total'`)
+	written := 0
+	comma := func() {
+		if written > 0 {
+			ctx.Write(`, `)
 		}
-	} else {
-		ctx.Write(`(TO_JSONB(`)
-		sr().Write(`.*) - '__rn' - '__cursor'`)
-		if hasTotal {
-			ctx.Write(` - '__total'`)
-		}
-		ctx.Write(`) ORDER BY `)
-		sr().Write(`."__rn"`)
-		if page.last {
-			ctx.Write(` DESC`)
-		}
-		ctx.Write(`) FILTER (WHERE `)
-		sr().Write(`."__rn" <= `, page.limit)
+		written++
 	}
-	ctx.Write(`), '[]')`)
+
+	// 响应只含选择的字段：items未请求（仅total）时不输出
+	ctx.Write(`SELECT JSONB_BUILD_OBJECT(`)
+	if len(items) > 0 {
+		comma()
+		// items聚合：游标模式剔除辅助列、按行号FILTER并保持显示顺序
+		ctx.Write(`'`, protocol.ITEMS, `', COALESCE(JSONB_AGG(`)
+		if page == nil {
+			ctx.Write(`TO_JSONB(`)
+			sr().Write(`.*)`)
+			if hasTotal {
+				ctx.Write(` - '__total'`)
+			}
+		} else {
+			ctx.Write(`(TO_JSONB(`)
+			sr().Write(`.*) - '__rn' - '__cursor'`)
+			if hasTotal {
+				ctx.Write(` - '__total'`)
+			}
+			ctx.Write(`) ORDER BY `)
+			sr().Write(`."__rn"`)
+			if page.last {
+				ctx.Write(` DESC`)
+			}
+			ctx.Write(`) FILTER (WHERE `)
+			sr().Write(`."__rn" <= `, page.limit)
+		}
+		ctx.Write(`), '[]')`)
+	}
 
 	if hasTotal {
-		ctx.Write(`, '`, protocol.TOTAL, `', COALESCE(MIN(`)
+		comma()
+		ctx.Write(`'`, protocol.TOTAL, `', COALESCE(MIN(`)
 		sr().Write(`."__total"), 0)`)
 	}
 	if pageInfo != nil {
-		ctx.Write(`, '`, pageInfo.Alias, `', `)
+		comma()
+		ctx.Write(`'`, pageInfo.Alias, `', `)
 		my.buildPageInfo(ctx, u, pageInfo)
 	}
 	for _, f := range typeNames {
-		ctx.Write(`, '`, f.Alias, `', '`, u.class.Name, protocol.SUFFIX_RESULT, `'`)
+		comma()
+		ctx.Write(`'`, f.Alias, `', '`, u.class.Name, protocol.SUFFIX_RESULT, `'`)
 	}
 	ctx.Write(`) AS "json" FROM (`)
 
@@ -324,7 +339,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			appendColumn(key.column)
 		}
 	}
-	if len(columns) == 0 {
+	if len(columns) == 0 && !withTotal {
 		return fmt.Errorf("查询 %s 没有可用的标量字段", u.field.Name)
 	}
 
@@ -401,7 +416,10 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		ctx.Quote(u.class.Table).Write(`.`).Quote(column)
 	}
 	if withTotal {
-		ctx.SpaceAfter(`,`).Write(`COUNT(*) OVER() AS "__total"`)
+		if len(columns) > 0 {
+			ctx.SpaceAfter(`,`)
+		}
+		ctx.Write(`COUNT(*) OVER() AS "__total"`)
 	}
 	ctx.Space(`FROM`).Write(u.class.Table)
 

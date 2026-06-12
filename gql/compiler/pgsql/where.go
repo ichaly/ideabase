@@ -150,43 +150,64 @@ func (my *Dialect) buildFieldCondition(ctx *compiler.Context, sc scope, child *a
 		if i > 0 {
 			ctx.Space("AND")
 		}
-		if sc.qualifier != "" {
-			ctx.Quote(sc.qualifier).Write(".")
-		}
-		ctx.Quote(column)
-		if err := my.buildOperator(ctx, opChild); err != nil {
+		if err := my.buildOperator(ctx, sc, column, opChild); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// buildOperator 构建操作符及其值
-func (my *Dialect) buildOperator(ctx *compiler.Context, opChild *ast.ChildValue) error {
+// jsonbFunctions jsonb操作符的函数式写法：
+// gorm会把SQL中的@/?当作命名参数与占位符解析，@>/<@/?这类操作符会被劫持，
+// 统一改用PG内置等价函数（语义与索引利用完全一致）
+var jsonbFunctions = map[string]string{
+	protocol.CONTAINS:     "jsonb_contains",
+	protocol.CONTAINED_IN: "jsonb_contained",
+	protocol.HAS_KEY:      "jsonb_exists",
+}
+
+// buildOperator 构建单个字段条件表达式（含列引用）
+func (my *Dialect) buildOperator(ctx *compiler.Context, sc scope, column string, opChild *ast.ChildValue) error {
 	op, ok := protocol.GetOperator(opChild.Name)
 	if !ok {
 		return fmt.Errorf("不支持的操作符: %s", opChild.Name)
 	}
-	ctx.Space(strings.ToUpper(op.Value))
-
 	value := opChild.Value
 	if value == nil {
 		return fmt.Errorf("操作符 %s 缺少值", opChild.Name)
 	}
+	qualify := func() {
+		if sc.qualifier != "" {
+			ctx.Quote(sc.qualifier).Write(".")
+		}
+		ctx.Quote(column)
+	}
+
+	// jsonb函数式操作符：jsonb_contains(列, $n::jsonb) / jsonb_exists(列, $n)
+	if function, ok := jsonbFunctions[opChild.Name]; ok {
+		ctx.Write(function, `(`)
+		qualify()
+		ctx.Write(`, `)
+		if value.Kind == ast.Variable {
+			ctx.Write(my.Placeholder(ctx.AddVariable(value.Raw)))
+		} else {
+			val, err := value.Value(nil)
+			if err != nil {
+				return err
+			}
+			ctx.Write(my.Placeholder(ctx.AddParam(normalizeArg(val))))
+		}
+		if opChild.Name != protocol.HAS_KEY {
+			ctx.Write(`::jsonb`)
+		}
+		ctx.Write(`)`)
+		return nil
+	}
+
+	qualify()
+	ctx.Space(strings.ToUpper(op.Value))
 
 	switch opChild.Name {
-	case protocol.CONTAINS, protocol.CONTAINED_IN:
-		// jsonb包含：参数统一序列化为JSON文本并cast
-		if value.Kind == ast.Variable {
-			ctx.Write(my.Placeholder(ctx.AddVariable(value.Raw)), `::jsonb`)
-			return nil
-		}
-		val, err := value.Value(nil)
-		if err != nil {
-			return err
-		}
-		ctx.Write(my.Placeholder(ctx.AddParam(normalizeArg(val))), `::jsonb`)
-		return nil
 	case protocol.IN, protocol.NI:
 		ctx.Write("(")
 		if value.Kind == ast.ListValue {

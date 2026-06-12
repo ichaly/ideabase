@@ -238,7 +238,7 @@ var Grouping = map[string][]*Operator{
 	SCALAR_DATE_TIME: Operators[:8],                                                      //[is,eq,in,gt,ge,lt,le,ne]
 	SCALAR_STRING:    Operators[:12],                                                      //[is..iRegex]
 	SCALAR_BOOLEAN:   Operators[1:3],                                                     //[eq,in]
-	SCALAR_JSON:      append(append([]*Operator{}, Operators[:3]...), Operators[12:]...), //[is,eq,in,contains,containedIn,hasKey,hasKeyAny,hasKeyAll] 先拷贝避免共享底层数组
+	SCALAR_JSON:      append(append([]*Operator{}, Operators[:3]...), Operators[12:15]...), //[is,eq,in,contains,containedIn,hasKey] 先拷贝避免共享底层数组
 }
 
 // Scalars 内置标量类型集合

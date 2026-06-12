@@ -1,0 +1,11 @@
+# 持久化查询文档：启动时经 LoadDocuments 注册，HTTP 仅传 operationName 即可执行
+query PostList($kw: String) {
+  posts(search: $kw, sort: { id: ASC }) {
+    items { id title author: user { name } tags { name } }
+    total
+  }
+}
+
+mutation AddTag($name: String!) {
+  createTag(input: { name: $name }) { id name }
+}
