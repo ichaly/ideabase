@@ -37,6 +37,8 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 	req := testcontainers.ContainerRequest{
 		Image:        "postgres:15-alpine",
 		ExposedPorts: []string{"5432/tcp"},
+		// CDC订阅依赖逻辑复制（生产部署同样只需此启动参数，pgoutput为内置插件）
+		Cmd: []string{"postgres", "-c", "wal_level=logical"},
 		Env: map[string]string{
 			"POSTGRES_DB":       "test",
 			"POSTGRES_USER":     "test",

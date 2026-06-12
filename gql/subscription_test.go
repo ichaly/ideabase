@@ -8,11 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSubscribe 轮询订阅：首推当前结果，数据变化后推送新结果，取消后通道关闭
+// TestSubscribe CDC订阅：首推当前结果，WAL变更触发推送，取消后通道关闭
 func TestSubscribe(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	executor.SetInterval(100 * time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

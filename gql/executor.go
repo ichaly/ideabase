@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/gofiber/fiber/v3"
@@ -52,7 +51,7 @@ type Executor struct {
 	cache     *planCache          // 执行计划缓存，命中路径零解析零编译
 	resolvers map[string]Resolver // 自定义字段解析器注册表
 	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
-	interval  time.Duration       // 订阅轮询间隔
+	cdc       *listener           // WAL逻辑复制监听器，订阅的唤醒信号源
 }
 
 // Register 注册自定义字段解析器，与元数据中 Field.Resolver 按名绑定
@@ -88,7 +87,6 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		cache:     newPlanCache(512),
 		resolvers: make(map[string]Resolver),
 		documents: make(map[string]string),
-		interval:  time.Second,
 	}
 
 	// 加载GraphQL模式：配置了schema.file优先从文件加载（生产推荐），否则由renderer生成
@@ -106,6 +104,13 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 
 	executor.schema = s
 	executor.intro = intro.New(s)
+
+	// 订阅唤醒源：CDC监听器（复制连接延迟到首个订阅时建立）
+	if d != nil {
+		if dsn, err := databaseDSN(executor); err == nil {
+			executor.cdc = newListener(dsn, m.cfg.Subscription.Publication)
+		}
+	}
 	return executor, nil
 }
 
@@ -356,4 +361,3 @@ func getOperation(operations ast.OperationList, operationName string) (*ast.Oper
 	}
 	return nil, fmt.Errorf("未找到名为'%s'的操作", operationName)
 }
-

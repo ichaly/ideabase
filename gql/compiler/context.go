@@ -22,6 +22,7 @@ type Context struct {
 	volatile  bool
 	hoster    protocol.Hoster
 	variables map[string]interface{}
+	tables    map[string]bool
 }
 
 // Slot 表示SQL参数槽位：字面量值或变量引用
@@ -70,6 +71,7 @@ func (my *Context) Release() {
 	my.volatile = false
 	my.hoster = nil
 	my.variables = nil
+	my.tables = nil
 	my.slots = my.slots[:0]
 	contextPool.Put(my)
 }
@@ -78,6 +80,23 @@ func (my *Context) Release() {
 func (my *Context) Variable(name string) (interface{}, bool) {
 	value, ok := my.variables[name]
 	return value, ok
+}
+
+// MarkTable 记录本次编译涉及的表，订阅按表变更唤醒
+func (my *Context) MarkTable(name string) {
+	if my.tables == nil {
+		my.tables = make(map[string]bool, 4)
+	}
+	my.tables[name] = true
+}
+
+// Tables 返回本次编译涉及的表集合
+func (my *Context) Tables() []string {
+	tables := make([]string, 0, len(my.tables))
+	for name := range my.tables {
+		tables = append(tables, name)
+	}
+	return tables
 }
 
 // MarkVolatile 标记编译产物依赖变量内容（如整体input变量），不可按查询文本缓存

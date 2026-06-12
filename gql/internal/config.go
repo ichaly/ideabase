@@ -4,9 +4,19 @@ import "github.com/ichaly/ideabase/std"
 
 // Config 表示GraphQL配置
 type Config struct {
-	std.Config `mapstructure:",squash"`
-	Schema     SchemaConfig   `mapstructure:"schema"`
-	Metadata   MetadataConfig `mapstructure:"metadata"`
+	std.Config   `mapstructure:",squash"`
+	Schema       SchemaConfig       `mapstructure:"schema"`
+	Metadata     MetadataConfig     `mapstructure:"metadata"`
+	Subscription SubscriptionConfig `mapstructure:"subscription"`
+}
+
+// SubscriptionConfig 表示订阅(CDC)相关配置
+type SubscriptionConfig struct {
+	// 逻辑复制发布名，缺省 ideabase_cdc（不存在时引擎自动创建 FOR ALL TABLES）
+	Publication string `mapstructure:"publication"`
+
+	// 复制连接DSN，缺省复用主连接DSN（需要REPLICATION权限）
+	DSN string `mapstructure:"dsn"`
 }
 
 // SchemaConfig 表示Schema相关配置

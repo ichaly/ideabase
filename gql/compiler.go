@@ -31,6 +31,7 @@ type Plan struct {
 	defaults  map[string]interface{}
 	volatile  bool
 	resolvers []binding
+	tables    []string // 涉及的表集合，订阅按表变更唤醒
 }
 
 // Volatile 编译产物是否依赖变量内容（如整体input变量），不可缓存
@@ -72,6 +73,7 @@ func (my *Compiler) Compile(operation *ast.OperationDefinition, variables map[st
 		slots:     ctx.Slots(),
 		volatile:  ctx.Volatile(),
 		resolvers: collectBindings(my.meta, operation),
+		tables:    ctx.Tables(),
 	}
 	for _, def := range operation.VariableDefinitions {
 		if def.DefaultValue == nil {

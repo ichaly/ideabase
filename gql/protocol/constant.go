@@ -224,12 +224,12 @@ var Operators = []*Operator{
 
 // Grouping 内置标量可用的操作符集合
 var Grouping = map[string][]*Operator{
-	SCALAR_ID:        Operators[1:7],                                              //[eq,in,gt,ge,lt,le]
-	SCALAR_INT:       Operators[:8],                                               //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_FLOAT:     Operators[:8],                                               //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_DATE_TIME: Operators[:8],                                               //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_STRING:    Operators,                                                   //全部
-	SCALAR_BOOLEAN:   Operators[1:3],                                              //[eq,in]
+	SCALAR_ID:        Operators[1:7],                                                     //[eq,in,gt,ge,lt,le]
+	SCALAR_INT:       Operators[:8],                                                      //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_FLOAT:     Operators[:8],                                                      //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_DATE_TIME: Operators[:8],                                                      //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_STRING:    Operators,                                                          //全部
+	SCALAR_BOOLEAN:   Operators[1:3],                                                     //[eq,in]
 	SCALAR_JSON:      append(append([]*Operator{}, Operators[:3]...), Operators[12:]...), //[is,eq,in,hasKey,hasKeyAny,hasKeyAll] 先拷贝避免共享底层数组
 }
 

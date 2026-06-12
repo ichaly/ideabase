@@ -74,15 +74,14 @@ func (Greet) Resolve(ctx context.Context, source, args map[string]any) (any, err
 executor.Register(Greet{})
 ```
 
-## 订阅
+## 订阅（CDC 驱动）
 
-订阅采用 graphjin 同款的轮询推送方案：按间隔重执行查询，结果指纹变化时推送。
-schema 中 `Subscription` 根类型与实体查询能力一致。
+订阅基于 **WAL 逻辑复制（CDC）**：引擎维持一条复制连接（pgoutput 内置插件 +
+临时复制槽，断开自动删除），解码到**表级变更**后只唤醒涉及该表的订阅重查，
+结果指纹变化才推送。空闲零数据库负载，推送毫秒级。
 
 ```go
-executor.SetInterval(500 * time.Millisecond) // 默认1秒
-
-// 程序内订阅（channel API）
+// 程序内订阅（channel API），首次立即推送当前结果
 events, _ := executor.Subscribe(ctx, `subscription { users { items { name } total } }`, nil, "")
 for reply := range events { ... } // ctx取消后通道关闭
 ```
@@ -91,6 +90,21 @@ HTTP 侧 `Bind` 已注册 GET 路由为 WebSocket 升级入口，
 实现 [graphql-transport-ws](https://github.com/enisdenjo/graphql-ws/blob/master/PROTOCOL.md)
 子协议（connection_init/ack、subscribe、next、complete、ping/pong），
 可直接对接 Apollo Client / graphql-ws 客户端。
+
+**部署要求**（官方 PG 镜像即可，无需扩展或自定义镜像）：
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    command: ["postgres", "-c", "wal_level=logical"]  # 唯一必须项
+```
+
+- 连接账号需 `REPLICATION` 权限（默认超级用户自带）；发布由引擎自动
+  `CREATE PUBLICATION ideabase_cdc FOR ALL TABLES`，也可由 DBA 预建后配置
+  `subscription.publication` 指定
+- 复制连接缺省复用主连接 DSN，可用 `subscription.dsn` 单独指定
+- 断线自动退避重连，重连后广播唤醒补偿期间可能错过的变更
 
 ## schema 与操作文档加载
 

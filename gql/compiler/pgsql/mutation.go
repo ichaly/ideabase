@@ -43,6 +43,7 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 			return fmt.Errorf("同一操作中不能多次变更表: %s", class.Table)
 		}
 		seen[class.Table] = true
+		ctx.MarkTable(class.Table)
 
 		m := &mutation{field: field, class: class, op: op}
 		if op != protocol.DELETE {

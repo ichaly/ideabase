@@ -2,9 +2,9 @@ package gql
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
 	"sync"
-	"time"
 
 	"github.com/fasthttp/websocket"
 	"github.com/gofiber/fiber/v3"
@@ -12,32 +12,33 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
-// Subscribe 订阅查询：按间隔轮询重执行，结果变化时推送（graphjin同款方案）
-// 首次立即推送当前结果，之后仅在结果指纹变化时推送；ctx取消后通道关闭
+// Subscribe 订阅查询：基于WAL逻辑复制(CDC)的变更推送
+// 订阅涉及的表发生变更时重执行查询，结果指纹变化才推送；
+// 首次立即推送当前结果；ctx取消后通道关闭
+// 依赖数据库 wal_level=logical 与连接账号的REPLICATION权限
 func (my *Executor) Subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
+	if my.cdc == nil {
+		return nil, fmt.Errorf("订阅不可用：无法获取数据库DSN，请配置 subscription.dsn")
+	}
 	plan, err := my.plan(query, operationName, variables)
 	if err != nil {
 		return nil, err
 	}
 
+	w, err := my.cdc.watch(plan.tables)
+	if err != nil {
+		return nil, err
+	}
+
 	events := make(chan gqlReply, 1)
-	go my.poll(ctx, plan, variables, events)
+	go my.stream(ctx, plan, variables, w, events)
 	return events, nil
 }
 
-// SetInterval 设置订阅轮询间隔（默认1秒）
-func (my *Executor) SetInterval(interval time.Duration) {
-	if interval > 0 {
-		my.interval = interval
-	}
-}
-
-// poll 订阅轮询循环：执行->指纹比对->推送
-func (my *Executor) poll(ctx context.Context, plan *Plan, variables map[string]interface{}, events chan<- gqlReply) {
+// stream 订阅事件循环：首查推送，之后等待表变更唤醒
+func (my *Executor) stream(ctx context.Context, plan *Plan, variables map[string]interface{}, w *watcher, events chan<- gqlReply) {
 	defer close(events)
-
-	ticker := time.NewTicker(my.interval)
-	defer ticker.Stop()
+	defer my.cdc.unwatch(w)
 
 	var last uint64
 	for {
@@ -49,7 +50,7 @@ func (my *Executor) poll(ctx context.Context, plan *Plan, variables map[string]i
 			}
 		}
 		select {
-		case <-ticker.C:
+		case <-w.wake:
 		case <-ctx.Done():
 			return
 		}

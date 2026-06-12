@@ -90,6 +90,8 @@ type BatchResolver interface {
 5. **P5 Resolver** ✅：注册/分发/批量（BatchResolver 免 N+1）、编译期绑定收集进 Plan
 6. **P6 加载与文档** ✅：schema.file 配置、LoadDocuments 持久化查询、列表关系字段嵌套参数、README
 7. **P7 订阅** ✅：轮询推送（指纹比对）+ graphql-transport-ws WebSocket 传输
+8. **P8 订阅改纯 CDC** ✅：WAL 逻辑复制（pgoutput + 临时槽）表级变更唤醒，移除轮询；
+   Plan 记录涉及表集合；部署仅需 `wal_level=logical`
 
 ## 遗留事项（后续版本）
 

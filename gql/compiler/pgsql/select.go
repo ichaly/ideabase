@@ -144,6 +144,7 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Field, withTotal bool) error {
 	base := fmt.Sprintf("%s_%d", u.class.Table, u.index)
 	sc := scope{class: u.class, qualifier: u.class.Table}
+	ctx.MarkTable(u.class.Table)
 
 	// 分拣标量列与子关系，并收集基础查询所需的原始列
 	type relIndex struct {
@@ -269,6 +270,7 @@ func (my *Dialect) relationBond(ctx *compiler.Context, u *unit, sc scope) (func(
 
 	if through := u.rel.Through; through != nil {
 		// 中间表JOIN：中间表.目标键 = 目标表.目标列
+		ctx.MarkTable(through.TableName)
 		ctx.Space(`INNER JOIN`).Write(through.TableName).
 			Space(`ON`).Quote(through.TableName).Write(`.`).Quote(through.TargetKey).
 			Space(`=`).Quote(u.class.Table).Write(`.`).Quote(targetCol)
