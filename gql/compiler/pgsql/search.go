@@ -71,7 +71,7 @@ func newSearcher(ctx *compiler.Context, sc scope, args ast.ArgumentList) (*searc
 // buildCondition 搜索过滤条件（各列OR）
 func (my *searcher) buildCondition(d *Dialect, ctx *compiler.Context, sc scope) error {
 	column := func(name string) {
-		ctx.Quote(sc.qualifier).Write(`.`).Quote(name)
+		ctx.Column(sc.qualifier, name)
 	}
 
 	ctx.Write(`(`)
@@ -108,7 +108,7 @@ func (my *searcher) buildRank(d *Dialect, ctx *compiler.Context, sc scope) (bool
 	}
 
 	column := func(name string) {
-		ctx.Quote(sc.qualifier).Write(`.`).Quote(name)
+		ctx.Column(sc.qualifier, name)
 	}
 	ctx.Write(`GREATEST(`)
 	for i, name := range my.columns {

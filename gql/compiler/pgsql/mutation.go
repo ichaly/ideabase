@@ -8,11 +8,11 @@ package pgsql
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -106,18 +106,20 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 	}
 
 	// 统一__root读回：create/update经LATERAL读回实体，delete内联计数，__typename字面量
+	byField := make(map[*ast.Field]*mutation, len(muts))
+	for _, m := range muts {
+		byField[m.field] = m
+	}
 	ctx.Space(`SELECT JSONB_BUILD_OBJECT(`)
-	pending := muts
 	for i, field := range fields {
 		if i > 0 {
 			ctx.Write(`, `)
 		}
-		if field.Name == typename {
+		m, ok := byField[field]
+		if !ok {
 			ctx.Write(`'`, field.Alias, `', 'Mutation'`)
 			continue
 		}
-		m := pending[0]
-		pending = pending[1:]
 		ctx.Write(`'`, m.field.Alias, `', `)
 		if m.unit == nil {
 			ctx.Write(`(SELECT COUNT(*) FROM `).Quote(m.class.Table).Write(`)`)
@@ -448,11 +450,8 @@ func (my *Dialect) literalRow(ctx *compiler.Context, class *protocol.Class, valu
 		if err != nil {
 			return row, err
 		}
-		v := child.Value
 		row.columns = append(row.columns, column)
-		row.values[column] = func(c *compiler.Context) error {
-			return my.buildParam(c, v)
-		}
+		row.values[column] = my.astWriter(child.Value)
 	}
 	return row, nil
 }
@@ -460,12 +459,7 @@ func (my *Dialect) literalRow(ctx *compiler.Context, class *protocol.Class, valu
 // rawRow 运行期对象转行（键排序保证SQL确定性）
 func (my *Dialect) rawRow(ctx *compiler.Context, class *protocol.Class, object map[string]interface{}) (inputRow, error) {
 	row := inputRow{values: make(map[string]paramWriter)}
-	names := make([]string, 0, len(object))
-	for name := range object {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	for _, name := range utl.SortKeys(object) {
 		if rel := relationField(class, name); rel != nil {
 			op, err := my.rawRelationOp(ctx, rel, object[name])
 			if err != nil {
@@ -478,12 +472,8 @@ func (my *Dialect) rawRow(ctx *compiler.Context, class *protocol.Class, object m
 		if err != nil {
 			return row, err
 		}
-		value := normalizeArg(object[name])
 		row.columns = append(row.columns, column)
-		row.values[column] = func(c *compiler.Context) error {
-			c.Write(my.Placeholder(c.AddParam(value)))
-			return nil
-		}
+		row.values[column] = my.valWriter(normalizeArg(object[name]))
 	}
 	return row, nil
 }
@@ -592,23 +582,29 @@ func (my *Dialect) idWriters(ctx *compiler.Context, value *ast.Value) ([]paramWr
 	}
 	writers := make([]paramWriter, 0, len(value.Children))
 	for _, child := range value.Children {
-		id := child.Value
-		writers = append(writers, func(c *compiler.Context) error {
-			return my.buildParam(c, id)
-		})
+		writers = append(writers, my.astWriter(child.Value))
 	}
 	return writers, nil
 }
 
-// rawWriters 运行期值转参数写入器
+// astWriter 字面量/变量AST值的参数写入器
+func (my *Dialect) astWriter(value *ast.Value) paramWriter {
+	return func(c *compiler.Context) error { return my.buildParam(c, value) }
+}
+
+// valWriter 运行期值的参数写入器
+func (my *Dialect) valWriter(value any) paramWriter {
+	return func(c *compiler.Context) error {
+		c.Write(my.Placeholder(c.AddParam(value)))
+		return nil
+	}
+}
+
+// rawWriters 运行期值列表转参数写入器
 func rawWriters(my *Dialect, values []interface{}) []paramWriter {
 	writers := make([]paramWriter, 0, len(values))
 	for _, value := range values {
-		id := value
-		writers = append(writers, func(c *compiler.Context) error {
-			c.Write(my.Placeholder(c.AddParam(id)))
-			return nil
-		})
+		writers = append(writers, my.valWriter(value))
 	}
 	return writers
 }

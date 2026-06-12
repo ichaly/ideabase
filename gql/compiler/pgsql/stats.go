@@ -5,31 +5,19 @@ package pgsql
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
-// aggregates 聚合子字段到SQL函数的映射
+// aggregates 聚合子字段到SQL函数调用前缀（统一"前缀(列)"形式）
 var aggregates = map[string]string{
-	protocol.FUNCTION_SUM:            "SUM",
-	protocol.FUNCTION_AVG:            "AVG",
-	protocol.FUNCTION_MIN:            "MIN",
-	protocol.FUNCTION_MAX:            "MAX",
-	protocol.FUNCTION_COUNT_DISTINCT: "COUNT(DISTINCT %s)",
-}
-
-// buildStatsWrap 统计单元：纯数组包装 + 聚合核心
-func (my *Dialect) buildStatsWrap(ctx *compiler.Context, u *unit) error {
-	ctx.Write(`SELECT COALESCE(JSONB_AGG(TO_JSONB(`).
-		Quote(`__sr_`, u.index).Write(`.*)), '[]') AS "json" FROM (`)
-	if err := my.buildStatsCore(ctx, u); err != nil {
-		return err
-	}
-	ctx.Write(`) AS `).Quote(`__sr_`, u.index)
-	return nil
+	protocol.FUNCTION_SUM:            "SUM(",
+	protocol.FUNCTION_AVG:            "AVG(",
+	protocol.FUNCTION_MIN:            "MIN(",
+	protocol.FUNCTION_MAX:            "MAX(",
+	protocol.FUNCTION_COUNT_DISTINCT: "COUNT(DISTINCT ",
 }
 
 // buildStatsCore 聚合核心：投影 + WHERE + GROUP BY + LIMIT
@@ -44,7 +32,7 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 
 	// 投影：选择驱动，逐字段生成聚合表达式
 	column := func(name string) {
-		ctx.Quote(u.class.Table).Write(`.`).Quote(sc.column(name))
+		ctx.Column(u.class.Table, sc.column(name))
 	}
 	written := 0
 	comma := func() {
@@ -95,16 +83,9 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 				if !ok {
 					return fmt.Errorf("不支持的聚合函数: %s", sub.Name)
 				}
-				ctx.Write(`'`, sub.Alias, `', `)
-				if strings.Contains(function, "%s") { // COUNT(DISTINCT col)
-					ctx.Write(`COUNT(DISTINCT `)
-					column(f.Name)
-					ctx.Write(`)`)
-				} else {
-					ctx.Write(function, `(`)
-					column(f.Name)
-					ctx.Write(`)`)
-				}
+				ctx.Write(`'`, sub.Alias, `', `, function)
+				column(f.Name)
+				ctx.Write(`)`)
 			}
 			ctx.Write(`) AS `).Quote(f.Alias)
 		}

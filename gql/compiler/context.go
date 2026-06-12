@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/samber/lo"
 )
 
 // Context 负责SQL编译过程中的上下文状态，包括SQL拼接、参数、变量、方言等
@@ -124,11 +125,7 @@ func (my *Context) MarkTable(name string) {
 
 // Tables 返回本次编译涉及的表集合
 func (my *Context) Tables() []string {
-	tables := make([]string, 0, len(my.tables))
-	for name := range my.tables {
-		tables = append(tables, name)
-	}
-	return tables
+	return lo.Keys(my.tables)
 }
 
 // MarkVolatile 标记编译产物依赖变量内容（如整体input变量），不可按查询文本缓存
@@ -191,9 +188,31 @@ func (my *Context) TableName(className string) (string, bool) {
 
 // Args 返回参数列表（按当前变量表解析所有槽位）
 func (my *Context) Args() []any {
-	args := make([]any, len(my.slots))
-	for i, slot := range my.slots {
-		args[i] = slot.Resolve(my.variables)
+	return ResolveSlots(my.slots, my.variables)
+}
+
+// ResolveSlots 解析槽位为参数列表；同一游标变量只解码一次（K个排序键共享）
+func ResolveSlots(slots []Slot, variables map[string]interface{}) []any {
+	var cursors map[string][]any // 惰性：仅游标槽位存在时分配
+	args := make([]any, len(slots))
+	for i, slot := range slots {
+		if slot.Variable != "" && slot.Cursor >= 0 {
+			if cursors == nil {
+				cursors = make(map[string][]any, 1)
+			}
+			keys, ok := cursors[slot.Variable]
+			if !ok {
+				if text, isText := variables[slot.Variable].(string); isText {
+					keys, _ = DecodeCursor(text)
+				}
+				cursors[slot.Variable] = keys
+			}
+			if slot.Cursor < len(keys) {
+				args[i] = keys[slot.Cursor]
+			}
+			continue
+		}
+		args[i] = slot.Resolve(variables)
 	}
 	return args
 }
@@ -289,6 +308,14 @@ func (my *Context) SpaceAfter(content ...any) *Context {
 // Quote 添加引号
 func (my *Context) Quote(list ...any) *Context {
 	return my.Wrap(my.quote, list...)
+}
+
+// Column 写入（可选限定符的）带引号列引用："限定符"."列"
+func (my *Context) Column(qualifier string, column any) *Context {
+	if qualifier != "" {
+		my.Quote(qualifier).Write(".")
+	}
+	return my.Quote(column)
 }
 
 // QuotedWithSpace 添加引号和空格

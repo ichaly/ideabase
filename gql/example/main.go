@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -59,7 +60,7 @@ func main() {
 	})
 
 	// 2. 数据库连接（docker compose暴露5433）
-	dsn := env("DEMO_DSN", "host=localhost port=5433 user=demo password=demo dbname=demo sslmode=disable")
+	dsn := cmp.Or(os.Getenv("DEMO_DSN"), "host=localhost port=5433 user=demo password=demo dbname=demo sslmode=disable")
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	die(err)
 
@@ -81,13 +82,6 @@ func main() {
 
 	fmt.Println("GraphQL服务: http://localhost:8080/graphql （示例见 example/README.md）")
 	die(app.Listen(":8080"))
-}
-
-func env(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func die(err error) {

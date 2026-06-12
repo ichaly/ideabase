@@ -5,17 +5,23 @@ import (
 	"sync"
 )
 
+// planKey 缓存键：结构体避免每请求拼接字符串的分配
+type planKey struct {
+	operation string
+	query     string
+}
+
 // planCache 执行计划LRU缓存：命中路径零解析、零编译
 type planCache struct {
 	mu    sync.Mutex
 	limit int
-	items map[string]*list.Element
+	items map[planKey]*list.Element
 	order *list.List // 最近使用在前
 }
 
 // cacheEntry 缓存项
 type cacheEntry struct {
-	key  string
+	key  planKey
 	plan *Plan
 }
 
@@ -23,13 +29,13 @@ type cacheEntry struct {
 func newPlanCache(limit int) *planCache {
 	return &planCache{
 		limit: limit,
-		items: make(map[string]*list.Element, limit),
+		items: make(map[planKey]*list.Element, limit),
 		order: list.New(),
 	}
 }
 
 // Get 查找计划并刷新热度
-func (my *planCache) Get(key string) (*Plan, bool) {
+func (my *planCache) Get(key planKey) (*Plan, bool) {
 	my.mu.Lock()
 	defer my.mu.Unlock()
 
@@ -42,7 +48,7 @@ func (my *planCache) Get(key string) (*Plan, bool) {
 }
 
 // Put 写入计划，超出容量时淘汰最久未用项
-func (my *planCache) Put(key string, plan *Plan) {
+func (my *planCache) Put(key planKey, plan *Plan) {
 	my.mu.Lock()
 	defer my.mu.Unlock()
 

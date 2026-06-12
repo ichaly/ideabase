@@ -127,7 +127,7 @@ func (my *Dialect) buildKeyset(ctx *compiler.Context, sc scope, p *pager) error 
 	}
 
 	column := func(i int) {
-		ctx.Quote(sc.qualifier).Write(`.`).Quote(p.keys[i].column)
+		ctx.Column(sc.qualifier, p.keys[i].column)
 	}
 	operator := func(i int) string {
 		if p.order(i) == "DESC" {

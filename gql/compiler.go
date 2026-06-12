@@ -45,13 +45,11 @@ func (my *Plan) Volatile() bool {
 
 // Args 按变量表解析参数槽位，缺失变量回退到操作定义的默认值
 func (my *Plan) Args(variables map[string]interface{}) []any {
-	args := make([]any, len(my.slots))
+	args := compiler.ResolveSlots(my.slots, variables)
 	for i, slot := range my.slots {
-		value := slot.Resolve(variables)
-		if value == nil && slot.Variable != "" {
-			value = my.defaults[slot.Variable]
+		if args[i] == nil && slot.Variable != "" {
+			args[i] = my.defaults[slot.Variable]
 		}
-		args[i] = value
 	}
 	return args
 }
@@ -134,11 +132,11 @@ func (my *Compiler) selectDialect(list []compiler.Dialect) error {
 	// 已知驱动严格按名匹配
 	if my.meta != nil && my.meta.db != nil {
 		driver := my.meta.db.Name()
-		for _, name := range []string{"postgres", "mysql"} {
-			if !strings.Contains(driver, name) {
+		for prefix, name := range map[string]string{"postgres": "postgresql", "mysql": "mysql"} {
+			if !strings.Contains(driver, prefix) {
 				continue
 			}
-			dialect, ok := dialects[strings.Replace(name, "postgres", "postgresql", 1)]
+			dialect, ok := dialects[name]
 			if !ok {
 				return fmt.Errorf("数据库驱动 %s 没有注册对应的SQL方言实现", driver)
 			}

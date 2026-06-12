@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	stdjson "encoding/json"
 	"fmt"
 	"hash/fnv"
 	"sync"
@@ -89,8 +90,15 @@ func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]i
 
 // ---------- graphql-transport-ws 协议 ----------
 
-// wsMessage graphql-transport-ws 协议消息
+// wsMessage graphql-transport-ws 协议消息（出站Payload为任意值，入站为原始JSON延迟解析）
 type wsMessage struct {
+	ID      string          `json:"id,omitempty"`
+	Type    string          `json:"type"`
+	Payload stdjson.RawMessage `json:"payload,omitempty"`
+}
+
+// wsReply 出站消息
+type wsReply struct {
 	ID      string `json:"id,omitempty"`
 	Type    string `json:"type"`
 	Payload any    `json:"payload,omitempty"`
@@ -128,7 +136,7 @@ type socketSession struct {
 }
 
 // write 串行化并发写
-func (my *socketSession) write(message wsMessage) error {
+func (my *socketSession) write(message wsReply) error {
 	my.mu.Lock()
 	defer my.mu.Unlock()
 	return my.conn.WriteJSON(message)
@@ -156,11 +164,11 @@ func (my *Executor) serveSocket(conn *websocket.Conn) {
 
 		switch message.Type {
 		case wsConnectionInit:
-			if err := session.write(wsMessage{Type: wsConnectionAck}); err != nil {
+			if err := session.write(wsReply{Type: wsConnectionAck}); err != nil {
 				return
 			}
 		case wsPing:
-			if err := session.write(wsMessage{Type: wsPong}); err != nil {
+			if err := session.write(wsReply{Type: wsPong}); err != nil {
 				return
 			}
 		case wsSubscribe:
@@ -179,12 +187,8 @@ func (my *Executor) serveSocket(conn *websocket.Conn) {
 // startSubscription 启动单个订阅：消费事件通道并推送next帧
 func (my *Executor) startSubscription(ctx context.Context, session *socketSession, message wsMessage) {
 	var req gqlQuery
-	payload, err := json.Marshal(message.Payload)
-	if err == nil {
-		err = json.Unmarshal(payload, &req)
-	}
-	if err != nil {
-		_ = session.write(wsMessage{ID: message.ID, Type: wsError,
+	if err := json.Unmarshal(message.Payload, &req); err != nil {
+		_ = session.write(wsReply{ID: message.ID, Type: wsError,
 			Payload: gqlerror.List{gqlerror.Errorf("无效的subscribe载荷: %v", err)}})
 		return
 	}
@@ -193,7 +197,7 @@ func (my *Executor) startSubscription(ctx context.Context, session *socketSessio
 	events, err := my.Subscribe(subCtx, req.Query, req.Variables, req.OperationName)
 	if err != nil {
 		stop()
-		_ = session.write(wsMessage{ID: message.ID, Type: wsError, Payload: gqlerror.List{gqlerror.Wrap(err)}})
+		_ = session.write(wsReply{ID: message.ID, Type: wsError, Payload: gqlerror.List{gqlerror.Wrap(err)}})
 		return
 	}
 
@@ -201,7 +205,7 @@ func (my *Executor) startSubscription(ctx context.Context, session *socketSessio
 	if _, exists := session.subs[message.ID]; exists {
 		session.mu.Unlock()
 		stop()
-		_ = session.write(wsMessage{ID: message.ID, Type: wsError,
+		_ = session.write(wsReply{ID: message.ID, Type: wsError,
 			Payload: gqlerror.List{gqlerror.Errorf("订阅ID重复: %s", message.ID)}})
 		return
 	}
@@ -211,10 +215,10 @@ func (my *Executor) startSubscription(ctx context.Context, session *socketSessio
 	go func() {
 		defer stop()
 		for reply := range events {
-			if err := session.write(wsMessage{ID: message.ID, Type: wsNext, Payload: reply}); err != nil {
+			if err := session.write(wsReply{ID: message.ID, Type: wsNext, Payload: reply}); err != nil {
 				return
 			}
 		}
-		_ = session.write(wsMessage{ID: message.ID, Type: wsComplete})
+		_ = session.write(wsReply{ID: message.ID, Type: wsComplete})
 	}()
 }

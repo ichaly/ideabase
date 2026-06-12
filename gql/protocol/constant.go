@@ -14,21 +14,17 @@ const (
 	// GraphQL类型名称
 	TYPE_SORT_DIRECTION  = "SortDirection"
 	TYPE_PAGE_INFO       = "PageInfo"
-	TYPE_GROUP_BY        = "GroupBy"
 	TYPE_NUMBER_STATS    = "NumberStats"
 	TYPE_STRING_STATS    = "StringStats"
 	TYPE_DATE_TIME_STATS = "DateTimeStats"
 
 	// GraphQL入参名称后缀
 	SUFFIX_STATS        = "Stats"
-	SUFFIX_GROUP        = "Group"
 	SUFFIX_RESULT       = "Result"
 	SUFFIX_SORT_INPUT   = "SortInput"
 	SUFFIX_WHERE_INPUT  = "WhereInput"
 	SUFFIX_CREATE_INPUT = "CreateInput"
 	SUFFIX_UPDATE_INPUT = "UpdateInput"
-	SUFFIX_UPSERT_INPUT = "UpsertInput"
-	SUFFIX_INSERT_INPUT = "InsertInput"
 )
 
 // 参数名称
@@ -44,7 +40,6 @@ const (
 	BEFORE     = "before"
 	SORT       = "sort"
 	WHERE      = "where"
-	LEVEL      = "level"
 	INSERT     = "insert"
 	CREATE     = "create"
 	UPSERT     = "upsert"
@@ -61,8 +56,6 @@ const (
 	TOTAL     = "total"
 	ITEMS     = "items"
 	PAGE_INFO = "pageInfo"
-	PARENTS   = "parents"
-	CHILDREN  = "children"
 )
 
 // 聚合函数字段名常量
@@ -76,23 +69,15 @@ const (
 	FUNCTION_COUNT_DISTINCT = "countDistinct"
 )
 
-// 路基表达式后缀
-const (
-	SUFFIX_EXPRESSION      = "Expression"
-	SUFFIX_EXPRESSION_LIST = "ListExpression"
-)
-
 // 内置枚举类型
 const (
 	ENUM_IS_INPUT   = "IsInput"
-	ENUM_SORT_INPUT = "SortInput"
 )
 
 // 内置标量类型
 const (
 	SCALAR_ID        = "ID"
 	SCALAR_INT       = "Int"
-	SCALAR_DATE      = "Date"
 	SCALAR_JSON      = "Json"
 	SCALAR_FLOAT     = "Float"
 	SCALAR_STRING    = "String"
@@ -118,8 +103,6 @@ const (
 	descContains           = "JSON value contains the given JSON (jsonb @>, GIN-indexable)"
 	descContainedIn        = "JSON value is contained in the given JSON (jsonb <@)"
 	descHasKey             = "Value is a JSON object with the specified key"
-	descHasKeyAny          = "Value is a JSON object with any of the specified keys"
-	descHasKeyAll          = "Value is a JSON object with all of the specified keys"
 )
 
 // 逻辑关系操作符常量
@@ -133,7 +116,6 @@ const (
 	IS          = "is"
 	EQ          = "eq"
 	IN          = "in"
-	NI          = "ni"
 	GT          = "gt"
 	GE          = "ge"
 	LT          = "lt"
@@ -146,8 +128,6 @@ const (
 	CONTAINS     = "contains"
 	CONTAINED_IN = "containedIn"
 	HAS_KEY     = "hasKey"
-	HAS_KEY_ANY = "hasKeyAny"
-	HAS_KEY_ALL = "hasKeyAll"
 )
 
 // DataTypes 内置的数据库到GraphQL的类型映射
@@ -209,36 +189,44 @@ var DataTypes = map[string]string{
 	"longblob":   SCALAR_STRING,
 }
 
-// Operators 全部操作符，顺序不可调整（Grouping按下标切片）
+// Operators 全部操作符；Value为最终SQL文本（编译期零转换）
+// jsonb系（contains/containedIn/hasKey）由方言渲染为函数形式，Value仅作标注
 var Operators = []*Operator{
-	{Name: IS, Value: "is", Description: descIs},
+	{Name: IS, Value: "IS", Description: descIs},
 	{Name: EQ, Value: "=", Description: descEqual},
-	{Name: IN, Value: "in", Description: descIn},
+	{Name: IN, Value: "IN", Description: descIn},
 	{Name: GT, Value: ">", Description: descGreaterThan},
 	{Name: GE, Value: ">=", Description: descGreaterThanOrEqual},
 	{Name: LT, Value: "<", Description: descLessThan},
 	{Name: LE, Value: "<=", Description: descLessThanOrEqual},
 	{Name: NE, Value: "!=", Description: descNotEqual},
-	{Name: LIKE, Value: "like", Description: descLike},
-	{Name: I_LIKE, Value: "ilike", Description: descILike},
+	{Name: LIKE, Value: "LIKE", Description: descLike},
+	{Name: I_LIKE, Value: "ILIKE", Description: descILike},
 	{Name: REGEX, Value: "~", Description: descRegex},
 	{Name: I_REGEX, Value: "~*", Description: descIRegex},
-	{Name: CONTAINS, Value: "@>", Description: descContains},
-	{Name: CONTAINED_IN, Value: "<@", Description: descContainedIn},
-	{Name: HAS_KEY, Value: "?", Description: descHasKey},
-	{Name: HAS_KEY_ANY, Value: "?|", Description: descHasKeyAny},
-	{Name: HAS_KEY_ALL, Value: "?&", Description: descHasKeyAll},
+	{Name: CONTAINS, Value: "jsonb_contains", Description: descContains},
+	{Name: CONTAINED_IN, Value: "jsonb_contained", Description: descContainedIn},
+	{Name: HAS_KEY, Value: "jsonb_exists", Description: descHasKey},
+}
+
+// pick 按名取操作符（声明式分组，杜绝下标切片的顺序耦合）
+func pick(names ...string) []*Operator {
+	operators := make([]*Operator, 0, len(names))
+	for _, name := range names {
+		operators = append(operators, dictionary[name])
+	}
+	return operators
 }
 
 // Grouping 内置标量可用的操作符集合
 var Grouping = map[string][]*Operator{
-	SCALAR_ID:        Operators[1:7],                                                     //[eq,in,gt,ge,lt,le]
-	SCALAR_INT:       Operators[:8],                                                      //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_FLOAT:     Operators[:8],                                                      //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_DATE_TIME: Operators[:8],                                                      //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_STRING:    Operators[:12],                                                      //[is..iRegex]
-	SCALAR_BOOLEAN:   Operators[1:3],                                                     //[eq,in]
-	SCALAR_JSON:      append(append([]*Operator{}, Operators[:3]...), Operators[12:15]...), //[is,eq,in,contains,containedIn,hasKey] 先拷贝避免共享底层数组
+	SCALAR_ID:        pick(EQ, IN, GT, GE, LT, LE),
+	SCALAR_INT:       pick(IS, EQ, IN, GT, GE, LT, LE, NE),
+	SCALAR_FLOAT:     pick(IS, EQ, IN, GT, GE, LT, LE, NE),
+	SCALAR_DATE_TIME: pick(IS, EQ, IN, GT, GE, LT, LE, NE),
+	SCALAR_STRING:    pick(IS, EQ, IN, GT, GE, LT, LE, NE, LIKE, I_LIKE, REGEX, I_REGEX),
+	SCALAR_BOOLEAN:   pick(EQ, IN),
+	SCALAR_JSON:      pick(IS, EQ, IN, CONTAINS, CONTAINED_IN, HAS_KEY),
 }
 
 // Scalars 内置标量类型集合

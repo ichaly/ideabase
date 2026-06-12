@@ -157,13 +157,11 @@ func (my *Dialect) buildFieldCondition(ctx *compiler.Context, sc scope, child *a
 	return nil
 }
 
-// jsonbFunctions jsonb操作符的函数式写法：
-// gorm会把SQL中的@/?当作命名参数与占位符解析，@>/<@/?这类操作符会被劫持，
-// 统一改用PG内置等价函数（语义与索引利用完全一致）
-var jsonbFunctions = map[string]string{
-	protocol.CONTAINS:     "jsonb_contains",
-	protocol.CONTAINED_IN: "jsonb_contained",
-	protocol.HAS_KEY:      "jsonb_exists",
+// jsonbFunctions 以函数形式渲染的操作符（函数名即protocol.Operator.Value）
+var jsonbFunctions = map[string]bool{
+	protocol.CONTAINS:     true,
+	protocol.CONTAINED_IN: true,
+	protocol.HAS_KEY:      true,
 }
 
 // buildOperator 构建单个字段条件表达式（含列引用）
@@ -184,18 +182,13 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, sc scope, column string,
 	}
 
 	// jsonb函数式操作符：jsonb_contains(列, $n::jsonb) / jsonb_exists(列, $n)
-	if function, ok := jsonbFunctions[opChild.Name]; ok {
-		ctx.Write(function, `(`)
+	// （gorm会劫持@>/<@/?符号形态，函数形式语义与索引利用一致）
+	if jsonbFunctions[opChild.Name] {
+		ctx.Write(op.Value, `(`)
 		qualify()
 		ctx.Write(`, `)
-		if value.Kind == ast.Variable {
-			ctx.Write(my.Placeholder(ctx.AddVariable(value.Raw)))
-		} else {
-			val, err := value.Value(nil)
-			if err != nil {
-				return err
-			}
-			ctx.Write(my.Placeholder(ctx.AddParam(normalizeArg(val))))
+		if err := my.buildParam(ctx, value); err != nil {
+			return err
 		}
 		if opChild.Name != protocol.HAS_KEY {
 			ctx.Write(`::jsonb`)
@@ -205,10 +198,10 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, sc scope, column string,
 	}
 
 	qualify()
-	ctx.Space(strings.ToUpper(op.Value))
+	ctx.Space(op.Value)
 
 	switch opChild.Name {
-	case protocol.IN, protocol.NI:
+	case protocol.IN:
 		ctx.Write("(")
 		if value.Kind == ast.ListValue {
 			for i, child := range value.Children {
@@ -255,6 +248,6 @@ func (my *Dialect) buildParam(ctx *compiler.Context, value *ast.Value) error {
 	if err != nil {
 		return fmt.Errorf("获取参数值失败: %w", err)
 	}
-	ctx.Write(my.Placeholder(ctx.AddParam(val)))
+	ctx.Write(my.Placeholder(ctx.AddParam(normalizeArg(val))))
 	return nil
 }

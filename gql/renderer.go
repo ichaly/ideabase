@@ -27,14 +27,9 @@ const (
 	DESC_IS_ENUM         = "空值条件枚举"
 
 	// 分类标题
-	SECTION_PAGING      = "分页相关类型"
 	SECTION_FILTER      = "过滤器类型定义"
 	SECTION_QUERY       = "查询和变更"
 	SECTION_CONNECTION  = "连接和边类型（游标分页）"
-)
-
-// 字段描述常量
-const (
 )
 
 // Renderer 负责将元数据渲染为GraphQL schema
@@ -447,9 +442,9 @@ func (my *Renderer) renderFilter() error {
 			}
 			renderedOps[op.Name] = true
 
-			if op.Name == HAS_KEY || op.Name == HAS_KEY_ANY || op.Name == HAS_KEY_ALL {
+			if op.Name == HAS_KEY {
 				my.writeField(op.Name, SCALAR_STRING, renderer.WithComment(op.Description))
-			} else if op.Name == IN || op.Name == NI {
+			} else if op.Name == IN {
 				my.writeField(op.Name, scalarType, renderer.ListNonNull(), renderer.WithComment(op.Description))
 			} else if op.Name == IS {
 				my.writeField(op.Name, ENUM_IS_INPUT, renderer.WithComment(op.Description))

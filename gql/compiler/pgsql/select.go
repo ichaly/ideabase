@@ -76,19 +76,21 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 
 	var err error
 	switch {
-	case u.stats: // 统计聚合
-		err = my.buildStatsWrap(ctx, u)
 	case u.single: // 单对象：多对一关系或变更读回
 		ctx.Write(`SELECT TO_JSONB(`).
 			Quote(`__sr_`, u.index).Write(`.*) AS "json" FROM (`)
 		err = my.buildCore(ctx, u, fieldsOf(u.field.SelectionSet), false)
 		ctx.Write(`) AS `).Quote(`__sr_`, u.index)
-	case u.rel == nil && !u.plain: // 查询根字段：Result契约 items/total
+	case u.rel == nil && !u.plain && !u.stats: // 查询根字段：Result契约 items/total
 		err = my.buildResultWrap(ctx, u)
-	default: // 列表关系：纯数组
+	default: // 纯数组：列表关系 / 批量读回 / 统计聚合
+		core := func() error { return my.buildCore(ctx, u, fieldsOf(u.field.SelectionSet), false) }
+		if u.stats {
+			core = func() error { return my.buildStatsCore(ctx, u) }
+		}
 		ctx.Write(`SELECT COALESCE(JSONB_AGG(TO_JSONB(`).
 			Quote(`__sr_`, u.index).Write(`.*)), '[]') AS "json" FROM (`)
-		err = my.buildCore(ctx, u, fieldsOf(u.field.SelectionSet), false)
+		err = core()
 		ctx.Write(`) AS `).Quote(`__sr_`, u.index)
 	}
 	if err != nil {
@@ -354,7 +356,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	ctx.SpaceAfter(`SELECT`)
 	for _, f := range scalars {
 		comma()
-		ctx.Quote(base).Write(`.`).Quote(sc.column(f.Name)).Space(`AS`).Quote(f.Alias)
+		ctx.Column(base, sc.column(f.Name)).Space(`AS`).Quote(f.Alias)
 	}
 	for _, f := range typeNames {
 		comma()
@@ -374,7 +376,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			if i > 0 {
 				ctx.Write(`, `)
 			}
-			ctx.Quote(base).Write(`.`).Quote(key.column)
+			ctx.Column(base, key.column)
 		}
 		ctx.Write(`)::text, 'UTF8'), 'base64') AS "__cursor"`)
 	}
@@ -405,7 +407,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			if i > 0 {
 				ctx.Write(`, `)
 			}
-			ctx.Quote(u.class.Table).Write(`.`).Quote(column)
+			ctx.Column(u.class.Table, column)
 		}
 		ctx.Write(`) `)
 	}
@@ -413,7 +415,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		if i > 0 {
 			ctx.SpaceAfter(`,`)
 		}
-		ctx.Quote(u.class.Table).Write(`.`).Quote(column)
+		ctx.Column(u.class.Table, column)
 	}
 	if withTotal {
 		if len(columns) > 0 {
@@ -473,7 +475,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			if i > 0 {
 				ctx.Write(`, `)
 			}
-			ctx.Quote(sc.qualifier).Write(`.`).Quote(key.column).SpaceBefore(u.page.order(i))
+			ctx.Column(sc.qualifier, key.column).SpaceBefore(u.page.order(i))
 		}
 		ctx.Space(`LIMIT`).Write(u.page.limit + 1)
 	} else {
@@ -488,11 +490,11 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 				if i > 0 {
 					ctx.Write(`, `)
 				}
-				ctx.Quote(u.class.Table).Write(`.`).Quote(column)
+				ctx.Column(u.class.Table, column)
 			}
 			for _, child := range sortEntries(u.args) {
 				column := sc.column(child.Name)
-				ctx.Write(`, `).Quote(u.class.Table).Write(`.`).Quote(column)
+				ctx.Write(`, `).Column(u.class.Table, column)
 				if child.Value != nil && child.Value.Raw != "" {
 					ctx.SpaceBefore(directions[strings.ToUpper(child.Value.Raw)])
 				}
@@ -540,19 +542,19 @@ func (my *Dialect) relationBond(ctx *compiler.Context, u *unit, sc scope) (func(
 		// 中间表JOIN：中间表.目标键 = 目标表.目标列
 		ctx.MarkTable(through.TableName)
 		ctx.Space(`INNER JOIN`).Write(through.TableName).
-			Space(`ON`).Quote(through.TableName).Write(`.`).Quote(through.TargetKey).
-			Space(`=`).Quote(u.class.Table).Write(`.`).Quote(targetCol)
+			Space(`ON`).Column(through.TableName, through.TargetKey).
+			Space(`=`).Column(u.class.Table, targetCol)
 		// 关联条件：中间表.源键 = 父别名.源列
 		return func() {
-			ctx.Quote(through.TableName).Write(`.`).Quote(through.SourceKey).
-				Space(`=`).Quote(u.parent).Write(`.`).Quote(parentCol)
+			ctx.Column(through.TableName, through.SourceKey).
+				Space(`=`).Column(u.parent, parentCol)
 		}, nil
 	}
 
 	// 普通关联：目标表.目标列 = 父别名.源列
 	return func() {
-		ctx.Quote(u.class.Table).Write(`.`).Quote(targetCol).
-			Space(`=`).Quote(u.parent).Write(`.`).Quote(parentCol)
+		ctx.Column(u.class.Table, targetCol).
+			Space(`=`).Column(u.parent, parentCol)
 	}, nil
 }
 
@@ -624,7 +626,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 			if i > 0 {
 				ctx.Write(`, `)
 			}
-			ctx.Quote(qualifier).Write(`.`).Quote(column)
+			ctx.Column(qualifier, column)
 		}
 	}
 
@@ -632,12 +634,12 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 	list(u.class.Table)
 	ctx.Write(`, 1 AS "__lv" FROM `, u.class.Table, ` WHERE `).
 		Quote(u.class.Table).Write(`.`).Quote(targetCol).
-		Write(` = `).Quote(u.parent).Write(`.`).Quote(parentCol)
+		Write(` = `).Column(u.parent, parentCol)
 	ctx.Write(` UNION ALL SELECT `)
 	list(u.class.Table)
 	ctx.Write(`, `).Quote(tree).Write(`."__lv" + 1 FROM `, u.class.Table, `, `).Quote(tree).
-		Write(` WHERE `).Quote(u.class.Table).Write(`.`).Quote(targetCol).
-		Write(` = `).Quote(tree).Write(`.`).Quote(sourceCol).
+		Write(` WHERE `).Column(u.class.Table, targetCol).
+		Write(` = `).Column(tree, sourceCol).
 		Write(` AND `).Quote(tree).Write(`."__lv" < `, depth)
 	ctx.Write(`) SELECT `)
 	list(tree)

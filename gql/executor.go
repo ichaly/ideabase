@@ -109,13 +109,10 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 	executor.schema = s
 	executor.intro = intro.New(s)
 
-	// 全文搜索能力：配置优先，否则探测数据库（jieba/zhparser分词 > pg_trgm > ilike降级）
 	if d != nil {
+		// 全文搜索能力：配置优先，否则探测数据库（jieba/zhparser分词 > pg_trgm > ilike降级）
 		executor.metadata.SetSearchMode(detectSearch(d, m.cfg.Search))
-	}
-
-	// 订阅唤醒源：按驱动名从注册表选取CDC实现（复制连接延迟到首个订阅时建立）
-	if d != nil {
+		// 订阅唤醒源：按驱动名从注册表选取CDC实现（复制连接延迟到首个订阅时建立）
 		if factory, ok := notifiers[d.Name()]; ok {
 			if source, err := factory(d, m.cfg.Subscription); err == nil {
 				executor.cdc = source
@@ -140,9 +137,17 @@ func detectSearch(db *gorm.DB, cfg internal.SearchConfig) (string, string) {
 		return "tsvector", config
 	}
 
-	db.Exec(`CREATE EXTENSION IF NOT EXISTS pg_trgm`) // 权限不足时静默失败，仅探测
-	var trigram int
-	if err := db.Raw(`SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'`).Scan(&trigram).Error; err == nil && trigram == 1 {
+	// 先探测已安装（常态），缺失才尝试创建（contrib模块，权限不足时静默降级）
+	probe := func() bool {
+		var trigram int
+		err := db.Raw(`SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'`).Scan(&trigram).Error
+		return err == nil && trigram == 1
+	}
+	if probe() {
+		return "trigram", ""
+	}
+	db.Exec(`CREATE EXTENSION IF NOT EXISTS pg_trgm`)
+	if probe() {
 		return "trigram", ""
 	}
 	return "ilike", ""
@@ -341,7 +346,7 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 		return nil, fmt.Errorf("执行器未配置数据库或编译器")
 	}
 
-	key := operationName + "\x00" + query
+	key := planKey{operation: operationName, query: query}
 	if plan, ok := my.cache.Get(key); ok {
 		return plan, nil
 	}
