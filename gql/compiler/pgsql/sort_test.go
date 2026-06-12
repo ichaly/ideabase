@@ -1,6 +1,7 @@
 package pgsql
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql"
@@ -8,6 +9,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/vektah/gqlparser/v2/ast"
 )
+
+// normalizeSpaces 归一化空白：去除首尾空格并把连续空白压缩为单个空格
+func normalizeSpaces(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
 
 func TestSortBuilder(t *testing.T) {
 	dialect := &Dialect{}
@@ -134,7 +140,7 @@ func TestSortBuilder(t *testing.T) {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, tt.expected, ctx.String())
+				assert.Equal(t, normalizeSpaces(tt.expected), normalizeSpaces(ctx.String()))
 			}
 		})
 	}
@@ -165,7 +171,7 @@ func TestSortWithAlias(t *testing.T) {
 	err := dialect.buildOrderByWithAlias(ctx, args, "u")
 
 	assert.NoError(t, err)
-	assert.Equal(t, ` ORDER BY "u"."name" ASC`, ctx.String())
+	assert.Equal(t, normalizeSpaces(` ORDER BY "u"."name" ASC`), normalizeSpaces(ctx.String()))
 }
 
 func TestSortErrorHandling(t *testing.T) {

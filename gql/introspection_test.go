@@ -3,12 +3,9 @@ package gql
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/compiler"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -70,13 +67,13 @@ func (my *mockPgsqlDialect) SupportsWithCTE() bool {
 }
 
 func TestGqlParserSchema(t *testing.T) {
-	// 从cfg/schema.graphql文件中读取数据
-	data, err := os.ReadFile(filepath.Join(utl.Root(), "cfg/schema.graphql"))
+	// 由mock元数据现场生成schema，避免依赖预生成文件
+	data, err := NewRenderer(createMockMetadata(t)).Generate()
 	assert.NoError(t, err)
 
 	schema, err := gqlparser.LoadSchema(&ast.Source{
 		Name:  "test.graphql",
-		Input: string(data),
+		Input: data,
 	})
 	assert.NoError(t, err)
 

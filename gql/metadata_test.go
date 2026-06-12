@@ -73,7 +73,7 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 
 	// 创建测试表结构
 	// 读取PostgreSQL建表SQL文件
-	sqlBytes, err := os.ReadFile(filepath.Join(utl.Root(), "gql/assets/sql/pgsql.sql"))
+	sqlBytes, err := os.ReadFile(filepath.Join(utl.Root(), "assets/sql/pgsql.sql"))
 	require.NoError(t, err, "读取SQL文件失败")
 
 	// 执行建表SQL
@@ -105,7 +105,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 		k, err := std.NewKonfig()
 		require.NoError(t, err, "创建配置失败")
 		k.Set("mode", "dev")
-		k.Set("app.root", utl.Root())
+		k.Set("app.root", t.TempDir())
 		k.Set("schema.schema", "public")
 		k.Set("schema.enable-camel-case", true)
 
@@ -183,10 +183,11 @@ func TestMetadataLoadingModes(t *testing.T) {
 		require.NoError(t, err, "创建配置失败")
 		k.Set("mode", "dev")
 
-		k.Set("app.root", "../")
+		root := t.TempDir()
+		k.Set("app.root", root)
 		loader1, err := NewMetadata(k, db)
 		require.NoError(t, err, "从数据库创建元数据加载器失败")
-		err = loader1.saveToFile("../cfg/metadata.test.json")
+		err = loader1.saveToFile(filepath.Join(root, "cfg", "metadata.test.json"))
 		require.NoError(t, err, "保存元数据到文件失败")
 
 		// 从test.json加载
@@ -344,7 +345,7 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.use-camel", true)
 
@@ -363,7 +364,8 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 	defer cleanup()
 
 	// 创建临时配置文件
-	configFile := filepath.Join(utl.Root(), "cfg", "metadata.config.json")
+	root := t.TempDir()
+	configFile := filepath.Join(root, "cfg", "metadata.config.json")
 	configData := map[string]interface{}{
 		"nodes": map[string]interface{}{
 			"User": map[string]interface{}{
@@ -399,7 +401,7 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "config")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", root)
 	k.Set("metadata.file", "cfg/metadata.config.json") // 路径加上cfg/
 
 	// 创建元数据加载器
@@ -453,7 +455,7 @@ func TestNameConversion(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("metadata.use-camel", true)
 	k.Set("metadata.use-singular", false)
 	k.Set("metadata.table-prefix", []string{"tbl_"})
@@ -509,7 +511,7 @@ func TestTableAndFieldFiltering(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("metadata.exclude-tables", []string{"posts"})
 	k.Set("metadata.exclude-fields", []string{"password"})
 
@@ -561,7 +563,7 @@ func TestLoadMetadataFromFile(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 
 	// 创建元数据加载器
 	meta, err := NewMetadata(k, db)
@@ -597,7 +599,7 @@ func TestRelationNameConversion(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.use-camel", true)
 	k.Set("metadata.use-singular", false)
@@ -682,7 +684,7 @@ func TestNewMetadataFeatures(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("schema.enable-camel-case", true)
 
@@ -871,7 +873,7 @@ func TestMetadataIndexPointers(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("schema.enable-camel-case", true)
 

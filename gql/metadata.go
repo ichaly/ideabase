@@ -267,6 +267,7 @@ func (my *Metadata) processRelations() {
 		Description  string
 		IsThrough    bool
 		RelationType protocol.RelationType
+		Relation     *protocol.Relation // 关系字段的join元数据，编译器据此生成关联条件
 	}
 
 	// 存储所有需要创建的关系字段
@@ -276,7 +277,7 @@ func (my *Metadata) processRelations() {
 
 	// 添加关系字段信息的辅助函数
 	addRelationField := func(sourceClass, targetClass string, isList, nullable, isReverse, isThrough bool,
-		relType protocol.RelationType, fieldName string, description string) {
+		relType protocol.RelationType, fieldName string, description string, rel *protocol.Relation) {
 
 		fieldsToCreate = append(fieldsToCreate, RelationFieldInfo{
 			SourceClass:  sourceClass,
@@ -288,7 +289,31 @@ func (my *Metadata) processRelations() {
 			Description:  description,
 			IsThrough:    isThrough,
 			RelationType: relType,
+			Relation:     rel,
 		})
+	}
+
+	// 复制关系元数据的辅助函数，reverse为true时交换源和目标方向
+	cloneRelation := func(rel *protocol.Relation, relType protocol.RelationType, reverse bool) *protocol.Relation {
+		result := &protocol.Relation{
+			Type:        relType,
+			SourceClass: rel.SourceClass,
+			SourceFiled: rel.SourceFiled,
+			TargetClass: rel.TargetClass,
+			TargetFiled: rel.TargetFiled,
+		}
+		if reverse {
+			result.SourceClass, result.TargetClass = result.TargetClass, result.SourceClass
+			result.SourceFiled, result.TargetFiled = result.TargetFiled, result.SourceFiled
+		}
+		if rel.Through != nil {
+			through := *rel.Through
+			if reverse {
+				through.SourceKey, through.TargetKey = through.TargetKey, through.SourceKey
+			}
+			result.Through = &through
+		}
+		return result
 	}
 
 	// 创建描述文本的辅助函数
@@ -346,7 +371,7 @@ func (my *Metadata) processRelations() {
 				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 				desc := createDescription(targetClassName, true)
 				addRelationField(class.Name, targetClassName, true, false, false, false,
-					protocol.MANY_TO_MANY, relName, desc)
+					protocol.MANY_TO_MANY, relName, desc, cloneRelation(relation, protocol.MANY_TO_MANY, false))
 
 				// 处理中间表
 				if relation.Through != nil {
@@ -354,8 +379,15 @@ func (my *Metadata) processRelations() {
 					if throughClass := my.Nodes[relation.Through.TableName]; throughClass != nil {
 						throughFieldName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(throughClass.Name)))
 						throughDesc := createDescription(throughClass.Name, true)
+						// 指向中间表本身是普通一对多：源类主键 -> 中间表的源外键
 						addRelationField(class.Name, throughClass.Name, true, false, false, true,
-							protocol.MANY_TO_MANY, throughFieldName, throughDesc)
+							protocol.MANY_TO_MANY, throughFieldName, throughDesc, &protocol.Relation{
+								Type:        protocol.ONE_TO_MANY,
+								SourceClass: class.Name,
+								SourceFiled: relation.SourceFiled,
+								TargetClass: throughClass.Name,
+								TargetFiled: relation.Through.SourceKey,
+							})
 					}
 				}
 
@@ -364,14 +396,14 @@ func (my *Metadata) processRelations() {
 				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 				desc := createDescription(targetClassName, true)
 				addRelationField(class.Name, targetClassName, true, false, false, false,
-					protocol.ONE_TO_MANY, relName, desc)
+					protocol.ONE_TO_MANY, relName, desc, cloneRelation(relation, protocol.ONE_TO_MANY, false))
 
 			case protocol.MANY_TO_ONE:
 				// 添加多对一关系字段
 				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(targetClassName))
 				desc := createDescription(targetClassName, false)
 				addRelationField(class.Name, targetClassName, false, field.Nullable, false, false,
-					protocol.MANY_TO_ONE, relName, desc)
+					protocol.MANY_TO_ONE, relName, desc, cloneRelation(relation, protocol.MANY_TO_ONE, false))
 
 				// 收集反向关系字段信息（一对多）
 				// 创建唯一的键来防止重复
@@ -380,24 +412,24 @@ func (my *Metadata) processRelations() {
 					reverseName := my.uniqueFieldName(targetClass, strcase.ToLowerCamel(inflection.Plural(className)))
 					reverseDesc := createDescription(className, true)
 					addRelationField(targetClassName, class.Name, true, false, true, false,
-						protocol.ONE_TO_MANY, reverseName, reverseDesc)
+						protocol.ONE_TO_MANY, reverseName, reverseDesc, cloneRelation(relation, protocol.ONE_TO_MANY, true))
 					reverseRelationKeys[reverseKey] = true
 				}
 
 			case protocol.RECURSIVE:
 				// 处理递归关系
 				if strings.HasSuffix(fieldName, "Id") || strings.HasSuffix(fieldName, "ID") {
-					// 添加父级关系字段
+					// 添加父级关系字段：本类外键 -> 本类主键
 					parentName := my.uniqueFieldName(class, "parent")
 					parentDesc := "父" + className + "对象"
 					addRelationField(class.Name, className, false, true, false, false,
-						protocol.RECURSIVE, parentName, parentDesc)
+						protocol.RECURSIVE, parentName, parentDesc, cloneRelation(relation, protocol.RECURSIVE, false))
 
-					// 添加子级关系字段
+					// 添加子级关系字段：本类主键 -> 本类外键
 					childrenName := my.uniqueFieldName(targetClass, "children")
 					childrenDesc := "子" + className + "列表"
 					addRelationField(className, className, true, false, false, false,
-						protocol.RECURSIVE, childrenName, childrenDesc)
+						protocol.RECURSIVE, childrenName, childrenDesc, cloneRelation(relation, protocol.RECURSIVE, true))
 				}
 			}
 		}
@@ -416,6 +448,7 @@ func (my *Metadata) processRelations() {
 					Nullable:    info.Nullable,
 					IsThrough:   info.IsThrough,
 					Description: info.Description,
+					Relation:    info.Relation,
 				}
 			}
 		}

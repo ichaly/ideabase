@@ -17,9 +17,25 @@ import (
 type Context struct {
 	buf       *strings.Builder
 	quote     string
-	params    []any
+	slots     []Slot
+	counter   int
 	hoster    protocol.Hoster
 	variables map[string]interface{}
+}
+
+// Slot 表示SQL参数槽位：字面量值或变量引用
+// 变量引用在执行期解析，使编译产物可按查询文本缓存复用
+type Slot struct {
+	Value    any    // 字面量值
+	Variable string // 变量名，非空时优先生效
+}
+
+// Resolve 解析槽位的实际参数值
+func (my Slot) Resolve(variables map[string]interface{}) any {
+	if my.Variable != "" {
+		return variables[my.Variable]
+	}
+	return my.Value
 }
 
 // contextPool 用于Context对象池管理，减少GC压力
@@ -30,7 +46,7 @@ var contextPool = sync.Pool{
 		sb.Grow(1024) // 预分配1KB初始容量
 		return &Context{
 			variables: make(map[string]interface{}),
-			params:    make([]any, 0, 8),
+			slots:     make([]Slot, 0, 8),
 			buf:       sb,
 		}
 	},
@@ -49,10 +65,18 @@ func NewContext(h protocol.Hoster, q string, v map[string]interface{}) *Context 
 func (my *Context) Release() {
 	my.buf.Reset()
 	my.quote = ""
+	my.counter = 0
 	my.hoster = nil
 	my.variables = nil
-	my.params = my.params[:0]
+	my.slots = my.slots[:0]
 	contextPool.Put(my)
+}
+
+// NextIndex 返回全局自增索引，用于生成不冲突的子查询别名
+func (my *Context) NextIndex() int {
+	index := my.counter
+	my.counter++
+	return index
 }
 
 func (my *Context) FindField(className, fieldName string) (*protocol.Field, bool) {
@@ -78,15 +102,30 @@ func (my *Context) TableName(className string) (string, bool) {
 	return class.Table, true
 }
 
-// Args 返回参数列表
+// Args 返回参数列表（按当前变量表解析所有槽位）
 func (my *Context) Args() []any {
-	return my.params
+	args := make([]any, len(my.slots))
+	for i, slot := range my.slots {
+		args[i] = slot.Resolve(my.variables)
+	}
+	return args
 }
 
-// AddParam 添加参数并返回参数索引
+// Slots 返回参数槽位列表（拷贝），供编译计划缓存复用
+func (my *Context) Slots() []Slot {
+	return append([]Slot(nil), my.slots...)
+}
+
+// AddParam 添加字面量参数并返回参数序号（从1开始）
 func (my *Context) AddParam(value any) int {
-	my.params = append(my.params, value)
-	return len(my.params)
+	my.slots = append(my.slots, Slot{Value: value})
+	return len(my.slots)
+}
+
+// AddVariable 添加变量引用参数并返回参数序号（从1开始）
+func (my *Context) AddVariable(name string) int {
+	my.slots = append(my.slots, Slot{Variable: name})
+	return len(my.slots)
 }
 
 // String 获取当前SQL字符串

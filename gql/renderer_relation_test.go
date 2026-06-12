@@ -163,9 +163,9 @@ func TestRenderRelation(t *testing.T) {
 		filterSchema := schema.String()
 
 		// 检查是否包含标准过滤器字段
-		assert.Contains(t, filterSchema, "and: [PostFilter!]")
-		assert.Contains(t, filterSchema, "or: [PostFilter!]")
-		assert.Contains(t, filterSchema, "not: PostFilter")
+		assert.Contains(t, filterSchema, "and: [PostWhereInput!]")
+		assert.Contains(t, filterSchema, "or: [PostWhereInput!]")
+		assert.Contains(t, filterSchema, "not: PostWhereInput")
 
 		// 修改配置隐藏中间表关系
 		meta.cfg.Metadata.ShowThrough = false

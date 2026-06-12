@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/ichaly/ideabase/utl"
 
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
@@ -39,7 +38,7 @@ func (my *_DialectSuite) SetupSuite() {
 	k, err := std.NewKonfig()
 	my.Require().NoError(err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", my.T().TempDir())
 	k.Set("metadata.table-prefix", []string{"sys_"})
 
 	// 设置测试用的元数据配置

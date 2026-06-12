@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/std"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +29,7 @@ func getTestMetadata(t *testing.T) (*Metadata, error) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.use-camel", true)
 	k.Set("metadata.show-through", true)
@@ -50,8 +49,9 @@ func getTestMetadata(t *testing.T) (*Metadata, error) {
 func createMockMetadata(t *testing.T) *Metadata {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
+	root := t.TempDir() // 使用临时目录作为根目录
 	k.Set("mode", "dev")
-	k.Set("app.root", t.TempDir()) // 使用临时目录作为根目录
+	k.Set("app.root", root)
 
 	// 定义类型映射
 	typeMapping := map[string]string{
@@ -92,6 +92,7 @@ func createMockMetadata(t *testing.T) *Metadata {
 			},
 		},
 	}
+	meta.cfg.Root = root // 避免 Generate() 把 schema 写到包目录的相对路径 cfg/ 下
 
 	// 添加模拟的User类
 	userClass := &protocol.Class{
@@ -384,8 +385,8 @@ func TestRenderer_RenderPaging(t *testing.T) {
 	assert.Contains(t, generatedSchema, "hasPrev")
 
 	// 验证连接类型
-	assert.Contains(t, generatedSchema, "type UserPage {")
-	assert.Contains(t, generatedSchema, "type PostPage {")
+	assert.Contains(t, generatedSchema, "type UserResult {")
+	assert.Contains(t, generatedSchema, "type PostResult {")
 	assert.Contains(t, generatedSchema, "items: [User")
 	assert.Contains(t, generatedSchema, "pageInfo: PageInfo!")
 }
@@ -410,9 +411,9 @@ func TestRenderer_RenderFilter(t *testing.T) {
 	generatedSchema := schema.String()
 
 	// 验证通用过滤器类型
-	assert.Contains(t, generatedSchema, "input StringFilter {")
-	assert.Contains(t, generatedSchema, "input IntFilter {")
-	assert.Contains(t, generatedSchema, "input DateTimeFilter {")
+	assert.Contains(t, generatedSchema, "input StringWhereInput {")
+	assert.Contains(t, generatedSchema, "input IntWhereInput {")
+	assert.Contains(t, generatedSchema, "input DateTimeWhereInput {")
 }
 
 // 测试渲染排序类型
@@ -438,8 +439,8 @@ func TestRenderer_RenderSort(t *testing.T) {
 	generatedSchema := schema.String()
 
 	// 验证排序类型
-	assert.Contains(t, generatedSchema, "input UserSort {")
-	assert.Contains(t, generatedSchema, "input PostSort {")
+	assert.Contains(t, generatedSchema, "input UserSortInput {")
+	assert.Contains(t, generatedSchema, "input PostSortInput {")
 }
 
 // 测试渲染查询根类型
@@ -470,13 +471,11 @@ func TestRenderer_RenderQuery(t *testing.T) {
 	// 验证查询根类型
 	assert.Contains(t, generatedSchema, "type Query {")
 
-	// 验证单个实体查询
-	assert.Contains(t, generatedSchema, "user(")
-	assert.Contains(t, generatedSchema, "post(")
-
-	// 验证实体列表查询
+	// 验证实体查询（统一列表查询，支持 id 参数查询单条）
 	assert.Contains(t, generatedSchema, "users(")
 	assert.Contains(t, generatedSchema, "posts(")
+	assert.Contains(t, generatedSchema, "): UserResult!")
+	assert.Contains(t, generatedSchema, "): PostResult!")
 }
 
 // 测试渲染变更根类型
@@ -827,7 +826,7 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("metadata.table-prefix", []string{"sys_"})
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
 		"User": {

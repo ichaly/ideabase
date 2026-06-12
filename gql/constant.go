@@ -238,7 +238,7 @@ var grouping = map[string][]*Operator{
 	SCALAR_DATE_TIME: operators[:8],                            //[is,eq,in,gt,ge,lt,le,ne]
 	SCALAR_STRING:    operators,                                //[is,eq,in,gt,ge,lt,le,ne,like,iLike,regex,iRegex,hasKey,hasKeyAny,hasKeyAll]
 	SCALAR_BOOLEAN:   operators[1:3],                           //[eq,in]
-	SCALAR_JSON:      append(operators[:3], operators[12:]...), //[eq,in,is,hasKey,hasKeyAny,hasKeyAll]
+	SCALAR_JSON:      append(append([]*Operator{}, operators[:3]...), operators[12:]...), //[is,eq,in,hasKey,hasKeyAny,hasKeyAll] 先拷贝避免共享底层数组覆写operators
 }
 
 // 运算符按照名字索引字典

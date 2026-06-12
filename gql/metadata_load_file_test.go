@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/std"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,14 +16,15 @@ func TestMetadataLoadFromFile(t *testing.T) {
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
+	root := t.TempDir()
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", root)
 
 	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "创建元数据加载器失败")
 
 	// 保存到文件
-	filePath := filepath.Join(utl.Root(), "cfg", "metadata.test.json")
+	filePath := filepath.Join(root, "cfg", "metadata.test.json")
 	err = meta.saveToFile(filePath)
 	require.NoError(t, err, "保存元数据到文件失败")
 	defer os.Remove(filePath)

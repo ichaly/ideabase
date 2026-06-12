@@ -141,6 +141,9 @@ func (my *Renderer) write(parts ...string) {
 func (my *Renderer) saveToFile(content string) error {
 	// 写入文件
 	filename := filepath.Join(my.meta.cfg.Root, "cfg/schema.graphql")
+	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+		return fmt.Errorf("创建schema目录失败: %w", err)
+	}
 	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
 		return fmt.Errorf("写入schema文件失败: %w", err)
 	}
