@@ -164,6 +164,28 @@ func (my *_DialectSuite) TestRelation() {
 				) AS "__sj_0" ON TRUE`,
 		},
 		{
+			name:  "嵌套关系参数(过滤排序分页)",
+			query: `query { users { items { id posts(where: { title: { like: "%a%" } }, sort: { title: DESC }, limit: 3) { title } } } }`,
+			args:  []any{"%a%"},
+			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id", "__sj_1"."json" AS "posts"
+						FROM (SELECT "sys_user"."id" FROM sys_user) AS "sys_user_0"
+						LEFT OUTER JOIN LATERAL (
+							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
+							FROM (
+								SELECT "sys_post_1"."title" AS "title"
+								FROM (SELECT "sys_post"."title" FROM sys_post
+									WHERE "sys_post"."user_id" = "sys_user_0"."id" AND "sys_post"."title" LIKE $1
+									ORDER BY "sys_post"."title" DESC LIMIT 3) AS "sys_post_1"
+							) AS "__sr_1"
+						) AS "__sj_1" ON TRUE
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+		{
 			name:  "嵌套两层关系",
 			query: `query { users { items { id posts { title tags { name } } } } }`,
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"

@@ -5,6 +5,10 @@ package gql
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/gofiber/fiber/v3"
@@ -46,6 +50,7 @@ type Executor struct {
 	compiler  *Compiler           // 编译器，将GraphQL查询编译为SQL
 	cache     *planCache          // 执行计划缓存，命中路径零解析零编译
 	resolvers map[string]Resolver // 自定义字段解析器注册表
+	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
 }
 
 // Register 注册自定义字段解析器，与元数据中 Field.Resolver 按名绑定
@@ -80,10 +85,11 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		compiler:  c,
 		cache:     newPlanCache(512),
 		resolvers: make(map[string]Resolver),
+		documents: make(map[string]string),
 	}
 
-	// 生成并加载GraphQL模式
-	data, err := r.Generate()
+	// 加载GraphQL模式：配置了schema.file优先从文件加载（生产推荐），否则由renderer生成
+	data, err := loadSchema(m, r)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +104,62 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 	executor.schema = s
 	executor.intro = intro.New(s)
 	return executor, nil
+}
+
+// loadSchema 解析schema来源：schema.file配置 > renderer现场生成
+func loadSchema(m *Metadata, r *Renderer) (string, error) {
+	if file := strings.TrimSpace(m.cfg.Schema.File); file != "" {
+		if !filepath.IsAbs(file) {
+			file = filepath.Join(m.cfg.Root, file)
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return "", fmt.Errorf("读取schema文件失败: %w", err)
+		}
+		return string(data), nil
+	}
+	return r.Generate()
+}
+
+// LoadDocuments 从目录加载.graphql操作文档（持久化查询）
+// 操作按名注册，可通过ExecuteOperation按名执行；编译缓存尽力预热
+func (my *Executor) LoadDocuments(dir string) error {
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".graphql") {
+			return err
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return my.loadDocument(string(content))
+	})
+}
+
+// loadDocument 解析并注册文档中的命名操作
+func (my *Executor) loadDocument(content string) error {
+	doc, errs := gqlparser.LoadQuery(my.schema, content)
+	if len(errs) > 0 {
+		return errs
+	}
+	for _, operation := range doc.Operations {
+		if operation.Name == "" {
+			return fmt.Errorf("持久化文档中的操作必须命名")
+		}
+		my.documents[operation.Name] = content
+		// 尽力预热编译缓存；依赖变量内容的操作（volatile）留到执行期编译
+		_, _ = my.plan(content, operation.Name, nil)
+	}
+	return nil
+}
+
+// ExecuteOperation 按操作名执行已加载文档中的持久化查询
+func (my *Executor) ExecuteOperation(ctx context.Context, operationName string, variables map[string]interface{}) gqlReply {
+	query, ok := my.documents[operationName]
+	if !ok {
+		return gqlReply{Errors: gqlerror.List{gqlerror.Errorf("未找到名为'%s'的持久化操作", operationName)}}
+	}
+	return my.Execute(ctx, query, variables, operationName)
 }
 
 // 接口实现方法
@@ -138,8 +200,13 @@ func (my *Executor) Handler(c fiber.Ctx) error {
 		})
 	}
 
-	// 直接使用map类型的变量
-	result := my.Execute(c.Context(), req.Query, req.Variables, req.OperationName)
+	// 空查询且携带操作名时按持久化查询执行
+	var result gqlReply
+	if strings.TrimSpace(req.Query) == "" && req.OperationName != "" {
+		result = my.ExecuteOperation(c.Context(), req.OperationName, req.Variables)
+	} else {
+		result = my.Execute(c.Context(), req.Query, req.Variables, req.OperationName)
+	}
 
 	// 返回结果
 	return c.JSON(result)

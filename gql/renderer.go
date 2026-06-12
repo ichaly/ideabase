@@ -278,6 +278,18 @@ func (my *Renderer) renderTypes() error {
 				typeName += "!"
 			}
 
+			// 列表关系字段支持嵌套过滤/排序/分页参数
+			if field.Column == "" && field.Relation != nil && field.IsList {
+				target := field.Relation.TargetClass
+				my.writeField(fieldName, typeName, renderer.WithArgs([]renderer.Argument{
+					{Name: WHERE, Type: target + SUFFIX_WHERE_INPUT},
+					{Name: SORT, Type: "[" + target + SUFFIX_SORT_INPUT + "!]"},
+					{Name: LIMIT, Type: SCALAR_INT},
+					{Name: OFFSET, Type: SCALAR_INT},
+				}...))
+				continue
+			}
+
 			// 输出字段定义
 			my.writeLine("  ", fieldName, ": ", typeName)
 		}

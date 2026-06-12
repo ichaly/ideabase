@@ -14,6 +14,9 @@ type SchemaConfig struct {
 	// 数据库schema
 	Schema string `mapstructure:"schema"`
 
+	// GraphQL schema文件路径（配置后优先从文件加载，生产环境推荐）
+	File string `mapstructure:"file"`
+
 	// 默认分页限制
 	DefaultLimit int `mapstructure:"default-limit"`
 

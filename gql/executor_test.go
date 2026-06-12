@@ -2,6 +2,8 @@ package gql
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/compiler"
@@ -108,4 +110,39 @@ func TestExecutorRoundTrip(t *testing.T) {
 	users = reply.Data["users"].(map[string]interface{})
 	require.EqualValues(t, 0, users["total"])
 	require.Empty(t, users["items"])
+}
+
+// TestExecutorDocuments 持久化查询文档：加载、按名执行、未知操作报错
+func TestExecutorDocuments(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	document := `
+		query ListUsers($name: String) {
+			users(where: { name: { eq: $name } }) { items { id name } total }
+		}
+		mutation AddUser($input: UserCreateInput!) {
+			createUser(input: $input) { id name }
+		}
+	`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "user.graphql"), []byte(document), 0644))
+	require.NoError(t, executor.LoadDocuments(dir), "加载操作文档失败")
+
+	// 按名执行变更与查询
+	reply := executor.ExecuteOperation(ctx, "AddUser", map[string]interface{}{
+		"input": map[string]interface{}{"name": "Carol", "email": "c@x.com"},
+	})
+	require.Empty(t, reply.Errors, "执行持久化变更失败: %v", reply.Errors)
+	require.Equal(t, "Carol", reply.Data["createUser"].(map[string]interface{})["name"])
+
+	reply = executor.ExecuteOperation(ctx, "ListUsers", map[string]interface{}{"name": "Carol"})
+	require.Empty(t, reply.Errors, "执行持久化查询失败: %v", reply.Errors)
+	require.EqualValues(t, 1, reply.Data["users"].(map[string]interface{})["total"])
+
+	// 未知操作名报错
+	reply = executor.ExecuteOperation(ctx, "Nope", nil)
+	require.NotEmpty(t, reply.Errors)
+	require.Contains(t, reply.Errors[0].Message, "未找到")
 }
