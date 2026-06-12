@@ -15,7 +15,11 @@ type Compiler struct {
 }
 
 // NewCompiler 创建新的编译上下文
+// dialects传nil时使用自注册的方言（方言包init注册，空白导入即启用）
 func NewCompiler(m *Metadata, dialects []compiler.Dialect) (*Compiler, error) {
+	if len(dialects) == 0 {
+		dialects = compiler.Dialects()
+	}
 	my := &Compiler{meta: m}
 	if err := my.selectDialect(dialects); err != nil {
 		return nil, err

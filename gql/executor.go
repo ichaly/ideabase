@@ -51,7 +51,7 @@ type Executor struct {
 	cache     *planCache          // 执行计划缓存，命中路径零解析零编译
 	resolvers map[string]Resolver // 自定义字段解析器注册表
 	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
-	cdc       *listener           // WAL逻辑复制监听器，订阅的唤醒信号源
+	cdc       notifier            // CDC唤醒源（按数据库驱动从注册表选取）
 }
 
 // Register 注册自定义字段解析器，与元数据中 Field.Resolver 按名绑定
@@ -105,10 +105,12 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 	executor.schema = s
 	executor.intro = intro.New(s)
 
-	// 订阅唤醒源：CDC监听器（复制连接延迟到首个订阅时建立）
+	// 订阅唤醒源：按驱动名从注册表选取CDC实现（复制连接延迟到首个订阅时建立）
 	if d != nil {
-		if dsn, err := databaseDSN(executor); err == nil {
-			executor.cdc = newListener(dsn, m.cfg.Subscription.Publication)
+		if factory, ok := notifiers[d.Name()]; ok {
+			if source, err := factory(d, m.cfg.Subscription); err == nil {
+				executor.cdc = source
+			}
 		}
 	}
 	return executor, nil

@@ -18,7 +18,7 @@ import (
 // 依赖数据库 wal_level=logical 与连接账号的REPLICATION权限
 func (my *Executor) Subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
 	if my.cdc == nil {
-		return nil, fmt.Errorf("订阅不可用：无法获取数据库DSN，请配置 subscription.dsn")
+		return nil, fmt.Errorf("订阅不可用：当前数据库没有注册CDC唤醒源或DSN不可用")
 	}
 	plan, err := my.plan(query, operationName, variables)
 	if err != nil {

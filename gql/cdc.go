@@ -11,12 +11,49 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog/log"
 	gormpg "gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
+
+// notifier 订阅唤醒源接口：按表变更唤醒watcher
+// 新数据库的CDC实现（如MySQL binlog）实现本接口并registerNotifier注册，
+// 执行器与订阅链路零修改
+type notifier interface {
+	watch(tables []string) (*watcher, error)
+	unwatch(w *watcher)
+}
+
+// notifiers 唤醒源工厂注册表（key=gorm驱动名），在各实现文件的init中登记
+var notifiers = map[string]func(db *gorm.DB, cfg internal.SubscriptionConfig) (notifier, error){}
+
+// registerNotifier 注册唤醒源工厂
+func registerNotifier(driver string, factory func(db *gorm.DB, cfg internal.SubscriptionConfig) (notifier, error)) {
+	notifiers[driver] = factory
+}
+
+// 导入本包即注册PostgreSQL逻辑复制唤醒源
+func init() {
+	registerNotifier("postgres", newPostgresNotifier)
+}
+
+// newPostgresNotifier 构造PG唤醒源：DSN取subscription.dsn配置，缺省从gorm连接提取
+func newPostgresNotifier(db *gorm.DB, cfg internal.SubscriptionConfig) (notifier, error) {
+	dsn := strings.TrimSpace(cfg.DSN)
+	if dsn == "" {
+		if dialector, ok := db.Dialector.(*gormpg.Dialector); ok {
+			dsn = dialector.Config.DSN
+		}
+	}
+	if dsn == "" {
+		return nil, fmt.Errorf("无法获取数据库DSN，请配置 subscription.dsn")
+	}
+	return newListener(dsn, cfg.Publication), nil
+}
 
 // watcher 单个订阅的唤醒端：关注的表集合 + 容量1的唤醒通道（天然合并连续变更）
 type watcher struct {
@@ -251,13 +288,3 @@ func replicationDSN(dsn string) string {
 	return dsn + " replication=database"
 }
 
-// databaseDSN 从gorm连接配置提取DSN
-func databaseDSN(executor *Executor) (string, error) {
-	if dsn := strings.TrimSpace(executor.metadata.cfg.Subscription.DSN); dsn != "" {
-		return dsn, nil
-	}
-	if dialector, ok := executor.database.Dialector.(*gormpg.Dialector); ok && dialector.Config.DSN != "" {
-		return dialector.Config.DSN, nil
-	}
-	return "", fmt.Errorf("无法获取数据库DSN，请配置 subscription.dsn")
-}

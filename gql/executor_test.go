@@ -6,8 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ichaly/ideabase/gql/compiler"
-	"github.com/ichaly/ideabase/gql/compiler/pgsql"
+	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 自注册PostgreSQL方言
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 )
@@ -25,7 +24,8 @@ func setupTestExecutor(t *testing.T) (*Executor, func()) {
 	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "加载元数据失败")
 
-	compile, err := NewCompiler(meta, []compiler.Dialect{pgsql.NewDialect()})
+	// 走方言自注册路径（导入pgsql包即注册）
+	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err, "创建编译器失败")
 
 	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)

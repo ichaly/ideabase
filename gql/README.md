@@ -120,13 +120,21 @@ services:
 - 编译上下文走 `sync.Pool`，热路径零反射
 - 整体 `input` 变量的变更依赖变量内容，自动跳过缓存（volatile）
 
-## 扩展新数据库
+## 扩展新数据库（纯新增，零修改）
 
-`compiler.Dialect` 是策略模式扩展点，新增数据库（如 MySQL）只需：
-新建 `compiler/mysql` 包实现接口的 5 个方法（契约见接口注释：单行单列
-__root JSON、参数槽位、MarkTable 等），组装时把实例加进 `NewCompiler`
-的方言列表——编译器/执行器/缓存/resolver 零改动。元数据侧 `MysqlLoader`
-已就绪。注意：订阅(CDC)的唤醒源基于 PG 逻辑复制，MySQL 需另接 binlog。
+所有数据库相关能力都走自注册（`database/sql` 驱动同款模式），
+将来支持 MySQL 只需**新增**以下代码，不修改任何现有文件：
+
+1. **方言**：新建 `compiler/mysql` 包实现 `compiler.Dialect` 的 5 个方法
+   （契约见接口注释：单行单列 __root JSON、参数槽位、MarkTable 等），
+   `init` 中 `compiler.Register(NewDialect())`——空白导入即生效，
+   `NewCompiler(meta, nil)` 自动按驱动名路由；已知驱动未注册方言会明确报错
+2. **订阅唤醒源**：新增文件实现 `notifier` 接口（binlog 监听）并
+   `registerNotifier("mysql", 工厂)`——执行器按 `db.Name()` 自动选取
+3. **元数据**：`MysqlLoader` 已就绪，按驱动自动启用，无需任何动作
+
+当前未注册 MySQL 的任何实现：连 MySQL 时编译器报「没有注册对应的SQL
+方言实现」，订阅报「没有注册CDC唤醒源」，不会静默出错。
 
 ## 当前限制
 
