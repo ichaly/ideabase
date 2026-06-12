@@ -8,6 +8,16 @@ type Config struct {
 	Schema       SchemaConfig       `mapstructure:"schema"`
 	Metadata     MetadataConfig     `mapstructure:"metadata"`
 	Subscription SubscriptionConfig `mapstructure:"subscription"`
+	Search       SearchConfig       `mapstructure:"search"`
+}
+
+// SearchConfig 全文搜索配置；缺省启动时自动探测数据库能力
+type SearchConfig struct {
+	// 模式：tsvector(分词检索) / trigram(pg_trgm) / ilike(降级)，空=自动探测
+	Mode string `mapstructure:"mode"`
+
+	// tsvector模式的text search配置名（如jiebacfg），空=自动探测中文分词配置
+	Config string `mapstructure:"config"`
 }
 
 // SubscriptionConfig 表示订阅(CDC)相关配置
@@ -78,6 +88,9 @@ type ClassConfig struct {
 
 	// 关系定义
 	Relations []RelationConfig `mapstructure:"relations"`
+
+	// 参与全文搜索的字段
+	Search []string `mapstructure:"search"`
 
 	// 字段过滤配置
 	ExcludeFields []string `mapstructure:"exclude_fields"` // 排除这些字段

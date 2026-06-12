@@ -41,10 +41,12 @@ func (my *_DialectSuite) SetupSuite() {
 	k.Set("mode", "dev")
 	k.Set("app.root", my.T().TempDir())
 	k.Set("metadata.table-prefix", []string{"sys_"})
+	k.Set("search.mode", "trigram") // golden测试固定模式（无数据库可探测）
 
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
 		"User": {
-			Table: "sys_user",
+			Table:  "sys_user",
+			Search: []string{"name", "email"},
 			Fields: map[string]*internal.FieldConfig{
 				"id":    {Type: "ID", Column: "id", IsPrimary: true},
 				"name":  {Type: "String", Column: "name"},
@@ -117,6 +119,36 @@ func (my *_DialectSuite) runCases(cases []Case) {
 			}
 		})
 	}
+}
+
+// newSuite 以配置覆盖构造独立的元数据/schema/方言（如不同搜索模式）
+func (my *_DialectSuite) newSuite(overrides map[string]interface{}) (*gql.Metadata, *ast.Schema, *Dialect) {
+	k, err := std.NewKonfig()
+	my.Require().NoError(err)
+	k.Set("mode", "dev")
+	k.Set("app.root", my.T().TempDir())
+	k.Set("metadata.table-prefix", []string{"sys_"})
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+		"User": {
+			Table:  "sys_user",
+			Search: []string{"name"},
+			Fields: map[string]*internal.FieldConfig{
+				"id":   {Type: "ID", Column: "id", IsPrimary: true},
+				"name": {Type: "String", Column: "name"},
+			},
+		},
+	})
+	for key, value := range overrides {
+		k.Set(key, value)
+	}
+
+	meta, err := gql.NewMetadata(k, nil)
+	my.Require().NoError(err)
+	schemaStr, err := gql.NewRenderer(meta).Generate()
+	my.Require().NoError(err)
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "alt.graphql", Input: schemaStr})
+	my.Require().NoError(err)
+	return meta, schema, &Dialect{}
 }
 
 // normalizeSQL 空白归一化（含括号邻接空格），比较时忽略格式差异

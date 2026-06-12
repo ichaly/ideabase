@@ -148,6 +148,19 @@ func (my *Context) NextIndex() int {
 	return index
 }
 
+// Searcher 元数据承载者的可选能力：全文搜索模式（启动探测或配置指定）
+type Searcher interface {
+	SearchMode() (mode, config string)
+}
+
+// SearchMode 返回全文搜索模式与分词配置；元数据未实现Searcher时为空
+func (my *Context) SearchMode() (string, string) {
+	if searcher, ok := my.hoster.(Searcher); ok {
+		return searcher.SearchMode()
+	}
+	return "", ""
+}
+
 // GetClass 按类名（或表名索引）获取类定义
 func (my *Context) GetClass(className string) (*protocol.Class, bool) {
 	if my.hoster == nil {

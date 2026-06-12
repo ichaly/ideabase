@@ -586,13 +586,18 @@ func (my *Renderer) renderQuery() error {
 
 	// 实体查询字段渲染闭包，Query与Subscription共用
 	writeEntityField := func(className string) {
+		args := []renderer.Argument{}
+		// 声明了搜索列的实体提供全文搜索参数
+		if class := my.meta.Nodes[className]; class != nil && len(class.Search) > 0 {
+			args = append(args, renderer.Argument{Name: SEARCH, Type: SCALAR_STRING})
+		}
 		my.writeLine("  # ", className, "查询")
 		my.writeField(
 			strcase.ToLowerCamel(inflection.Plural(className)),
 			className+SUFFIX_RESULT,
 			renderer.NonNull(),
 			renderer.WithMultilineArgs(),
-			renderer.WithArgs([]renderer.Argument{
+			renderer.WithArgs(append(args, []renderer.Argument{
 				{Name: ID, Type: SCALAR_ID},
 				{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
 				{Name: SORT, Type: "[" + className + SUFFIX_SORT_INPUT + "!]"},
@@ -602,7 +607,7 @@ func (my *Renderer) renderQuery() error {
 				{Name: AFTER, Type: SCALAR_CURSOR},
 				{Name: LAST, Type: SCALAR_INT},
 				{Name: BEFORE, Type: SCALAR_CURSOR},
-			}...),
+			}...)...),
 		)
 	}
 

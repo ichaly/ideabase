@@ -48,6 +48,18 @@ app.Post("/graphql", executor.Handler)     // fiber v3
   keyset 语义性能恒定（排序键自动追加主键兜底；排序键应为非空列）
 - 统计：`userStats(where, groupBy, limit, offset)` 返回 `count` 与各列的
   sum/avg/min/max/countDistinct，选择驱动只算请求的聚合
+- 全文搜索：实体声明搜索列后获得 `search: "关键词"` 参数，无显式 sort 时
+  按相关度降序。**启动自动探测三档**：装有 pg_jieba/zhparser → tsvector
+  真分词（自动发现其分词配置）；否则 pg_trgm 三元组（contrib 模块自动
+  `CREATE EXTENSION`，官方镜像零额外部署，中文子串检索可用）；再否则
+  ILIKE 降级。`search.mode/config` 可显式覆盖。中文建议配 GIN 索引：
+  `CREATE INDEX ON posts USING gin (title gin_trgm_ops)`
+
+  ```yaml
+  metadata:
+    classes:
+      Post: { table: posts, search: [title, content] }
+  ```
 - 关系：多对一/一对多/多对多（中间表）/递归（parent/children）自动生成，
   嵌套关系字段同样支持 `where/sort/limit/offset`
 - 变更：`createX(input)` / `updateX(input, id|where)` / `deleteX(id|where)`，

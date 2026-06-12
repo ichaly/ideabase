@@ -128,6 +128,9 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	if len(classConfig.PrimaryKeys) > 0 {
 		newClass.PrimaryKeys = classConfig.PrimaryKeys
 	}
+	if len(classConfig.Search) > 0 {
+		newClass.Search = classConfig.Search
+	}
 	my.applyFieldFilter(newClass, classConfig)
 	if err := my.applyFieldConfig(newClass, classConfig.Fields); err != nil {
 		return nil, err

@@ -12,6 +12,7 @@ type Class struct {
 	Description string            `json:"description"`        // 描述信息
 	Fields      map[string]*Field `json:"fields"`             // 字段映射表(包含字段名和列名的索引)
 	Resolver    string            `json:"resolver,omitempty"` // 类级别自定义Resolver
+	Search      []string          `json:"search,omitempty"`   // 参与全文搜索的字段
 	IsThrough   bool              `json:"isThrough"`          // 是否为中间表关系表
 }
 
@@ -64,5 +65,6 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		PrimaryKeys: my.PrimaryKeys,
 		Description: my.Description,
 		Resolver:    my.Resolver,
+		Search:      my.Search,
 	})
 }

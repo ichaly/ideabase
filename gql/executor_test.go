@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 自注册PostgreSQL方言
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 )
@@ -110,6 +111,68 @@ func TestExecutorRoundTrip(t *testing.T) {
 	users = reply.Data["users"].(map[string]interface{})
 	require.EqualValues(t, 0, users["total"])
 	require.Empty(t, users["items"])
+}
+
+// TestExecutorSearch 全文搜索真库验证：自动探测pg_trgm，中文子串检索与相关度排序
+func TestExecutorSearch(t *testing.T) {
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+
+	k, err := std.NewKonfig()
+	require.NoError(t, err)
+	k.Set("mode", "dev")
+	k.Set("app.root", t.TempDir())
+	k.Set("schema.schema", "public")
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+		"Post": {Table: "posts", Search: []string{"title", "content"}},
+	})
+
+	meta, err := NewMetadata(k, db)
+	require.NoError(t, err)
+	compile, err := NewCompiler(meta, nil)
+	require.NoError(t, err)
+	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	require.NoError(t, err)
+
+	// 官方镜像无jieba：应探测出trigram（contrib自动启用）
+	mode, _ := meta.SearchMode()
+	require.Equal(t, "trigram", mode, "应自动探测出pg_trgm")
+
+	ctx := context.Background()
+	uid := func() interface{} {
+		reply := executor.Execute(ctx, `mutation { createUser(input: { name: "作者", email: "z@x.com" }) { id } }`, nil, "")
+		require.Empty(t, reply.Errors, "%v", reply.Errors)
+		return reply.Data["createUser"].(map[string]interface{})["id"]
+	}()
+	for _, p := range []map[string]interface{}{
+		{"title": "PostgreSQL数据库引擎选型", "content": "全文检索方案对比"},
+		{"title": "Go语言实践", "content": "数据库连接池调优"},
+		{"title": "前端构建", "content": "与后端无关"},
+	} {
+		p["userId"] = uid
+		reply := executor.Execute(ctx, `mutation ($in: PostCreateInput!) { createPost(input: $in) { id } }`,
+			map[string]interface{}{"in": p}, "")
+		require.Empty(t, reply.Errors, "%v", reply.Errors)
+	}
+
+	// 中文搜索：标题或内容命中"数据库"的两篇命中、无关的一篇排除
+	// （trigram的similarity是整串相似度，命中顺序不做强断言）
+	reply := executor.Execute(ctx, `query { posts(search: "数据库") { items { title } total } }`, nil, "")
+	require.Empty(t, reply.Errors, "搜索失败: %v", reply.Errors)
+	posts := reply.Data["posts"].(map[string]interface{})
+	require.EqualValues(t, 2, posts["total"])
+	titles := map[string]bool{}
+	for _, item := range posts["items"].([]interface{}) {
+		titles[item.(map[string]interface{})["title"].(string)] = true
+	}
+	require.True(t, titles["PostgreSQL数据库引擎选型"] && titles["Go语言实践"], "中文子串命中应包含标题与内容两种来源: %v", titles)
+
+	// 搜索+条件组合
+	reply = executor.Execute(ctx, `query { posts(search: "数据库", where: { title: { like: "%Go%" } }) { items { title } } }`, nil, "")
+	require.Empty(t, reply.Errors)
+	items := reply.Data["posts"].(map[string]interface{})["items"].([]interface{})
+	require.Len(t, items, 1)
+	require.Equal(t, "Go语言实践", items[0].(map[string]interface{})["title"])
 }
 
 // TestExecutorFragments fragment展开：命名/嵌套/内联fragment正确编译进SQL

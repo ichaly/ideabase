@@ -53,6 +53,7 @@ const (
 	CONNECT    = "connect"
 	DISCONNECT = "disconnect"
 	GROUP_BY   = "groupBy"
+	SEARCH     = "search"
 )
 
 const (

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -108,6 +109,11 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 	executor.schema = s
 	executor.intro = intro.New(s)
 
+	// 全文搜索能力：配置优先，否则探测数据库（jieba/zhparser分词 > pg_trgm > ilike降级）
+	if d != nil {
+		executor.metadata.SetSearchMode(detectSearch(d, m.cfg.Search))
+	}
+
 	// 订阅唤醒源：按驱动名从注册表选取CDC实现（复制连接延迟到首个订阅时建立）
 	if d != nil {
 		if factory, ok := notifiers[d.Name()]; ok {
@@ -117,6 +123,29 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		}
 	}
 	return executor, nil
+}
+
+// detectSearch 探测全文搜索能力：
+// 1. 配置显式指定则直接采用；2. 存在挂在jieba/zhparser解析器上的分词配置则tsvector；
+// 3. pg_trgm可用（尝试自动创建，contrib模块官方镜像自带）则trigram；4. 否则ilike降级
+func detectSearch(db *gorm.DB, cfg internal.SearchConfig) (string, string) {
+	if mode := strings.TrimSpace(cfg.Mode); mode != "" {
+		return mode, cfg.Config
+	}
+
+	var config string
+	if err := db.Raw(`SELECT c.cfgname FROM pg_ts_config c
+		JOIN pg_ts_parser p ON c.cfgparser = p.oid
+		WHERE p.prsname IN ('jieba', 'zhparser') LIMIT 1`).Scan(&config).Error; err == nil && config != "" {
+		return "tsvector", config
+	}
+
+	db.Exec(`CREATE EXTENSION IF NOT EXISTS pg_trgm`) // 权限不足时静默失败，仅探测
+	var trigram int
+	if err := db.Raw(`SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'`).Scan(&trigram).Error; err == nil && trigram == 1 {
+		return "trigram", ""
+	}
+	return "ilike", ""
 }
 
 // loadSchema 解析schema来源：schema.file配置 > renderer现场生成

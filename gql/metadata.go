@@ -34,6 +34,10 @@ type Metadata struct {
 	// 统一索引: 支持类名、表名、原始表名查找
 	Nodes   map[string]*protocol.Class `json:"nodes"`
 	Version string                     `json:"version"`
+
+	// 全文搜索能力（启动探测或配置指定）
+	searchMode   string
+	searchConfig string
 }
 
 // MetadataOption 用于自定义Loader注册与移除
@@ -121,6 +125,9 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 		k: k, db: d, cfg: cfg,
 		Nodes:   make(map[string]*protocol.Class),
 		Version: time.Now().Format("20060102150405"),
+		// 配置显式指定的搜索模式立即生效；为空时由NewExecutor启动探测补全
+		searchMode:   cfg.Search.Mode,
+		searchConfig: cfg.Search.Config,
 	}
 
 	// 默认Loader注册，Pgsql和Mysql用HookedLoader包装，dev模式下自动保存
@@ -170,6 +177,16 @@ func (my *Metadata) PutNode(className string, node *protocol.Class) error {
 	}
 	my.Nodes[className] = node
 	return nil
+}
+
+// SetSearchMode 记录探测/配置得到的全文搜索能力（NewExecutor启动时写入）
+func (my *Metadata) SetSearchMode(mode, config string) {
+	my.searchMode, my.searchConfig = mode, config
+}
+
+// SearchMode 返回全文搜索模式与分词配置（实现compiler.Searcher）
+func (my *Metadata) SearchMode() (string, string) {
+	return my.searchMode, my.searchConfig
 }
 
 func (my *Metadata) GetNode(name string) (*protocol.Class, bool) {

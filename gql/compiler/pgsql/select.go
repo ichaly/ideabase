@@ -371,8 +371,26 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	if err != nil {
 		return err
 	}
+	// 全文搜索条件并入关联条件位
+	search, err := newSearcher(ctx, sc, u.args)
+	if err != nil {
+		return err
+	}
+	var bondErr error
+	if search != nil {
+		if u.page != nil && len(sortEntries(u.args)) == 0 {
+			return fmt.Errorf("search与游标分页同用时必须显式sort（相关度排序无法作为稳定游标键）")
+		}
+		prev := bond
+		bond = func() {
+			if prev != nil {
+				prev()
+				ctx.Space(`AND`)
+			}
+			bondErr = search.buildCondition(my, ctx, sc)
+		}
+	}
 	// 游标续页：keyset边界条件并入关联条件位
-	var keysetErr error
 	if u.page != nil && u.page.cursor != nil {
 		prev := bond
 		bond = func() {
@@ -380,14 +398,16 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 				prev()
 				ctx.Space(`AND`)
 			}
-			keysetErr = my.buildKeyset(ctx, sc, u.page)
+			if bondErr == nil {
+				bondErr = my.buildKeyset(ctx, sc, u.page)
+			}
 		}
 	}
 	if err = my.buildWhere(ctx, sc, u.args, bond); err != nil {
 		return err
 	}
-	if keysetErr != nil {
-		return keysetErr
+	if bondErr != nil {
+		return bondErr
 	}
 
 	if u.page != nil {
@@ -401,7 +421,13 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		}
 		ctx.Space(`LIMIT`).Write(u.page.limit + 1)
 	} else {
-		if err = my.buildOrderBy(ctx, sc, u.args); err != nil {
+		// 无显式排序时按搜索相关度降序
+		if search != nil && len(sortEntries(u.args)) == 0 {
+			ctx.Space(`ORDER BY`)
+			if _, err = search.buildRank(my, ctx, sc); err != nil {
+				return err
+			}
+		} else if err = my.buildOrderBy(ctx, sc, u.args); err != nil {
 			return err
 		}
 		if err = my.buildLimit(ctx, u); err != nil {
