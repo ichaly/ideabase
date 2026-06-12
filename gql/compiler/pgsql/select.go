@@ -21,6 +21,7 @@ type unit struct {
 	parent string             // 父级基表别名（lateral关联引用）
 	index  int                // 单元序号，决定 __sj_N/__sr_N 别名
 	single bool               // 单对象形态（多对一关系、变更读回）
+	stats  bool               // 统计聚合形态（xxxStats根字段）
 	args   ast.ArgumentList   // 生效的查询参数；变更读回为nil（参数已被CTE消费）
 }
 
@@ -42,12 +43,14 @@ func (my *Dialect) BuildQuery(ctx *compiler.Context, set ast.SelectionSet) error
 			continue
 		}
 
-		className := strings.TrimSuffix(field.Definition.Type.Name(), protocol.SUFFIX_RESULT)
+		typeName := field.Definition.Type.Name()
+		stats := strings.HasSuffix(typeName, protocol.SUFFIX_STATS)
+		className := strings.TrimSuffix(strings.TrimSuffix(typeName, protocol.SUFFIX_RESULT), protocol.SUFFIX_STATS)
 		class, ok := ctx.GetClass(className)
 		if !ok {
 			return fmt.Errorf("不支持的根查询字段: %s", field.Name)
 		}
-		u := &unit{field: field, class: class, index: ctx.NextIndex(), args: field.Arguments}
+		u := &unit{field: field, class: class, index: ctx.NextIndex(), args: field.Arguments, stats: stats}
 		units = append(units, u)
 		ctx.Write(`'`, field.Alias, `', `).Quote(`__sj_`, u.index).Write(`."json"`)
 	}
@@ -70,6 +73,8 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 
 	var err error
 	switch {
+	case u.stats: // 统计聚合
+		err = my.buildStatsWrap(ctx, u)
 	case u.single: // 单对象：多对一关系或变更读回
 		ctx.Write(`SELECT TO_JSONB(`).
 			Quote(`__sr_`, u.index).Write(`.*) AS "json" FROM (`)

@@ -69,6 +69,7 @@ func (my *Renderer) Generate() (string, error) {
 		{"枚举类型", my.renderEnums},
 		{"实体类型", my.renderTypes},
 		{"分页类型", my.renderPaging},
+		{"统计类型", my.renderStats},
 		{"过滤器类型", my.renderFilter},
 		{"实体过滤器", my.renderEntity},
 		{"排序类型", my.renderSort},
@@ -588,6 +589,19 @@ func (my *Renderer) renderQuery() error {
 	for _, className := range names {
 		writeEntityField(className)
 
+		// 统计查询
+		my.writeLine("  # ", className, "统计")
+		my.writeField(
+			strcase.ToLowerCamel(className)+SUFFIX_STATS,
+			"["+className+SUFFIX_STATS+"!]",
+			renderer.NonNull(),
+			renderer.WithArgs([]renderer.Argument{
+				{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
+				{Name: GROUP_BY, Type: "[" + SCALAR_STRING + "!]"},
+				{Name: LIMIT, Type: SCALAR_INT},
+				{Name: OFFSET, Type: SCALAR_INT},
+			}...),
+		)
 	}
 	my.writeLine("}")
 	my.writeLine()
@@ -644,6 +658,74 @@ func (my *Renderer) renderMutation() error {
 	}
 
 	my.writeLine("}")
+	return nil
+}
+
+// statsKind 标量字段对应的统计类型，空串表示不参与统计
+func statsKind(typeName string) string {
+	switch typeName {
+	case SCALAR_INT, SCALAR_FLOAT:
+		return TYPE_NUMBER_STATS
+	case SCALAR_STRING:
+		return TYPE_STRING_STATS
+	case SCALAR_DATE_TIME:
+		return TYPE_DATE_TIME_STATS
+	}
+	return ""
+}
+
+// renderStats 渲染统计类型：通用聚合结果 + 每实体的Stats类型（选择驱动编译）
+func (my *Renderer) renderStats() error {
+	my.writeLine("# 数值聚合结果")
+	my.writeLine("type ", TYPE_NUMBER_STATS, " {")
+	my.writeField(FUNCTION_SUM, SCALAR_FLOAT)
+	my.writeField(FUNCTION_AVG, SCALAR_FLOAT)
+	my.writeField(FUNCTION_MIN, SCALAR_FLOAT)
+	my.writeField(FUNCTION_MAX, SCALAR_FLOAT)
+	my.writeField(FUNCTION_COUNT_DISTINCT, SCALAR_INT)
+	my.writeLine("}")
+	my.writeLine()
+
+	my.writeLine("# 字符串聚合结果")
+	my.writeLine("type ", TYPE_STRING_STATS, " {")
+	my.writeField(FUNCTION_MIN, SCALAR_STRING)
+	my.writeField(FUNCTION_MAX, SCALAR_STRING)
+	my.writeField(FUNCTION_COUNT_DISTINCT, SCALAR_INT)
+	my.writeLine("}")
+	my.writeLine()
+
+	my.writeLine("# 日期聚合结果")
+	my.writeLine("type ", TYPE_DATE_TIME_STATS, " {")
+	my.writeField(FUNCTION_MIN, SCALAR_DATE_TIME)
+	my.writeField(FUNCTION_MAX, SCALAR_DATE_TIME)
+	my.writeField(FUNCTION_COUNT_DISTINCT, SCALAR_INT)
+	my.writeLine("}")
+	my.writeLine()
+
+	// 每实体统计类型：key为分组键，count恒有，标量列按类别挂聚合
+	for _, className := range utl.SortKeys(my.meta.Nodes) {
+		class := my.meta.Nodes[className]
+		if className != class.Name || (class.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
+			continue
+		}
+
+		my.writeLine("# ", className, "统计结果")
+		my.writeLine("type ", className, SUFFIX_STATS, " {")
+		my.writeField(FUNCTION_KEY, SCALAR_JSON, renderer.WithComment("分组键(无groupBy时为null)"))
+		my.writeField(FUNCTION_COUNT, SCALAR_INT, renderer.NonNull())
+		for _, fieldName := range utl.SortKeys(class.Fields) {
+			field := class.Fields[fieldName]
+			// 仅真实标量列参与统计（跳过列名索引/虚拟字段/主键）
+			if fieldName != field.Name || field.Column == "" || field.Virtual || field.IsPrimary {
+				continue
+			}
+			if kind := statsKind(my.getGraphQLType(field)); kind != "" {
+				my.writeField(fieldName, kind)
+			}
+		}
+		my.writeLine("}")
+		my.writeLine()
+	}
 	return nil
 }
 

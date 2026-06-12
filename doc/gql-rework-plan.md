@@ -93,10 +93,34 @@ type BatchResolver interface {
 8. **P8 订阅改纯 CDC** ✅：WAL 逻辑复制（pgoutput + 临时槽）表级变更唤醒，移除轮询；
    Plan 记录涉及表集合；部署仅需 `wal_level=logical`
 
+## P9~P11 设计（统计/游标分页/嵌套写入）
+
+### P9 统计聚合
+- schema：`userStats(where, groupBy: [String!], limit, offset): [UserStats!]!`；
+  `UserStats{ key: Json, count: Int!, <数值列>: NumberStats, <字符串列>: StringStats, <时间列>: DateTimeStats }`
+  `NumberStats{sum,avg,min,max,countDistinct}` String/DateTime 仅 min/max/countDistinct
+- 编译：选择驱动——选了哪个字段/哪个聚合才生成对应表达式；
+  `key` = JSONB_BUILD_OBJECT(分组字段)，GROUP BY 分组列；无 groupBy 时单行全表聚合
+- 复用现有 where 构建器与 LATERAL 单元结构（纯数组包装）
+
+### P10 游标分页
+- 语义：`first+after` 向前 / `last+before` 向后，互斥且与 offset 互斥；排序键自动追加主键兜底
+- cursor = base64(JSON 数组：边界行的排序键值)；SQL 行级生成
+  `encode(convert_to(JSONB_BUILD_ARRAY(键...)::text,'UTF8'),'base64') AS "__cursor"`
+- keyset WHERE：混合方向展开 `k1>v1 OR (k1=v1 AND k2>v2)...`；LIMIT N+1 探测 hasNext；
+  wrapper 用 FILTER(__rn<=N) 聚合 items，pageInfo.end/start 取边界 __cursor
+- 变量游标：Slot 扩展 CursorIndex——执行期解 base64 后按下标取键值（一变量多参数槽）
+- hasPrev(向前)=after 是否提供（编译期字面量），向后对称
+
+### P11 嵌套写入
+- schema：Create/UpdateInput 的列表关系字段接受 `RelationInput{connect:[ID!], disconnect:[ID!]}`
+- 编译为变更 CTE 链（同一语句原子）：
+  o2m connect: `UPDATE 子表 SET fk=(SELECT pk FROM 主CTE) WHERE pk IN (...)`，disconnect 置 NULL
+  m2m connect: `INSERT INTO 中间表 SELECT 主pk, v FROM (VALUES...)`，disconnect DELETE
+- 约束：update 携带关系操作时必须用 id 定位单行；create 仅支持 connect
+
 ## 遗留事项（后续版本）
 
 - MySQL 方言实现（接口已就位，参照 pgsql 单元化结构）
-- 游标分页（first/last/after/before/pageInfo，编译期明确报错）
-- 统计查询 `xxxStats` 编译（schema 已生成）
-- 嵌套写入（connect/disconnect/upsert）
+- upsert
 - `metadata.go` 中 loader_base 反向关系挂在主键字段会被多个外键覆写（仅影响极端多外键场景）

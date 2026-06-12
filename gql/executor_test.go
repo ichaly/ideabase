@@ -112,6 +112,40 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Empty(t, users["items"])
 }
 
+// TestExecutorStats 统计聚合真库验证：全表聚合与分组聚合
+func TestExecutorStats(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	for _, m := range []string{
+		`mutation { createUser(input: { name: "A", email: "a@x.com" }) { id } }`,
+		`mutation { createUser(input: { name: "B", email: "b@x.com" }) { id } }`,
+		`mutation { createUser(input: { name: "B", email: "b2@x.com" }) { id } }`,
+	} {
+		reply := executor.Execute(ctx, m, nil, "")
+		require.Empty(t, reply.Errors, "准备数据失败: %v", reply.Errors)
+	}
+
+	// 全表聚合
+	reply := executor.Execute(ctx, `query { userStats { count email { countDistinct } } }`, nil, "")
+	require.Empty(t, reply.Errors, "全表聚合失败: %v", reply.Errors)
+	rows := reply.Data["userStats"].([]interface{})
+	require.Len(t, rows, 1)
+	row := rows[0].(map[string]interface{})
+	require.EqualValues(t, 3, row["count"])
+	require.EqualValues(t, 3, row["email"].(map[string]interface{})["countDistinct"])
+
+	// 分组聚合
+	reply = executor.Execute(ctx, `query { userStats(groupBy: ["name"], where: { name: { eq: "B" } }) { key count } }`, nil, "")
+	require.Empty(t, reply.Errors, "分组聚合失败: %v", reply.Errors)
+	rows = reply.Data["userStats"].([]interface{})
+	require.Len(t, rows, 1)
+	row = rows[0].(map[string]interface{})
+	require.EqualValues(t, 2, row["count"])
+	require.Equal(t, "B", row["key"].(map[string]interface{})["name"])
+}
+
 // TestExecutorDocuments 持久化查询文档：加载、按名执行、未知操作报错
 func TestExecutorDocuments(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
