@@ -23,13 +23,14 @@ func NewCompiler(m *Metadata, dialects []compiler.Dialect) (*Compiler, error) {
 	return my, nil
 }
 
-// Plan 编译产物：SQL + 参数槽位 + 变量默认值
+// Plan 编译产物：SQL + 参数槽位 + 变量默认值 + resolver绑定
 // 非volatile的计划可按查询文本缓存，执行期仅需解析参数槽位
 type Plan struct {
-	SQL      string
-	slots    []compiler.Slot
-	defaults map[string]interface{}
-	volatile bool
+	SQL       string
+	slots     []compiler.Slot
+	defaults  map[string]interface{}
+	volatile  bool
+	resolvers []binding
 }
 
 // Volatile 编译产物是否依赖变量内容（如整体input变量），不可缓存
@@ -66,7 +67,12 @@ func (my *Compiler) Compile(operation *ast.OperationDefinition, variables map[st
 		return nil, err
 	}
 
-	plan := &Plan{SQL: ctx.String(), slots: ctx.Slots(), volatile: ctx.Volatile()}
+	plan := &Plan{
+		SQL:       ctx.String(),
+		slots:     ctx.Slots(),
+		volatile:  ctx.Volatile(),
+		resolvers: collectBindings(my.meta, operation),
+	}
 	for _, def := range operation.VariableDefinitions {
 		if def.DefaultValue == nil {
 			continue

@@ -39,12 +39,20 @@ type (
 // 负责解析GraphQL查询、编译为SQL并执行查询，支持多种数据库方言
 // 可作为Fiber插件集成到Web服务中，提供标准的GraphQL API
 type Executor struct {
-	intro    *intro.Handler // 自省处理器，处理__schema和__type查询
-	schema   *ast.Schema    // GraphQL模式定义
-	database *gorm.DB       // 数据库连接，用于执行生成的SQL
-	metadata *Metadata      // 元数据信息，包含表结构、关系等
-	compiler *Compiler      // 编译器，将GraphQL查询编译为SQL
-	cache    *planCache     // 执行计划缓存，命中路径零解析零编译
+	intro     *intro.Handler      // 自省处理器，处理__schema和__type查询
+	schema    *ast.Schema         // GraphQL模式定义
+	database  *gorm.DB            // 数据库连接，用于执行生成的SQL
+	metadata  *Metadata           // 元数据信息，包含表结构、关系等
+	compiler  *Compiler           // 编译器，将GraphQL查询编译为SQL
+	cache     *planCache          // 执行计划缓存，命中路径零解析零编译
+	resolvers map[string]Resolver // 自定义字段解析器注册表
+}
+
+// Register 注册自定义字段解析器，与元数据中 Field.Resolver 按名绑定
+func (my *Executor) Register(resolvers ...Resolver) {
+	for _, r := range resolvers {
+		my.resolvers[r.Name()] = r
+	}
 }
 
 // 构造函数和初始化方法
@@ -67,10 +75,11 @@ type Executor struct {
 //	}
 func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, error) {
 	executor := &Executor{
-		database: d,
-		metadata: m,
-		compiler: c,
-		cache:    newPlanCache(512),
+		database:  d,
+		metadata:  m,
+		compiler:  c,
+		cache:     newPlanCache(512),
+		resolvers: make(map[string]Resolver),
 	}
 
 	// 生成并加载GraphQL模式
@@ -188,6 +197,14 @@ func (my *Executor) Execute(ctx context.Context, query string, variables map[str
 	result := make(map[string]interface{})
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &result); err != nil {
+			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
+			return r
+		}
+	}
+
+	// 自定义resolver后处理：填充SQL无法表达的字段
+	if len(plan.resolvers) > 0 {
+		if err := my.resolve(ctx, plan.resolvers, result); err != nil {
 			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 			return r
 		}

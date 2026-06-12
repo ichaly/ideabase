@@ -361,8 +361,8 @@ func (my *Renderer) writableFields(class *protocol.Class) []string {
 	names := make([]string, 0, len(class.Fields))
 	for _, fieldName := range utl.SortKeys(class.Fields) {
 		field := class.Fields[fieldName]
-		// 跳过列名索引、自动生成字段（主键/时间戳）、虚拟字段与中间表字段
-		if fieldName != field.Name || field.Virtual ||
+		// 跳过列名索引、无列字段（关系/resolver）、自动生成字段（主键/时间戳）、虚拟字段与中间表字段
+		if fieldName != field.Name || field.Virtual || field.Column == "" ||
 			field.IsPrimary ||
 			strings.EqualFold(fieldName, "createdAt") ||
 			strings.EqualFold(fieldName, "updatedAt") ||
