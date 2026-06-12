@@ -48,9 +48,9 @@ func (my *_DialectSuite) SetupSuite() {
 			Table:  "sys_user",
 			Search: []string{"name", "email"},
 			Fields: map[string]*internal.FieldConfig{
-				"id":    {Type: "ID", Column: "id", IsPrimary: true},
-				"name":  {Type: "String", Column: "name"},
-				"email": {Type: "String", Column: "email"},
+				"id":       {Type: "ID", Column: "id", IsPrimary: true},
+				"name":     {Type: "String", Column: "name"},
+				"email":    {Type: "String", Column: "email"},
 				"age":      {Type: "Int", Column: "age", IsNullable: true},
 				"metadata": {Type: "Json", Column: "metadata", IsNullable: true},
 			},

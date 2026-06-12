@@ -14,6 +14,16 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
+// shape 单元的JSON包装形态
+type shape int
+
+const (
+	shapeResult shape = iota // 查询根字段：Result契约 items/total/pageInfo
+	shapeSingle              // 单对象：多对一关系、单条变更读回
+	shapeList                // 纯数组：列表关系、批量/upsert读回
+	shapeStats               // 统计聚合
+)
+
 // unit 一个LATERAL JOIN子查询单元：查询根字段、关系字段或变更读回
 type unit struct {
 	field  *ast.Field         // GraphQL字段
@@ -21,9 +31,7 @@ type unit struct {
 	rel    *protocol.Relation // 与父级的关系，根字段为nil
 	parent string             // 父级基表别名（lateral关联引用）
 	index  int                // 单元序号，决定 __sj_N/__sr_N 别名
-	single bool               // 单对象形态（多对一关系、变更读回）
-	plain  bool               // 纯数组形态（批量/upsert变更读回）
-	stats  bool               // 统计聚合形态（xxxStats根字段）
+	shape  shape              // JSON包装形态
 	page   *pager             // 游标分页参数（first/last模式）
 	args   ast.ArgumentList   // 生效的查询参数；变更读回为nil（参数已被CTE消费）
 }
@@ -47,13 +55,16 @@ func (my *Dialect) BuildQuery(ctx *compiler.Context, set ast.SelectionSet) error
 		}
 
 		typeName := field.Definition.Type.Name()
-		stats := strings.HasSuffix(typeName, protocol.SUFFIX_STATS)
+		kind := shapeResult
+		if strings.HasSuffix(typeName, protocol.SUFFIX_STATS) {
+			kind = shapeStats
+		}
 		className := strings.TrimSuffix(strings.TrimSuffix(typeName, protocol.SUFFIX_RESULT), protocol.SUFFIX_STATS)
 		class, ok := ctx.GetClass(className)
 		if !ok {
 			return fmt.Errorf("不支持的根查询字段: %s", field.Name)
 		}
-		u := &unit{field: field, class: class, index: ctx.NextIndex(), args: field.Arguments, stats: stats}
+		u := &unit{field: field, class: class, index: ctx.NextIndex(), args: field.Arguments, shape: kind}
 		units = append(units, u)
 		ctx.Write(`'`, field.Alias, `', `).Quote(`__sj_`, u.index).Write(`."json"`)
 	}
@@ -75,17 +86,17 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 	ctx.SpaceBefore(`LEFT OUTER JOIN LATERAL (`)
 
 	var err error
-	switch {
-	case u.single: // 单对象：多对一关系或变更读回
+	switch u.shape {
+	case shapeSingle:
 		ctx.Write(`SELECT TO_JSONB(`).
 			Quote(`__sr_`, u.index).Write(`.*) AS "json" FROM (`)
 		err = my.buildCore(ctx, u, fieldsOf(u.field.SelectionSet), false)
 		ctx.Write(`) AS `).Quote(`__sr_`, u.index)
-	case u.rel == nil && !u.plain && !u.stats: // 查询根字段：Result契约 items/total
+	case shapeResult:
 		err = my.buildResultWrap(ctx, u)
-	default: // 纯数组：列表关系 / 批量读回 / 统计聚合
+	default: // shapeList / shapeStats：纯数组包装
 		core := func() error { return my.buildCore(ctx, u, fieldsOf(u.field.SelectionSet), false) }
-		if u.stats {
+		if u.shape == shapeStats {
 			core = func() error { return my.buildStatsCore(ctx, u) }
 		}
 		ctx.Write(`SELECT COALESCE(JSONB_AGG(TO_JSONB(`).
@@ -307,7 +318,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			children = append(children, relIndex{
 				unit: &unit{
 					field: f, class: target, rel: field.Relation, parent: base,
-					index: ctx.NextIndex(), single: f.Definition.Type.NamedType != "", args: f.Arguments,
+					index: ctx.NextIndex(), shape: childShape(f), args: f.Arguments,
 				},
 				alias: f.Alias,
 			})
@@ -324,10 +335,11 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	for _, column := range sortColumns(sc, u.args) {
 		appendColumn(column)
 	}
-	distinct, err := distinctColumns(sc, u.args)
+	distinctNames, err := fieldNames(sc, u.args, protocol.DISTINCT)
 	if err != nil {
 		return err
 	}
+	distinct := columnsOf(sc, distinctNames)
 	if len(distinct) > 0 {
 		if u.page != nil {
 			return fmt.Errorf("distinct与游标分页不能同时使用")
@@ -425,47 +437,26 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	}
 	ctx.Space(`FROM`).Write(u.class.Table)
 
-	bond, err := my.relationBond(ctx, u, sc)
+	// WHERE位的合取条件：父子关联 + 全文搜索 + keyset续页边界
+	conjuncts, err := my.relationBond(ctx, u, sc)
 	if err != nil {
 		return err
 	}
-	// 全文搜索条件并入关联条件位
 	search, err := newSearcher(ctx, sc, u.args)
 	if err != nil {
 		return err
 	}
-	var bondErr error
 	if search != nil {
 		if u.page != nil && len(sortEntries(u.args)) == 0 {
 			return fmt.Errorf("search与游标分页同用时必须显式sort（相关度排序无法作为稳定游标键）")
 		}
-		prev := bond
-		bond = func() {
-			if prev != nil {
-				prev()
-				ctx.Space(`AND`)
-			}
-			bondErr = search.buildCondition(my, ctx, sc)
-		}
+		conjuncts = append(conjuncts, func() error { return search.buildCondition(my, ctx, sc) })
 	}
-	// 游标续页：keyset边界条件并入关联条件位
 	if u.page != nil && u.page.cursor != nil {
-		prev := bond
-		bond = func() {
-			if prev != nil {
-				prev()
-				ctx.Space(`AND`)
-			}
-			if bondErr == nil {
-				bondErr = my.buildKeyset(ctx, sc, u.page)
-			}
-		}
+		conjuncts = append(conjuncts, func() error { return my.buildKeyset(ctx, sc, u.page) })
 	}
-	if err = my.buildWhere(ctx, sc, u.args, bond); err != nil {
+	if err = my.buildWhere(ctx, sc, u.args, conjuncts...); err != nil {
 		return err
-	}
-	if bondErr != nil {
-		return bondErr
 	}
 
 	if u.page != nil {
@@ -525,8 +516,8 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	return nil
 }
 
-// relationBond 生成父子关联条件；多对多在基础查询追加中间表JOIN后返回关联闭包
-func (my *Dialect) relationBond(ctx *compiler.Context, u *unit, sc scope) (func(), error) {
+// relationBond 生成父子关联条件（合取项）；多对多在基础查询追加中间表JOIN
+func (my *Dialect) relationBond(ctx *compiler.Context, u *unit, sc scope) ([]func() error, error) {
 	if u.rel == nil {
 		return nil, nil
 	}
@@ -545,22 +536,32 @@ func (my *Dialect) relationBond(ctx *compiler.Context, u *unit, sc scope) (func(
 			Space(`ON`).Column(through.TableName, through.TargetKey).
 			Space(`=`).Column(u.class.Table, targetCol)
 		// 关联条件：中间表.源键 = 父别名.源列
-		return func() {
+		return []func() error{func() error {
 			ctx.Column(through.TableName, through.SourceKey).
 				Space(`=`).Column(u.parent, parentCol)
-		}, nil
+			return nil
+		}}, nil
 	}
 
 	// 普通关联：目标表.目标列 = 父别名.源列
-	return func() {
+	return []func() error{func() error {
 		ctx.Column(u.class.Table, targetCol).
 			Space(`=`).Column(u.parent, parentCol)
-	}, nil
+		return nil
+	}}, nil
+}
+
+// childShape 嵌套关系字段的形态：命名类型为单对象，否则列表
+func childShape(f *ast.Field) shape {
+	if f.Definition.Type.NamedType != "" {
+		return shapeSingle
+	}
+	return shapeList
 }
 
 // buildLimit 构建LIMIT/OFFSET：单对象单元固定LIMIT 1，字面量内联，变量走参数槽位
 func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
-	if u.single {
+	if u.shape == shapeSingle {
 		ctx.Space(`LIMIT 1`)
 		return nil
 	}
@@ -647,7 +648,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 
 	// 用户条件/排序/分页应用在递归完成后的结果集上
 	treeScope := scope{class: u.class, qualifier: tree}
-	if err = my.buildWhere(ctx, treeScope, u.args, nil); err != nil {
+	if err = my.buildWhere(ctx, treeScope, u.args); err != nil {
 		return err
 	}
 	if err = my.buildOrderBy(ctx, treeScope, u.args); err != nil {
@@ -670,28 +671,6 @@ func treeDepth(args ast.ArgumentList) (int, error) {
 		return 0, fmt.Errorf("depth必须在1..32之间")
 	}
 	return depth, nil
-}
-
-// distinctColumns 解析distinct参数为列列表（须为实体真实列）
-func distinctColumns(sc scope, args ast.ArgumentList) ([]string, error) {
-	arg := args.ForName(protocol.DISTINCT)
-	if arg == nil || arg.Value == nil {
-		return nil, nil
-	}
-	values := arg.Value.Children
-	if len(values) == 0 && arg.Value.Raw != "" { // 单值写法
-		values = []*ast.ChildValue{{Value: arg.Value}}
-	}
-	columns := make([]string, 0, len(values))
-	for _, child := range values {
-		name := child.Value.Raw
-		field, ok := sc.class.Fields[name]
-		if !ok || field.Column == "" {
-			return nil, fmt.Errorf("distinct包含无效字段: %s", name)
-		}
-		columns = append(columns, field.Column)
-	}
-	return columns, nil
 }
 
 // fieldsOf 提取选择集中的字段列表

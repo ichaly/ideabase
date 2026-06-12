@@ -3,7 +3,6 @@ module github.com/ichaly/ideabase/gql
 go 1.25.0
 
 require (
-	github.com/duke-git/lancet/v2 v2.3.8
 	github.com/fasthttp/websocket v1.5.12
 	github.com/gofiber/fiber/v3 v3.0.0-rc.3
 	github.com/huandu/go-clone v1.7.3
@@ -11,6 +10,8 @@ require (
 	github.com/ichaly/ideabase/log v0.0.0-20260110145933-e564f1aca14f
 	github.com/ichaly/ideabase/std v0.0.0-20260110145933-e564f1aca14f
 	github.com/ichaly/ideabase/utl v0.0.0-20260110145933-e564f1aca14f
+	github.com/jackc/pglogrepl v0.0.0-20260401131349-e37c41485510
+	github.com/jackc/pgx/v5 v5.9.1
 	github.com/jinzhu/inflection v1.0.0
 	github.com/joho/godotenv v1.5.1
 	github.com/json-iterator/go v1.1.12
@@ -20,6 +21,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.38.0
 	github.com/valyala/fasthttp v1.69.0
 	github.com/vektah/gqlparser/v2 v2.5.31
+	golang.org/x/sync v0.20.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
 )
@@ -65,10 +67,8 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgio v1.0.0 // indirect
-	github.com/jackc/pglogrepl v0.0.0-20260401131349-e37c41485510 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.9.1 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
@@ -128,7 +128,6 @@ require (
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
 	golang.org/x/net v0.48.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect

@@ -158,7 +158,7 @@ func (my *_DialectSuite) TestRelationOps() {
 func (my *_DialectSuite) TestRelationOpGuards() {
 	for name, c := range map[string]struct{ query, wants string }{
 		"创建不支持disconnect": {`mutation { createUser(input: { name: "x", email: "e", posts: { disconnect: [1] } }) { id } }`, "不支持disconnect"},
-		"关系操作必须按id":      {`mutation { updateUser(input: { posts: { connect: [1] } }, where: { name: { eq: "x" } }) { id } }`, "必须用id定位"},
+		"关系操作必须按id":       {`mutation { updateUser(input: { posts: { connect: [1] } }, where: { name: { eq: "x" } }) { id } }`, "必须用id定位"},
 	} {
 		my.Run(name, func() {
 			doc, gqlErr := gqlparser.LoadQuery(my.schema, c.query)

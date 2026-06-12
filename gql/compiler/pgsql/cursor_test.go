@@ -78,10 +78,10 @@ func (my *_DialectSuite) TestCursor() {
 // TestCursorGuards 游标分页参数约束
 func (my *_DialectSuite) TestCursorGuards() {
 	for name, c := range map[string]struct{ query, wants string }{
-		"first与last互斥":  {`query { users(first: 1, last: 1) { items { id } } }`, "不能同时使用"},
+		"first与last互斥": {`query { users(first: 1, last: 1) { items { id } } }`, "不能同时使用"},
 		"与limit互斥":     {`query { users(first: 1, limit: 5) { items { id } } }`, "不能同时使用"},
-		"after需要first":  {`query ($c: Cursor) { users(after: $c) { items { id } } }`, "必须配合first/last"},
-		"pageInfo需要游标":  {`query { users { items { id } pageInfo { hasNext } } }`, "需要配合first/last"},
+		"after需要first": {`query ($c: Cursor) { users(after: $c) { items { id } } }`, "必须配合first/last"},
+		"pageInfo需要游标": {`query { users { items { id } pageInfo { hasNext } } }`, "需要配合first/last"},
 		"first必须字面量":   {`query ($n: Int) { users(first: $n) { items { id } } }`, "必须是字面量整数"},
 	} {
 		my.Run(name, func() {

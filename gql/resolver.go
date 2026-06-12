@@ -7,10 +7,12 @@ import (
 
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
+	"golang.org/x/sync/errgroup"
 )
 
 // Resolver 自定义字段解析器：处理无法用SQL表达的字段逻辑
 // 元数据中通过 Field.Resolver 按名绑定，编译期跳过SQL，执行期填充结果
+// 列表场景下Resolve会被并发调用，实现须线程安全；有状态逻辑请实现BatchResolver
 type Resolver interface {
 	Name() string
 	// Resolve 计算单个宿主对象的字段值，source为该对象已查出的字段
@@ -110,7 +112,8 @@ func hosts(root map[string]interface{}, path []string) []map[string]interface{} 
 	return out
 }
 
-// resolve 按绑定填充resolver字段：批量解析器整列表一次调用，避免N+1
+// resolve 按绑定填充resolver字段：批量解析器整列表一次调用，
+// 普通解析器逐宿主并行计算；计算与写回分离，避免并发写共享对象
 func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[string]interface{}) error {
 	for _, b := range bindings {
 		resolver, ok := my.resolvers[b.Name]
@@ -122,27 +125,37 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 			continue
 		}
 
+		var values []interface{}
+		var err error
 		if batch, ok := resolver.(BatchResolver); ok {
-			values, err := batch.ResolveBatch(ctx, sources, nil)
-			if err != nil {
-				return fmt.Errorf("resolver %s 批量执行失败: %w", b.Name, err)
+			values, err = batch.ResolveBatch(ctx, sources, nil)
+			if err == nil && len(values) != len(sources) {
+				err = fmt.Errorf("返回数量不匹配: 期望%d实际%d", len(sources), len(values))
 			}
-			if len(values) != len(sources) {
-				return fmt.Errorf("resolver %s 返回数量不匹配: 期望%d实际%d", b.Name, len(sources), len(values))
-			}
-			for i, source := range sources {
-				source[b.Field] = values[i]
-			}
-			continue
+		} else {
+			values, err = resolveEach(ctx, resolver, sources)
 		}
-
-		for _, source := range sources {
-			value, err := resolver.Resolve(ctx, source, nil)
-			if err != nil {
-				return fmt.Errorf("resolver %s 执行失败: %w", b.Name, err)
-			}
-			source[b.Field] = value
+		if err != nil {
+			return fmt.Errorf("resolver %s 执行失败: %w", b.Name, err)
+		}
+		for i, source := range sources {
+			source[b.Field] = values[i]
 		}
 	}
 	return nil
+}
+
+// resolveEach 普通resolver逐宿主有界并发计算，返回与sources对位的结果
+func resolveEach(ctx context.Context, resolver Resolver, sources []map[string]interface{}) ([]interface{}, error) {
+	values := make([]interface{}, len(sources))
+	group, ctx := errgroup.WithContext(ctx)
+	group.SetLimit(8)
+	for i, source := range sources {
+		group.Go(func() error {
+			value, err := resolver.Resolve(ctx, source, nil)
+			values[i] = value
+			return err
+		})
+	}
+	return values, group.Wait()
 }

@@ -26,19 +26,26 @@ func (my scope) column(fieldName string) string {
 	return fieldName
 }
 
-// buildWhere 构建WHERE子句；bond为父子关联条件（可为nil），与用户条件AND组合
-func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.ArgumentList, bond func()) error {
+// buildWhere 构建WHERE子句；conjuncts为前置合取条件（关联/搜索/keyset），与用户条件AND组合
+func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.ArgumentList, conjuncts ...func() error) error {
 	conditions := my.collectConditions(args)
-	if bond == nil && len(conditions) == 0 {
+	if len(conjuncts) == 0 && len(conditions) == 0 {
 		return nil
 	}
 
 	ctx.Space("WHERE")
-	if bond != nil {
-		bond()
-		if len(conditions) == 0 {
-			return nil
+	for i, conjunct := range conjuncts {
+		if i > 0 {
+			ctx.Space("AND")
 		}
+		if err := conjunct(); err != nil {
+			return err
+		}
+	}
+	if len(conditions) == 0 {
+		return nil
+	}
+	if len(conjuncts) > 0 {
 		ctx.Space("AND")
 	}
 	return my.buildConditionList(ctx, sc, conditions, "AND", len(conditions) > 1)

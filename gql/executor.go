@@ -4,6 +4,7 @@ package gql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -281,16 +282,17 @@ func (my *Executor) Handler(c fiber.Ctx) error {
 func (my *Executor) Execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	var r gqlReply
 
-	// 处理自省查询（精确匹配__schema/__type字段，__typename走正常编译路径）
+	// 处理自省查询（特征预筛可能误命中字面量，sentinel回退到正常编译路径）
 	if introPattern.MatchString(query) {
 		data, err := my.intro.Introspect(ctx, query, variables, operationName)
-		if err != nil {
+		switch {
+		case err == nil:
+			r.Data = data
+			return r
+		case !errors.Is(err, intro.ErrNotIntrospection):
 			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 			return r
 		}
-
-		r.Data = data
-		return r
 	}
 
 	// 获取执行计划（优先命中缓存）并执行

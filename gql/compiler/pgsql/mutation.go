@@ -69,7 +69,11 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 		ctx.MarkTable(m.class.Table)
 
 		if m.op != protocol.DELETE {
-			m.unit = &unit{field: field, class: m.class, single: !m.bulk, plain: m.bulk, index: ctx.NextIndex()}
+			kind := shapeSingle
+			if m.bulk {
+				kind = shapeList
+			}
+			m.unit = &unit{field: field, class: m.class, shape: kind, index: ctx.NextIndex()}
 		}
 		muts = append(muts, m)
 	}
@@ -200,20 +204,14 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 
 	// 冲突列：on参数（字段名），缺省主键
 	sc := scope{class: m.class}
-	conflicts := make([]string, 0, 2)
-	if arg := m.field.Arguments.ForName("on"); arg != nil && arg.Value != nil {
-		for _, child := range arg.Value.Children {
-			name := child.Value.Raw
-			if field, ok := m.class.Fields[name]; !ok || field.Column == "" {
-				return fmt.Errorf("on包含无效字段: %s", name)
-			}
-			conflicts = append(conflicts, sc.column(name))
-		}
-	} else {
-		for _, pk := range m.class.PrimaryKeys {
-			conflicts = append(conflicts, sc.column(pk))
-		}
+	names, err := fieldNames(sc, m.field.Arguments, "on")
+	if err != nil {
+		return err
 	}
+	if len(names) == 0 {
+		names = m.class.PrimaryKeys
+	}
+	conflicts := columnsOf(sc, names)
 	if len(conflicts) == 0 {
 		return fmt.Errorf("upsert需要冲突列（on参数或实体主键）")
 	}
@@ -364,7 +362,7 @@ func (my *Dialect) buildMutationWhere(ctx *compiler.Context, class *protocol.Cla
 	if len(my.collectConditions(field.Arguments)) == 0 {
 		return fmt.Errorf("%s需要id或where条件", field.Name)
 	}
-	return my.buildWhere(ctx, sc, field.Arguments, nil)
+	return my.buildWhere(ctx, sc, field.Arguments)
 }
 
 // ---------- 输入行解析 ----------

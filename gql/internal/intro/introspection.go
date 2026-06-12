@@ -7,10 +7,12 @@ package intro
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/samber/lo"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -29,6 +31,9 @@ func New(schema *ast.Schema) *Handler {
 	return my
 }
 
+// ErrNotIntrospection 选择集中没有自省字段：调用方应落回正常数据查询路径
+var ErrNotIntrospection = errors.New("不是自省查询")
+
 // Introspect 处理自省查询：解析校验后按选择集投影数据集
 func (my *Handler) Introspect(ctx context.Context, query string, variables map[string]interface{}, operationName string) (map[string]interface{}, error) {
 	doc, errs := gqlparser.LoadQuery(my.schema, query)
@@ -45,8 +50,13 @@ func (my *Handler) Introspect(ctx context.Context, query string, variables map[s
 		}
 	}
 
+	fields := expand(doc, operation.SelectionSet)
+	if !lo.SomeBy(fields, func(f *ast.Field) bool { return f.Name == "__schema" || f.Name == "__type" }) {
+		return nil, ErrNotIntrospection
+	}
+
 	result := make(map[string]interface{})
-	for _, field := range expand(doc, operation.SelectionSet) {
+	for _, field := range fields {
 		switch field.Name {
 		case "__typename":
 			result[field.Alias] = "Query"

@@ -275,16 +275,14 @@ func (my *Metadata) processRelations() {
 
 	// 定义关系字段信息结构体
 	type RelationFieldInfo struct {
-		SourceClass  string
-		TargetClass  string
-		FieldName    string
-		IsReverse    bool
-		IsList       bool
-		Nullable     bool
-		Description  string
-		IsThrough    bool
-		RelationType protocol.RelationType
-		Relation     *protocol.Relation // 关系字段的join元数据，编译器据此生成关联条件
+		SourceClass string
+		TargetClass string
+		FieldName   string
+		IsList      bool
+		Nullable    bool
+		Description string
+		IsThrough   bool
+		Relation    *protocol.Relation // 关系字段的join元数据，编译器据此生成关联条件
 	}
 
 	// 存储所有需要创建的关系字段
@@ -293,20 +291,18 @@ func (my *Metadata) processRelations() {
 	reverseRelationKeys := make(map[string]bool)
 
 	// 添加关系字段信息的辅助函数
-	addRelationField := func(sourceClass, targetClass string, isList, nullable, isReverse, isThrough bool,
-		relType protocol.RelationType, fieldName string, description string, rel *protocol.Relation) {
+	addRelationField := func(sourceClass, targetClass string, isList, nullable, isThrough bool,
+		fieldName string, description string, rel *protocol.Relation) {
 
 		fieldsToCreate = append(fieldsToCreate, RelationFieldInfo{
-			SourceClass:  sourceClass,
-			TargetClass:  targetClass,
-			FieldName:    fieldName,
-			IsReverse:    isReverse,
-			IsList:       isList,
-			Nullable:     nullable,
-			Description:  description,
-			IsThrough:    isThrough,
-			RelationType: relType,
-			Relation:     rel,
+			SourceClass: sourceClass,
+			TargetClass: targetClass,
+			FieldName:   fieldName,
+			IsList:      isList,
+			Nullable:    nullable,
+			Description: description,
+			IsThrough:   isThrough,
+			Relation:    rel,
 		})
 	}
 
@@ -387,8 +383,8 @@ func (my *Metadata) processRelations() {
 				// 添加多对多关系字段
 				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 				desc := createDescription(targetClassName, true)
-				addRelationField(class.Name, targetClassName, true, false, false, false,
-					protocol.MANY_TO_MANY, relName, desc, cloneRelation(relation, protocol.MANY_TO_MANY, false))
+				addRelationField(class.Name, targetClassName, true, false, false,
+					relName, desc, cloneRelation(relation, protocol.MANY_TO_MANY, false))
 
 				// 处理中间表
 				if relation.Through != nil {
@@ -397,8 +393,8 @@ func (my *Metadata) processRelations() {
 						throughFieldName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(throughClass.Name)))
 						throughDesc := createDescription(throughClass.Name, true)
 						// 指向中间表本身是普通一对多：源类主键 -> 中间表的源外键
-						addRelationField(class.Name, throughClass.Name, true, false, false, true,
-							protocol.MANY_TO_MANY, throughFieldName, throughDesc, &protocol.Relation{
+						addRelationField(class.Name, throughClass.Name, true, false, true,
+							throughFieldName, throughDesc, &protocol.Relation{
 								Type:        protocol.ONE_TO_MANY,
 								SourceClass: class.Name,
 								SourceFiled: relation.SourceFiled,
@@ -412,15 +408,15 @@ func (my *Metadata) processRelations() {
 				// 添加一对多关系字段
 				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(targetClassName)))
 				desc := createDescription(targetClassName, true)
-				addRelationField(class.Name, targetClassName, true, false, false, false,
-					protocol.ONE_TO_MANY, relName, desc, cloneRelation(relation, protocol.ONE_TO_MANY, false))
+				addRelationField(class.Name, targetClassName, true, false, false,
+					relName, desc, cloneRelation(relation, protocol.ONE_TO_MANY, false))
 
 			case protocol.MANY_TO_ONE:
 				// 添加多对一关系字段
 				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(targetClassName))
 				desc := createDescription(targetClassName, false)
-				addRelationField(class.Name, targetClassName, false, field.Nullable, false, false,
-					protocol.MANY_TO_ONE, relName, desc, cloneRelation(relation, protocol.MANY_TO_ONE, false))
+				addRelationField(class.Name, targetClassName, false, field.Nullable, false,
+					relName, desc, cloneRelation(relation, protocol.MANY_TO_ONE, false))
 
 				// 收集反向关系字段信息（一对多）
 				// 创建唯一的键来防止重复
@@ -428,8 +424,8 @@ func (my *Metadata) processRelations() {
 				if !reverseRelationKeys[reverseKey] {
 					reverseName := my.uniqueFieldName(targetClass, strcase.ToLowerCamel(inflection.Plural(className)))
 					reverseDesc := createDescription(className, true)
-					addRelationField(targetClassName, class.Name, true, false, true, false,
-						protocol.ONE_TO_MANY, reverseName, reverseDesc, cloneRelation(relation, protocol.ONE_TO_MANY, true))
+					addRelationField(targetClassName, class.Name, true, false, false,
+						reverseName, reverseDesc, cloneRelation(relation, protocol.ONE_TO_MANY, true))
 					reverseRelationKeys[reverseKey] = true
 				}
 
@@ -439,25 +435,25 @@ func (my *Metadata) processRelations() {
 					// 添加父级关系字段：本类外键 -> 本类主键
 					parentName := my.uniqueFieldName(class, "parent")
 					parentDesc := "父" + className + "对象"
-					addRelationField(class.Name, className, false, true, false, false,
-						protocol.RECURSIVE, parentName, parentDesc, cloneRelation(relation, protocol.RECURSIVE, false))
+					addRelationField(class.Name, className, false, true, false,
+						parentName, parentDesc, cloneRelation(relation, protocol.RECURSIVE, false))
 
 					// 添加子级关系字段：本类主键 -> 本类外键
 					childrenName := my.uniqueFieldName(targetClass, "children")
 					childrenDesc := "子" + className + "列表"
-					addRelationField(className, className, true, false, false, false,
-						protocol.RECURSIVE, childrenName, childrenDesc, cloneRelation(relation, protocol.RECURSIVE, true))
+					addRelationField(className, className, true, false, false,
+						childrenName, childrenDesc, cloneRelation(relation, protocol.RECURSIVE, true))
 
 					// 深度递归字段：全树后代/祖先（递归CTE，depth参数限深）
 					descendants := cloneRelation(relation, protocol.RECURSIVE, true)
 					descendants.Deep = true
-					addRelationField(className, className, true, false, false, false,
-						protocol.RECURSIVE, my.uniqueFieldName(class, "descendants"), "全部后代（递归）", descendants)
+					addRelationField(className, className, true, false, false,
+						my.uniqueFieldName(class, "descendants"), "全部后代（递归）", descendants)
 
 					ancestors := cloneRelation(relation, protocol.RECURSIVE, false)
 					ancestors.Deep = true
-					addRelationField(className, className, true, false, false, false,
-						protocol.RECURSIVE, my.uniqueFieldName(class, "ancestors"), "全部祖先（递归）", ancestors)
+					addRelationField(className, className, true, false, false,
+						my.uniqueFieldName(class, "ancestors"), "全部祖先（递归）", ancestors)
 				}
 			}
 		}

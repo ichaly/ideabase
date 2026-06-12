@@ -113,6 +113,18 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Empty(t, users["items"])
 }
 
+// TestIntroFallback 自省特征误命中字面量时应回退到正常数据查询路径
+func TestIntroFallback(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	reply := executor.Execute(context.Background(), `query {
+		users(where: { name: { eq: "__schema demo" } }) { items { id } total }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "应回退为数据查询: %v", reply.Errors)
+	require.EqualValues(t, 0, reply.Data["users"].(map[string]interface{})["total"])
+}
+
 // TestExecutorTree 递归全树真库验证：三层评论链 A->B->C
 func TestExecutorTree(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)

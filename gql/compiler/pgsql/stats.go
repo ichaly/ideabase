@@ -8,7 +8,6 @@ import (
 
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // aggregates 聚合子字段到SQL函数调用前缀（统一"前缀(列)"形式）
@@ -25,7 +24,7 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 	sc := scope{class: u.class, qualifier: u.class.Table}
 	ctx.MarkTable(u.class.Table)
 
-	groups, err := my.groupColumns(sc, u.args)
+	groups, err := fieldNames(sc, u.args, protocol.GROUP_BY)
 	if err != nil {
 		return err
 	}
@@ -95,7 +94,7 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 	}
 
 	ctx.Space(`FROM`).Write(u.class.Table)
-	if err = my.buildWhere(ctx, sc, u.args, nil); err != nil {
+	if err = my.buildWhere(ctx, sc, u.args); err != nil {
 		return err
 	}
 	if len(groups) > 0 {
@@ -108,27 +107,4 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 		}
 	}
 	return my.buildLimit(ctx, u)
-}
-
-// groupColumns 解析groupBy参数为字段名列表（须为实体的真实列）
-func (my *Dialect) groupColumns(sc scope, args ast.ArgumentList) ([]string, error) {
-	arg := args.ForName(protocol.GROUP_BY)
-	if arg == nil || arg.Value == nil {
-		return nil, nil
-	}
-
-	values := arg.Value.Children
-	if len(values) == 0 && arg.Value.Raw != "" { // 单值写法 groupBy: "name"
-		values = []*ast.ChildValue{{Value: arg.Value}}
-	}
-	groups := make([]string, 0, len(values))
-	for _, child := range values {
-		name := child.Value.Raw
-		field, ok := sc.class.Fields[name]
-		if !ok || field.Column == "" {
-			return nil, fmt.Errorf("groupBy包含无效字段: %s", name)
-		}
-		groups = append(groups, name)
-	}
-	return groups, nil
 }
