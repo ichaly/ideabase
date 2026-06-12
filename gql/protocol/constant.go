@@ -1,0 +1,248 @@
+package protocol
+
+import "github.com/samber/lo"
+
+// Operator 表示过滤操作符
+type Operator struct {
+	Name        string
+	Value       string
+	Description string
+}
+
+// 类型常量
+const (
+	// GraphQL类型名称
+	TYPE_SORT_DIRECTION  = "SortDirection"
+	TYPE_PAGE_INFO       = "PageInfo"
+	TYPE_GROUP_BY        = "GroupBy"
+	TYPE_NUMBER_STATS    = "NumberStats"
+	TYPE_STRING_STATS    = "StringStats"
+	TYPE_DATE_TIME_STATS = "DateTimeStats"
+
+	// GraphQL入参名称后缀
+	SUFFIX_STATS        = "Stats"
+	SUFFIX_GROUP        = "Group"
+	SUFFIX_RESULT       = "Result"
+	SUFFIX_SORT_INPUT   = "SortInput"
+	SUFFIX_WHERE_INPUT  = "WhereInput"
+	SUFFIX_CREATE_INPUT = "CreateInput"
+	SUFFIX_UPDATE_INPUT = "UpdateInput"
+	SUFFIX_UPSERT_INPUT = "UpsertInput"
+	SUFFIX_INSERT_INPUT = "InsertInput"
+)
+
+// 参数名称
+const (
+	ID         = "id"
+	INPUT      = "input"
+	DISTINCT   = "distinct"
+	LIMIT      = "limit"
+	OFFSET     = "offset"
+	FIRST      = "first"
+	LAST       = "last"
+	AFTER      = "after"
+	BEFORE     = "before"
+	SORT       = "sort"
+	WHERE      = "where"
+	LEVEL      = "level"
+	INSERT     = "insert"
+	CREATE     = "create"
+	UPSERT     = "upsert"
+	UPDATE     = "update"
+	DELETE     = "delete"
+	CONNECT    = "connect"
+	DISCONNECT = "disconnect"
+	GROUP_BY   = "groupBy"
+)
+
+const (
+	TOTAL     = "total"
+	ITEMS     = "items"
+	PAGE_INFO = "pageInfo"
+	PARENTS   = "parents"
+	CHILDREN  = "children"
+)
+
+// 聚合函数字段名常量
+const (
+	FUNCTION_SUM            = "sum"
+	FUNCTION_AVG            = "avg"
+	FUNCTION_MIN            = "min"
+	FUNCTION_MAX            = "max"
+	FUNCTION_KEY            = "key"
+	FUNCTION_COUNT          = "count"
+	FUNCTION_COUNT_DISTINCT = "countDistinct"
+)
+
+// 路基表达式后缀
+const (
+	SUFFIX_EXPRESSION      = "Expression"
+	SUFFIX_EXPRESSION_LIST = "ListExpression"
+)
+
+// 内置枚举类型
+const (
+	ENUM_IS_INPUT   = "IsInput"
+	ENUM_SORT_INPUT = "SortInput"
+)
+
+// 内置标量类型
+const (
+	SCALAR_ID        = "ID"
+	SCALAR_INT       = "Int"
+	SCALAR_DATE      = "Date"
+	SCALAR_JSON      = "Json"
+	SCALAR_FLOAT     = "Float"
+	SCALAR_STRING    = "String"
+	SCALAR_CURSOR    = "Cursor"
+	SCALAR_BOOLEAN   = "Boolean"
+	SCALAR_DATE_TIME = "DateTime"
+)
+
+// 过滤操作符号描述
+const (
+	descIn                 = "Is in list of values"
+	descIs                 = "Is value null (true) or not null (false)"
+	descEqual              = "Equals value"
+	descNotEqual           = "Does not equal value"
+	descGreaterThan        = "Is greater than value"
+	descGreaterThanOrEqual = "Is greater than or equal to value"
+	descLessThan           = "Is less than value"
+	descLessThanOrEqual    = "Is less than or equal to value"
+	descLike               = "Value matching pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values having 'r' in second position"
+	descILike              = "Value matching (case-insensitive) pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values not having 'r' in second position"
+	descRegex              = "Value matching regular pattern"
+	descIRegex             = "Value matching (case-insensitive) regex pattern"
+	descHasKey             = "Value is a JSON object with the specified key"
+	descHasKeyAny          = "Value is a JSON object with any of the specified keys"
+	descHasKeyAll          = "Value is a JSON object with all of the specified keys"
+)
+
+// 逻辑关系操作符常量
+const (
+	NOT = "not"
+	AND = "and"
+	OR  = "or"
+)
+
+const (
+	IS          = "is"
+	EQ          = "eq"
+	IN          = "in"
+	NI          = "ni"
+	GT          = "gt"
+	GE          = "ge"
+	LT          = "lt"
+	LE          = "le"
+	NE          = "ne"
+	LIKE        = "like"
+	I_LIKE      = "iLike"
+	REGEX       = "regex"
+	I_REGEX     = "iRegex"
+	HAS_KEY     = "hasKey"
+	HAS_KEY_ANY = "hasKeyAny"
+	HAS_KEY_ALL = "hasKeyAll"
+)
+
+// DataTypes 内置的数据库到GraphQL的类型映射
+var DataTypes = map[string]string{
+	// PostgreSQL 类型
+	"timestamp with time zone":    SCALAR_DATE_TIME,
+	"timestamp without time zone": SCALAR_DATE_TIME,
+	"character varying":           SCALAR_STRING,
+	"character":                   SCALAR_STRING,
+	"char":                        SCALAR_STRING,
+	"text":                        SCALAR_STRING,
+	"varchar":                     SCALAR_STRING,
+	"smallint":                    SCALAR_INT,
+	"integer":                     SCALAR_INT,
+	"int":                         SCALAR_INT,
+	"int2":                        SCALAR_INT,
+	"int4":                        SCALAR_INT,
+	"int8":                        SCALAR_INT,
+	"bigint":                      SCALAR_INT,
+	"smallserial":                 SCALAR_INT,
+	"serial":                      SCALAR_INT,
+	"bigserial":                   SCALAR_INT,
+	"decimal":                     SCALAR_FLOAT,
+	"numeric":                     SCALAR_FLOAT,
+	"real":                        SCALAR_FLOAT,
+	"float":                       SCALAR_FLOAT,
+	"float4":                      SCALAR_FLOAT,
+	"float8":                      SCALAR_FLOAT,
+	"double precision":            SCALAR_FLOAT,
+	"money":                       SCALAR_FLOAT,
+	"boolean":                     SCALAR_BOOLEAN,
+	"bool":                        SCALAR_BOOLEAN,
+	"uuid":                        SCALAR_ID,
+	"date":                        SCALAR_DATE_TIME,
+	"timestamp":                   SCALAR_DATE_TIME,
+	"timestamptz":                 SCALAR_DATE_TIME,
+	"json":                        SCALAR_JSON,
+	"jsonb":                       SCALAR_JSON,
+	"serialid":                    SCALAR_ID,
+	"bigserialid":                 SCALAR_ID,
+
+	// MySQL 类型
+	"tinyint":    SCALAR_INT,
+	"tinyint(1)": SCALAR_BOOLEAN,
+	"mediumint":  SCALAR_INT,
+	"tinytext":   SCALAR_STRING,
+	"mediumtext": SCALAR_STRING,
+	"longtext":   SCALAR_STRING,
+	"enum":       SCALAR_STRING,
+	"set":        SCALAR_STRING,
+	"datetime":   SCALAR_DATE_TIME,
+	"time":       SCALAR_STRING,
+	"year":       SCALAR_INT,
+	"binary":     SCALAR_STRING,
+	"varbinary":  SCALAR_STRING,
+	"blob":       SCALAR_STRING,
+	"tinyblob":   SCALAR_STRING,
+	"mediumblob": SCALAR_STRING,
+	"longblob":   SCALAR_STRING,
+}
+
+// Operators 全部操作符，顺序不可调整（Grouping按下标切片）
+var Operators = []*Operator{
+	{Name: IS, Value: "is", Description: descIs},
+	{Name: EQ, Value: "=", Description: descEqual},
+	{Name: IN, Value: "in", Description: descIn},
+	{Name: GT, Value: ">", Description: descGreaterThan},
+	{Name: GE, Value: ">=", Description: descGreaterThanOrEqual},
+	{Name: LT, Value: "<", Description: descLessThan},
+	{Name: LE, Value: "<=", Description: descLessThanOrEqual},
+	{Name: NE, Value: "!=", Description: descNotEqual},
+	{Name: LIKE, Value: "like", Description: descLike},
+	{Name: I_LIKE, Value: "ilike", Description: descILike},
+	{Name: REGEX, Value: "~", Description: descRegex},
+	{Name: I_REGEX, Value: "~*", Description: descIRegex},
+	{Name: HAS_KEY, Value: "?", Description: descHasKey},
+	{Name: HAS_KEY_ANY, Value: "?|", Description: descHasKeyAny},
+	{Name: HAS_KEY_ALL, Value: "?&", Description: descHasKeyAll},
+}
+
+// Grouping 内置标量可用的操作符集合
+var Grouping = map[string][]*Operator{
+	SCALAR_ID:        Operators[1:7],                                              //[eq,in,gt,ge,lt,le]
+	SCALAR_INT:       Operators[:8],                                               //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_FLOAT:     Operators[:8],                                               //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_DATE_TIME: Operators[:8],                                               //[is,eq,in,gt,ge,lt,le,ne]
+	SCALAR_STRING:    Operators,                                                   //全部
+	SCALAR_BOOLEAN:   Operators[1:3],                                              //[eq,in]
+	SCALAR_JSON:      append(append([]*Operator{}, Operators[:3]...), Operators[12:]...), //[is,eq,in,hasKey,hasKeyAny,hasKeyAll] 先拷贝避免共享底层数组
+}
+
+// Scalars 内置标量类型集合
+var Scalars = []string{SCALAR_ID, SCALAR_INT, SCALAR_FLOAT, SCALAR_STRING, SCALAR_BOOLEAN}
+
+// 运算符按照名字索引字典
+var dictionary = lo.KeyBy(Operators, func(op *Operator) string {
+	return op.Name
+})
+
+// GetOperator 根据名称获取操作符信息
+func GetOperator(name string) (*Operator, bool) {
+	op, exists := dictionary[name]
+	return op, exists
+}

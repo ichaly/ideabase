@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -55,7 +55,7 @@ func (my *Dialect) buildOrderBy(ctx *compiler.Context, sc scope, args ast.Argume
 
 // sortEntries 提取排序键值对，sort参数兼容单对象与对象列表两种写法
 func sortEntries(args ast.ArgumentList) []*ast.ChildValue {
-	sortArg := args.ForName(gql.SORT)
+	sortArg := args.ForName(protocol.SORT)
 	if sortArg == nil || sortArg.Value == nil {
 		return nil
 	}

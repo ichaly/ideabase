@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -49,20 +48,20 @@ func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.Argument
 func (my *Dialect) collectConditions(args ast.ArgumentList) []*ast.Value {
 	var conditions []*ast.Value
 
-	if idArg := args.ForName(gql.ID); idArg != nil && idArg.Value != nil {
+	if idArg := args.ForName(protocol.ID); idArg != nil && idArg.Value != nil {
 		conditions = append(conditions, &ast.Value{
 			Kind: ast.ObjectValue,
 			Children: []*ast.ChildValue{{
-				Name: gql.ID,
+				Name: protocol.ID,
 				Value: &ast.Value{
 					Kind:     ast.ObjectValue,
-					Children: []*ast.ChildValue{{Name: gql.EQ, Value: idArg.Value}},
+					Children: []*ast.ChildValue{{Name: protocol.EQ, Value: idArg.Value}},
 				},
 			}},
 		})
 	}
 
-	if whereArg := args.ForName(gql.WHERE); whereArg != nil && whereArg.Value != nil {
+	if whereArg := args.ForName(protocol.WHERE); whereArg != nil && whereArg.Value != nil {
 		conditions = append(conditions, whereArg.Value)
 	}
 
@@ -118,7 +117,7 @@ func (my *Dialect) buildChild(ctx *compiler.Context, sc scope, child *ast.ChildV
 	}
 
 	switch child.Name {
-	case gql.AND, gql.OR:
+	case protocol.AND, protocol.OR:
 		if child.Value == nil || len(child.Value.Children) == 0 {
 			return fmt.Errorf("逻辑操作符 %s 至少需要一个条件", child.Name)
 		}
@@ -127,7 +126,7 @@ func (my *Dialect) buildChild(ctx *compiler.Context, sc scope, child *ast.ChildV
 			values[i] = sub.Value
 		}
 		return my.buildConditionList(ctx, sc, values, strings.ToUpper(child.Name), true)
-	case gql.NOT:
+	case protocol.NOT:
 		if child.Value == nil {
 			return fmt.Errorf("NOT操作符需要一个条件")
 		}
@@ -164,7 +163,7 @@ func (my *Dialect) buildFieldCondition(ctx *compiler.Context, sc scope, child *a
 
 // buildOperator 构建操作符及其值
 func (my *Dialect) buildOperator(ctx *compiler.Context, opChild *ast.ChildValue) error {
-	op, ok := gql.GetOperator(opChild.Name)
+	op, ok := protocol.GetOperator(opChild.Name)
 	if !ok {
 		return fmt.Errorf("不支持的操作符: %s", opChild.Name)
 	}
@@ -176,7 +175,7 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, opChild *ast.ChildValue)
 	}
 
 	switch opChild.Name {
-	case gql.IN, gql.NI:
+	case protocol.IN, protocol.NI:
 		ctx.Write("(")
 		if value.Kind == ast.ListValue {
 			for i, child := range value.Children {
@@ -192,7 +191,7 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, opChild *ast.ChildValue)
 		}
 		ctx.Write(")")
 		return nil
-	case gql.IS:
+	case protocol.IS:
 		// IsInput枚举：NULL / NOT_NULL
 		switch value.Raw {
 		case "NULL":

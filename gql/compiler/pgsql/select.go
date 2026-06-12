@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -59,7 +58,7 @@ func (my *Dialect) rootUnits(ctx *compiler.Context, set ast.SelectionSet) ([]*un
 	units := make([]*unit, 0, len(fields))
 	for _, field := range fields {
 		typeName := field.Definition.Type.Name()
-		className := strings.TrimSuffix(typeName, gql.SUFFIX_RESULT)
+		className := strings.TrimSuffix(typeName, protocol.SUFFIX_RESULT)
 		class, ok := ctx.GetClass(className)
 		if !ok {
 			return nil, fmt.Errorf("不支持的根查询字段: %s", field.Name)
@@ -102,11 +101,11 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	var hasTotal bool
 	for _, f := range fieldsOf(u.field.SelectionSet) {
 		switch f.Name {
-		case gql.ITEMS:
+		case protocol.ITEMS:
 			items = fieldsOf(f.SelectionSet)
-		case gql.TOTAL:
+		case protocol.TOTAL:
 			hasTotal = true
-		case gql.PAGE_INFO:
+		case protocol.PAGE_INFO:
 			return fmt.Errorf("暂不支持pageInfo游标分页")
 		}
 	}
@@ -116,14 +115,14 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 
 	sr := func() *compiler.Context { return ctx.Quote(`__sr_`, u.index) }
 
-	ctx.Write(`SELECT JSONB_BUILD_OBJECT('`, gql.ITEMS, `', COALESCE(JSONB_AGG(TO_JSONB(`)
+	ctx.Write(`SELECT JSONB_BUILD_OBJECT('`, protocol.ITEMS, `', COALESCE(JSONB_AGG(TO_JSONB(`)
 	sr().Write(`.*)`)
 	if hasTotal {
 		ctx.Write(` - '__total'`)
 	}
 	ctx.Write(`), '[]')`)
 	if hasTotal {
-		ctx.Write(`, '`, gql.TOTAL, `', COALESCE(MIN(`)
+		ctx.Write(`, '`, protocol.TOTAL, `', COALESCE(MIN(`)
 		sr().Write(`."__total"), 0)`)
 	}
 	ctx.Write(`) AS "json" FROM (`)
@@ -294,7 +293,7 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 		return nil
 	}
 
-	for _, name := range []string{gql.LIMIT, gql.OFFSET} {
+	for _, name := range []string{protocol.LIMIT, protocol.OFFSET} {
 		arg := u.args.ForName(name)
 		if arg == nil || arg.Value == nil {
 			continue
@@ -315,7 +314,7 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 		ctx.Write(int(count))
 	}
 
-	for _, name := range []string{gql.AFTER, gql.BEFORE, gql.FIRST, gql.LAST} {
+	for _, name := range []string{protocol.AFTER, protocol.BEFORE, protocol.FIRST, protocol.LAST} {
 		if arg := u.args.ForName(name); arg != nil && arg.Value != nil {
 			return fmt.Errorf("暂不支持游标分页参数: %s", name)
 		}

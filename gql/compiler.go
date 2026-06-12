@@ -23,7 +23,35 @@ func NewCompiler(m *Metadata, dialects []compiler.Dialect) (*Compiler, error) {
 	return my, nil
 }
 
-func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[string]interface{}) (string, []any, error) {
+// Plan 编译产物：SQL + 参数槽位 + 变量默认值
+// 非volatile的计划可按查询文本缓存，执行期仅需解析参数槽位
+type Plan struct {
+	SQL      string
+	slots    []compiler.Slot
+	defaults map[string]interface{}
+	volatile bool
+}
+
+// Volatile 编译产物是否依赖变量内容（如整体input变量），不可缓存
+func (my *Plan) Volatile() bool {
+	return my.volatile
+}
+
+// Args 按变量表解析参数槽位，缺失变量回退到操作定义的默认值
+func (my *Plan) Args(variables map[string]interface{}) []any {
+	args := make([]any, len(my.slots))
+	for i, slot := range my.slots {
+		value := slot.Resolve(variables)
+		if value == nil && slot.Variable != "" {
+			value = my.defaults[slot.Variable]
+		}
+		args[i] = value
+	}
+	return args
+}
+
+// Compile 编译GraphQL操作为执行计划
+func (my *Compiler) Compile(operation *ast.OperationDefinition, variables map[string]interface{}) (*Plan, error) {
 	ctx := compiler.NewContext(my.meta, my.dialect.Quotation(), variables)
 	defer ctx.Release()
 
@@ -35,9 +63,31 @@ func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[stri
 		err = my.dialect.BuildMutation(ctx, operation.SelectionSet)
 	}
 	if err != nil {
+		return nil, err
+	}
+
+	plan := &Plan{SQL: ctx.String(), slots: ctx.Slots(), volatile: ctx.Volatile()}
+	for _, def := range operation.VariableDefinitions {
+		if def.DefaultValue == nil {
+			continue
+		}
+		if value, err := def.DefaultValue.Value(nil); err == nil {
+			if plan.defaults == nil {
+				plan.defaults = make(map[string]interface{})
+			}
+			plan.defaults[def.Variable] = value
+		}
+	}
+	return plan, nil
+}
+
+// Build 编译并立即解析参数（一次性场景与测试）
+func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[string]interface{}) (string, []any, error) {
+	plan, err := my.Compile(operation, variables)
+	if err != nil {
 		return "", nil, err
 	}
-	return ctx.String(), ctx.Args(), nil
+	return plan.SQL, plan.Args(variables), nil
 }
 
 // selectDialect 选择适合当前数据库的SQL方言
@@ -46,7 +96,6 @@ func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[stri
 // 2. 如未找到匹配，尝试使用PostgreSQL方言(推荐方言)
 // 3. 如仍未找到，使用首个可用方言
 // 4. 如无可用方言，返回错误
-// 返回: 如无可用方言则返回错误
 func (my *Compiler) selectDialect(list []compiler.Dialect) error {
 	dialects := make(map[string]compiler.Dialect, len(list))
 	for _, dialect := range list {

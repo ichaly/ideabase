@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -46,7 +45,7 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 		seen[class.Table] = true
 
 		m := &mutation{field: field, class: class, op: op}
-		if op != gql.DELETE {
+		if op != protocol.DELETE {
 			m.unit = &unit{field: field, class: class, single: true, index: ctx.NextIndex()}
 		}
 		muts = append(muts, m)
@@ -61,11 +60,11 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 		ctx.Quote(m.class.Table).Write(` AS (`)
 		var err error
 		switch m.op {
-		case gql.CREATE:
+		case protocol.CREATE:
 			err = my.buildInsert(ctx, m.class, m.field)
-		case gql.UPDATE:
+		case protocol.UPDATE:
 			err = my.buildUpdate(ctx, m.class, m.field)
-		case gql.DELETE:
+		case protocol.DELETE:
 			err = my.buildDelete(ctx, m.class, m.field)
 		}
 		if err != nil {
@@ -101,7 +100,7 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 
 // parseMutation 解析变更字段名：createUser -> (create, User)
 func parseMutation(name string) (string, string) {
-	for _, op := range []string{gql.CREATE, gql.UPDATE, gql.DELETE} {
+	for _, op := range []string{protocol.CREATE, protocol.UPDATE, protocol.DELETE} {
 		if strings.HasPrefix(name, op) {
 			return op, strings.TrimPrefix(name, op)
 		}
@@ -180,7 +179,7 @@ type inputEntry struct {
 // inputEntries 解析input参数为列与值。支持两种形态：
 // 字面量对象逐字段编译；整体变量则读取运行期变量内容（编译产物不可缓存）
 func (my *Dialect) inputEntries(ctx *compiler.Context, class *protocol.Class, field *ast.Field) ([]*inputEntry, error) {
-	arg := field.Arguments.ForName(gql.INPUT)
+	arg := field.Arguments.ForName(protocol.INPUT)
 	if arg == nil || arg.Value == nil {
 		return nil, fmt.Errorf("%s缺少input参数", field.Name)
 	}

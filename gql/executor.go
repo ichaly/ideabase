@@ -44,6 +44,7 @@ type Executor struct {
 	database *gorm.DB       // 数据库连接，用于执行生成的SQL
 	metadata *Metadata      // 元数据信息，包含表结构、关系等
 	compiler *Compiler      // 编译器，将GraphQL查询编译为SQL
+	cache    *planCache     // 执行计划缓存，命中路径零解析零编译
 }
 
 // 构造函数和初始化方法
@@ -69,6 +70,7 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		database: d,
 		metadata: m,
 		compiler: c,
+		cache:    newPlanCache(512),
 	}
 
 	// 生成并加载GraphQL模式
@@ -167,23 +169,63 @@ func (my *Executor) Execute(ctx context.Context, query string, variables map[str
 		return r
 	}
 
-	// 解析查询
-	doc, err := gqlparser.LoadQuery(my.schema, query)
+	// 获取执行计划（优先命中缓存）并执行
+	plan, err := my.plan(query, operationName, variables)
 	if err != nil {
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
 	}
+	r.sql = plan.SQL
+	r.args = plan.Args(variables)
 
-	// 按照GraphQL规范处理操作
-	operation, opErr := getOperation(doc.Operations, operationName)
-	if opErr != nil {
-		r.Errors = gqlerror.List{gqlerror.Wrap(opErr)}
+	// 单条SQL返回单行单列的__root JSON，直接解包为data
+	// 顶层key即GraphQL字段别名，符合规范的data组织
+	var data []byte
+	if err := my.database.WithContext(ctx).Raw(r.sql, r.args...).Row().Scan(&data); err != nil {
+		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
 	}
+	result := make(map[string]interface{})
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &result); err != nil {
+			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
+			return r
+		}
+	}
 
-	// 执行选定的操作
-	r = my.runOperation(operation, variables)
+	r.Data = result
 	return r
+}
+
+// plan 获取执行计划：命中缓存直接返回，未命中则解析编译并缓存
+func (my *Executor) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
+	if my.compiler == nil || my.database == nil {
+		return nil, fmt.Errorf("执行器未配置数据库或编译器")
+	}
+
+	key := operationName + "\x00" + query
+	if plan, ok := my.cache.Get(key); ok {
+		return plan, nil
+	}
+
+	doc, errs := gqlparser.LoadQuery(my.schema, query)
+	if len(errs) > 0 {
+		return nil, errs
+	}
+	operation, err := getOperation(doc.Operations, operationName)
+	if err != nil {
+		return nil, err
+	}
+
+	plan, err := my.compiler.Compile(operation, variables)
+	if err != nil {
+		return nil, err
+	}
+	// volatile计划依赖变量内容（如整体input变量），不可复用
+	if !plan.Volatile() {
+		my.cache.Put(key, plan)
+	}
+	return plan, nil
 }
 
 // 获取操作
@@ -216,36 +258,3 @@ func getOperation(operations ast.OperationList, operationName string) (*ast.Oper
 	return nil, fmt.Errorf("未找到名为'%s'的操作", operationName)
 }
 
-// runOperation 执行单个GraphQL操作
-// 将操作编译为SQL并执行，然后处理结果
-// 参数:
-//   - op: 要执行的GraphQL操作定义
-//   - variables: 操作变量
-//
-// 返回:
-//   - 包含执行结果或错误的GraphQL响应
-func (my *Executor) runOperation(operation *ast.OperationDefinition, variables map[string]interface{}) gqlReply {
-	var r gqlReply
-
-	// 编译并执行SQL查询
-	var err error
-	if r.sql, r.args, err = my.compiler.Build(operation, variables); err != nil {
-		r.Errors = append(r.Errors, gqlerror.Wrap(err))
-		return r
-	}
-
-	result := make(map[string]interface{})
-	if err = my.database.Raw(r.sql, r.args...).Scan(&result).Error; err != nil {
-		r.Errors = append(r.Errors, gqlerror.Wrap(err))
-		return r
-	}
-
-	// 按GraphQL规范组织结果
-	if operation.Name != "" {
-		r.Data = map[string]interface{}{operation.Name: result}
-	} else {
-		r.Data = result
-	}
-
-	return r
-}
