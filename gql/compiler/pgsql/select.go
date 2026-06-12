@@ -26,17 +26,30 @@ type unit struct {
 
 // BuildQuery 构建查询语句：根JSON对象 + 每个根字段一个LATERAL单元
 func (my *Dialect) BuildQuery(ctx *compiler.Context, set ast.SelectionSet) error {
-	units, err := my.rootUnits(ctx, set)
-	if err != nil {
-		return err
+	fields := fieldsOf(set)
+	if len(fields) == 0 {
+		return fmt.Errorf("查询选择集为空")
 	}
 
+	units := make([]*unit, 0, len(fields))
 	ctx.Write(`SELECT JSONB_BUILD_OBJECT(`)
-	for i, u := range units {
+	for i, field := range fields {
 		if i > 0 {
 			ctx.Write(`, `)
 		}
-		ctx.Write(`'`, u.field.Alias, `', `).Quote(`__sj_`, u.index).Write(`."json"`)
+		if field.Name == typename {
+			ctx.Write(`'`, field.Alias, `', 'Query'`)
+			continue
+		}
+
+		className := strings.TrimSuffix(field.Definition.Type.Name(), protocol.SUFFIX_RESULT)
+		class, ok := ctx.GetClass(className)
+		if !ok {
+			return fmt.Errorf("不支持的根查询字段: %s", field.Name)
+		}
+		u := &unit{field: field, class: class, index: ctx.NextIndex(), args: field.Arguments}
+		units = append(units, u)
+		ctx.Write(`'`, field.Alias, `', `).Quote(`__sj_`, u.index).Write(`."json"`)
 	}
 	ctx.Write(`) AS "__root" FROM (SELECT TRUE) AS "__root_x"`)
 
@@ -48,25 +61,8 @@ func (my *Dialect) BuildQuery(ctx *compiler.Context, set ast.SelectionSet) error
 	return nil
 }
 
-// rootUnits 解析根选择集为单元列表（根字段类型为 XxxResult）
-func (my *Dialect) rootUnits(ctx *compiler.Context, set ast.SelectionSet) ([]*unit, error) {
-	fields := fieldsOf(set)
-	if len(fields) == 0 {
-		return nil, fmt.Errorf("查询选择集为空")
-	}
-
-	units := make([]*unit, 0, len(fields))
-	for _, field := range fields {
-		typeName := field.Definition.Type.Name()
-		className := strings.TrimSuffix(typeName, protocol.SUFFIX_RESULT)
-		class, ok := ctx.GetClass(className)
-		if !ok {
-			return nil, fmt.Errorf("不支持的根查询字段: %s", field.Name)
-		}
-		units = append(units, &unit{field: field, class: class, index: ctx.NextIndex(), args: field.Arguments})
-	}
-	return units, nil
-}
+// typename GraphQL元字段，编译为类型名字面量
+const typename = "__typename"
 
 // buildUnit 输出一个LATERAL JOIN单元，按单元形态选择JSON包装策略
 func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
@@ -97,7 +93,7 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 
 // buildResultWrap 根字段的 items/total 包装
 func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
-	var items []*ast.Field
+	var items, typeNames []*ast.Field
 	var hasTotal bool
 	for _, f := range fieldsOf(u.field.SelectionSet) {
 		switch f.Name {
@@ -105,8 +101,8 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 			items = fieldsOf(f.SelectionSet)
 		case protocol.TOTAL:
 			hasTotal = true
-		case protocol.PAGE_INFO:
-			return fmt.Errorf("暂不支持pageInfo游标分页")
+		case typename:
+			typeNames = append(typeNames, f)
 		}
 	}
 	if len(items) == 0 && !hasTotal {
@@ -124,6 +120,9 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	if hasTotal {
 		ctx.Write(`, '`, protocol.TOTAL, `', COALESCE(MIN(`)
 		sr().Write(`."__total"), 0)`)
+	}
+	for _, f := range typeNames {
+		ctx.Write(`, '`, f.Alias, `', '`, u.class.Name, protocol.SUFFIX_RESULT, `'`)
 	}
 	ctx.Write(`) AS "json" FROM (`)
 
@@ -151,7 +150,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		unit  *unit
 		alias string
 	}
-	var scalars []*ast.Field
+	var scalars, typeNames []*ast.Field
 	var children []relIndex
 	columns := make([]string, 0, len(selection))
 	seen := make(map[string]bool)
@@ -163,6 +162,10 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	}
 
 	for _, f := range selection {
+		if f.Name == typename {
+			typeNames = append(typeNames, f)
+			continue
+		}
 		field, ok := u.class.Fields[f.Name]
 		if !ok || strings.HasPrefix(f.Name, "__") {
 			continue
@@ -197,24 +200,29 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		return fmt.Errorf("查询 %s 没有可用的标量字段", u.field.Name)
 	}
 
-	// 列投影：原始列 -> GraphQL字段别名，子关系 -> json别名
-	ctx.SpaceAfter(`SELECT`)
-	for i, f := range scalars {
-		if i > 0 {
+	// 列投影：原始列 -> GraphQL字段别名，__typename -> 类型名字面量，子关系 -> json别名
+	written := 0
+	comma := func() {
+		if written > 0 {
 			ctx.SpaceAfter(`,`)
 		}
+		written++
+	}
+	ctx.SpaceAfter(`SELECT`)
+	for _, f := range scalars {
+		comma()
 		ctx.Quote(base).Write(`.`).Quote(sc.column(f.Name)).Space(`AS`).Quote(f.Alias)
 	}
+	for _, f := range typeNames {
+		comma()
+		ctx.Write(`'`, u.class.Name, `' AS `).Quote(f.Alias)
+	}
 	if withTotal {
-		if len(scalars) > 0 {
-			ctx.SpaceAfter(`,`)
-		}
+		comma()
 		ctx.Quote(base).Write(`."__total"`)
 	}
-	for i, child := range children {
-		if i > 0 || len(scalars) > 0 || withTotal {
-			ctx.SpaceAfter(`,`)
-		}
+	for _, child := range children {
+		comma()
 		ctx.Quote(`__sj_`, child.unit.index).Write(`."json"`).Space(`AS`).Quote(child.alias)
 	}
 
@@ -316,11 +324,6 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 		ctx.Write(int(count))
 	}
 
-	for _, name := range []string{protocol.AFTER, protocol.BEFORE, protocol.FIRST, protocol.LAST} {
-		if arg := u.args.ForName(name); arg != nil && arg.Value != nil {
-			return fmt.Errorf("暂不支持游标分页参数: %s", name)
-		}
-	}
 	return nil
 }
 

@@ -8,9 +8,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
-	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/vektah/gqlparser/v2"
@@ -18,6 +18,9 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"gorm.io/gorm"
 )
+
+// introPattern 自省查询特征：__schema字段 或 __type(调用；不会误伤__typename
+var introPattern = regexp.MustCompile(`__schema\b|__type\s*\(`)
 
 // 请求和结果类型定义
 type (
@@ -244,9 +247,9 @@ func (my *Executor) Handler(c fiber.Ctx) error {
 func (my *Executor) Execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	var r gqlReply
 
-	// 处理自省查询
-	if strutil.ContainsAny(query, []string{"__schema", "__type"}) {
-		data, err := my.intro.Introspect(ctx, query, variables)
+	// 处理自省查询（精确匹配__schema/__type字段，__typename走正常编译路径）
+	if introPattern.MatchString(query) {
+		data, err := my.intro.Introspect(ctx, query, variables, operationName)
 		if err != nil {
 			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 			return r

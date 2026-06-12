@@ -33,6 +33,9 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 	muts := make([]*mutation, 0, len(fields))
 	seen := make(map[string]bool, len(fields))
 	for _, field := range fields {
+		if field.Name == typename {
+			continue // 元字段在根对象输出字面量
+		}
 		op, className := parseMutation(field.Name)
 		class, ok := ctx.GetClass(className)
 		if op == "" || !ok {
@@ -50,6 +53,9 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 			m.unit = &unit{field: field, class: class, single: true, index: ctx.NextIndex()}
 		}
 		muts = append(muts, m)
+	}
+	if len(muts) == 0 {
+		return fmt.Errorf("变更选择集为空")
 	}
 
 	// 变更CTE
@@ -74,12 +80,19 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 		ctx.Write(` RETURNING *)`)
 	}
 
-	// 统一__root读回：create/update经LATERAL读回实体，delete内联计数
+	// 统一__root读回：create/update经LATERAL读回实体，delete内联计数，__typename字面量
 	ctx.Space(`SELECT JSONB_BUILD_OBJECT(`)
-	for i, m := range muts {
+	pending := muts
+	for i, field := range fields {
 		if i > 0 {
 			ctx.Write(`, `)
 		}
+		if field.Name == typename {
+			ctx.Write(`'`, field.Alias, `', 'Mutation'`)
+			continue
+		}
+		m := pending[0]
+		pending = pending[1:]
 		ctx.Write(`'`, m.field.Alias, `', `)
 		if m.unit == nil {
 			ctx.Write(`(SELECT COUNT(*) FROM `).Quote(m.class.Table).Write(`)`)

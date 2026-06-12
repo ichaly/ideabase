@@ -136,13 +136,21 @@ services:
 当前未注册 MySQL 的任何实现：连 MySQL 时编译器报「没有注册对应的SQL
 方言实现」，订阅报「没有注册CDC唤醒源」，不会静默出错。
 
+## 契约一致性
+
+schema、能力、自省三者严格一致，没有任何方向的偏差：
+
+- **没有隐藏能力**：所有请求先经 schema 校验（gqlparser），schema 没有的字段/参数直接报错——不存在 graphjin 那种"文档不展示但提交能用"的隐含关键字
+- **没有虚假展示**：未实现的能力（游标分页、统计、嵌套写入）不渲染进 schema，文档里看到的就是能用的
+- **自省完整**：按客户端查询形状投影（支持别名/fragment），GraphiQL、Apollo codegen 的标准 IntrospectionQuery 直接对接（有测试覆盖）；`__typename` 在根/Result/实体各层级编译为类型名字面量，Apollo 客户端缓存正常工作
+
 ## 当前限制
 
 - MySQL 方言未实现（扩展方式见上节；已知驱动未注册方言会明确报错，不会静默回退）
-- 游标分页（`first/last/after/before/pageInfo`）编译期明确报错，未实现
-- 嵌套写入（`connect/disconnect`、upsert）未实现
+- 游标分页未实现（schema 不展示相关参数）
+- 嵌套写入（connect/disconnect、upsert）未实现（schema 不展示）
 - 同一 mutation 内不能两次变更同一张表（变更 CTE 同名限制）
-- 统计查询（`xxxStats`）schema 已生成，编译未实现
+- 统计查询未实现（schema 不展示）
 
 设计细节见 [`../doc/gql-rework-plan.md`](../doc/gql-rework-plan.md) 与
 [`../doc/pgsql-template-design.md`](../doc/pgsql-template-design.md)。

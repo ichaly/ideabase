@@ -1,320 +1,320 @@
+// Package intro GraphQL自省查询处理
+// 启动时从schema构建一份符合规范的完整自省数据集（含__Type/ofType链、
+// inputFields、enumValues、directives等），请求时按客户端查询形状投影返回，
+// 支持别名与fragment——GraphiQL/Apollo codegen的标准IntrospectionQuery可直接对接。
+// 自省结果与schema严格一致：schema没有的能力不存在任何隐藏入口。
 package intro
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"sort"
 	"strings"
 
+	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // Handler GraphQL自省查询处理器
 type Handler struct {
 	schema *ast.Schema
+	data   map[string]interface{} // __schema完整数据集
+	types  map[string]interface{} // 类型名 -> __Type完整数据（含相互引用）
 }
 
-// New 创建一个新的自省查询处理器
+// New 创建自省处理器并构建数据集
 func New(schema *ast.Schema) *Handler {
-	return &Handler{schema: schema}
+	my := &Handler{schema: schema, types: make(map[string]interface{}, len(schema.Types))}
+	my.build()
+	return my
 }
 
-// Introspect 处理自省查询
-func (my *Handler) Introspect(ctx context.Context, query string, variables map[string]interface{}) (map[string]interface{}, error) {
-	if strings.Contains(query, "__schema") {
-		return my.handleSchemaQuery(variables)
-	} else if strings.Contains(query, "__type") {
-		typeName, ok := variables["name"].(string)
-		if !ok {
-			return nil, errors.New("__type查询需要提供name参数")
+// Introspect 处理自省查询：解析校验后按选择集投影数据集
+func (my *Handler) Introspect(ctx context.Context, query string, variables map[string]interface{}, operationName string) (map[string]interface{}, error) {
+	doc, errs := gqlparser.LoadQuery(my.schema, query)
+	if len(errs) > 0 {
+		return nil, errs
+	}
+
+	operation := doc.Operations.ForName(operationName)
+	if operation == nil {
+		if operationName == "" && len(doc.Operations) == 1 {
+			operation = doc.Operations[0]
+		} else {
+			return nil, fmt.Errorf("未找到名为'%s'的操作", operationName)
 		}
-		return my.handleTypeQuery(typeName)
 	}
 
-	return nil, errors.New("不是有效的自省查询")
-}
-
-// handleSchemaQuery 处理__schema查询
-func (my *Handler) handleSchemaQuery(variables map[string]interface{}) (map[string]interface{}, error) {
-	result := map[string]interface{}{
-		"__schema": my.getSchemaInfo(),
+	result := make(map[string]interface{})
+	for _, field := range expand(doc, operation.SelectionSet) {
+		switch field.Name {
+		case "__typename":
+			result[field.Alias] = "Query"
+		case "__schema":
+			result[field.Alias] = my.project(doc, field.SelectionSet, my.data)
+		case "__type":
+			name, err := typeArgument(field, variables)
+			if err != nil {
+				return nil, err
+			}
+			if value, ok := my.types[name]; ok {
+				result[field.Alias] = my.project(doc, field.SelectionSet, value)
+			} else {
+				result[field.Alias] = nil
+			}
+		default:
+			return nil, fmt.Errorf("自省查询不支持与数据字段混合: %s", field.Name)
+		}
 	}
-
 	return result, nil
 }
 
-// handleTypeQuery 处理__type查询
-func (my *Handler) handleTypeQuery(typeName string) (map[string]interface{}, error) {
-	typeDef := my.schema.Types[typeName]
-	if typeDef == nil {
-		return map[string]interface{}{
-			"__type": nil,
-		}, nil
+// typeArgument 解析__type的name参数（字面量或变量）
+func typeArgument(field *ast.Field, variables map[string]interface{}) (string, error) {
+	arg := field.Arguments.ForName("name")
+	if arg == nil || arg.Value == nil {
+		return "", fmt.Errorf("__type查询需要提供name参数")
 	}
-
-	return map[string]interface{}{
-		"__type": my.getFullType(typeDef),
-	}, nil
+	if arg.Value.Kind == ast.Variable {
+		if name, ok := variables[arg.Value.Raw].(string); ok {
+			return name, nil
+		}
+		return "", fmt.Errorf("__type的name变量缺失或不是字符串")
+	}
+	return arg.Value.Raw, nil
 }
 
-// getSchemaInfo 获取Schema信息
-func (my *Handler) getSchemaInfo() map[string]interface{} {
-	result := map[string]interface{}{}
-
-	// 添加查询、变更和订阅类型
-	if my.schema.Query != nil {
-		result["queryType"] = map[string]string{"name": my.schema.Query.Name}
-	}
-
-	if my.schema.Mutation != nil {
-		result["mutationType"] = map[string]string{"name": my.schema.Mutation.Name}
-	}
-
-	if my.schema.Subscription != nil {
-		result["subscriptionType"] = map[string]string{"name": my.schema.Subscription.Name}
-	}
-
-	// 添加所有类型
-	types := make([]map[string]interface{}, 0, len(my.schema.Types))
-	for _, typeDef := range my.schema.Types {
-		// 跳过内部类型
-		if !strings.HasPrefix(typeDef.Name, "__") {
-			types = append(types, my.getFullType(typeDef))
+// project 按选择集投影数据：map按字段取值，数组逐项递归，叶子原样返回
+func (my *Handler) project(doc *ast.QueryDocument, set ast.SelectionSet, value interface{}) interface{} {
+	switch node := value.(type) {
+	case []interface{}:
+		out := make([]interface{}, len(node))
+		for i, item := range node {
+			out[i] = my.project(doc, set, item)
 		}
+		return out
+	case map[string]interface{}:
+		if len(set) == 0 {
+			return nil
+		}
+		out := make(map[string]interface{}, len(set))
+		for _, field := range expand(doc, set) {
+			child, ok := node[field.Name]
+			if !ok || child == nil {
+				out[field.Alias] = nil
+				continue
+			}
+			if len(field.SelectionSet) > 0 {
+				out[field.Alias] = my.project(doc, field.SelectionSet, child)
+			} else {
+				out[field.Alias] = child
+			}
+		}
+		return out
+	default:
+		return node
 	}
-	result["types"] = types
-
-	// 添加所有指令
-	directives := make([]map[string]interface{}, 0, len(my.schema.Directives))
-	for _, directive := range my.schema.Directives {
-		directives = append(directives, my.getDirective(directive))
-	}
-	result["directives"] = directives
-
-	return result
 }
 
-// getFullType 获取完整类型信息
-func (my *Handler) getFullType(def *ast.Definition) map[string]interface{} {
-	result := map[string]interface{}{
-		"kind": def.Kind,
-		"name": def.Name,
-	}
-
-	if def.Description != "" {
-		result["description"] = def.Description
-	}
-
-	// 处理字段
-	if len(def.Fields) > 0 && (def.Kind == ast.Object || def.Kind == ast.Interface) {
-		fields := make([]map[string]interface{}, 0, len(def.Fields))
-		for _, field := range def.Fields {
-			// 跳过内部字段
-			if !strings.HasPrefix(field.Name, "__") {
-				fields = append(fields, my.getField(field))
+// expand 展开选择集中的fragment（命名与内联），返回纯字段列表
+func expand(doc *ast.QueryDocument, set ast.SelectionSet) []*ast.Field {
+	fields := make([]*ast.Field, 0, len(set))
+	for _, selection := range set {
+		switch s := selection.(type) {
+		case *ast.Field:
+			fields = append(fields, s)
+		case *ast.FragmentSpread:
+			if fragment := doc.Fragments.ForName(s.Name); fragment != nil {
+				fields = append(fields, expand(doc, fragment.SelectionSet)...)
 			}
+		case *ast.InlineFragment:
+			fields = append(fields, expand(doc, s.SelectionSet)...)
 		}
-		result["fields"] = fields
+	}
+	return fields
+}
+
+// ---------- 数据集构建 ----------
+
+// build 构建__schema数据集；类型先建空容器再填充，支持相互引用与ofType环
+func (my *Handler) build() {
+	names := make([]string, 0, len(my.schema.Types))
+	for name := range my.schema.Types {
+		names = append(names, name)
+		my.types[name] = map[string]interface{}{"__typename": "__Type"}
+	}
+	sort.Strings(names)
+
+	typeList := make([]interface{}, 0, len(names))
+	for _, name := range names {
+		my.fillType(my.schema.Types[name])
+		typeList = append(typeList, my.types[name])
 	}
 
-	// 处理输入字段
-	if def.Kind == ast.InputObject && len(def.Fields) > 0 {
-		inputFields := make([]map[string]interface{}, 0, len(def.Fields))
+	directives := make([]interface{}, 0, len(my.schema.Directives))
+	directiveNames := make([]string, 0, len(my.schema.Directives))
+	for name := range my.schema.Directives {
+		directiveNames = append(directiveNames, name)
+	}
+	sort.Strings(directiveNames)
+	for _, name := range directiveNames {
+		directives = append(directives, my.directive(my.schema.Directives[name]))
+	}
+
+	my.data = map[string]interface{}{
+		"__typename":       "__Schema",
+		"description":      nil,
+		"queryType":        my.rootRef(my.schema.Query),
+		"mutationType":     my.rootRef(my.schema.Mutation),
+		"subscriptionType": my.rootRef(my.schema.Subscription),
+		"types":            typeList,
+		"directives":       directives,
+	}
+}
+
+// rootRef 根操作类型引用
+func (my *Handler) rootRef(def *ast.Definition) interface{} {
+	if def == nil {
+		return nil
+	}
+	return my.types[def.Name]
+}
+
+// fillType 填充单个类型的完整__Type数据
+func (my *Handler) fillType(def *ast.Definition) {
+	node := my.types[def.Name].(map[string]interface{})
+	node["kind"] = string(def.Kind)
+	node["name"] = def.Name
+	node["description"] = description(def.Description)
+	node["fields"] = nil
+	node["inputFields"] = nil
+	node["interfaces"] = nil
+	node["possibleTypes"] = nil
+	node["enumValues"] = nil
+	node["ofType"] = nil
+	node["specifiedByURL"] = nil
+
+	switch def.Kind {
+	case ast.Object, ast.Interface:
+		fields := make([]interface{}, 0, len(def.Fields))
 		for _, field := range def.Fields {
-			inputFields = append(inputFields, my.getInputValue(field))
-		}
-		result["inputFields"] = inputFields
-	}
-
-	// 处理接口
-	if def.Kind == ast.Object || def.Kind == ast.Interface {
-		interfaces := make([]map[string]interface{}, 0, len(def.Interfaces))
-		for _, iface := range def.Interfaces {
-			ifaceDef := my.schema.Types[iface]
-			if ifaceDef != nil {
-				interfaces = append(interfaces, my.getTypeRef(&ast.Type{NamedType: iface}))
+			if strings.HasPrefix(field.Name, "__") {
+				continue // 元字段不出现在fields列表（与规范一致）
 			}
+			fields = append(fields, map[string]interface{}{
+				"__typename":        "__Field",
+				"name":              field.Name,
+				"description":       description(field.Description),
+				"args":              my.inputValues(field.Arguments),
+				"type":              my.typeRef(field.Type),
+				"isDeprecated":      false,
+				"deprecationReason": nil,
+			})
 		}
-		result["interfaces"] = interfaces
-	}
+		node["fields"] = fields
 
-	// 处理可能的类型
-	if def.Kind == ast.Interface || def.Kind == ast.Union {
-		possibleTypes := make([]map[string]interface{}, 0)
-		for _, impl := range my.schema.GetPossibleTypes(def) {
-			possibleTypes = append(possibleTypes, my.getTypeRef(&ast.Type{NamedType: impl.Name}))
+		interfaces := make([]interface{}, 0, len(def.Interfaces))
+		for _, name := range def.Interfaces {
+			interfaces = append(interfaces, my.types[name])
 		}
-		result["possibleTypes"] = possibleTypes
-	}
-
-	// 处理枚举值
-	if def.Kind == ast.Enum && len(def.EnumValues) > 0 {
-		enumValues := make([]map[string]interface{}, 0, len(def.EnumValues))
+		node["interfaces"] = interfaces
+	case ast.InputObject:
+		inputs := make([]interface{}, 0, len(def.Fields))
+		for _, field := range def.Fields {
+			inputs = append(inputs, map[string]interface{}{
+				"__typename":   "__InputValue",
+				"name":         field.Name,
+				"description":  description(field.Description),
+				"type":         my.typeRef(field.Type),
+				"defaultValue": defaultValue(field.DefaultValue),
+			})
+		}
+		node["inputFields"] = inputs
+	case ast.Enum:
+		values := make([]interface{}, 0, len(def.EnumValues))
 		for _, value := range def.EnumValues {
-			enumValues = append(enumValues, my.getEnumValue(value))
+			values = append(values, map[string]interface{}{
+				"__typename":        "__EnumValue",
+				"name":              value.Name,
+				"description":       description(value.Description),
+				"isDeprecated":      false,
+				"deprecationReason": nil,
+			})
 		}
-		result["enumValues"] = enumValues
+		node["enumValues"] = values
+	case ast.Union:
+		possible := make([]interface{}, 0)
+		for _, t := range my.schema.PossibleTypes[def.Name] {
+			possible = append(possible, my.types[t.Name])
+		}
+		node["possibleTypes"] = possible
 	}
-
-	return result
 }
 
-// getField 获取字段信息
-func (my *Handler) getField(field *ast.FieldDefinition) map[string]interface{} {
-	result := map[string]interface{}{
-		"name": field.Name,
-		"type": my.getTypeRef(field.Type),
-	}
-
-	if field.Description != "" {
-		result["description"] = field.Description
-	}
-
-	// 处理参数
-	args := make([]map[string]interface{}, 0, len(field.Arguments))
-	for _, arg := range field.Arguments {
-		args = append(args, my.getInputValue(arg))
-	}
-	result["args"] = args
-
-	// 处理弃用信息
-	isDeprecated := false
-	var deprecationReason string
-
-	directive := field.Directives.ForName("deprecated")
-	if directive != nil {
-		isDeprecated = true
-		reason := directive.Arguments.ForName("reason")
-		if reason != nil && reason.Value != nil && reason.Value.Raw != "" {
-			deprecationReason = reason.Value.Raw
-		} else {
-			deprecationReason = "No longer supported"
-		}
-	}
-
-	result["isDeprecated"] = isDeprecated
-	if isDeprecated {
-		result["deprecationReason"] = deprecationReason
-	}
-
-	return result
-}
-
-// getInputValue 获取输入值信息
-func (my *Handler) getInputValue(def interface{}) map[string]interface{} {
-	result := map[string]interface{}{}
-
-	switch d := def.(type) {
-	case *ast.FieldDefinition:
-		result["name"] = d.Name
-		result["type"] = my.getTypeRef(d.Type)
-
-		if d.Description != "" {
-			result["description"] = d.Description
-		}
-
-		if d.DefaultValue != nil {
-			result["defaultValue"] = d.DefaultValue.String()
-		}
-
-	case *ast.ArgumentDefinition:
-		result["name"] = d.Name
-		result["type"] = my.getTypeRef(d.Type)
-
-		if d.Description != "" {
-			result["description"] = d.Description
-		}
-
-		if d.DefaultValue != nil {
-			result["defaultValue"] = d.DefaultValue.String()
-		}
-	}
-
-	return result
-}
-
-// getEnumValue 获取枚举值信息
-func (my *Handler) getEnumValue(value *ast.EnumValueDefinition) map[string]interface{} {
-	result := map[string]interface{}{
-		"name": value.Name,
-	}
-
-	if value.Description != "" {
-		result["description"] = value.Description
-	}
-
-	// 处理弃用信息
-	isDeprecated := false
-	var deprecationReason string
-
-	directive := value.Directives.ForName("deprecated")
-	if directive != nil {
-		isDeprecated = true
-		reason := directive.Arguments.ForName("reason")
-		if reason != nil && reason.Value != nil && reason.Value.Raw != "" {
-			deprecationReason = reason.Value.Raw
-		} else {
-			deprecationReason = "No longer supported"
-		}
-	}
-
-	result["isDeprecated"] = isDeprecated
-	if isDeprecated {
-		result["deprecationReason"] = deprecationReason
-	}
-
-	return result
-}
-
-// getTypeRef 获取类型引用
-func (my *Handler) getTypeRef(t *ast.Type) map[string]interface{} {
-	result := map[string]interface{}{}
-
+// typeRef 类型引用：NON_NULL/LIST包装层为独立节点，命名类型直接引用完整__Type
+func (my *Handler) typeRef(t *ast.Type) interface{} {
 	if t.NonNull {
-		result["kind"] = "NON_NULL"
-		result["ofType"] = my.getTypeRef(&ast.Type{
-			NamedType: t.NamedType,
-			Elem:      t.Elem,
-		})
-	} else if t.Elem != nil {
-		result["kind"] = "LIST"
-		result["ofType"] = my.getTypeRef(t.Elem)
-	} else {
-		def := my.schema.Types[t.NamedType]
-		if def != nil {
-			result["kind"] = def.Kind
-			result["name"] = def.Name
-		} else {
-			result["kind"] = "SCALAR"
-			result["name"] = t.NamedType
-		}
+		return wrap("NON_NULL", my.typeRef(&ast.Type{NamedType: t.NamedType, Elem: t.Elem}))
 	}
-
-	return result
+	if t.Elem != nil {
+		return wrap("LIST", my.typeRef(t.Elem))
+	}
+	return my.types[t.NamedType]
 }
 
-// getDirective 获取指令信息
-func (my *Handler) getDirective(directive *ast.DirectiveDefinition) map[string]interface{} {
-	result := map[string]interface{}{
-		"name": directive.Name,
+// wrap 构造包装类型节点（除kind/ofType外其余字段为null，符合规范）
+func wrap(kind string, inner interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"__typename": "__Type",
+		"kind":       kind,
+		"name":       nil,
+		"ofType":     inner,
 	}
+}
 
-	if directive.Description != "" {
-		result["description"] = directive.Description
+// inputValues 参数列表转__InputValue
+func (my *Handler) inputValues(args ast.ArgumentDefinitionList) []interface{} {
+	values := make([]interface{}, 0, len(args))
+	for _, arg := range args {
+		values = append(values, map[string]interface{}{
+			"__typename":   "__InputValue",
+			"name":         arg.Name,
+			"description":  description(arg.Description),
+			"type":         my.typeRef(arg.Type),
+			"defaultValue": defaultValue(arg.DefaultValue),
+		})
 	}
+	return values
+}
 
-	// 处理位置
-	locations := make([]string, 0, len(directive.Locations))
-	for _, loc := range directive.Locations {
-		locations = append(locations, string(loc))
+// directive 指令定义转__Directive
+func (my *Handler) directive(def *ast.DirectiveDefinition) map[string]interface{} {
+	locations := make([]interface{}, 0, len(def.Locations))
+	for _, location := range def.Locations {
+		locations = append(locations, string(location))
 	}
-	result["locations"] = locations
-
-	// 处理参数
-	args := make([]map[string]interface{}, 0, len(directive.Arguments))
-	for _, arg := range directive.Arguments {
-		args = append(args, my.getInputValue(arg))
+	return map[string]interface{}{
+		"__typename":   "__Directive",
+		"name":         def.Name,
+		"description":  description(def.Description),
+		"locations":    locations,
+		"args":         my.inputValues(def.Arguments),
+		"isRepeatable": def.IsRepeatable,
 	}
-	result["args"] = args
+}
 
-	return result
+// description 空描述返回null
+func description(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// defaultValue 默认值的GraphQL字面量表示
+func defaultValue(value *ast.Value) interface{} {
+	if value == nil {
+		return nil
+	}
+	return value.String()
 }

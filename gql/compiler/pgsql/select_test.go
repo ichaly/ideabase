@@ -52,6 +52,25 @@ func (my *_DialectSuite) TestSelect() {
 				) AS "__sj_0" ON TRUE`,
 		},
 		{
+			name:  "__typename元字段",
+			query: `query { __typename users { __typename items { id __typename posts { __typename title } } } }`,
+			expected: `SELECT JSONB_BUILD_OBJECT('__typename', 'Query', 'users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]'), '__typename', 'UserResult') AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id", 'User' AS "__typename", "__sj_1"."json" AS "posts"
+						FROM (SELECT "sys_user"."id" FROM sys_user) AS "sys_user_0"
+						LEFT OUTER JOIN LATERAL (
+							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
+							FROM (
+								SELECT "sys_post_1"."title" AS "title", 'Post' AS "__typename"
+								FROM (SELECT "sys_post"."title" FROM sys_post WHERE "sys_post"."user_id" = "sys_user_0"."id") AS "sys_post_1"
+							) AS "__sr_1"
+						) AS "__sj_1" ON TRUE
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+		{
 			name:  "多根字段查询",
 			query: `query { users { items { id } } tags { items { name } } }`,
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json", 'tags', "__sj_1"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"

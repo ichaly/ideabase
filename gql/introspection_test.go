@@ -80,93 +80,124 @@ func TestGqlParserSchema(t *testing.T) {
 	t.Log(schema)
 }
 
-// TestIntrospection 测试自省功能
+// TestIntrospection 测试自省功能：标准IntrospectionQuery（GraphiQL/codegen同款）直接对接
 func TestIntrospection(t *testing.T) {
-	// 从数据库或模拟数据获取元数据
 	meta, err := getTestMetadata(t)
 	if err != nil {
 		t.Skipf("跳过测试: %v", err)
 	}
-	// 创建渲染器
-	renderer := NewRenderer(meta)
-
-	// 创建测试执行器
-	executor, err := NewExecutor(nil, renderer, meta, nil) // 直接使用元数据初始化执行器
+	executor, err := NewExecutor(nil, NewRenderer(meta), meta, nil)
 	assert.NoError(t, err)
+	ctx := context.Background()
 
-	// 测试__schema查询
-	t.Run("Schema Introspection", func(t *testing.T) {
-		query := `
-		{
-			__schema {
-				queryType { name }
-				types { name kind }
+	t.Run("标准IntrospectionQuery", func(t *testing.T) {
+		result := executor.Execute(ctx, standardIntrospectionQuery, nil, "IntrospectionQuery")
+		assert.Empty(t, result.Errors, "标准自省查询失败: %v", result.Errors)
+
+		schema := result.Data["__schema"].(map[string]interface{})
+		assert.Equal(t, "Query", schema["queryType"].(map[string]interface{})["name"])
+		assert.Equal(t, "Mutation", schema["mutationType"].(map[string]interface{})["name"])
+		assert.Equal(t, "Subscription", schema["subscriptionType"].(map[string]interface{})["name"])
+
+		// 类型清单完整：实体、输入、内省元类型都在
+		names := map[string]map[string]interface{}{}
+		for _, item := range schema["types"].([]interface{}) {
+			node := item.(map[string]interface{})
+			names[node["name"].(string)] = node
+		}
+		for _, expected := range []string{"User", "UserResult", "UserWhereInput", "UserCreateInput", "__Schema", "__Type"} {
+			assert.Contains(t, names, expected)
+		}
+
+		// ofType链：User.posts类型 [Post]! -> NON_NULL -> LIST -> Post
+		var posts map[string]interface{}
+		for _, f := range names["User"]["fields"].([]interface{}) {
+			if field := f.(map[string]interface{}); field["name"] == "posts" {
+				posts = field
 			}
 		}
-		`
+		assert.NotNil(t, posts, "User应有posts字段")
+		nonNull := posts["type"].(map[string]interface{})
+		assert.Equal(t, "NON_NULL", nonNull["kind"])
+		listRef := nonNull["ofType"].(map[string]interface{})
+		assert.Equal(t, "LIST", listRef["kind"])
+		assert.Equal(t, "Post", listRef["ofType"].(map[string]interface{})["name"])
 
-		result := executor.Execute(context.Background(), query, nil, "")
-		assert.Empty(t, result.Errors)
-		assert.NotNil(t, result.Data)
+		// 输入类型有inputFields且含NON_NULL链
+		inputs := names["UserCreateInput"]["inputFields"].([]interface{})
+		assert.NotEmpty(t, inputs)
+		var nameInput map[string]interface{}
+		for _, item := range inputs {
+			if node := item.(map[string]interface{}); node["name"] == "name" {
+				nameInput = node
+			}
+		}
+		assert.NotNil(t, nameInput)
+		assert.Equal(t, "NON_NULL", nameInput["type"].(map[string]interface{})["kind"])
 
-		// 验证结果
-		schemaData := result.Data["__schema"]
-		assert.NotNil(t, schemaData, "结果中应包含__schema")
-
-		schemaDataMap, ok := schemaData.(map[string]interface{})
-		assert.True(t, ok, "schemaData应为map[string]interface{}")
-
-		// 验证queryType
-		queryType, ok := schemaDataMap["queryType"].(map[string]string)
-		assert.True(t, ok, "结果中应包含queryType")
-		assert.Equal(t, "Query", queryType["name"])
-
-		// 验证types
-		types, ok := schemaDataMap["types"].([]map[string]interface{})
-		assert.True(t, ok, "结果中应包含types")
-		assert.NotEmpty(t, types)
+		// 指令完整
+		directives := map[string]bool{}
+		for _, item := range schema["directives"].([]interface{}) {
+			directives[item.(map[string]interface{})["name"].(string)] = true
+		}
+		assert.True(t, directives["include"] && directives["skip"])
 	})
 
-	// 测试__type查询
 	t.Run("Type Introspection", func(t *testing.T) {
-		query := `
-		{
-			__type(name: "User") {
-				name
-				kind
-				fields {
-					name
-					type {
-						name
-						kind
-					}
-				}
-			}
-		}
-		`
-
-		// 构造带有name参数的变量
-		variables := map[string]interface{}{
-			"name": "User",
-		}
-
-		result := executor.Execute(context.Background(), query, variables, "")
+		result := executor.Execute(ctx, `{ __type(name: "User") { name kind fields { name type { name kind } } } }`, nil, "")
 		assert.Empty(t, result.Errors)
-		assert.NotNil(t, result.Data)
 
-		// 验证结果
-		typeData := result.Data["__type"]
-		assert.NotNil(t, typeData, "结果中应包含__type")
+		typeData := result.Data["__type"].(map[string]interface{})
+		assert.Equal(t, "User", typeData["name"])
+		assert.Equal(t, "OBJECT", typeData["kind"])
+		assert.NotEmpty(t, typeData["fields"])
+	})
 
-		typeDataMap, ok := typeData.(map[string]interface{})
-		assert.True(t, ok, "__type应为map[string]interface{}")
+	t.Run("变量传name", func(t *testing.T) {
+		result := executor.Execute(ctx, `query ($n: String!) { __type(name: $n) { name } }`,
+			map[string]interface{}{"n": "Post"}, "")
+		assert.Empty(t, result.Errors)
+		assert.Equal(t, "Post", result.Data["__type"].(map[string]interface{})["name"])
+	})
 
-		assert.Equal(t, "User", typeDataMap["name"])
-		assert.Equal(t, "OBJECT", fmt.Sprintf("%s", typeDataMap["kind"]))
-
-		// 验证字段
-		fields, ok := typeDataMap["fields"].([]map[string]interface{})
-		assert.True(t, ok, "结果中应包含fields")
-		assert.NotEmpty(t, fields)
+	t.Run("未知类型返回null", func(t *testing.T) {
+		result := executor.Execute(ctx, `{ __type(name: "Nope") { name } }`, nil, "")
+		assert.Empty(t, result.Errors)
+		assert.Nil(t, result.Data["__type"])
 	})
 }
+
+// standardIntrospectionQuery GraphiQL/graphql-js getIntrospectionQuery() 的标准文本
+const standardIntrospectionQuery = `
+query IntrospectionQuery {
+  __schema {
+    queryType { name }
+    mutationType { name }
+    subscriptionType { name }
+    types { ...FullType }
+    directives { name description locations args { ...InputValue } }
+  }
+}
+fragment FullType on __Type {
+  kind name description
+  fields(includeDeprecated: true) {
+    name description
+    args { ...InputValue }
+    type { ...TypeRef }
+    isDeprecated deprecationReason
+  }
+  inputFields { ...InputValue }
+  interfaces { ...TypeRef }
+  enumValues(includeDeprecated: true) { name description isDeprecated deprecationReason }
+  possibleTypes { ...TypeRef }
+}
+fragment InputValue on __InputValue {
+  name description
+  type { ...TypeRef }
+  defaultValue
+}
+fragment TypeRef on __Type {
+  kind name
+  ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } }
+}
+`

@@ -122,9 +122,8 @@ func TestRenderRelation(t *testing.T) {
 		// 获取schema文本
 		inputSchema := schema.String()
 
-		// 检查是否包含标准关系字段
-		assert.Contains(t, inputSchema, "# 关系操作")
-		assert.Contains(t, inputSchema, "relation: RelationInput")
+		// 嵌套写入未实现，schema不应展示relation操作
+		assert.NotContains(t, inputSchema, "RelationInput")
 
 		// 修改配置隐藏中间表关系
 		meta.cfg.Metadata.ShowThrough = false
@@ -225,61 +224,6 @@ func TestRenderRelation(t *testing.T) {
 		assert.NotContains(t, sortSchemaWithoutThrough, "postTags: SortDirection")
 	})
 
-	// 验证中间表关系在统计中的显示
-	t.Run("中间表关系在统计中的显示", func(t *testing.T) {
-		// 设置ShowThrough为true
-		meta.cfg.Metadata.ShowThrough = true
-
-		// 创建新的渲染器
-		renderer = NewRenderer(meta)
-		schema = &strings.Builder{}
-		renderer.sb = schema
-
-		// 渲染统计
-		err = renderer.renderStats()
-		require.NoError(t, err, "渲染统计失败")
-
-		// 获取schema文本
-		statsSchema := schema.String()
-
-		// 确认中间表字段在统计中可见
-		postTagsStatsType := "type PostTagsStats {"
-		assert.Contains(t, statsSchema, postTagsStatsType)
-
-		// 修改配置隐藏中间表关系
-		meta.cfg.Metadata.ShowThrough = false
-
-		// 创建一个新的元数据对象，确保中间表关系字段被正确标记
-		newMeta := createRelationTestMetadata()
-		newMeta.cfg = &internal.Config{
-			Schema: internal.SchemaConfig{
-				TypeMapping: map[string]string{},
-			},
-			Metadata: internal.MetadataConfig{
-				ShowThrough: false,
-			},
-		}
-
-		// 处理关系
-		newMeta.processRelations()
-
-		// 重新创建渲染器，使用新的元数据
-		renderer = NewRenderer(newMeta)
-		schema = &strings.Builder{}
-		renderer.sb = schema
-
-		// 重新渲染统计
-		err = renderer.renderStats()
-		require.NoError(t, err, "渲染统计失败")
-
-		// 获取新的schema文本
-		statsSchemaWithoutThrough := schema.String()
-
-		// 确保中间表相关字段在统计中不可见
-		// 由于测试数据的限制，我们只能测试在ShowThrough=false时，中间表字段被正确处理
-		// 而不需关注具体渲染的内容
-		assert.NotContains(t, statsSchemaWithoutThrough, "postTags:")
-	})
 }
 
 // createRelationTestMetadata 创建用于测试关系的元数据

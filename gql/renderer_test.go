@@ -264,7 +264,6 @@ func TestRenderer_WithMockData(t *testing.T) {
 	for _, fn := range []func() error{
 		renderer.renderScalars,
 		renderer.renderEnums,
-		renderer.renderCommon,
 		renderer.renderTypes,
 		renderer.renderPaging,
 		renderer.renderFilter,
@@ -326,7 +325,8 @@ func TestRenderer_RenderScalars(t *testing.T) {
 	// 验证标量类型
 	assert.Contains(t, generatedSchema, "scalar DateTime")
 	assert.Contains(t, generatedSchema, "scalar Json")
-	assert.Contains(t, generatedSchema, "scalar Cursor")
+	// 游标分页未实现，不展示Cursor标量
+	assert.NotContains(t, generatedSchema, "scalar Cursor")
 }
 
 // 测试渲染枚举类型
@@ -366,11 +366,8 @@ func TestRenderer_RenderPaging(t *testing.T) {
 	schema := &strings.Builder{}
 	renderer.sb = schema
 
-	// 渲染通用类型和分页类型
-	err := renderer.renderCommon()
-	assert.NoError(t, err, "渲染通用类型失败")
-
-	err = renderer.renderTypes()
+	// 渲染实体类型和分页类型
+	err := renderer.renderTypes()
 	assert.NoError(t, err, "渲染实体类型失败")
 
 	err = renderer.renderPaging()
@@ -379,16 +376,12 @@ func TestRenderer_RenderPaging(t *testing.T) {
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
 
-	// 验证分页类型
-	assert.Contains(t, generatedSchema, "type PageInfo {")
-	assert.Contains(t, generatedSchema, "hasNext")
-	assert.Contains(t, generatedSchema, "hasPrev")
-
 	// 验证连接类型
 	assert.Contains(t, generatedSchema, "type UserResult {")
 	assert.Contains(t, generatedSchema, "type PostResult {")
 	assert.Contains(t, generatedSchema, "items: [User")
-	assert.Contains(t, generatedSchema, "pageInfo: PageInfo!")
+	// 游标分页未实现，schema不应展示pageInfo
+	assert.NotContains(t, generatedSchema, "pageInfo")
 }
 
 // 测试渲染过滤器类型
@@ -569,7 +562,6 @@ func TestRenderer_SaveToFile(t *testing.T) {
 	for _, fn := range []func() error{
 		renderer.renderScalars,
 		renderer.renderEnums,
-		renderer.renderCommon,
 		renderer.renderTypes,
 	} {
 		err := fn()
@@ -667,51 +659,6 @@ func TestRenderer_DataTypeMapping(t *testing.T) {
 	}
 }
 
-// 测试渲染数据统计类型
-func TestRenderer_RenderStats(t *testing.T) {
-	// 创建模拟元数据
-	meta := createMockMetadata(t)
-
-	// 创建渲染器
-	renderer := NewRenderer(meta)
-
-	// 绕过文件保存部分直接获取schema
-	schema := &strings.Builder{}
-	renderer.sb = schema
-
-	// 先渲染必要的基础类型
-	err := renderer.renderScalars()
-	assert.NoError(t, err, "渲染标量类型失败")
-
-	err = renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
-
-	// 渲染统计类型
-	err = renderer.renderStats()
-	assert.NoError(t, err, "渲染统计类型失败")
-
-	// 获取生成的schema文本
-	generatedSchema := schema.String()
-
-	// 验证生成成功 - 通用统计类型
-	assert.Contains(t, generatedSchema, "type NumberStats {")
-	assert.Contains(t, generatedSchema, "type StringStats {")
-	assert.Contains(t, generatedSchema, "type DateTimeStats {")
-
-	// 验证实体统计类型
-	assert.Contains(t, generatedSchema, "type UserStats {")
-	assert.Contains(t, generatedSchema, "type PostStats {")
-
-	// 验证特定统计字段
-	assert.Contains(t, generatedSchema, "count: Int!")
-	assert.Contains(t, generatedSchema, "countDistinct: Int!")
-	assert.Contains(t, generatedSchema, "avg: Float")
-	assert.Contains(t, generatedSchema, "sum: Float")
-	assert.Contains(t, generatedSchema, "min:")
-	assert.Contains(t, generatedSchema, "max:")
-}
-
-// 测试渲染关系
 func TestRenderer_RenderRelation(t *testing.T) {
 	// 创建模拟元数据
 	meta := createMockMetadata(t)
