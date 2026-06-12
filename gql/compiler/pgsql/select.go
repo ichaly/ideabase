@@ -14,13 +14,15 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
-// unit 一个LATERAL JOIN子查询单元：根字段或关系字段
+// unit 一个LATERAL JOIN子查询单元：查询根字段、关系字段或变更读回
 type unit struct {
 	field  *ast.Field         // GraphQL字段
 	class  *protocol.Class    // 对应实体
 	rel    *protocol.Relation // 与父级的关系，根字段为nil
 	parent string             // 父级基表别名（lateral关联引用）
 	index  int                // 单元序号，决定 __sj_N/__sr_N 别名
+	single bool               // 单对象形态（多对一关系、变更读回）
+	args   ast.ArgumentList   // 生效的查询参数；变更读回为nil（参数已被CTE消费）
 }
 
 // BuildQuery 构建查询语句：根JSON对象 + 每个根字段一个LATERAL单元
@@ -62,7 +64,7 @@ func (my *Dialect) rootUnits(ctx *compiler.Context, set ast.SelectionSet) ([]*un
 		if !ok {
 			return nil, fmt.Errorf("不支持的根查询字段: %s", field.Name)
 		}
-		units = append(units, &unit{field: field, class: class, index: ctx.NextIndex()})
+		units = append(units, &unit{field: field, class: class, index: ctx.NextIndex(), args: field.Arguments})
 	}
 	return units, nil
 }
@@ -73,16 +75,16 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 
 	var err error
 	switch {
-	case u.rel == nil: // 根字段：Result契约 items/total
-		err = my.buildResultWrap(ctx, u)
-	case u.field.Definition.Type.NamedType == "": // 列表关系：纯数组
-		ctx.Write(`SELECT COALESCE(JSONB_AGG(TO_JSONB(`).
-			Quote(`__sr_`, u.index).Write(`.*)), '[]') AS "json" FROM (`)
-		err = my.buildCore(ctx, u, fieldsOf(u.field.SelectionSet), false)
-		ctx.Write(`) AS `).Quote(`__sr_`, u.index)
-	default: // 单对象关系
+	case u.single: // 单对象：多对一关系或变更读回
 		ctx.Write(`SELECT TO_JSONB(`).
 			Quote(`__sr_`, u.index).Write(`.*) AS "json" FROM (`)
+		err = my.buildCore(ctx, u, fieldsOf(u.field.SelectionSet), false)
+		ctx.Write(`) AS `).Quote(`__sr_`, u.index)
+	case u.rel == nil: // 查询根字段：Result契约 items/total
+		err = my.buildResultWrap(ctx, u)
+	default: // 列表关系：纯数组
+		ctx.Write(`SELECT COALESCE(JSONB_AGG(TO_JSONB(`).
+			Quote(`__sr_`, u.index).Write(`.*)), '[]') AS "json" FROM (`)
 		err = my.buildCore(ctx, u, fieldsOf(u.field.SelectionSet), false)
 		ctx.Write(`) AS `).Quote(`__sr_`, u.index)
 	}
@@ -172,7 +174,10 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 				return fmt.Errorf("关系目标类不存在: %s", field.Relation.TargetClass)
 			}
 			children = append(children, relIndex{
-				unit:  &unit{field: f, class: target, rel: field.Relation, parent: base, index: ctx.NextIndex()},
+				unit: &unit{
+					field: f, class: target, rel: field.Relation, parent: base,
+					index: ctx.NextIndex(), single: f.Definition.Type.NamedType != "", args: f.Arguments,
+				},
 				alias: f.Alias,
 			})
 			// 子关系的关联条件引用父级源列，基础查询必须带出
@@ -185,7 +190,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		scalars = append(scalars, f)
 		appendColumn(field.Column)
 	}
-	for _, column := range sortColumns(sc, u.field.Arguments) {
+	for _, column := range sortColumns(sc, u.args) {
 		appendColumn(column)
 	}
 	if len(columns) == 0 {
@@ -230,10 +235,10 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	if err != nil {
 		return err
 	}
-	if err = my.buildWhere(ctx, sc, u.field.Arguments, bond); err != nil {
+	if err = my.buildWhere(ctx, sc, u.args, bond); err != nil {
 		return err
 	}
-	if err = my.buildOrderBy(ctx, sc, u.field.Arguments); err != nil {
+	if err = my.buildOrderBy(ctx, sc, u.args); err != nil {
 		return err
 	}
 	if err = my.buildLimit(ctx, u); err != nil {
@@ -282,15 +287,15 @@ func (my *Dialect) relationBond(ctx *compiler.Context, u *unit, sc scope) (func(
 	}, nil
 }
 
-// buildLimit 构建LIMIT/OFFSET：单对象关系固定LIMIT 1，字面量内联，变量走参数槽位
+// buildLimit 构建LIMIT/OFFSET：单对象单元固定LIMIT 1，字面量内联，变量走参数槽位
 func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
-	if u.rel != nil && u.field.Definition.Type.NamedType != "" {
+	if u.single {
 		ctx.Space(`LIMIT 1`)
 		return nil
 	}
 
 	for _, name := range []string{gql.LIMIT, gql.OFFSET} {
-		arg := u.field.Arguments.ForName(name)
+		arg := u.args.ForName(name)
 		if arg == nil || arg.Value == nil {
 			continue
 		}
@@ -311,7 +316,7 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 	}
 
 	for _, name := range []string{gql.AFTER, gql.BEFORE, gql.FIRST, gql.LAST} {
-		if arg := u.field.Arguments.ForName(name); arg != nil && arg.Value != nil {
+		if arg := u.args.ForName(name); arg != nil && arg.Value != nil {
 			return fmt.Errorf("暂不支持游标分页参数: %s", name)
 		}
 	}

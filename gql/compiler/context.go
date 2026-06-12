@@ -19,6 +19,7 @@ type Context struct {
 	quote     string
 	slots     []Slot
 	counter   int
+	volatile  bool
 	hoster    protocol.Hoster
 	variables map[string]interface{}
 }
@@ -66,10 +67,27 @@ func (my *Context) Release() {
 	my.buf.Reset()
 	my.quote = ""
 	my.counter = 0
+	my.volatile = false
 	my.hoster = nil
 	my.variables = nil
 	my.slots = my.slots[:0]
 	contextPool.Put(my)
+}
+
+// Variable 返回变量值
+func (my *Context) Variable(name string) (interface{}, bool) {
+	value, ok := my.variables[name]
+	return value, ok
+}
+
+// MarkVolatile 标记编译产物依赖变量内容（如整体input变量），不可按查询文本缓存
+func (my *Context) MarkVolatile() {
+	my.volatile = true
+}
+
+// Volatile 编译产物是否依赖变量内容
+func (my *Context) Volatile() bool {
+	return my.volatile
 }
 
 // NextIndex 返回全局自增索引，用于生成不冲突的子查询别名

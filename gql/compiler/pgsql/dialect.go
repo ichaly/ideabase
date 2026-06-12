@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/ichaly/ideabase/gql/compiler"
-	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // Dialect PostgreSQL方言实现
@@ -29,9 +28,4 @@ func (my *Dialect) Quotation() string {
 // Placeholder 获取参数占位符 (PostgreSQL使用$1,$2...)
 func (my *Dialect) Placeholder(index int) string {
 	return fmt.Sprintf("$%d", index)
-}
-
-// BuildMutation 构建变更语句
-func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) error {
-	return fmt.Errorf("mutation编译尚未实现")
 }

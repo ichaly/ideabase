@@ -356,6 +356,24 @@ func (my *Renderer) getGraphQLType(field *protocol.Field) string {
 	return fieldType
 }
 
+// writableFields 返回类的可写字段名（排除主键、时间戳、虚拟与中间表字段）
+func (my *Renderer) writableFields(class *protocol.Class) []string {
+	names := make([]string, 0, len(class.Fields))
+	for _, fieldName := range utl.SortKeys(class.Fields) {
+		field := class.Fields[fieldName]
+		// 跳过列名索引、自动生成字段（主键/时间戳）、虚拟字段与中间表字段
+		if fieldName != field.Name || field.Virtual ||
+			field.IsPrimary ||
+			strings.EqualFold(fieldName, "createdAt") ||
+			strings.EqualFold(fieldName, "updatedAt") ||
+			(field.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
+			continue
+		}
+		names = append(names, fieldName)
+	}
+	return names
+}
+
 // renderInput 渲染输入类型
 func (my *Renderer) renderInput() error {
 	// 为每个实体类生成创建和更新输入类型
@@ -372,69 +390,32 @@ func (my *Renderer) renderInput() error {
 			continue
 		}
 
+		// 无可写字段的类（如纯主键表）不生成输入类型
+		writable := my.writableFields(class)
+		if len(writable) == 0 {
+			continue
+		}
+
 		// 生成创建输入类型
 		my.writeLine("# ", className, "创建输入")
 		my.writeLine("input ", className, SUFFIX_CREATE_INPUT, " {")
-		// 添加创建时的必要字段
-		fields := utl.SortKeys(class.Fields)
-		for _, fieldName := range fields {
+		for _, fieldName := range writable {
 			field := class.Fields[fieldName]
-			// 确保只处理真正的字段名，跳过列名索引
-			if fieldName != field.Name {
-				continue
-			}
-
-			// 判断是否应该跳过中间表字段
-			if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-				continue
-			}
-
-			// 跳过虚拟字段，这些通常是关系或计算字段
-			if field.Virtual {
-				continue
-			}
-
 			typeName := my.getGraphQLType(field)
 			// 非空字段添加!
 			if !field.Nullable {
 				typeName += "!"
 			}
-
 			my.writeField(fieldName, typeName)
 		}
 		my.writeLine("}")
 		my.writeLine("")
 
-		// 生成更新输入类型
+		// 生成更新输入类型（全部可选）
 		my.writeLine("# ", className, "更新输入")
 		my.writeLine("input ", className, SUFFIX_UPDATE_INPUT, " {")
-		// 添加可更新字段，全部为可选
-		for _, fieldName := range fields {
-			field := class.Fields[fieldName]
-			// 确保只处理真正的字段名，跳过列名索引
-			if fieldName != field.Name {
-				continue
-			}
-
-			// 排除自动生成和只读字段
-			if strings.EqualFold(fieldName, "id") ||
-				strings.EqualFold(fieldName, "createdAt") ||
-				strings.EqualFold(fieldName, "updatedAt") {
-				continue
-			}
-
-			// 判断是否应该跳过中间表字段
-			if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-				continue
-			}
-
-			// 跳过虚拟字段，这些通常是关系或计算字段
-			if field.Virtual {
-				continue
-			}
-
-			typeName := my.getGraphQLType(field)
-			my.writeField(fieldName, typeName)
+		for _, fieldName := range writable {
+			my.writeField(fieldName, my.getGraphQLType(class.Fields[fieldName]))
 		}
 
 		// 添加关系操作字段
@@ -702,17 +683,20 @@ func (my *Renderer) renderMutation() error {
 			continue
 		}
 
-		my.writeLine("  # ", class.Name, "创建")
-		my.writeField(CREATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-			{Name: INPUT, Type: className + SUFFIX_CREATE_INPUT + "!"},
-		}...))
+		// 无可写字段的类（如纯主键表）不生成创建/更新操作
+		if len(my.writableFields(class)) > 0 {
+			my.writeLine("  # ", class.Name, "创建")
+			my.writeField(CREATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+				{Name: INPUT, Type: className + SUFFIX_CREATE_INPUT + "!"},
+			}...))
 
-		my.writeLine("  # ", class.Name, "更新")
-		my.writeField(UPDATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-			{Name: INPUT, Type: className + SUFFIX_UPDATE_INPUT + "!"},
-			{Name: ID, Type: SCALAR_ID},
-			{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
-		}...))
+			my.writeLine("  # ", class.Name, "更新")
+			my.writeField(UPDATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+				{Name: INPUT, Type: className + SUFFIX_UPDATE_INPUT + "!"},
+				{Name: ID, Type: SCALAR_ID},
+				{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
+			}...))
+		}
 
 		my.writeLine("  # ", class.Name, "删除")
 		my.writeField(DELETE+className, SCALAR_INT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
