@@ -8,6 +8,7 @@ import (
 	"github.com/huandu/go-clone"
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 )
 
@@ -130,6 +131,14 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	my.applyFieldFilter(newClass, classConfig)
 	if err := my.applyFieldConfig(newClass, classConfig.Fields); err != nil {
 		return nil, err
+	}
+	// 主键列表缺省时从IsPrimary字段推导（与db加载器行为对齐）
+	if len(newClass.PrimaryKeys) == 0 {
+		for _, name := range utl.SortKeys(newClass.Fields) {
+			if field := newClass.Fields[name]; name == field.Name && field.IsPrimary {
+				newClass.PrimaryKeys = append(newClass.PrimaryKeys, name)
+			}
+		}
 	}
 	return newClass, nil
 }

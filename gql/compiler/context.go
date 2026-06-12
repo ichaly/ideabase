@@ -1,13 +1,14 @@
 package compiler
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ichaly/ideabase/gql/protocol"
-
-	"sync"
 )
 
 // Context 负责SQL编译过程中的上下文状态，包括SQL拼接、参数、变量、方言等
@@ -30,14 +31,45 @@ type Context struct {
 type Slot struct {
 	Value    any    // 字面量值
 	Variable string // 变量名，非空时优先生效
+	Cursor   int    // >=0时变量为base64游标，解码JSON数组后取第Cursor个键值
 }
 
 // Resolve 解析槽位的实际参数值
 func (my Slot) Resolve(variables map[string]interface{}) any {
-	if my.Variable != "" {
-		return variables[my.Variable]
+	if my.Variable == "" {
+		return my.Value
 	}
-	return my.Value
+	value := variables[my.Variable]
+	if my.Cursor >= 0 {
+		return cursorElement(value, my.Cursor)
+	}
+	return value
+}
+
+// cursorElement 解码游标并取键值：base64(JSON数组)
+func cursorElement(value any, index int) any {
+	text, ok := value.(string)
+	if !ok {
+		return nil
+	}
+	keys, err := DecodeCursor(text)
+	if err != nil || index >= len(keys) {
+		return nil
+	}
+	return keys[index]
+}
+
+// DecodeCursor 解码游标为排序键值数组
+func DecodeCursor(cursor string) ([]any, error) {
+	data, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("无效的游标: %w", err)
+	}
+	var keys []any
+	if err = json.Unmarshal(data, &keys); err != nil {
+		return nil, fmt.Errorf("无效的游标内容: %w", err)
+	}
+	return keys, nil
 }
 
 // contextPool 用于Context对象池管理，减少GC压力
@@ -160,13 +192,19 @@ func (my *Context) Slots() []Slot {
 
 // AddParam 添加字面量参数并返回参数序号（从1开始）
 func (my *Context) AddParam(value any) int {
-	my.slots = append(my.slots, Slot{Value: value})
+	my.slots = append(my.slots, Slot{Value: value, Cursor: -1})
 	return len(my.slots)
 }
 
 // AddVariable 添加变量引用参数并返回参数序号（从1开始）
 func (my *Context) AddVariable(name string) int {
-	my.slots = append(my.slots, Slot{Variable: name})
+	my.slots = append(my.slots, Slot{Variable: name, Cursor: -1})
+	return len(my.slots)
+}
+
+// AddCursor 添加游标键值参数：执行期解码变量游标取第index个键值
+func (my *Context) AddCursor(name string, index int) int {
+	my.slots = append(my.slots, Slot{Variable: name, Cursor: index})
 	return len(my.slots)
 }
 

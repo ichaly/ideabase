@@ -325,8 +325,7 @@ func TestRenderer_RenderScalars(t *testing.T) {
 	// 验证标量类型
 	assert.Contains(t, generatedSchema, "scalar DateTime")
 	assert.Contains(t, generatedSchema, "scalar Json")
-	// 游标分页未实现，不展示Cursor标量
-	assert.NotContains(t, generatedSchema, "scalar Cursor")
+	assert.Contains(t, generatedSchema, "scalar Cursor")
 }
 
 // 测试渲染枚举类型
@@ -380,8 +379,8 @@ func TestRenderer_RenderPaging(t *testing.T) {
 	assert.Contains(t, generatedSchema, "type UserResult {")
 	assert.Contains(t, generatedSchema, "type PostResult {")
 	assert.Contains(t, generatedSchema, "items: [User")
-	// 游标分页未实现，schema不应展示pageInfo
-	assert.NotContains(t, generatedSchema, "pageInfo")
+	assert.Contains(t, generatedSchema, "pageInfo: PageInfo")
+	assert.Contains(t, generatedSchema, "type PageInfo {")
 }
 
 // 测试渲染过滤器类型

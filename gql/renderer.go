@@ -128,6 +128,7 @@ func (my *Renderer) saveToFile(content string) error {
 func (my *Renderer) renderScalars() error {
 	my.writeLine("# ", DESC_SCALAR_TYPES)
 	my.writeLine("scalar ", SCALAR_JSON)
+	my.writeLine("scalar ", SCALAR_CURSOR)
 	my.writeLine("scalar ", SCALAR_DATE_TIME)
 	my.writeLine()
 	return nil
@@ -569,6 +570,10 @@ func (my *Renderer) renderQuery() error {
 				{Name: SORT, Type: "[" + className + SUFFIX_SORT_INPUT + "!]"},
 				{Name: LIMIT, Type: SCALAR_INT},
 				{Name: OFFSET, Type: SCALAR_INT},
+				{Name: FIRST, Type: SCALAR_INT},
+				{Name: AFTER, Type: SCALAR_CURSOR},
+				{Name: LAST, Type: SCALAR_INT},
+				{Name: BEFORE, Type: SCALAR_CURSOR},
 			}...),
 		)
 	}
@@ -729,8 +734,21 @@ func (my *Renderer) renderStats() error {
 	return nil
 }
 
+// renderPageInfo 游标分页信息类型
+func (my *Renderer) renderPageInfo() {
+	my.writeLine("# 游标分页信息")
+	my.writeLine("type ", TYPE_PAGE_INFO, " {")
+	my.writeField("hasNext", SCALAR_BOOLEAN, renderer.NonNull())
+	my.writeField("hasPrev", SCALAR_BOOLEAN, renderer.NonNull())
+	my.writeField("start", SCALAR_CURSOR, renderer.WithComment("本页第一条的游标"))
+	my.writeField("end", SCALAR_CURSOR, renderer.WithComment("本页最后一条的游标"))
+	my.writeLine("}")
+	my.writeLine()
+}
+
 // renderPaging 渲染分页类型
 func (my *Renderer) renderPaging() error {
+	my.renderPageInfo()
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_CONNECTION, " ", SEPARATOR_LINE, "\n")
 	keys := utl.SortKeys(my.meta.Nodes)
 	// 为每个实体类生成分页类型
@@ -751,6 +769,7 @@ func (my *Renderer) renderPaging() error {
 		my.writeLine("type ", className, SUFFIX_RESULT, " {")
 		my.writeField(ITEMS, className, renderer.NonNull(), renderer.ListNonNull(), renderer.WithComment("直接返回"+className+"对象数组"))
 		my.writeField(TOTAL, SCALAR_INT, renderer.NonNull())
+		my.writeField(PAGE_INFO, TYPE_PAGE_INFO, renderer.WithComment("游标分页信息(需配合first/last使用)"))
 		my.writeLine("}")
 		my.writeLine("")
 	}

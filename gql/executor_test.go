@@ -112,6 +112,64 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Empty(t, users["items"])
 }
 
+// TestExecutorCursor 游标分页真库验证：向前逐页遍历 + 向后取末页
+func TestExecutorCursor(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	for _, name := range []string{"A", "B", "C", "D", "E"} {
+		reply := executor.Execute(ctx, `mutation ($n: String!, $e: String!) {
+			createUser(input: { name: $n, email: $e }) { id }
+		}`, map[string]interface{}{"n": name, "e": name + "@x.com"}, "")
+		require.Empty(t, reply.Errors, "准备数据失败: %v", reply.Errors)
+	}
+
+	// 向前遍历：每页2条，应得 [A,B] [C,D] [E]
+	var pages [][]string
+	cursor := interface{}(nil)
+	for i := 0; i < 5; i++ { // 上限防死循环
+		reply := executor.Execute(ctx, `query ($c: Cursor) {
+			users(first: 2, after: $c, sort: { name: ASC }) {
+				items { name }
+				pageInfo { hasNext hasPrev end }
+			}
+		}`, map[string]interface{}{"c": cursor}, "")
+		require.Empty(t, reply.Errors, "翻页失败: %v", reply.Errors)
+
+		users := reply.Data["users"].(map[string]interface{})
+		var names []string
+		for _, item := range users["items"].([]interface{}) {
+			names = append(names, item.(map[string]interface{})["name"].(string))
+		}
+		pages = append(pages, names)
+
+		info := users["pageInfo"].(map[string]interface{})
+		require.Equal(t, cursor != nil, info["hasPrev"], "hasPrev应反映是否携带游标")
+		if info["hasNext"] != true {
+			break
+		}
+		cursor = info["end"]
+		require.NotNil(t, cursor, "有下一页时end游标不应为空")
+	}
+	require.Equal(t, [][]string{{"A", "B"}, {"C", "D"}, {"E"}}, pages)
+
+	// 向后取末页：last: 2 应得 [D,E]（显示顺序）且hasPrev=true
+	reply := executor.Execute(ctx, `query {
+		users(last: 2, sort: { name: ASC }) { items { name } pageInfo { hasNext hasPrev } }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "向后翻页失败: %v", reply.Errors)
+	users := reply.Data["users"].(map[string]interface{})
+	var names []string
+	for _, item := range users["items"].([]interface{}) {
+		names = append(names, item.(map[string]interface{})["name"].(string))
+	}
+	require.Equal(t, []string{"D", "E"}, names)
+	info := users["pageInfo"].(map[string]interface{})
+	require.Equal(t, true, info["hasPrev"])
+	require.Equal(t, false, info["hasNext"])
+}
+
 // TestExecutorStats 统计聚合真库验证：全表聚合与分组聚合
 func TestExecutorStats(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)

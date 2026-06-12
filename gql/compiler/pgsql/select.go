@@ -22,6 +22,7 @@ type unit struct {
 	index  int                // 单元序号，决定 __sj_N/__sr_N 别名
 	single bool               // 单对象形态（多对一关系、变更读回）
 	stats  bool               // 统计聚合形态（xxxStats根字段）
+	page   *pager             // 游标分页参数（first/last模式）
 	args   ast.ArgumentList   // 生效的查询参数；变更读回为nil（参数已被CTE消费）
 }
 
@@ -96,9 +97,10 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 	return nil
 }
 
-// buildResultWrap 根字段的 items/total 包装
+// buildResultWrap 根字段的 items/total/pageInfo 包装
 func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	var items, typeNames []*ast.Field
+	var pageInfo *ast.Field
 	var hasTotal bool
 	for _, f := range fieldsOf(u.field.SelectionSet) {
 		switch f.Name {
@@ -106,6 +108,8 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 			items = fieldsOf(f.SelectionSet)
 		case protocol.TOTAL:
 			hasTotal = true
+		case protocol.PAGE_INFO:
+			pageInfo = f
 		case typename:
 			typeNames = append(typeNames, f)
 		}
@@ -114,17 +118,51 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 		return fmt.Errorf("查询 %s 缺少items选择集", u.field.Name)
 	}
 
+	page, err := newPager(scope{class: u.class}, u.args)
+	if err != nil {
+		return err
+	}
+	u.page = page
+	switch {
+	case pageInfo != nil && page == nil:
+		return fmt.Errorf("pageInfo需要配合first/last使用")
+	case hasTotal && page != nil && page.cursor != nil:
+		return fmt.Errorf("total不能与after/before续页同用（边界后计数无总数语义）")
+	}
+
 	sr := func() *compiler.Context { return ctx.Quote(`__sr_`, u.index) }
 
-	ctx.Write(`SELECT JSONB_BUILD_OBJECT('`, protocol.ITEMS, `', COALESCE(JSONB_AGG(TO_JSONB(`)
-	sr().Write(`.*)`)
-	if hasTotal {
-		ctx.Write(` - '__total'`)
+	// items聚合：游标模式剔除辅助列、按行号FILTER并保持显示顺序
+	ctx.Write(`SELECT JSONB_BUILD_OBJECT('`, protocol.ITEMS, `', COALESCE(JSONB_AGG(`)
+	if page == nil {
+		ctx.Write(`TO_JSONB(`)
+		sr().Write(`.*)`)
+		if hasTotal {
+			ctx.Write(` - '__total'`)
+		}
+	} else {
+		ctx.Write(`(TO_JSONB(`)
+		sr().Write(`.*) - '__rn' - '__cursor'`)
+		if hasTotal {
+			ctx.Write(` - '__total'`)
+		}
+		ctx.Write(`) ORDER BY `)
+		sr().Write(`."__rn"`)
+		if page.last {
+			ctx.Write(` DESC`)
+		}
+		ctx.Write(`) FILTER (WHERE `)
+		sr().Write(`."__rn" <= `, page.limit)
 	}
 	ctx.Write(`), '[]')`)
+
 	if hasTotal {
 		ctx.Write(`, '`, protocol.TOTAL, `', COALESCE(MIN(`)
 		sr().Write(`."__total"), 0)`)
+	}
+	if pageInfo != nil {
+		ctx.Write(`, '`, pageInfo.Alias, `', `)
+		my.buildPageInfo(ctx, u, pageInfo)
 	}
 	for _, f := range typeNames {
 		ctx.Write(`, '`, f.Alias, `', '`, u.class.Name, protocol.SUFFIX_RESULT, `'`)
@@ -138,6 +176,72 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	ctx.Write(`) AS `)
 	sr()
 	return nil
+}
+
+// buildPageInfo 游标分页信息：N+1探测行决定hasNext/hasPrev，边界行游标为start/end
+func (my *Dialect) buildPageInfo(ctx *compiler.Context, u *unit, field *ast.Field) {
+	page := u.page
+	sr := func() *compiler.Context { return ctx.Quote(`__sr_`, u.index) }
+	// 探测：取到的行数超过N说明边界外还有数据
+	probe := func() {
+		ctx.Write(`COALESCE(MAX(`)
+		sr().Write(`."__rn") > `, page.limit)
+		ctx.Write(`, FALSE)`)
+	}
+	// 显示顺序的游标聚合，->>0 首条 ->>-1 末条
+	boundary := func(index int) {
+		ctx.Write(`(JSONB_AGG(`)
+		sr().Write(`."__cursor" ORDER BY `)
+		sr().Write(`."__rn"`)
+		if page.last {
+			ctx.Write(` DESC`)
+		}
+		ctx.Write(`) FILTER (WHERE `)
+		sr().Write(`."__rn" <= `, page.limit)
+		ctx.Write(`) ->> `, index, `)`)
+	}
+
+	ctx.Write(`JSONB_BUILD_OBJECT(`)
+	for i, f := range fieldsOf(field.SelectionSet) {
+		if i > 0 {
+			ctx.Write(`, `)
+		}
+		ctx.Write(`'`, f.Alias, `', `)
+		switch f.Name {
+		case typename:
+			ctx.Write(`'`, protocol.TYPE_PAGE_INFO, `'`)
+		case "hasNext":
+			if page.last {
+				my.boundaryGiven(ctx, page)
+			} else {
+				probe()
+			}
+		case "hasPrev":
+			if page.last {
+				probe()
+			} else {
+				my.boundaryGiven(ctx, page)
+			}
+		case "start":
+			boundary(0)
+		case "end":
+			boundary(-1)
+		}
+	}
+	ctx.Write(`)`)
+}
+
+// boundaryGiven 是否提供了续页游标：字面量编译期定值，变量运行期判空
+func (my *Dialect) boundaryGiven(ctx *compiler.Context, page *pager) {
+	if page.cursor == nil {
+		ctx.Write(false)
+		return
+	}
+	if page.cursor.Kind == ast.Variable {
+		ctx.Write(`(`, my.Placeholder(ctx.AddVariable(page.cursor.Raw)), `::text IS NOT NULL)`)
+		return
+	}
+	ctx.Write(true)
 }
 
 // buildCore 单元核心：列投影 + 基础查询(条件/排序/分页) + 子关系LATERAL
@@ -201,6 +305,11 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	for _, column := range sortColumns(sc, u.args) {
 		appendColumn(column)
 	}
+	if u.page != nil {
+		for _, key := range u.page.keys {
+			appendColumn(key.column)
+		}
+	}
 	if len(columns) == 0 {
 		return fmt.Errorf("查询 %s 没有可用的标量字段", u.field.Name)
 	}
@@ -226,6 +335,20 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		comma()
 		ctx.Quote(base).Write(`."__total"`)
 	}
+	if u.page != nil {
+		// 行号探测hasNext，行级游标=base64(排序键值JSON数组)
+		comma()
+		ctx.Write(`ROW_NUMBER() OVER () AS "__rn"`)
+		comma()
+		ctx.Write(`encode(convert_to(JSONB_BUILD_ARRAY(`)
+		for i, key := range u.page.keys {
+			if i > 0 {
+				ctx.Write(`, `)
+			}
+			ctx.Quote(base).Write(`.`).Quote(key.column)
+		}
+		ctx.Write(`)::text, 'UTF8'), 'base64') AS "__cursor"`)
+	}
 	for _, child := range children {
 		comma()
 		ctx.Quote(`__sj_`, child.unit.index).Write(`."json"`).Space(`AS`).Quote(child.alias)
@@ -248,14 +371,42 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	if err != nil {
 		return err
 	}
+	// 游标续页：keyset边界条件并入关联条件位
+	var keysetErr error
+	if u.page != nil && u.page.cursor != nil {
+		prev := bond
+		bond = func() {
+			if prev != nil {
+				prev()
+				ctx.Space(`AND`)
+			}
+			keysetErr = my.buildKeyset(ctx, sc, u.page)
+		}
+	}
 	if err = my.buildWhere(ctx, sc, u.args, bond); err != nil {
 		return err
 	}
-	if err = my.buildOrderBy(ctx, sc, u.args); err != nil {
-		return err
+	if keysetErr != nil {
+		return keysetErr
 	}
-	if err = my.buildLimit(ctx, u); err != nil {
-		return err
+
+	if u.page != nil {
+		// 排序键全序（向后翻页方向反转），取N+1行探测边界
+		ctx.Space(`ORDER BY`)
+		for i, key := range u.page.keys {
+			if i > 0 {
+				ctx.Write(`, `)
+			}
+			ctx.Quote(sc.qualifier).Write(`.`).Quote(key.column).SpaceBefore(u.page.order(i))
+		}
+		ctx.Space(`LIMIT`).Write(u.page.limit + 1)
+	} else {
+		if err = my.buildOrderBy(ctx, sc, u.args); err != nil {
+			return err
+		}
+		if err = my.buildLimit(ctx, u); err != nil {
+			return err
+		}
 	}
 	ctx.Write(`) AS `).Quote(base)
 
