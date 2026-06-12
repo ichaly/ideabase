@@ -119,6 +119,24 @@ type BatchResolver interface {
   m2m connect: `INSERT INTO 中间表 SELECT 主pk, v FROM (VALUES...)`，disconnect DELETE
 - 约束：update 携带关系操作时必须用 id 定位单行；create 仅支持 connect
 
+## P13~P15 设计（变更簇/查询簇/递归全树）
+
+### P13 变更簇
+- 批量插入：复数字段 `createUsers(input: [UserCreateInput!]!): [User!]!`（单数 createUser 保留单对象语义）；
+  多行 VALUES 单条 INSERT；列集合取各行并集，缺失格填 DEFAULT；批量不支持关系操作（编译报错）
+- 嵌套创建：关系输入升级为按目标类的 `XxxRelationInput{connect,disconnect,create:[XxxCreateInput!]}`；
+  o2m create = 子表多行 INSERT 且 FK 取主CTE锚点标量子查询；m2m = 目标表 INSERT RETURNING pk + 中间表 INSERT SELECT 两段CTE
+- upsert：`upsertUsers(input: [...!]!, on: [String!]): [User!]!`；ON CONFLICT(on列,默认主键) DO UPDATE SET 非冲突列=EXCLUDED.列
+- 读回：批量/upsert 用 plain 数组单元（无 LIMIT 1）；parseMutation 复数名先精确后单数化解析，bulk 标记
+
+### P14 查询簇
+- distinct: [String!] → SELECT DISTINCT ON(列) + 列前置 ORDER BY（PG要求），与游标分页互斥
+- jsonb 包含：Json 类型加 contains(@>)/containedIn(<@)，GIN 可加速；真 PG array 列不支持（文档注明）
+
+### P15 递归全树
+- 递归实体加 descendants/ancestors(depth: Int=5) 虚拟字段，编译为基础子查询内嵌 WITH RECURSIVE
+  （UNION ALL 免去重、__depth 限深防爆炸）；平铺列表返回，树形重组留客户端；文档建议 parent_id 建索引
+
 ## 遗留事项（后续版本）
 
 - MySQL 方言实现（接口已就位，参照 pgsql 单元化结构）

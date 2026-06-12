@@ -113,6 +113,57 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Empty(t, users["items"])
 }
 
+// TestExecutorBulk 批量插入/upsert/嵌套创建真库验证
+func TestExecutorBulk(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	run := func(query string, vars map[string]interface{}) map[string]interface{} {
+		reply := executor.Execute(ctx, query, vars, "")
+		require.Empty(t, reply.Errors, "执行失败: %v", reply.Errors)
+		return reply.Data
+	}
+
+	// 批量创建（变量数组形态）
+	data := run(`mutation ($in: [UserCreateInput!]!) { createUsers(input: $in) { id name } }`,
+		map[string]interface{}{"in": []interface{}{
+			map[string]interface{}{"name": "A", "email": "a@x.com"},
+			map[string]interface{}{"name": "B", "email": "b@x.com"},
+		}})
+	require.Len(t, data["createUsers"].([]interface{}), 2)
+
+	// upsert：email冲突更新name，新email插入
+	data = run(`mutation { upsertUsers(input: [
+		{ name: "A2", email: "a@x.com" },
+		{ name: "C", email: "c@x.com" }
+	], on: ["email"]) { name email } }`, nil)
+	require.Len(t, data["upsertUsers"].([]interface{}), 2)
+	users := run(`query { users(sort: { name: ASC }) { items { name } total } }`, nil)["users"].(map[string]interface{})
+	require.EqualValues(t, 3, users["total"], "upsert应更新1条插入1条")
+	first := users["items"].([]interface{})[0].(map[string]interface{})["name"]
+	require.Equal(t, "A2", first, "冲突行name应被更新")
+
+	// 嵌套创建：建用户同时内联建两篇文章（同语句原子）
+	owner := run(`mutation { createUser(input: {
+		name: "D", email: "d@x.com",
+		posts: { create: [{ title: "N1" }, { title: "N2" }] }
+	}) { id } }`, nil)["createUser"].(map[string]interface{})
+	posts := run(`query ($id: ID) { users(id: $id) { items { posts { title } } } }`,
+		map[string]interface{}{"id": owner["id"]})["users"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["posts"].([]interface{})
+	require.Len(t, posts, 2, "内联创建的子行应挂在新用户名下")
+
+	// m2m内联创建：更新文章时内联建新标签并关联
+	postId := run(`mutation ($u: Int!) { createPost(input: { title: "M", userId: $u }) { id } }`,
+		map[string]interface{}{"u": owner["id"]})["createPost"].(map[string]interface{})["id"]
+	run(`mutation ($id: ID) { updatePost(input: { tags: { create: [{ name: "newtag" }] } }, id: $id) { id } }`,
+		map[string]interface{}{"id": postId})
+	tags := run(`query ($id: ID) { posts(id: $id) { items { tags { name } } } }`,
+		map[string]interface{}{"id": postId})["posts"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["tags"].([]interface{})
+	require.Len(t, tags, 1)
+	require.Equal(t, "newtag", tags[0].(map[string]interface{})["name"])
+}
+
 // TestExecutorSearch 全文搜索真库验证：自动探测pg_trgm，中文子串检索与相关度排序
 func TestExecutorSearch(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)

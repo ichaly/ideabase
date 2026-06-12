@@ -122,9 +122,10 @@ func TestRenderRelation(t *testing.T) {
 		// 获取schema文本
 		inputSchema := schema.String()
 
-		// 列表关系字段提供connect/disconnect关系操作
-		assert.Contains(t, inputSchema, "input RelationInput {")
-		assert.Contains(t, inputSchema, "children1: RelationInput")
+		// 列表关系字段提供按目标类的关系操作（挂接/解除/内联创建）
+		assert.Contains(t, inputSchema, "input CommentRelationInput {")
+		assert.Contains(t, inputSchema, "children1: CommentRelationInput")
+		assert.Contains(t, inputSchema, "create: [CommentCreateInput!]")
 
 		// 修改配置隐藏中间表关系
 		meta.cfg.Metadata.ShowThrough = false

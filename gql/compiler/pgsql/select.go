@@ -21,6 +21,7 @@ type unit struct {
 	parent string             // 父级基表别名（lateral关联引用）
 	index  int                // 单元序号，决定 __sj_N/__sr_N 别名
 	single bool               // 单对象形态（多对一关系、变更读回）
+	plain  bool               // 纯数组形态（批量/upsert变更读回）
 	stats  bool               // 统计聚合形态（xxxStats根字段）
 	page   *pager             // 游标分页参数（first/last模式）
 	args   ast.ArgumentList   // 生效的查询参数；变更读回为nil（参数已被CTE消费）
@@ -81,7 +82,7 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 			Quote(`__sr_`, u.index).Write(`.*) AS "json" FROM (`)
 		err = my.buildCore(ctx, u, fieldsOf(u.field.SelectionSet), false)
 		ctx.Write(`) AS `).Quote(`__sr_`, u.index)
-	case u.rel == nil: // 查询根字段：Result契约 items/total
+	case u.rel == nil && !u.plain: // 查询根字段：Result契约 items/total
 		err = my.buildResultWrap(ctx, u)
 	default: // 列表关系：纯数组
 		ctx.Write(`SELECT COALESCE(JSONB_AGG(TO_JSONB(`).

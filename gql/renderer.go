@@ -346,7 +346,7 @@ func (my *Renderer) writeRelationOps(class *protocol.Class) {
 		if target, ok := my.meta.Nodes[field.Relation.TargetClass]; ok && target.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
 			continue
 		}
-		my.writeField(fieldName, "RelationInput")
+		my.writeField(fieldName, field.Relation.TargetClass+"RelationInput")
 	}
 }
 
@@ -378,8 +378,8 @@ func (my *Renderer) renderInput() error {
 		for _, fieldName := range writable {
 			field := class.Fields[fieldName]
 			typeName := my.getGraphQLType(field)
-			// 非空字段添加!
-			if !field.Nullable {
+			// 非空字段添加!；外键列放宽为可选（嵌套创建时由父行锚点填充，数据库NOT NULL兜底）
+			if !field.Nullable && field.Relation == nil {
 				typeName += "!"
 			}
 			my.writeField(fieldName, typeName)
@@ -400,13 +400,22 @@ func (my *Renderer) renderInput() error {
 		my.writeLine("")
 	}
 
-	// 关系操作输入：创建仅connect生效，更新二者皆可
-	my.writeLine("# 关系操作（原子挂接/解除）")
-	my.writeLine("input RelationInput {")
-	my.writeField("connect", SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("挂接目标主键列表"))
-	my.writeField("disconnect", SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("解除目标主键列表(仅更新)"))
-	my.writeLine("}")
-	my.writeLine()
+	// 按目标类生成关系操作输入：connect/disconnect挂接解除既有行，create内联建新行
+	for _, className := range keys {
+		class := my.meta.Nodes[className]
+		if className != class.Name || (class.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
+			continue
+		}
+		my.writeLine("# ", className, "关系操作（原子挂接/解除/内联创建）")
+		my.writeLine("input ", className, "RelationInput {")
+		my.writeField("connect", SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("挂接既有行主键"))
+		my.writeField("disconnect", SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("解除既有行主键(仅更新)"))
+		if len(my.writableFields(class)) > 0 {
+			my.writeField("create", "["+className+SUFFIX_CREATE_INPUT+"!]", renderer.WithComment("内联创建新行"))
+		}
+		my.writeLine("}")
+		my.writeLine()
+	}
 
 	return nil
 }
@@ -675,9 +684,22 @@ func (my *Renderer) renderMutation() error {
 
 		// 无可写字段的类（如纯主键表）不生成创建/更新操作
 		if len(my.writableFields(class)) > 0 {
+			plural := inflection.Plural(className)
+
 			my.writeLine("  # ", class.Name, "创建")
 			my.writeField(CREATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
 				{Name: INPUT, Type: className + SUFFIX_CREATE_INPUT + "!"},
+			}...))
+
+			my.writeLine("  # ", class.Name, "批量创建")
+			my.writeField(CREATE+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+				{Name: INPUT, Type: "[" + className + SUFFIX_CREATE_INPUT + "!]!"},
+			}...))
+
+			my.writeLine("  # ", class.Name, "插入或更新（按on列冲突，缺省主键）")
+			my.writeField(UPSERT+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+				{Name: INPUT, Type: "[" + className + SUFFIX_CREATE_INPUT + "!]!"},
+				{Name: "on", Type: "[" + SCALAR_STRING + "!]"},
 			}...))
 
 			my.writeLine("  # ", class.Name, "更新")

@@ -170,3 +170,54 @@ func (my *_DialectSuite) TestRelationOpGuards() {
 		})
 	}
 }
+
+// TestBulkMutations 批量插入/upsert/嵌套创建
+func (my *_DialectSuite) TestBulkMutations() {
+	cases := []Case{
+		{
+			name:  "批量创建多行VALUES缺失列填DEFAULT",
+			query: `mutation { createUsers(input: [{ name: "A", email: "a@x" }, { name: "B", email: "b@x", age: 3 }]) { id name } }`,
+			args:  []any{"A", "a@x", "B", "b@x", int64(3)},
+			expected: `WITH "sys_user" AS (INSERT INTO sys_user ("name", "email", "age") VALUES ($1, $2, DEFAULT), ($3, $4, $5) RETURNING *)
+				SELECT JSONB_BUILD_OBJECT('createUsers', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]') AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name"
+						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM sys_user) AS "sys_user_0"
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+		{
+			name:  "upsert按邮箱冲突",
+			query: `mutation { upsertUsers(input: [{ name: "A", email: "a@x" }], on: ["email"]) { id } }`,
+			args:  []any{"A", "a@x"},
+			expected: `WITH "sys_user" AS (INSERT INTO sys_user ("name", "email") VALUES ($1, $2)
+					ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name" RETURNING *)
+				SELECT JSONB_BUILD_OBJECT('upsertUsers', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]') AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id"
+						FROM (SELECT "sys_user"."id" FROM sys_user) AS "sys_user_0"
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+		{
+			name:  "创建并内联建子行",
+			query: `mutation { createUser(input: { name: "A", email: "a@x", posts: { create: [{ title: "P1" }, { title: "P2" }] } }) { id } }`,
+			args:  []any{"A", "a@x", "P1", "P2"},
+			expected: `WITH "sys_user" AS (INSERT INTO sys_user ("name", "email") VALUES ($1, $2) RETURNING *),
+				"__c_1" AS (INSERT INTO sys_post ("title", "user_id") VALUES ($3, (SELECT "id" FROM "sys_user")), ($4, (SELECT "id" FROM "sys_user")))
+				SELECT JSONB_BUILD_OBJECT('createUser', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT TO_JSONB("__sr_0".*) AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id"
+						FROM (SELECT "sys_user"."id" FROM sys_user LIMIT 1) AS "sys_user_0"
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+	}
+	my.runCases(cases)
+}
