@@ -105,3 +105,62 @@ func (my *_DialectSuite) TestDistinctAndJsonb() {
 	}
 	my.runCases(cases)
 }
+
+// TestRecursiveTree 深度递归全树遍历
+func (my *_DialectSuite) TestRecursiveTree() {
+	cases := []Case{
+		{
+			name:  "全部后代默认限深5",
+			query: `query { comments { items { id descendants { id content } } } }`,
+			expected: `SELECT JSONB_BUILD_OBJECT('comments', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
+					FROM (
+						SELECT "sys_comment_0"."id" AS "id", "__sj_1"."json" AS "descendants"
+						FROM (SELECT "sys_comment"."id" FROM sys_comment) AS "sys_comment_0"
+						LEFT OUTER JOIN LATERAL (
+							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
+							FROM (
+								SELECT "sys_comment_1"."id" AS "id", "sys_comment_1"."content" AS "content"
+								FROM (WITH RECURSIVE "__tree_1" AS (
+									SELECT "sys_comment"."id", "sys_comment"."content", "sys_comment"."parent_id", 1 AS "__lv"
+									FROM sys_comment WHERE "sys_comment"."parent_id" = "sys_comment_0"."id"
+									UNION ALL
+									SELECT "sys_comment"."id", "sys_comment"."content", "sys_comment"."parent_id", "__tree_1"."__lv" + 1
+									FROM sys_comment, "__tree_1"
+									WHERE "sys_comment"."parent_id" = "__tree_1"."id" AND "__tree_1"."__lv" < 5
+								) SELECT "__tree_1"."id", "__tree_1"."content", "__tree_1"."parent_id" FROM "__tree_1") AS "sys_comment_1"
+							) AS "__sr_1"
+						) AS "__sj_1" ON TRUE
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+		{
+			name:  "祖先链限深2",
+			query: `query { comments { items { id ancestors(depth: 2) { id } } } }`,
+			expected: `SELECT JSONB_BUILD_OBJECT('comments', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
+					FROM (
+						SELECT "sys_comment_0"."id" AS "id", "__sj_1"."json" AS "ancestors"
+						FROM (SELECT "sys_comment"."id", "sys_comment"."parent_id" FROM sys_comment) AS "sys_comment_0"
+						LEFT OUTER JOIN LATERAL (
+							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
+							FROM (
+								SELECT "sys_comment_1"."id" AS "id"
+								FROM (WITH RECURSIVE "__tree_1" AS (
+									SELECT "sys_comment"."id", "sys_comment"."parent_id", 1 AS "__lv"
+									FROM sys_comment WHERE "sys_comment"."id" = "sys_comment_0"."parent_id"
+									UNION ALL
+									SELECT "sys_comment"."id", "sys_comment"."parent_id", "__tree_1"."__lv" + 1
+									FROM sys_comment, "__tree_1"
+									WHERE "sys_comment"."id" = "__tree_1"."parent_id" AND "__tree_1"."__lv" < 2
+								) SELECT "__tree_1"."id", "__tree_1"."parent_id" FROM "__tree_1") AS "sys_comment_1"
+							) AS "__sr_1"
+						) AS "__sj_1" ON TRUE
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+	}
+	my.runCases(cases)
+}

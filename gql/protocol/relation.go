@@ -8,6 +8,7 @@ type Relation struct {
 	SourceFiled string       `json:"sourceFiled"`       // 源字段名
 	TargetClass string       `json:"targetClass"`       // 目标类名
 	TargetFiled string       `json:"targetFiled"`       // 目标字段名
+	Deep        bool         `json:"deep,omitempty"`    // 深度递归（descendants/ancestors全树遍历）
 }
 
 // Through 表示多对多关系中的中间表配置

@@ -224,15 +224,19 @@ func (my *Renderer) renderTypes() error {
 				typeName += "!"
 			}
 
-			// 列表关系字段支持嵌套过滤/排序/分页参数
+			// 列表关系字段支持嵌套过滤/排序/分页参数；深度递归字段附加depth限深
 			if field.Column == "" && field.Relation != nil && field.IsList {
 				target := field.Relation.TargetClass
-				my.writeField(fieldName, typeName, renderer.WithArgs([]renderer.Argument{
+				args := []renderer.Argument{
 					{Name: WHERE, Type: target + SUFFIX_WHERE_INPUT},
 					{Name: SORT, Type: "[" + target + SUFFIX_SORT_INPUT + "!]"},
 					{Name: LIMIT, Type: SCALAR_INT},
 					{Name: OFFSET, Type: SCALAR_INT},
-				}...))
+				}
+				if field.Relation.Deep {
+					args = append(args, renderer.Argument{Name: DEPTH, Type: SCALAR_INT})
+				}
+				my.writeField(fieldName, typeName, renderer.WithArgs(args...))
 				continue
 			}
 

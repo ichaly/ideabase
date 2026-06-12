@@ -54,6 +54,7 @@ const (
 	DISCONNECT = "disconnect"
 	GROUP_BY   = "groupBy"
 	SEARCH     = "search"
+	DEPTH      = "depth"
 )
 
 const (

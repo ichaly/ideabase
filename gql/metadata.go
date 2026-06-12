@@ -447,6 +447,17 @@ func (my *Metadata) processRelations() {
 					childrenDesc := "子" + className + "列表"
 					addRelationField(className, className, true, false, false, false,
 						protocol.RECURSIVE, childrenName, childrenDesc, cloneRelation(relation, protocol.RECURSIVE, true))
+
+					// 深度递归字段：全树后代/祖先（递归CTE，depth参数限深）
+					descendants := cloneRelation(relation, protocol.RECURSIVE, true)
+					descendants.Deep = true
+					addRelationField(className, className, true, false, false, false,
+						protocol.RECURSIVE, my.uniqueFieldName(class, "descendants"), "全部后代（递归）", descendants)
+
+					ancestors := cloneRelation(relation, protocol.RECURSIVE, false)
+					ancestors.Deep = true
+					addRelationField(className, className, true, false, false, false,
+						protocol.RECURSIVE, my.uniqueFieldName(class, "ancestors"), "全部祖先（递归）", ancestors)
 				}
 			}
 		}

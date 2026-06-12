@@ -52,6 +52,7 @@ const (
 	DISCONNECT = protocol.DISCONNECT
 	GROUP_BY   = protocol.GROUP_BY
 	SEARCH     = protocol.SEARCH
+	DEPTH      = protocol.DEPTH
 
 	TOTAL     = protocol.TOTAL
 	ITEMS     = protocol.ITEMS

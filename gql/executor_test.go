@@ -113,6 +113,57 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Empty(t, users["items"])
 }
 
+// TestExecutorTree 递归全树真库验证：三层评论链 A->B->C
+func TestExecutorTree(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	run := func(query string, vars map[string]interface{}) map[string]interface{} {
+		reply := executor.Execute(ctx, query, vars, "")
+		require.Empty(t, reply.Errors, "执行失败: %v", reply.Errors)
+		return reply.Data
+	}
+
+	uid := run(`mutation { createUser(input: { name: "U", email: "u@x.com" }) { id } }`, nil)["createUser"].(map[string]interface{})["id"]
+	pid := run(`mutation ($u: Int!) { createPost(input: { title: "P", userId: $u }) { id } }`,
+		map[string]interface{}{"u": uid})["createPost"].(map[string]interface{})["id"]
+
+	make := func(content string, parent interface{}) interface{} {
+		in := map[string]interface{}{"content": content, "userId": uid, "postId": pid}
+		if parent != nil {
+			in["parentId"] = parent
+		}
+		return run(`mutation ($in: CommentCreateInput!) { createComment(input: $in) { id } }`,
+			map[string]interface{}{"in": in})["createComment"].(map[string]interface{})["id"]
+	}
+	a := make("A", nil)
+	b := make("B", a)
+	c := make("C", b)
+
+	// 全部后代：A下应有B、C
+	data := run(`query ($id: ID) { comments(id: $id) { items { descendants(sort: { content: ASC }) { content } } } }`,
+		map[string]interface{}{"id": a})
+	desc := data["comments"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["descendants"].([]interface{})
+	require.Len(t, desc, 2)
+	require.Equal(t, "B", desc[0].(map[string]interface{})["content"])
+	require.Equal(t, "C", desc[1].(map[string]interface{})["content"])
+
+	// 限深1：只有B
+	data = run(`query ($id: ID) { comments(id: $id) { items { descendants(depth: 1) { content } } } }`,
+		map[string]interface{}{"id": a})
+	desc = data["comments"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["descendants"].([]interface{})
+	require.Len(t, desc, 1)
+	require.Equal(t, "B", desc[0].(map[string]interface{})["content"])
+
+	// 祖先链：C向上应有B、A
+	data = run(`query ($id: ID) { comments(id: $id) { items { ancestors(sort: { content: ASC }) { content } } } }`,
+		map[string]interface{}{"id": c})
+	anc := data["comments"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["ancestors"].([]interface{})
+	require.Len(t, anc, 2)
+	require.Equal(t, "A", anc[0].(map[string]interface{})["content"])
+}
+
 // TestExecutorDistinct distinct真库验证
 func TestExecutorDistinct(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)

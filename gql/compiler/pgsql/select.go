@@ -6,6 +6,7 @@ package pgsql
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/compiler"
@@ -367,6 +368,20 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		ctx.Quote(`__sj_`, child.unit.index).Write(`."json"`).Space(`AS`).Quote(child.alias)
 	}
 
+	// 深度递归字段：基础查询为递归CTE全树遍历
+	if u.rel != nil && u.rel.Deep {
+		if err := my.buildTree(ctx, u, sc, columns); err != nil {
+			return err
+		}
+		ctx.Write(`) AS `).Quote(base)
+		for _, child := range children {
+			if err := my.buildUnit(ctx, child.unit); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	// 基础查询；DISTINCT ON要求排序以去重列开头（PG规则）
 	ctx.Space(`FROM (SELECT`)
 	if len(distinct) > 0 {
@@ -552,6 +567,89 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 	}
 
 	return nil
+}
+
+// buildTree 深度递归基础查询：WITH RECURSIVE 全树遍历
+//
+//	(WITH RECURSIVE "__tree_N" AS (
+//	   SELECT 列..., 1 AS "__lv" FROM 表 WHERE 表.目标列 = 父锚.源列      -- 起始层
+//	   UNION ALL
+//	   SELECT t.列..., "__tree_N"."__lv"+1 FROM 表 t, "__tree_N"
+//	   WHERE t.目标列 = "__tree_N".源列 AND "__tree_N"."__lv" < 深度      -- 步进+限深
+//	) SELECT 列... FROM "__tree_N" [WHERE 用户条件] [ORDER BY] [LIMIT])
+func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns []string) error {
+	depth, err := treeDepth(u.args)
+	if err != nil {
+		return err
+	}
+
+	// 递归引用需要源列与目标列
+	need := map[string]bool{}
+	for _, column := range columns {
+		need[column] = true
+	}
+	sourceCol, targetCol := sc.column(u.rel.SourceFiled), sc.column(u.rel.TargetFiled)
+	all := append([]string{}, columns...)
+	for _, column := range []string{sourceCol, targetCol} {
+		if !need[column] {
+			need[column] = true
+			all = append(all, column)
+		}
+	}
+
+	tree := fmt.Sprintf("__tree_%d", u.index)
+	parentClass, _ := ctx.GetClass(u.rel.SourceClass)
+	parentCol := scope{class: parentClass}.column(u.rel.SourceFiled)
+
+	list := func(qualifier string) {
+		for i, column := range all {
+			if i > 0 {
+				ctx.Write(`, `)
+			}
+			ctx.Quote(qualifier).Write(`.`).Quote(column)
+		}
+	}
+
+	ctx.Space(`FROM (WITH RECURSIVE`).QuotedWithSpace(tree).Write(`AS (SELECT `)
+	list(u.class.Table)
+	ctx.Write(`, 1 AS "__lv" FROM `, u.class.Table, ` WHERE `).
+		Quote(u.class.Table).Write(`.`).Quote(targetCol).
+		Write(` = `).Quote(u.parent).Write(`.`).Quote(parentCol)
+	ctx.Write(` UNION ALL SELECT `)
+	list(u.class.Table)
+	ctx.Write(`, `).Quote(tree).Write(`."__lv" + 1 FROM `, u.class.Table, `, `).Quote(tree).
+		Write(` WHERE `).Quote(u.class.Table).Write(`.`).Quote(targetCol).
+		Write(` = `).Quote(tree).Write(`.`).Quote(sourceCol).
+		Write(` AND `).Quote(tree).Write(`."__lv" < `, depth)
+	ctx.Write(`) SELECT `)
+	list(tree)
+	ctx.Write(` FROM `).Quote(tree)
+
+	// 用户条件/排序/分页应用在递归完成后的结果集上
+	treeScope := scope{class: u.class, qualifier: tree}
+	if err = my.buildWhere(ctx, treeScope, u.args, nil); err != nil {
+		return err
+	}
+	if err = my.buildOrderBy(ctx, treeScope, u.args); err != nil {
+		return err
+	}
+	return my.buildLimit(ctx, u)
+}
+
+// treeDepth 解析depth参数：1..32的字面量，缺省5（限深防爆炸）
+func treeDepth(args ast.ArgumentList) (int, error) {
+	arg := args.ForName(protocol.DEPTH)
+	if arg == nil || arg.Value == nil {
+		return 5, nil
+	}
+	if arg.Value.Kind == ast.Variable {
+		return 0, fmt.Errorf("depth必须是字面量整数")
+	}
+	depth, err := strconv.Atoi(arg.Value.Raw)
+	if err != nil || depth < 1 || depth > 32 {
+		return 0, fmt.Errorf("depth必须在1..32之间")
+	}
+	return depth, nil
 }
 
 // distinctColumns 解析distinct参数为列列表（须为实体真实列）

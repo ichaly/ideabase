@@ -62,9 +62,17 @@ app.Post("/graphql", executor.Handler)     // fiber v3
   ```
 - 关系：多对一/一对多/多对多（中间表）/递归（parent/children）自动生成，
   嵌套关系字段同样支持 `where/sort/limit/offset`
+- 递归全树：自关联实体自动生成 `descendants/ancestors(depth: Int)` 字段，
+  递归 CTE 单查询全树遍历，depth 缺省 5（1~32，限深防爆炸）；建议 parent_id 建索引
+- 去重：`distinct: ["列"]` 编译为 DISTINCT ON；Json 列支持
+  `contains/containedIn`（jsonb @>/<@，可配 GIN 索引）
 - 变更：`createX(input)` / `updateX(input, id|where)` / `deleteX(id|where)`，
   变更 CTE + 读回单条 SQL 原子完成；update/delete 强制要求条件
-- 嵌套写入：输入中列表关系字段接受 `{connect:[ID!], disconnect:[ID!]}`，
+- 批量与 upsert：`createUsers(input: [..!]!)` 多行单条 INSERT（约束：参数总数
+  受 PG 协议 65535 上限，万行级请分批）；`upsertUsers(input, on: ["email"])`
+  ON CONFLICT DO UPDATE，on 缺省主键
+- 嵌套写入：输入中列表关系字段接受 `{connect:[ID!], disconnect:[ID!], create:[子CreateInput!]}`
+  （connect/disconnect 挂接解除既有行，create 内联建新行并自动填外键），
   一对多改外键、多对多插删中间表，与主变更同语句原子；携带关系操作的
   更新必须按 id 定位。注意 PG 快照语义：同请求读回看不到关系变更，
   需后续查询确认（写入本身原子生效）
@@ -167,7 +175,6 @@ schema、能力、自省三者严格一致，没有任何方向的偏差：
 ## 当前限制
 
 - MySQL 方言未实现（扩展方式见上节；已知驱动未注册方言会明确报错，不会静默回退）
-- upsert 未实现
 - 同一 mutation 内不能两次变更同一张表（变更 CTE 同名限制）
 - first/last 必须是字面量整数（动态页大小改变查询文本即可，计划仍缓存）
 - 统计的 having 子句未提供
