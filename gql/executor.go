@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/gofiber/fiber/v3"
@@ -51,6 +52,7 @@ type Executor struct {
 	cache     *planCache          // 执行计划缓存，命中路径零解析零编译
 	resolvers map[string]Resolver // 自定义字段解析器注册表
 	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
+	interval  time.Duration       // 订阅轮询间隔
 }
 
 // Register 注册自定义字段解析器，与元数据中 Field.Resolver 按名绑定
@@ -86,6 +88,7 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		cache:     newPlanCache(512),
 		resolvers: make(map[string]Resolver),
 		documents: make(map[string]string),
+		interval:  time.Second,
 	}
 
 	// 加载GraphQL模式：配置了schema.file优先从文件加载（生产推荐），否则由renderer生成
@@ -176,8 +179,9 @@ func (my *Executor) Path() string {
 // 参数:
 //   - r: Fiber路由器，用于注册路由
 func (my *Executor) Bind(r fiber.Router) {
-	// 注册GraphQL请求处理路由
+	// 注册GraphQL请求处理路由；GET用于订阅WebSocket升级
 	r.Post("/", my.Handler)
+	r.Get("/", my.SubscribeHandler)
 }
 
 // Handler 处理GraphQL HTTP请求
@@ -251,34 +255,45 @@ func (my *Executor) Execute(ctx context.Context, query string, variables map[str
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
 	}
-	r.sql = plan.SQL
-	r.args = plan.Args(variables)
 
-	// 单条SQL返回单行单列的__root JSON，直接解包为data
-	// 顶层key即GraphQL字段别名，符合规范的data组织
-	var data []byte
-	if err := my.database.WithContext(ctx).Raw(r.sql, r.args...).Row().Scan(&data); err != nil {
+	data, args, err := my.fetch(ctx, plan, variables)
+	r.sql, r.args = plan.SQL, args
+	if err != nil {
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
 	}
+
+	result, err := my.unpack(ctx, plan, data)
+	if err != nil {
+		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
+		return r
+	}
+	r.Data = result
+	return r
+}
+
+// fetch 执行计划：单条SQL返回单行单列的__root JSON原始字节
+func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, []any, error) {
+	args := plan.Args(variables)
+	var data []byte
+	err := my.database.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
+	return data, args, err
+}
+
+// unpack 解包__root JSON为data（顶层key即字段别名）并执行resolver后处理
+func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &result); err != nil {
-			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
-			return r
+			return nil, err
 		}
 	}
-
-	// 自定义resolver后处理：填充SQL无法表达的字段
 	if len(plan.resolvers) > 0 {
 		if err := my.resolve(ctx, plan.resolvers, result); err != nil {
-			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
-			return r
+			return nil, err
 		}
 	}
-
-	r.Data = result
-	return r
+	return result, nil
 }
 
 // plan 获取执行计划：命中缓存直接返回，未命中则解析编译并缓存

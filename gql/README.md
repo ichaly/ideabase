@@ -74,6 +74,24 @@ func (Greet) Resolve(ctx context.Context, source, args map[string]any) (any, err
 executor.Register(Greet{})
 ```
 
+## 订阅
+
+订阅采用 graphjin 同款的轮询推送方案：按间隔重执行查询，结果指纹变化时推送。
+schema 中 `Subscription` 根类型与实体查询能力一致。
+
+```go
+executor.SetInterval(500 * time.Millisecond) // 默认1秒
+
+// 程序内订阅（channel API）
+events, _ := executor.Subscribe(ctx, `subscription { users { items { name } total } }`, nil, "")
+for reply := range events { ... } // ctx取消后通道关闭
+```
+
+HTTP 侧 `Bind` 已注册 GET 路由为 WebSocket 升级入口，
+实现 [graphql-transport-ws](https://github.com/enisdenjo/graphql-ws/blob/master/PROTOCOL.md)
+子协议（connection_init/ack、subscribe、next、complete、ping/pong），
+可直接对接 Apollo Client / graphql-ws 客户端。
+
 ## schema 与操作文档加载
 
 - `schema.file` 配置后从文件加载 schema（生产推荐，启动更快且可人工裁剪）；

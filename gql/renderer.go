@@ -619,27 +619,12 @@ func (my *Renderer) renderSort() error {
 	return nil
 }
 
-// renderQuery 渲染查询根类型
+// renderQuery 渲染查询根类型与订阅根类型（订阅镜像实体查询字段）
 func (my *Renderer) renderQuery() error {
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_QUERY, " ", SEPARATOR_LINE, "\n")
-	my.writeLine("# 查询根类型")
-	my.writeLine("type Query {")
 
-	// 为每个实体类生成查询字段
-	keys := utl.SortKeys(my.meta.Nodes)
-	for _, className := range keys {
-		class := my.meta.Nodes[className]
-		// 确保只处理真正的类名，跳过表名索引
-		if className != class.Name {
-			continue
-		}
-
-		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-			continue
-		}
-
-		// 统一查询（支持单条和多条）
+	// 实体查询字段渲染闭包，Query与Subscription共用
+	writeEntityField := func(className string) {
 		my.writeLine("  # ", className, "查询")
 		my.writeField(
 			strcase.ToLowerCamel(inflection.Plural(className)),
@@ -658,6 +643,23 @@ func (my *Renderer) renderQuery() error {
 				{Name: BEFORE, Type: SCALAR_CURSOR},
 			}...),
 		)
+	}
+
+	// 收集可渲染的实体类名
+	var names []string
+	for _, className := range utl.SortKeys(my.meta.Nodes) {
+		class := my.meta.Nodes[className]
+		// 跳过表名索引与隐藏的中间表类
+		if className != class.Name || (class.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
+			continue
+		}
+		names = append(names, className)
+	}
+
+	my.writeLine("# 查询根类型")
+	my.writeLine("type Query {")
+	for _, className := range names {
+		writeEntityField(className)
 
 		// 统计查询
 		my.writeLine("  # ", className, "统计查询")
@@ -671,7 +673,15 @@ func (my *Renderer) renderQuery() error {
 			}...),
 		)
 	}
+	my.writeLine("}")
+	my.writeLine()
 
+	// 订阅根类型：轮询式订阅，能力与实体查询一致
+	my.writeLine("# 订阅根类型")
+	my.writeLine("type Subscription {")
+	for _, className := range names {
+		writeEntityField(className)
+	}
 	my.writeLine("}")
 	my.writeLine()
 	return nil
