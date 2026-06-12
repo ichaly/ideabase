@@ -112,6 +112,56 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Empty(t, users["items"])
 }
 
+// TestExecutorRelationOps 嵌套写入真库验证：创建挂接、多对多connect/disconnect原子完成
+func TestExecutorRelationOps(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	run := func(query string, vars map[string]interface{}) map[string]interface{} {
+		reply := executor.Execute(ctx, query, vars, "")
+		require.Empty(t, reply.Errors, "执行失败: %v", reply.Errors)
+		return reply.Data
+	}
+
+	// 既有数据：作者 + 两篇游离文章 + 两个标签
+	author := run(`mutation { createUser(input: { name: "Au", email: "au@x.com" }) { id } }`, nil)["createUser"].(map[string]interface{})["id"]
+	orphanA := run(`mutation ($u: Int!) { createPost(input: { title: "PA", userId: $u }) { id } }`,
+		map[string]interface{}{"u": author})["createPost"].(map[string]interface{})["id"]
+	_ = run(`mutation ($u: Int!) { createPost(input: { title: "PB", userId: $u }) { id } }`, map[string]interface{}{"u": author})
+	tag1 := run(`mutation { createTag(input: { name: "t1" }) { id } }`, nil)["createTag"].(map[string]interface{})["id"]
+	tag2 := run(`mutation { createTag(input: { name: "t2" }) { id } }`, nil)["createTag"].(map[string]interface{})["id"]
+
+	// 创建新作者并原子挂接既有文章PA（一对多connect=改外键）
+	// 注：PG快照语义下同语句读回看不到关系变更，用后续查询验证
+	owner := run(`mutation ($p: ID!) {
+		createUser(input: { name: "New", email: "new@x.com", posts: { connect: [$p] } }) { id }
+	}`, map[string]interface{}{"p": orphanA})["createUser"].(map[string]interface{})
+
+	data := run(`query ($id: ID) { users(id: $id) { items { posts { title } } } }`,
+		map[string]interface{}{"id": owner["id"]})
+	posts := data["users"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["posts"].([]interface{})
+	require.Len(t, posts, 1)
+	require.Equal(t, "PA", posts[0].(map[string]interface{})["title"])
+
+	// 多对多connect：文章挂两个标签（原子，单语句）
+	run(`mutation ($id: ID, $t1: ID!, $t2: ID!) {
+		updatePost(input: { tags: { connect: [$t1, $t2] } }, id: $id) { id }
+	}`, map[string]interface{}{"id": orphanA, "t1": tag1, "t2": tag2})
+	data = run(`query ($id: ID) { posts(id: $id) { items { tags { name } } } }`, map[string]interface{}{"id": orphanA})
+	tags := data["posts"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["tags"].([]interface{})
+	require.Len(t, tags, 2)
+
+	// disconnect解除一个
+	run(`mutation ($id: ID, $t: ID!) {
+		updatePost(input: { tags: { disconnect: [$t] } }, id: $id) { id }
+	}`, map[string]interface{}{"id": orphanA, "t": tag1})
+	data = run(`query ($id: ID) { posts(id: $id) { items { tags { name } } } }`, map[string]interface{}{"id": orphanA})
+	tags = data["posts"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["tags"].([]interface{})
+	require.Len(t, tags, 1)
+	require.Equal(t, "t2", tags[0].(map[string]interface{})["name"])
+}
+
 // TestExecutorCursor 游标分页真库验证：向前逐页遍历 + 向后取末页
 func TestExecutorCursor(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)

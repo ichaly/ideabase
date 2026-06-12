@@ -122,8 +122,9 @@ func TestRenderRelation(t *testing.T) {
 		// 获取schema文本
 		inputSchema := schema.String()
 
-		// 嵌套写入未实现，schema不应展示relation操作
-		assert.NotContains(t, inputSchema, "RelationInput")
+		// 列表关系字段提供connect/disconnect关系操作
+		assert.Contains(t, inputSchema, "input RelationInput {")
+		assert.Contains(t, inputSchema, "children1: RelationInput")
 
 		// 修改配置隐藏中间表关系
 		meta.cfg.Metadata.ShowThrough = false

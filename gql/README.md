@@ -43,11 +43,19 @@ app.Post("/graphql", executor.Handler)     // fiber v3
 - 过滤：`where: { name: { eq/ne/gt/ge/lt/le/in/like/iLike/regex/iRegex/is/hasKey... } }`，
   支持 `and/or/not` 任意组合；`id: X` 是主键等值的快捷方式
 - 排序：`sort: { name: ASC, age: DESC_NULLS_LAST }`（单对象或列表均可）
-- 分页：`limit/offset` + `total`（窗口函数一次查询同时取数与总数）
+- 分页：`limit/offset` + `total`（窗口函数一次查询同时取数与总数）；
+  游标分页 `first/after`、`last/before` + `pageInfo{hasNext,hasPrev,start,end}`，
+  keyset 语义性能恒定（排序键自动追加主键兜底；排序键应为非空列）
+- 统计：`userStats(where, groupBy, limit, offset)` 返回 `count` 与各列的
+  sum/avg/min/max/countDistinct，选择驱动只算请求的聚合
 - 关系：多对一/一对多/多对多（中间表）/递归（parent/children）自动生成，
   嵌套关系字段同样支持 `where/sort/limit/offset`
 - 变更：`createX(input)` / `updateX(input, id|where)` / `deleteX(id|where)`，
   变更 CTE + 读回单条 SQL 原子完成；update/delete 强制要求条件
+- 嵌套写入：输入中列表关系字段接受 `{connect:[ID!], disconnect:[ID!]}`，
+  一对多改外键、多对多插删中间表，与主变更同语句原子；携带关系操作的
+  更新必须按 id 定位。注意 PG 快照语义：同请求读回看不到关系变更，
+  需后续查询确认（写入本身原子生效）
 - GraphQL 变量：编译为参数槽位，同一查询文本的计划可缓存复用
 
 ## 自定义 Resolver
@@ -147,10 +155,10 @@ schema、能力、自省三者严格一致，没有任何方向的偏差：
 ## 当前限制
 
 - MySQL 方言未实现（扩展方式见上节；已知驱动未注册方言会明确报错，不会静默回退）
-- 游标分页未实现（schema 不展示相关参数）
-- 嵌套写入（connect/disconnect、upsert）未实现（schema 不展示）
+- upsert 未实现
 - 同一 mutation 内不能两次变更同一张表（变更 CTE 同名限制）
-- 统计查询未实现（schema 不展示）
+- first/last 必须是字面量整数（动态页大小改变查询文本即可，计划仍缓存）
+- 统计的 having 子句未提供
 
 设计细节见 [`../doc/gql-rework-plan.md`](../doc/gql-rework-plan.md) 与
 [`../doc/pgsql-template-design.md`](../doc/pgsql-template-design.md)。

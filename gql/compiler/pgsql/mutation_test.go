@@ -115,3 +115,58 @@ func (my *_DialectSuite) TestMutationGuards() {
 		})
 	}
 }
+
+// TestRelationOps 嵌套写入：connect/disconnect 编译为关系操作CTE
+func (my *_DialectSuite) TestRelationOps() {
+	cases := []Case{
+		{
+			name:  "创建并挂接一对多",
+			query: `mutation { createUser(input: { name: "A", email: "a@x.com", posts: { connect: [1, 2] } }) { id } }`,
+			args:  []any{"A", "a@x.com", int64(1), int64(2)},
+			expected: `WITH "sys_user" AS (INSERT INTO sys_user ("name", "email") VALUES ($1, $2) RETURNING *),
+				"__c_1" AS (UPDATE sys_post SET "user_id" = (SELECT "id" FROM "sys_user") WHERE "id" IN ($3, $4))
+				SELECT JSONB_BUILD_OBJECT('createUser', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT TO_JSONB("__sr_0".*) AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id"
+						FROM (SELECT "sys_user"."id" FROM sys_user LIMIT 1) AS "sys_user_0"
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+		{
+			name:  "更新多对多挂接与解除",
+			query: `mutation { updatePost(input: { tags: { connect: [10], disconnect: [11] } }, id: 5) { id } }`,
+			args:  []any{int64(5), int64(10), int64(11)},
+			expected: `WITH "sys_post" AS (SELECT * FROM sys_post WHERE "sys_post"."id" = $1),
+				"__c_1" AS (INSERT INTO sys_post_tag ("post_id", "tag_id") VALUES ((SELECT "id" FROM "sys_post"), $2)),
+				"__c_2" AS (DELETE FROM sys_post_tag WHERE "post_id" = (SELECT "id" FROM "sys_post") AND "tag_id" IN ($3))
+				SELECT JSONB_BUILD_OBJECT('updatePost', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT TO_JSONB("__sr_0".*) AS "json"
+					FROM (
+						SELECT "sys_post_0"."id" AS "id"
+						FROM (SELECT "sys_post"."id" FROM sys_post LIMIT 1) AS "sys_post_0"
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+	}
+	my.runCases(cases)
+}
+
+// TestRelationOpGuards 关系操作约束
+func (my *_DialectSuite) TestRelationOpGuards() {
+	for name, c := range map[string]struct{ query, wants string }{
+		"创建不支持disconnect": {`mutation { createUser(input: { name: "x", email: "e", posts: { disconnect: [1] } }) { id } }`, "不支持disconnect"},
+		"关系操作必须按id":      {`mutation { updateUser(input: { posts: { connect: [1] } }, where: { name: { eq: "x" } }) { id } }`, "必须用id定位"},
+	} {
+		my.Run(name, func() {
+			doc, gqlErr := gqlparser.LoadQuery(my.schema, c.query)
+			my.Require().Empty(gqlErr, "解析失败")
+			compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
+			my.Require().NoError(err)
+			_, _, err = compile.Build(doc.Operations[0], nil)
+			my.Assert().ErrorContains(err, c.wants)
+		})
+	}
+}

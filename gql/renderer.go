@@ -332,6 +332,24 @@ func (my *Renderer) writableFields(class *protocol.Class) []string {
 	return names
 }
 
+// writeRelationOps 输入类型中的列表关系操作字段（connect/disconnect原子挂接）
+func (my *Renderer) writeRelationOps(class *protocol.Class) {
+	for _, fieldName := range utl.SortKeys(class.Fields) {
+		field := class.Fields[fieldName]
+		// 仅列表关系虚拟字段（一对多/多对多），中间表隐藏时跳过
+		if fieldName != field.Name || field.Column != "" || field.Relation == nil || !field.IsList {
+			continue
+		}
+		if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
+			continue
+		}
+		if target, ok := my.meta.Nodes[field.Relation.TargetClass]; ok && target.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
+			continue
+		}
+		my.writeField(fieldName, "RelationInput")
+	}
+}
+
 // renderInput 渲染输入类型
 func (my *Renderer) renderInput() error {
 	// 为每个实体类生成创建和更新输入类型
@@ -366,6 +384,7 @@ func (my *Renderer) renderInput() error {
 			}
 			my.writeField(fieldName, typeName)
 		}
+		my.writeRelationOps(class)
 		my.writeLine("}")
 		my.writeLine("")
 
@@ -375,10 +394,19 @@ func (my *Renderer) renderInput() error {
 		for _, fieldName := range writable {
 			my.writeField(fieldName, my.getGraphQLType(class.Fields[fieldName]))
 		}
+		my.writeRelationOps(class)
 
 		my.writeLine("}")
 		my.writeLine("")
 	}
+
+	// 关系操作输入：创建仅connect生效，更新二者皆可
+	my.writeLine("# 关系操作（原子挂接/解除）")
+	my.writeLine("input RelationInput {")
+	my.writeField("connect", SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("挂接目标主键列表"))
+	my.writeField("disconnect", SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("解除目标主键列表(仅更新)"))
+	my.writeLine("}")
+	my.writeLine()
 
 	return nil
 }

@@ -93,7 +93,7 @@ type BatchResolver interface {
 8. **P8 订阅改纯 CDC** ✅：WAL 逻辑复制（pgoutput + 临时槽）表级变更唤醒，移除轮询；
    Plan 记录涉及表集合；部署仅需 `wal_level=logical`
 
-## P9~P11 设计（统计/游标分页/嵌套写入）
+## P9~P11 设计（统计/游标分页/嵌套写入）——已全部实现 ✅
 
 ### P9 统计聚合
 - schema：`userStats(where, groupBy: [String!], limit, offset): [UserStats!]!`；
