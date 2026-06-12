@@ -225,9 +225,9 @@ var operators = []*Operator{
 	{Name: I_LIKE, Value: "ilike", Description: descILike},
 	{Name: REGEX, Value: "~", Description: descRegex},
 	{Name: I_REGEX, Value: "~*", Description: descIRegex},
-	{Name: HAS_KEY, Value: "hasKey", Description: descHasKey},
-	{Name: HAS_KEY_ANY, Value: "hasKeyAny", Description: descHasKeyAny},
-	{Name: HAS_KEY_ALL, Value: "hasKeyAll", Description: descHasKeyAll},
+	{Name: HAS_KEY, Value: "?", Description: descHasKey},
+	{Name: HAS_KEY_ANY, Value: "?|", Description: descHasKeyAny},
+	{Name: HAS_KEY_ALL, Value: "?&", Description: descHasKeyAll},
 }
 
 // 构建操作符和内置标量的关系

@@ -1,213 +1,53 @@
 package pgsql
 
-import (
-	"strings"
-	"testing"
-
-	"github.com/ichaly/ideabase/gql"
-	"github.com/ichaly/ideabase/gql/compiler"
-	"github.com/stretchr/testify/assert"
-	"github.com/vektah/gqlparser/v2/ast"
-)
-
-// normalizeSpaces 归一化空白：去除首尾空格并把连续空白压缩为单个空格
-func normalizeSpaces(s string) string {
-	return strings.Join(strings.Fields(s), " ")
+// 排序用例共用的SQL骨架：基础查询里带name列（排序列自动带出）
+func sortQuery(clause string) string {
+	return `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+		LEFT OUTER JOIN LATERAL (
+			SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
+			FROM (
+				SELECT "sys_user_0"."id" AS "id"
+				FROM (SELECT "sys_user"."id", "sys_user"."name" FROM sys_user ` + clause + `) AS "sys_user_0"
+			) AS "__sr_0"
+		) AS "__sj_0" ON TRUE`
 }
 
-func TestSortBuilder(t *testing.T) {
-	dialect := &Dialect{}
-
-	tests := []struct {
-		name     string
-		args     ast.ArgumentList
-		expected string
-		wantErr  bool
-	}{
+func (my *_DialectSuite) TestSort() {
+	cases := []Case{
 		{
-			name: "简单升序排序",
-			args: ast.ArgumentList{
-				{
-					Name: gql.SORT,
-					Value: &ast.Value{
-						Kind: ast.ListValue,
-						Children: []*ast.ChildValue{
-							{
-								Name: "name",
-								Value: &ast.Value{
-									Kind: ast.EnumValue,
-									Raw:  "ASC",
-								},
-							},
-						},
-					},
-				},
-			},
-			expected: ` ORDER BY "name" ASC`,
-			wantErr:  false,
+			name:     "单字段降序",
+			query:    `query { users(sort: { name: DESC }) { items { id } } }`,
+			expected: sortQuery(`ORDER BY "sys_user"."name" DESC`),
 		},
 		{
-			name: "PostgreSQL NULL值排序",
-			args: ast.ArgumentList{
-				{
-					Name: gql.SORT,
-					Value: &ast.Value{
-						Kind: ast.ListValue,
-						Children: []*ast.ChildValue{
-							{
-								Name: "email",
-								Value: &ast.Value{
-									Kind: ast.EnumValue,
-									Raw:  "DESC_NULLS_LAST",
-								},
-							},
-						},
-					},
-				},
-			},
-			expected: ` ORDER BY "email" DESC NULLS LAST`,
-			wantErr:  false,
+			name:     "默认方向为升序",
+			query:    `query { users(sort: { name: ASC }) { items { id } } }`,
+			expected: sortQuery(`ORDER BY "sys_user"."name" ASC`),
 		},
 		{
-			name: "多字段排序",
-			args: ast.ArgumentList{
-				{
-					Name: gql.SORT,
-					Value: &ast.Value{
-						Kind: ast.ListValue,
-						Children: []*ast.ChildValue{
-							{
-								Name: "name",
-								Value: &ast.Value{
-									Kind: ast.EnumValue,
-									Raw:  "ASC",
-								},
-							},
-							{
-								Name: "createdAt",
-								Value: &ast.Value{
-									Kind: ast.EnumValue,
-									Raw:  "DESC",
-								},
-							},
-						},
-					},
-				},
-			},
-			expected: ` ORDER BY "name" ASC, "createdAt" DESC`,
-			wantErr:  false,
+			name:  "多字段混合排序",
+			query: `query { users(sort: { name: ASC, age: DESC_NULLS_LAST }) { items { id } } }`,
+			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id"
+						FROM (SELECT "sys_user"."id", "sys_user"."name", "sys_user"."age" FROM sys_user
+							ORDER BY "sys_user"."name" ASC, "sys_user"."age" DESC NULLS LAST) AS "sys_user_0"
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
 		},
 		{
-			name: "旧版本orderBy兼容",
-			args: ast.ArgumentList{
-				{
-					Name: "orderBy",
-					Value: &ast.Value{
-						Kind: ast.ListValue,
-						Children: []*ast.ChildValue{
-							{
-								Name: "name",
-								Value: &ast.Value{
-									Kind: ast.StringValue,
-									Raw:  "ASC",
-								},
-							},
-						},
-					},
-				},
-			},
-			expected: ` ORDER BY "name" ASC`,
-			wantErr:  false,
+			name:     "排序与分页组合",
+			query:    `query { users(sort: { name: DESC_NULLS_FIRST }, limit: 5, offset: 10) { items { id } } }`,
+			expected: sortQuery(`ORDER BY "sys_user"."name" DESC NULLS FIRST LIMIT 5 OFFSET 10`),
 		},
 		{
-			name:     "无排序参数",
-			args:     ast.ArgumentList{},
-			expected: "",
-			wantErr:  false,
+			name:     "条件排序组合",
+			query:    `query { users(where: { name: { like: "%a%" } }, sort: { name: ASC }) { items { id } } }`,
+			expected: sortQuery(`WHERE "sys_user"."name" LIKE $1 ORDER BY "sys_user"."name" ASC`),
+			args:     []any{"%a%"},
 		},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// 创建测试上下文
-			ctx := compiler.NewContext(nil, `"`, nil)
-
-			// 执行排序构建
-			err := dialect.buildOrderBy(ctx, tt.args)
-
-			// 验证结果
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, normalizeSpaces(tt.expected), normalizeSpaces(ctx.String()))
-			}
-		})
-	}
-}
-
-func TestSortWithAlias(t *testing.T) {
-	dialect := &Dialect{}
-
-	args := ast.ArgumentList{
-		{
-			Name: gql.SORT,
-			Value: &ast.Value{
-				Kind: ast.ListValue,
-				Children: []*ast.ChildValue{
-					{
-						Name: "name",
-						Value: &ast.Value{
-							Kind: ast.EnumValue,
-							Raw:  "ASC",
-						},
-					},
-				},
-			},
-		},
-	}
-
-	ctx := compiler.NewContext(nil, `"`, nil)
-	err := dialect.buildOrderByWithAlias(ctx, args, "u")
-
-	assert.NoError(t, err)
-	assert.Equal(t, normalizeSpaces(` ORDER BY "u"."name" ASC`), normalizeSpaces(ctx.String()))
-}
-
-func TestSortErrorHandling(t *testing.T) {
-	dialect := &Dialect{}
-
-	tests := []struct {
-		name string
-		args ast.ArgumentList
-	}{
-		{
-			name: "空字段名",
-			args: ast.ArgumentList{
-				{
-					Name: gql.SORT,
-					Value: &ast.Value{
-						Kind: ast.ListValue,
-						Children: []*ast.ChildValue{
-							{
-								Name: "",
-								Value: &ast.Value{
-									Kind: ast.EnumValue,
-									Raw:  "ASC",
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := compiler.NewContext(nil, `"`, nil)
-			err := dialect.buildOrderBy(ctx, tt.args)
-			assert.Error(t, err)
-		})
-	}
+	my.runCases(cases)
 }

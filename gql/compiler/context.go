@@ -79,11 +79,16 @@ func (my *Context) NextIndex() int {
 	return index
 }
 
-func (my *Context) FindField(className, fieldName string) (*protocol.Field, bool) {
+// GetClass 按类名（或表名索引）获取类定义
+func (my *Context) GetClass(className string) (*protocol.Class, bool) {
 	if my.hoster == nil {
 		return nil, false
 	}
-	class, ok := my.hoster.GetNode(className)
+	return my.hoster.GetNode(className)
+}
+
+func (my *Context) FindField(className, fieldName string) (*protocol.Field, bool) {
+	class, ok := my.GetClass(className)
 	if !ok {
 		return nil, false
 	}
