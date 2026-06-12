@@ -81,11 +81,20 @@ type BatchResolver interface {
 - schema 统一入口：优先 `cfg/schema.graphql` 文件（生产），否则 renderer 现场生成（开发）
 - 支持加载 `.graphql` 操作文档（持久化查询），配合编译缓存预热
 
-## 阶段计划
+## 阶段计划（全部完成 ✅）
 
-1. **P1 测试基线**：修路径解析（`utl.Root()`=cwd 语义变化的连锁失败）、过时断言（旧命名 `XxxPage/XxxSort/XxxFilter`）、空格漂移归一化
-2. **P2 SELECT 重写**：关系关联条件 + 全局别名 + 嵌套参数
-3. **P3 Mutation**：`createX/updateX/deleteX` 路由 + 变更 CTE + RETURNING 复用查询机制
-4. **P4 执行链路**：`__root` 解包、规范 data 组织、编译缓存
-5. **P5 Resolver**：注册/分发/批量
-6. **P6 加载与文档**：schema/文档加载入口、README 与设计文档更新
+1. **P1 测试基线** ✅：修路径解析（`utl.Root()`=cwd 语义变化的连锁失败）、过时断言、空格归一化；附带修复 constant.go 切片别名覆写 bug
+2. **P2 SELECT 重写** ✅：关系关联条件（元数据驱动）+ 全局别名 + 嵌套参数 + 单轨 where/sort
+3. **P3 Mutation** ✅：`createX/updateX/deleteX` 路由 + 变更 CTE + 统一读回；update/delete 强制条件
+4. **P4 执行链路** ✅：`__root` 解包、规范 data 组织、Plan LRU 缓存、常量下沉 protocol 解除 import cycle
+5. **P5 Resolver** ✅：注册/分发/批量（BatchResolver 免 N+1）、编译期绑定收集进 Plan
+6. **P6 加载与文档** ✅：schema.file 配置、LoadDocuments 持久化查询、列表关系字段嵌套参数、README
+7. **P7 订阅** ✅：轮询推送（指纹比对）+ graphql-transport-ws WebSocket 传输
+
+## 遗留事项（后续版本）
+
+- MySQL 方言实现（接口已就位，参照 pgsql 单元化结构）
+- 游标分页（first/last/after/before/pageInfo，编译期明确报错）
+- 统计查询 `xxxStats` 编译（schema 已生成）
+- 嵌套写入（connect/disconnect/upsert）
+- `metadata.go` 中 loader_base 反向关系挂在主键字段会被多个外键覆写（仅影响极端多外键场景）
