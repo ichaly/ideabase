@@ -99,50 +99,38 @@ func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[stri
 }
 
 // selectDialect 选择适合当前数据库的SQL方言
-// 方言选择逻辑:
-// 1. 优先根据数据库驱动类型选择对应方言
-// 2. 如未找到匹配，尝试使用PostgreSQL方言(推荐方言)
-// 3. 如仍未找到，使用首个可用方言
-// 4. 如无可用方言，返回错误
+// 已知驱动严格匹配同名方言，未注册时明确报错（静默回退会生成错误SQL更难排查）；
+// 无数据库连接（纯编译场景）时优先PostgreSQL方言，否则取首个可用方言
 func (my *Compiler) selectDialect(list []compiler.Dialect) error {
 	dialects := make(map[string]compiler.Dialect, len(list))
 	for _, dialect := range list {
 		dialects[dialect.Name()] = dialect
 	}
-	// 1. 首先尝试根据数据库类型选择方言
+
+	// 已知驱动严格按名匹配
 	if my.meta != nil && my.meta.db != nil {
-		dbName := my.meta.db.Name()
-
-		// 根据数据库驱动名称匹配方言
-		switch {
-		case strings.Contains(dbName, "postgres"):
-			if dialect, ok := dialects["postgresql"]; ok {
-				my.dialect = dialect
+		driver := my.meta.db.Name()
+		for _, name := range []string{"postgres", "mysql"} {
+			if !strings.Contains(driver, name) {
+				continue
 			}
-		case strings.Contains(dbName, "mysql"):
-			if dialect, ok := dialects["mysql"]; ok {
-				my.dialect = dialect
+			dialect, ok := dialects[strings.Replace(name, "postgres", "postgresql", 1)]
+			if !ok {
+				return fmt.Errorf("数据库驱动 %s 没有注册对应的SQL方言实现", driver)
 			}
-		}
-	}
-
-	// 2. 如果未找到匹配方言，尝试使用PostgreSQL方言（如果存在）
-	if my.dialect == nil && len(dialects) > 0 {
-		if dialect, ok := dialects["postgresql"]; ok {
 			my.dialect = dialect
-		} else {
-			// 3. 否则使用第一个可用的方言
-			for _, dialect := range dialects {
-				my.dialect = dialect
-				break
-			}
+			return nil
 		}
 	}
 
-	// 4. 如果仍未找到方言，返回错误
-	if my.dialect == nil {
-		return fmt.Errorf("没有可用的SQL方言实现")
+	// 无连接或未知驱动：优先PostgreSQL，否则首个可用
+	if dialect, ok := dialects["postgresql"]; ok {
+		my.dialect = dialect
+		return nil
 	}
-
-	return nil
+	for _, dialect := range dialects {
+		my.dialect = dialect
+		return nil
+	}
+	return fmt.Errorf("没有可用的SQL方言实现")
 }

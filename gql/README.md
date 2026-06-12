@@ -120,9 +120,17 @@ services:
 - 编译上下文走 `sync.Pool`，热路径零反射
 - 整体 `input` 变量的变更依赖变量内容，自动跳过缓存（volatile）
 
+## 扩展新数据库
+
+`compiler.Dialect` 是策略模式扩展点，新增数据库（如 MySQL）只需：
+新建 `compiler/mysql` 包实现接口的 5 个方法（契约见接口注释：单行单列
+__root JSON、参数槽位、MarkTable 等），组装时把实例加进 `NewCompiler`
+的方言列表——编译器/执行器/缓存/resolver 零改动。元数据侧 `MysqlLoader`
+已就绪。注意：订阅(CDC)的唤醒源基于 PG 逻辑复制，MySQL 需另接 binlog。
+
 ## 当前限制
 
-- MySQL 方言仅有接口占位，未实现
+- MySQL 方言未实现（扩展方式见上节；已知驱动未注册方言会明确报错，不会静默回退）
 - 游标分页（`first/last/after/before/pageInfo`）编译期明确报错，未实现
 - 嵌套写入（`connect/disconnect`、upsert）未实现
 - 同一 mutation 内不能两次变更同一张表（变更 CTE 同名限制）
