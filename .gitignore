@@ -605,3 +605,6 @@ cython_debug/
 /.cursor/
 /.serena/
 /.cursor/
+
+# Git worktrees
+.worktrees/
