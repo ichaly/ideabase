@@ -325,6 +325,8 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 	if err != nil {
 		return nil, err
 	}
+	// fragment展开后编译器只需处理纯字段选择集
+	operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
 
 	plan, err := my.compiler.Compile(operation, variables)
 	if err != nil {

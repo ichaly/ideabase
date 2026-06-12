@@ -56,6 +56,26 @@ func (my *Plan) Args(variables map[string]interface{}) []any {
 	return args
 }
 
+// inline 展开选择集中的fragment（命名与内联），编译器只需处理纯字段
+// fragment重复引用时展开是幂等的（展开后不再有spread）
+func inline(set ast.SelectionSet, fragments ast.FragmentDefinitionList) ast.SelectionSet {
+	out := make(ast.SelectionSet, 0, len(set))
+	for _, selection := range set {
+		switch s := selection.(type) {
+		case *ast.Field:
+			s.SelectionSet = inline(s.SelectionSet, fragments)
+			out = append(out, s)
+		case *ast.FragmentSpread:
+			if fragment := fragments.ForName(s.Name); fragment != nil {
+				out = append(out, inline(fragment.SelectionSet, fragments)...)
+			}
+		case *ast.InlineFragment:
+			out = append(out, inline(s.SelectionSet, fragments)...)
+		}
+	}
+	return out
+}
+
 // Compile 编译GraphQL操作为执行计划
 func (my *Compiler) Compile(operation *ast.OperationDefinition, variables map[string]interface{}) (*Plan, error) {
 	ctx := compiler.NewContext(my.meta, my.dialect.Quotation(), variables)

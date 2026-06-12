@@ -112,6 +112,35 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Empty(t, users["items"])
 }
 
+// TestExecutorFragments fragment展开：命名/嵌套/内联fragment正确编译进SQL
+func TestExecutorFragments(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	reply := executor.Execute(ctx, `mutation { createUser(input: { name: "F", email: "f@x.com" }) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "准备数据失败: %v", reply.Errors)
+
+	reply = executor.Execute(ctx, `
+		fragment UserCore on User { id name }
+		fragment UserFull on User { ...UserCore email }
+		query {
+			users {
+				items { ...UserFull }
+				... on UserResult { total }
+			}
+		}
+	`, nil, "")
+	require.Empty(t, reply.Errors, "fragment查询失败: %v", reply.Errors)
+
+	users := reply.Data["users"].(map[string]interface{})
+	require.EqualValues(t, 1, users["total"], "内联fragment中的total应生效")
+	item := users["items"].([]interface{})[0].(map[string]interface{})
+	require.Equal(t, "F", item["name"], "嵌套fragment字段应生效")
+	require.Equal(t, "f@x.com", item["email"])
+	require.NotNil(t, item["id"])
+}
+
 // TestExecutorRelationOps 嵌套写入真库验证：创建挂接、多对多connect/disconnect原子完成
 func TestExecutorRelationOps(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
