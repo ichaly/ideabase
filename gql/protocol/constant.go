@@ -114,6 +114,8 @@ const (
 	descILike              = "Value matching (case-insensitive) pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values not having 'r' in second position"
 	descRegex              = "Value matching regular pattern"
 	descIRegex             = "Value matching (case-insensitive) regex pattern"
+	descContains           = "JSON value contains the given JSON (jsonb @>, GIN-indexable)"
+	descContainedIn        = "JSON value is contained in the given JSON (jsonb <@)"
 	descHasKey             = "Value is a JSON object with the specified key"
 	descHasKeyAny          = "Value is a JSON object with any of the specified keys"
 	descHasKeyAll          = "Value is a JSON object with all of the specified keys"
@@ -140,6 +142,8 @@ const (
 	I_LIKE      = "iLike"
 	REGEX       = "regex"
 	I_REGEX     = "iRegex"
+	CONTAINS     = "contains"
+	CONTAINED_IN = "containedIn"
 	HAS_KEY     = "hasKey"
 	HAS_KEY_ANY = "hasKeyAny"
 	HAS_KEY_ALL = "hasKeyAll"
@@ -218,6 +222,8 @@ var Operators = []*Operator{
 	{Name: I_LIKE, Value: "ilike", Description: descILike},
 	{Name: REGEX, Value: "~", Description: descRegex},
 	{Name: I_REGEX, Value: "~*", Description: descIRegex},
+	{Name: CONTAINS, Value: "@>", Description: descContains},
+	{Name: CONTAINED_IN, Value: "<@", Description: descContainedIn},
 	{Name: HAS_KEY, Value: "?", Description: descHasKey},
 	{Name: HAS_KEY_ANY, Value: "?|", Description: descHasKeyAny},
 	{Name: HAS_KEY_ALL, Value: "?&", Description: descHasKeyAll},
@@ -229,9 +235,9 @@ var Grouping = map[string][]*Operator{
 	SCALAR_INT:       Operators[:8],                                                      //[is,eq,in,gt,ge,lt,le,ne]
 	SCALAR_FLOAT:     Operators[:8],                                                      //[is,eq,in,gt,ge,lt,le,ne]
 	SCALAR_DATE_TIME: Operators[:8],                                                      //[is,eq,in,gt,ge,lt,le,ne]
-	SCALAR_STRING:    Operators,                                                          //全部
+	SCALAR_STRING:    Operators[:12],                                                      //[is..iRegex]
 	SCALAR_BOOLEAN:   Operators[1:3],                                                     //[eq,in]
-	SCALAR_JSON:      append(append([]*Operator{}, Operators[:3]...), Operators[12:]...), //[is,eq,in,hasKey,hasKeyAny,hasKeyAll] 先拷贝避免共享底层数组
+	SCALAR_JSON:      append(append([]*Operator{}, Operators[:3]...), Operators[12:]...), //[is,eq,in,contains,containedIn,hasKey,hasKeyAny,hasKeyAll] 先拷贝避免共享底层数组
 }
 
 // Scalars 内置标量类型集合

@@ -610,6 +610,7 @@ func (my *Renderer) renderQuery() error {
 				{Name: ID, Type: SCALAR_ID},
 				{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
 				{Name: SORT, Type: "[" + className + SUFFIX_SORT_INPUT + "!]"},
+				{Name: DISTINCT, Type: "[" + SCALAR_STRING + "!]"},
 				{Name: LIMIT, Type: SCALAR_INT},
 				{Name: OFFSET, Type: SCALAR_INT},
 				{Name: FIRST, Type: SCALAR_INT},

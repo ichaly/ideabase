@@ -51,7 +51,8 @@ func (my *_DialectSuite) SetupSuite() {
 				"id":    {Type: "ID", Column: "id", IsPrimary: true},
 				"name":  {Type: "String", Column: "name"},
 				"email": {Type: "String", Column: "email"},
-				"age":   {Type: "Int", Column: "age", IsNullable: true},
+				"age":      {Type: "Int", Column: "age", IsNullable: true},
+				"metadata": {Type: "Json", Column: "metadata", IsNullable: true},
 			},
 		},
 		"Post": {

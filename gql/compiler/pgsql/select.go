@@ -306,6 +306,18 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	for _, column := range sortColumns(sc, u.args) {
 		appendColumn(column)
 	}
+	distinct, err := distinctColumns(sc, u.args)
+	if err != nil {
+		return err
+	}
+	if len(distinct) > 0 {
+		if u.page != nil {
+			return fmt.Errorf("distinct与游标分页不能同时使用")
+		}
+		for _, column := range distinct {
+			appendColumn(column)
+		}
+	}
 	if u.page != nil {
 		for _, key := range u.page.keys {
 			appendColumn(key.column)
@@ -355,8 +367,18 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		ctx.Quote(`__sj_`, child.unit.index).Write(`."json"`).Space(`AS`).Quote(child.alias)
 	}
 
-	// 基础查询
+	// 基础查询；DISTINCT ON要求排序以去重列开头（PG规则）
 	ctx.Space(`FROM (SELECT`)
+	if len(distinct) > 0 {
+		ctx.Write(` DISTINCT ON (`)
+		for i, column := range distinct {
+			if i > 0 {
+				ctx.Write(`, `)
+			}
+			ctx.Quote(u.class.Table).Write(`.`).Quote(column)
+		}
+		ctx.Write(`) `)
+	}
 	for i, column := range columns {
 		if i > 0 {
 			ctx.SpaceAfter(`,`)
@@ -422,14 +444,36 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		}
 		ctx.Space(`LIMIT`).Write(u.page.limit + 1)
 	} else {
+		switch {
+		case len(distinct) > 0:
+			// DISTINCT ON：去重列前置排序，用户sort追加其后
+			if search != nil {
+				return fmt.Errorf("distinct与search不能同时使用")
+			}
+			ctx.Space(`ORDER BY`)
+			for i, column := range distinct {
+				if i > 0 {
+					ctx.Write(`, `)
+				}
+				ctx.Quote(u.class.Table).Write(`.`).Quote(column)
+			}
+			for _, child := range sortEntries(u.args) {
+				column := sc.column(child.Name)
+				ctx.Write(`, `).Quote(u.class.Table).Write(`.`).Quote(column)
+				if child.Value != nil && child.Value.Raw != "" {
+					ctx.SpaceBefore(directions[strings.ToUpper(child.Value.Raw)])
+				}
+			}
 		// 无显式排序时按搜索相关度降序
-		if search != nil && len(sortEntries(u.args)) == 0 {
+		case search != nil && len(sortEntries(u.args)) == 0:
 			ctx.Space(`ORDER BY`)
 			if _, err = search.buildRank(my, ctx, sc); err != nil {
 				return err
 			}
-		} else if err = my.buildOrderBy(ctx, sc, u.args); err != nil {
-			return err
+		default:
+			if err = my.buildOrderBy(ctx, sc, u.args); err != nil {
+				return err
+			}
 		}
 		if err = my.buildLimit(ctx, u); err != nil {
 			return err
@@ -508,6 +552,28 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 	}
 
 	return nil
+}
+
+// distinctColumns 解析distinct参数为列列表（须为实体真实列）
+func distinctColumns(sc scope, args ast.ArgumentList) ([]string, error) {
+	arg := args.ForName(protocol.DISTINCT)
+	if arg == nil || arg.Value == nil {
+		return nil, nil
+	}
+	values := arg.Value.Children
+	if len(values) == 0 && arg.Value.Raw != "" { // 单值写法
+		values = []*ast.ChildValue{{Value: arg.Value}}
+	}
+	columns := make([]string, 0, len(values))
+	for _, child := range values {
+		name := child.Value.Raw
+		field, ok := sc.class.Fields[name]
+		if !ok || field.Column == "" {
+			return nil, fmt.Errorf("distinct包含无效字段: %s", name)
+		}
+		columns = append(columns, field.Column)
+	}
+	return columns, nil
 }
 
 // fieldsOf 提取选择集中的字段列表

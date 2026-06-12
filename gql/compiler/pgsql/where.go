@@ -175,6 +175,18 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, opChild *ast.ChildValue)
 	}
 
 	switch opChild.Name {
+	case protocol.CONTAINS, protocol.CONTAINED_IN:
+		// jsonb包含：参数统一序列化为JSON文本并cast
+		if value.Kind == ast.Variable {
+			ctx.Write(my.Placeholder(ctx.AddVariable(value.Raw)), `::jsonb`)
+			return nil
+		}
+		val, err := value.Value(nil)
+		if err != nil {
+			return err
+		}
+		ctx.Write(my.Placeholder(ctx.AddParam(normalizeArg(val))), `::jsonb`)
+		return nil
 	case protocol.IN, protocol.NI:
 		ctx.Write("(")
 		if value.Kind == ast.ListValue {

@@ -72,3 +72,36 @@ func (my *_DialectSuite) TestSearchGuards() {
 	_, _, err = compile.Build(doc.Operations[0], nil)
 	my.Assert().ErrorContains(err, "必须显式sort")
 }
+
+// TestDistinctAndJsonb distinct去重与jsonb包含操作符
+func (my *_DialectSuite) TestDistinctAndJsonb() {
+	cases := []Case{
+		{
+			name:  "distinct去重并前置排序",
+			query: `query { users(distinct: ["name"], sort: { age: DESC }) { items { id name } } }`,
+			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name"
+						FROM (SELECT DISTINCT ON ("sys_user"."name") "sys_user"."id", "sys_user"."name", "sys_user"."age" FROM sys_user
+							ORDER BY "sys_user"."name", "sys_user"."age" DESC) AS "sys_user_0"
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+		{
+			name:  "jsonb包含操作符",
+			query: `query { users(where: { metadata: { contains: { vip: true } } }) { items { id } } }`,
+			args:  []any{`{"vip":true}`},
+			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id"
+						FROM (SELECT "sys_user"."id" FROM sys_user WHERE "sys_user"."metadata" @> $1::jsonb) AS "sys_user_0"
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+	}
+	my.runCases(cases)
+}

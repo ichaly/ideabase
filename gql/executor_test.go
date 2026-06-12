@@ -113,6 +113,23 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Empty(t, users["items"])
 }
 
+// TestExecutorDistinct distinct真库验证
+func TestExecutorDistinct(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	reply := executor.Execute(ctx, `mutation { createUsers(input: [
+		{ name: "X", email: "x1@x.com" }, { name: "X", email: "x2@x.com" }, { name: "Y", email: "y@x.com" }
+	]) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+
+	reply = executor.Execute(ctx, `query { users(distinct: ["name"]) { items { name } } }`, nil, "")
+	require.Empty(t, reply.Errors, "distinct查询失败: %v", reply.Errors)
+	items := reply.Data["users"].(map[string]interface{})["items"].([]interface{})
+	require.Len(t, items, 2, "按name去重应得2行")
+}
+
 // TestExecutorBulk 批量插入/upsert/嵌套创建真库验证
 func TestExecutorBulk(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)

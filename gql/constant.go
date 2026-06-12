@@ -100,6 +100,8 @@ const (
 	I_LIKE      = protocol.I_LIKE
 	REGEX       = protocol.REGEX
 	I_REGEX     = protocol.I_REGEX
+	CONTAINS     = protocol.CONTAINS
+	CONTAINED_IN = protocol.CONTAINED_IN
 	HAS_KEY     = protocol.HAS_KEY
 	HAS_KEY_ANY = protocol.HAS_KEY_ANY
 	HAS_KEY_ALL = protocol.HAS_KEY_ALL
