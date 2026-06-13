@@ -226,13 +226,17 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 	ctx.Write(` ON CONFLICT (`)
 	writeColumns(ctx, "", conflicts)
 	ctx.Write(`) DO UPDATE SET `)
-	conflictSet := make(map[string]bool, len(conflicts))
+	// 冲突列与作用域列都不进SET：作用域列租户/属主归属不可变更
+	skip := make(map[string]bool, len(conflicts)+len(m.class.Scope))
 	for _, column := range conflicts {
-		conflictSet[column] = true
+		skip[column] = true
+	}
+	for _, rule := range m.class.Scope {
+		skip[rule.Column] = true
 	}
 	written := 0
 	for _, column := range columns {
-		if conflictSet[column] {
+		if skip[column] {
 			continue
 		}
 		if written > 0 {
@@ -243,6 +247,15 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 	}
 	if written == 0 {
 		return fmt.Errorf("upsert没有可更新的非冲突列")
+	}
+	// 只更新属于当前作用域的冲突行：别租户/别属主的冲突行WHERE不满足→不更新（防主键劫持）
+	for i, rule := range m.class.Scope {
+		if i == 0 {
+			ctx.Space(`WHERE`)
+		} else {
+			ctx.Space(`AND`)
+		}
+		my.scopeCondition(ctx, m.class.Table, rule)
 	}
 	ctx.Write(` RETURNING *`)
 	return nil
@@ -355,14 +368,7 @@ func (my *Dialect) buildMutationWhere(ctx *compiler.Context, class *protocol.Cla
 		return fmt.Errorf("%s需要id或where条件", field.Name)
 	}
 	// 行级作用域：update/delete 强制 AND 作用域，只能改本租户/属主的行
-	var conjuncts []func() error
-	for _, rule := range class.Scope {
-		conjuncts = append(conjuncts, func() error {
-			my.scopeCondition(ctx, sc.qualifier, rule)
-			return nil
-		})
-	}
-	return my.buildWhere(ctx, sc, field.Arguments, conjuncts...)
+	return my.buildWhere(ctx, sc, field.Arguments, my.scopeConjuncts(ctx, sc.qualifier, class)...)
 }
 
 // applyScope 给每行强制填充作用域列=上下文值（覆盖客户端传值，防越租户/越属主创建）
@@ -497,6 +503,13 @@ func writableColumn(class *protocol.Class, name string) (string, error) {
 	f, ok := class.Fields[name]
 	if !ok || f.Column == "" {
 		return "", fmt.Errorf("input包含未知或不可写字段: %s", name)
+	}
+	// 作用域列由服务端强制填充，编译器层硬拒绝客户端写入（schema排除只挡字面量路径，
+	// 整体变量input绕过schema校验，须在此堵住——否则可篡改租户/属主归属）
+	for _, rule := range class.Scope {
+		if f.Column == rule.Column {
+			return "", fmt.Errorf("input不能包含作用域列（由服务端强制填充）: %s", name)
+		}
 	}
 	return f.Column, nil
 }

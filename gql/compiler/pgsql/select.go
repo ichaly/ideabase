@@ -440,12 +440,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	// 行级作用域：实体声明scope时强制注入 列=上下文值（租户/属主隔离）；
 	// 读基表的查询单元才注入，变更读回顶层单元读CTE跳过
 	if !u.readback {
-		for _, rule := range u.class.Scope {
-			conjuncts = append(conjuncts, func() error {
-				my.scopeCondition(ctx, sc.qualifier, rule)
-				return nil
-			})
-		}
+		conjuncts = append(conjuncts, my.scopeConjuncts(ctx, sc.qualifier, u.class)...)
 	}
 	if err = my.buildWhere(ctx, sc, u.args, conjuncts...); err != nil {
 		return err

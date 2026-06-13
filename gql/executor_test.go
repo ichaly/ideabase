@@ -602,4 +602,18 @@ func TestExecutorScope(t *testing.T) {
 	reply = executor.Execute(ctx1, `mutation { updateUser(input: { name: "own" }, where: { name: { eq: "new1" } }) { id name } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	require.Equal(t, "own", reply.Data["updateUser"].(map[string]interface{})["name"], "租户1 改自己的行成功")
+
+	// 安全回归：客户端整体变量 input 偷传作用域列 → 编译器层硬拒绝（堵整体变量绕过 schema）
+	reply = executor.Execute(ctx1, `mutation ($i: UserUpdateInput!) { updateUser(input: $i, where: { name: { eq: "own" } }) { id } }`,
+		map[string]any{"i": map[string]any{"name": "z", "tenantId": 2}}, "")
+	require.NotEmpty(t, reply.Errors, "偷传作用域列应被拒绝")
+	require.Contains(t, reply.Errors[0].Message, "作用域列")
+	require.NoError(t, db.Raw(`SELECT name FROM users WHERE id = ?`, newID).Scan(&name).Error)
+	require.Equal(t, "own", name, "被拒绝后行未被篡改")
+
+	// 安全回归：别租户用本租户行的唯一键 upsert → DO UPDATE 被作用域 WHERE 阻止，不劫持
+	reply = executor.Execute(ctx2, `mutation { upsertUsers(input: [{ name: "hijacked", email: "new1@x.com" }], on: ["email"]) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.NoError(t, db.Raw(`SELECT name, tenant_id FROM users WHERE email = 'new1@x.com'`).Row().Scan(&name, new(int)))
+	require.Equal(t, "own", name, "租户2 不应劫持租户1 的行（DO UPDATE 被作用域 WHERE 阻止）")
 }

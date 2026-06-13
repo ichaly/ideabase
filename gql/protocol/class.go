@@ -56,5 +56,6 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		PrimaryKeys: my.PrimaryKeys,
 		Description: my.Description,
 		Search:      my.Search,
+		Scope:       my.Scope, // 作用域随元数据序列化，文件缓存路径不丢隔离配置
 	})
 }

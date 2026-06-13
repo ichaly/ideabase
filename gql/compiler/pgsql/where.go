@@ -260,3 +260,15 @@ func (my *Dialect) scopeCondition(ctx *compiler.Context, qualifier string, rule 
 	ctx.Column(qualifier, rule.Column).Write(` = `)
 	ctx.Write(my.Placeholder(ctx.AddContextSlot(rule.Context)))
 }
+
+// scopeConjuncts 实体行级作用域的合取条件（每条 列=上下文值），查询/变更WHERE注入共用
+func (my *Dialect) scopeConjuncts(ctx *compiler.Context, qualifier string, class *protocol.Class) []func() error {
+	conjuncts := make([]func() error, len(class.Scope))
+	for i, rule := range class.Scope {
+		conjuncts[i] = func() error {
+			my.scopeCondition(ctx, qualifier, rule)
+			return nil
+		}
+	}
+	return conjuncts
+}

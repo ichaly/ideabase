@@ -119,7 +119,7 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 		newClass.Search = classConfig.Search
 	}
 	for _, s := range classConfig.Scope {
-		newClass.Scope = append(newClass.Scope, protocol.ScopeRule{Column: s.Column, Context: s.Context})
+		newClass.Scope = append(newClass.Scope, protocol.ScopeRule(s)) // 字段同构，直接转换
 	}
 	my.applyFieldFilter(newClass, classConfig)
 	if err := my.applyFieldConfig(newClass, classConfig.Fields); err != nil {
