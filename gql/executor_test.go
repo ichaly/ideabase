@@ -627,3 +627,50 @@ func TestExecutorScope(t *testing.T) {
 	require.NotZero(t, statsCount, "租户1 应有数据")
 	require.EqualValues(t, queryTotal, statsCount, "统计聚合应与查询同样按作用域隔离，不泄露全表")
 }
+
+// TestExecutorScopeRelation 关系挂接的作用域隔离真库验证：
+// m2m connect 经 SELECT...AND scope 校验，不能挂接别租户的目标行（防跨租户关联）
+func TestExecutorScopeRelation(t *testing.T) {
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+	require.NoError(t, db.Exec(`ALTER TABLE posts ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
+	require.NoError(t, db.Exec(`ALTER TABLE tags ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
+
+	k, err := std.NewKonfig()
+	require.NoError(t, err)
+	k.Set("mode", "dev")
+	k.Set("app.root", t.TempDir())
+	k.Set("schema.schema", "public")
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+		"Post": {Table: "posts", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+		"Tag":  {Table: "tags", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+	})
+	meta, err := NewMetadata(k, db)
+	require.NoError(t, err)
+	compile, err := NewCompiler(meta, nil)
+	require.NoError(t, err)
+	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	require.NoError(t, err)
+
+	// 租户1 的 post 与 tag1，租户2 的 tag2
+	require.NoError(t, db.Exec(`INSERT INTO users (id, name, email) VALUES (1, 'u', 'u@x.com')`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO posts (id, title, user_id, tenant_id) VALUES (1, 'p1', 1, 1)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO tags (id, name, tenant_id) VALUES (1, 't1', 1), (2, 't2', 2)`).Error)
+
+	ctx1 := WithScope(context.Background(), map[string]any{"tenant": 1})
+	count := func(tagID int) int {
+		var c int
+		require.NoError(t, db.Raw(`SELECT COUNT(*) FROM post_tags WHERE post_id=1 AND tag_id=?`, tagID).Scan(&c).Error)
+		return c
+	}
+
+	// 租户1 想挂接租户2 的 tag2 → 校验后不建立关联
+	reply := executor.Execute(ctx1, `mutation { updatePost(input: { tags: { connect: [2] } }, id: 1) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, 0, count(2), "不应建立到别租户 tag 的关联（跨租户挂接被阻止）")
+
+	// 租户1 挂接本租户 tag1 → 成功
+	reply = executor.Execute(ctx1, `mutation { updatePost(input: { tags: { connect: [1] } }, id: 1) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, 1, count(1), "应能挂接本租户 tag")
+}
