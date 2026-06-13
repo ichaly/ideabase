@@ -371,14 +371,12 @@ func (my *Dialect) buildMutationWhere(ctx *compiler.Context, class *protocol.Cla
 	return my.buildWhere(ctx, sc, field.Arguments, my.scopeConjuncts(ctx, sc.qualifier, class)...)
 }
 
-// applyScope 给每行强制填充作用域列=上下文值（覆盖客户端传值，防越租户/越属主创建）
+// applyScope 给每行填充作用域列=上下文值（客户端值已被writableColumn拒绝，此处直接填）
 func (my *Dialect) applyScope(class *protocol.Class, rows []inputRow) {
 	for _, rule := range class.Scope {
 		for i := range rows {
 			row := &rows[i]
-			if _, has := row.values[rule.Column]; !has {
-				row.columns = append(row.columns, rule.Column)
-			}
+			row.columns = append(row.columns, rule.Column)
 			row.values[rule.Column] = func(c *compiler.Context) error {
 				c.Write(my.Placeholder(c.AddContextSlot(rule.Context)))
 				return nil

@@ -74,10 +74,9 @@ func (my *_DialectSuite) TestScopeNested() {
 	sql, _, err := compile.Build(doc.Operations[0], nil)
 	my.Require().NoError(err)
 
-	// 两个单元各自表名限定，scope 各注入一个独立槽位
-	my.Assert().Contains(sql, `"sys_post"."tenant_id" =`)
-	my.Assert().Contains(sql, `"sys_user"."tenant_id" =`)
-	my.T().Logf("嵌套SQL:\n%s", sql)
+	// 两个单元各自表名限定；同上下文键(tenant)dedup 共享一个槽位 $1（免膨胀）
+	my.Assert().Contains(sql, `"sys_post"."tenant_id" = $1`)
+	my.Assert().Contains(sql, `"sys_user"."tenant_id" = $1`)
 }
 
 // TestScopeRecursive 递归全树作用域：递归CTE的起始层与步进层都注入scope，

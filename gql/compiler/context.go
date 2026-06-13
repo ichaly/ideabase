@@ -23,7 +23,8 @@ type Context struct {
 	volatile  bool
 	hoster    protocol.Hoster
 	variables map[string]interface{}
-	tables    []string // 涉及的表（去重slice，表数极少；省去map与Keys分配）
+	tables    []string       // 涉及的表（去重slice，表数极少；省去map与Keys分配）
+	contexts  map[string]int // 行级作用域槽位dedup：同上下文键复用一个$N（批量场景免槽位膨胀）
 }
 
 // Slot 表示SQL参数槽位：字面量值或变量引用
@@ -87,6 +88,7 @@ func (my *Context) Release() {
 	my.hoster = nil
 	my.variables = nil
 	my.tables = nil
+	my.contexts = nil
 	my.slots = my.slots[:0]
 	contextPool.Put(my)
 }
@@ -203,10 +205,19 @@ func (my *Context) AddVariable(name string) int {
 	return len(my.slots)
 }
 
-// AddContextSlot 添加上下文参数槽位：执行期从scope表按key取值（行级作用域）
+// AddContextSlot 添加上下文参数槽位：执行期从scope表按key取值（行级作用域）。
+// 同一key复用一个槽位（值全局相同）——批量写入每行同列共享$N，免槽位膨胀
 func (my *Context) AddContextSlot(key string) int {
-	my.slots = append(my.slots, Slot{Context: key, Cursor: -1})
-	return len(my.slots)
+	if idx, ok := my.contexts[key]; ok {
+		return idx
+	}
+	my.slots = append(my.slots, Slot{Context: key})
+	idx := len(my.slots)
+	if my.contexts == nil {
+		my.contexts = make(map[string]int)
+	}
+	my.contexts[key] = idx
+	return idx
 }
 
 // AddCursor 添加游标键值参数：执行期解码变量游标取第index个键值
