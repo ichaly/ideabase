@@ -608,3 +608,6 @@ cython_debug/
 
 # Git worktrees
 .worktrees/
+
+# demo编译产物
+/gql/example/example

@@ -83,11 +83,12 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 }
 
 // hosts 按路径收集宿主对象，数组层级自动展开
-// 单遍原地复用工作切片，无interface{}装箱中间层
+// 单遍直收map，无interface{}装箱中间层；每段新建next切片
+// （不可复用cur底层数组：数组段展开后宿主数可超上层，原地append会覆写未读元素）
 func hosts(root map[string]interface{}, path []string) []map[string]interface{} {
 	cur := []map[string]interface{}{root}
 	for _, segment := range path {
-		next := cur[:0] // 复用底层数组：next长度恒不超过cur
+		var next []map[string]interface{}
 		for _, node := range cur {
 			switch value := node[segment].(type) {
 			case []interface{}:

@@ -40,10 +40,19 @@ func (sign) ResolveBatch(ctx context.Context, sources []map[string]any, args map
 	return values, nil
 }
 
-func main() {
-	// 1. 配置：实体增强（搜索列、resolver虚拟字段）——生产中可放config.yml，键名一致
+// demoDSN demo数据库连接串（docker compose暴露5433），可用DEMO_DSN覆盖
+func demoDSN() string {
+	return cmp.Or(os.Getenv("DEMO_DSN"), "host=localhost port=5433 user=demo password=demo dbname=demo sslmode=disable")
+}
+
+// buildExecutor 装配完整引擎：配置 -> 元数据 -> 编译器（方言自注册） -> 执行器 + resolver
+// main与性能测试共用，保证基准跑的就是demo实际装配
+func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
+	// 配置：实体增强（搜索列、resolver虚拟字段）——生产中可放config.yml，键名一致
 	k, err := std.NewKonfig()
-	die(err)
+	if err != nil {
+		return nil, err
+	}
 	k.Set("mode", "dev")
 	k.Set("app.root", ".") // schema.graphql与元数据缓存输出到 ./cfg
 	k.Set("metadata.classes", map[string]*gql.ClassConfig{
@@ -58,24 +67,33 @@ func main() {
 		"Post": {Table: "posts", Search: []string{"title", "content"}},
 	})
 
-	// 2. 数据库连接（docker compose暴露5433）
-	dsn := cmp.Or(os.Getenv("DEMO_DSN"), "host=localhost port=5433 user=demo password=demo dbname=demo sslmode=disable")
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	die(err)
-
-	// 3. 引擎装配：元数据 -> 编译器（方言自注册） -> 执行器
 	meta, err := gql.NewMetadata(k, db)
-	die(err)
+	if err != nil {
+		return nil, err
+	}
 	compiler, err := gql.NewCompiler(meta, nil)
-	die(err)
+	if err != nil {
+		return nil, err
+	}
 	executor, err := gql.NewExecutor(db, gql.NewRenderer(meta), meta, compiler)
+	if err != nil {
+		return nil, err
+	}
+	executor.Register(sign{}) // 注册自定义resolver
+	return executor, nil
+}
+
+func main() {
+	// 1. 数据库连接 + 引擎装配
+	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
+	die(err)
+	executor, err := buildExecutor(db)
 	die(err)
 
-	// 4. 注册自定义resolver、加载持久化查询文档
-	executor.Register(sign{})
+	// 2. 加载持久化查询文档
 	die(executor.LoadDocuments("./queries"))
 
-	// 5. HTTP服务：POST /graphql 查询变更，GET /graphql 订阅WebSocket升级
+	// 3. HTTP服务：POST /graphql 查询变更，GET /graphql 订阅WebSocket升级
 	app := fiber.New()
 	executor.Bind(app.Group(executor.Path()))
 

@@ -12,6 +12,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestHostsNestedArrays 宿主拍平：连续两层数组段（一对多里嵌一对多）须收齐全部叶子宿主。
+// 回归——单元素cur首段侥幸安全，多元素cur上原地复用底层数组会覆写未读元素
+func TestHostsNestedArrays(t *testing.T) {
+	const width = 8
+	items := make([]interface{}, width)
+	for i := 0; i < width; i++ {
+		children := make([]interface{}, width)
+		for j := 0; j < width; j++ {
+			children[j] = map[string]interface{}{"id": i*width + j}
+		}
+		items[i] = map[string]interface{}{"children": children}
+	}
+	root := map[string]interface{}{"items": items}
+
+	got := hosts(root, []string{"items", "children"})
+	require.Len(t, got, width*width, "两层数组段应收齐全部叶子宿主")
+
+	seen := make(map[int]bool, len(got))
+	for _, host := range got {
+		seen[host["id"].(int)] = true
+	}
+	require.Len(t, seen, width*width, "宿主不得重复或丢失（原地复用会覆写）")
+}
+
 // greetResolver 单对象解析器：拼接问候语
 type greetResolver struct{}
 

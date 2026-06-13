@@ -107,6 +107,25 @@ executor.Register(Greet{})
 > 列表场景下 `Resolve` 会被**并发调用**（有界并发），实现须线程安全；
 > 有状态或需要共享资源的逻辑请实现 `BatchResolver`（整批单次调用，无并发约束）。
 
+### 批量机制：resolver 如何不产生 N+1
+
+关系嵌套的 N+1 由单条 SQL 根除；resolver 在 SQL 之外，靠**整结果集批量收集 +
+一次调用**消除 N+1。三步：
+
+1. **绑定收集**（编译期，`collectBindings`）：遍历查询 AST，为每个 resolver 字段
+   记一条 `binding{Path, Field, Name}`。`Path` 是从 data 根到宿主对象的别名路径，
+   数组层级（`items`、一对多关系）留到执行期展开；该字段在 SQL 编译期被跳过，
+   保证 schema=能力=自省一致。
+2. **宿主拍平**（执行期，`hosts`）：SQL 查完拿到完整结果树后，沿 `Path` 把这个
+   resolver 要填充的**所有**宿主对象——无论分布在多少行、多少层嵌套里——一次性
+   收集成一个扁平数组 `sources`。
+3. **批量调用**（`resolve`）：实现了 `BatchResolver` 则 `ResolveBatch(sources)`
+   **一次**处理全部 N 个宿主（内部可 `WHERE id IN (...)` 一把查完，N+1→1+1）；
+   仅普通 `Resolver` 则退化为逐宿主调用，但走有界并发（8）兜底。
+
+关键：批量是**跨整个结果集**的，不是每行一批——深层嵌套里的 resolver 字段也只
+调用一次（e2e 有调用次数断言，微基准 `BenchmarkHosts` 固化拍平开销）。
+
 ## 订阅（CDC 驱动）
 
 订阅基于 **WAL 逻辑复制（CDC）**：引擎维持一条复制连接（pgoutput 内置插件 +
@@ -152,6 +171,28 @@ services:
 - 编译计划 LRU 缓存（默认 512），key 为操作名+查询文本，变量不参与 key
 - 编译上下文走 `sync.Pool`，热路径零反射
 - 整体 `input` 变量的变更依赖变量内容，自动跳过缓存（volatile）
+- 响应直通：无 resolver 时 DB 返回的 `__root` 字节经 `MarshalJSON` 直接拼入响应，
+  跳过「解包成 map 再序列化」往返
+- resolver 宿主拍平单遍直收、无 `interface{}` 装箱中间层
+
+### 性能基准
+
+两类基准，运行 `go test -bench=. -benchmem`：
+
+- **引擎微基准**（`gql/bench_test.go`，无需数据库）：固化上述两处优化为可回归基线。
+  Apple M1 Max 实测（50 行列表响应）：
+
+  | 基准 | ns/op | allocs/op |
+  |------|-------|-----------|
+  | `BenchmarkReplyDirect`（直通拼接） | ~3.5K | 3 |
+  | `BenchmarkReplyUnpack`（解包重序列化） | ~149K | 3243 |
+  | `BenchmarkHosts`（64 宿主拍平） | ~0.6K | 11 |
+
+  直通相对解包约 **40×**、分配降三个数量级——无 resolver 的查询（多数流量）走此路径。
+
+- **端到端基准**（`gql/example/bench_test.go`，需 demo 库在运行）：复用 demo 实际装配，
+  打真实 PostgreSQL，覆盖平铺查询、嵌套关系（单条 SQL 零 N+1）、batch resolver。
+  `cd example && go test -bench=. -benchmem -run=^$`。
 
 ## 扩展新数据库（纯新增，零修改）
 
