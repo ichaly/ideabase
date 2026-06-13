@@ -110,3 +110,33 @@ func (my *_DialectSuite) TestScopeRecursive() {
 	cnt := strings.Count(sql, `"sys_comment"."tenant_id" = $`)
 	my.Assert().GreaterOrEqual(cnt, 2, "递归起始层+步进层都应注入scope，得到 %d 次:\n%s", cnt, sql)
 }
+
+// TestScopeMulti 多条作用域：租户+当前登录人同时，各注入一条 AND
+func (my *_DialectSuite) TestScopeMulti() {
+	meta, schema, dialect := my.newSuite(map[string]interface{}{
+		"metadata.classes": map[string]*internal.ClassConfig{
+			"User": {
+				Table: "sys_user",
+				Scope: []internal.ScopeConfig{
+					{Column: "tenant_id", Context: "tenant"},
+					{Column: "owner_id", Context: "userId"},
+				},
+				Fields: map[string]*internal.FieldConfig{
+					"id":   {Type: "ID", Column: "id", IsPrimary: true},
+					"name": {Type: "String", Column: "name"},
+				},
+			},
+		},
+	})
+
+	doc, gqlErr := gqlparser.LoadQuery(schema, `query { users { items { id } } }`)
+	my.Require().Empty(gqlErr)
+	compile, err := gql.NewCompiler(meta, []compiler.Dialect{dialect})
+	my.Require().NoError(err)
+	sql, _, err := compile.Build(doc.Operations[0], nil)
+	my.Require().NoError(err)
+
+	// 两条作用域各注入一个独立槽位，AND 连接
+	my.Assert().Contains(sql, `"sys_user"."tenant_id" = $1 AND "sys_user"."owner_id" = $2`)
+	my.T().Logf("多作用域SQL片段:\n%s", sql)
+}
