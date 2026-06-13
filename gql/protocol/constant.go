@@ -40,7 +40,6 @@ const (
 	BEFORE     = "before"
 	SORT       = "sort"
 	WHERE      = "where"
-	INSERT     = "insert"
 	CREATE     = "create"
 	UPSERT     = "upsert"
 	UPDATE     = "update"
@@ -56,6 +55,13 @@ const (
 	TOTAL     = "total"
 	ITEMS     = "items"
 	PAGE_INFO = "pageInfo"
+	ON        = "on" // upsert冲突列参数
+
+	// PageInfo子字段（renderer渲染与编译器投影两侧共用）
+	HAS_NEXT = "hasNext"
+	HAS_PREV = "hasPrev"
+	START    = "start"
+	END      = "end"
 )
 
 // 聚合函数字段名常量
@@ -71,7 +77,7 @@ const (
 
 // 内置枚举类型
 const (
-	ENUM_IS_INPUT   = "IsInput"
+	ENUM_IS_INPUT = "IsInput"
 )
 
 // 内置标量类型
@@ -113,21 +119,21 @@ const (
 )
 
 const (
-	IS          = "is"
-	EQ          = "eq"
-	IN          = "in"
-	GT          = "gt"
-	GE          = "ge"
-	LT          = "lt"
-	LE          = "le"
-	NE          = "ne"
-	LIKE        = "like"
-	I_LIKE      = "iLike"
-	REGEX       = "regex"
-	I_REGEX     = "iRegex"
+	IS           = "is"
+	EQ           = "eq"
+	IN           = "in"
+	GT           = "gt"
+	GE           = "ge"
+	LT           = "lt"
+	LE           = "le"
+	NE           = "ne"
+	LIKE         = "like"
+	I_LIKE       = "iLike"
+	REGEX        = "regex"
+	I_REGEX      = "iRegex"
 	CONTAINS     = "contains"
 	CONTAINED_IN = "containedIn"
-	HAS_KEY     = "hasKey"
+	HAS_KEY      = "hasKey"
 )
 
 // DataTypes 内置的数据库到GraphQL的类型映射
@@ -228,9 +234,6 @@ var Grouping = map[string][]*Operator{
 	SCALAR_BOOLEAN:   pick(EQ, IN),
 	SCALAR_JSON:      pick(IS, EQ, IN, CONTAINS, CONTAINED_IN, HAS_KEY),
 }
-
-// Scalars 内置标量类型集合
-var Scalars = []string{SCALAR_ID, SCALAR_INT, SCALAR_FLOAT, SCALAR_STRING, SCALAR_BOOLEAN}
 
 // 运算符按照名字索引字典
 var dictionary = lo.KeyBy(Operators, func(op *Operator) string {

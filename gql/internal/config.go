@@ -80,9 +80,6 @@ type ClassConfig struct {
 	// 主键列表
 	PrimaryKeys []string `mapstructure:"primary_keys"`
 
-	// 类级别自定义Resolver
-	Resolver string `mapstructure:"resolver"`
-
 	// 字段定义 (使用字段名作为键)
 	Fields map[string]*FieldConfig `mapstructure:"fields"`
 

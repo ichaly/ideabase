@@ -28,17 +28,3 @@ const (
 	ONE_TO_MANY  RelationType = "OneToMany"  // 一对多关系
 	MANY_TO_MANY RelationType = "ManyToMany" // 多对多关系
 )
-
-// Parse 从字符串转换为关系类型
-func (my RelationType) Parse(kind string) RelationType {
-	switch kind {
-	case string(ONE_TO_MANY):
-		return ONE_TO_MANY
-	case string(MANY_TO_MANY):
-		return MANY_TO_MANY
-	case string(RECURSIVE):
-		return RECURSIVE
-	default:
-		return MANY_TO_ONE // 默认为多对一
-	}
-}

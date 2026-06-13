@@ -75,7 +75,6 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		// 4. 虚拟类
 		"Statistics": {
 			Description: "统计数据",
-			Resolver:    "StatisticsResolver",
 			Fields: map[string]*internal.FieldConfig{
 				"totalUsers": {
 					Type:        "integer",
@@ -148,7 +147,6 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		assert.True(t, class.Virtual)
 		assert.Equal(t, "", class.Table)
 		assert.Equal(t, "统计数据", class.Description)
-		assert.Equal(t, "StatisticsResolver", class.Resolver)
 		assertField(t, class, "totalUsers", "", "integer", false, false, false, "用户总数", "CountUsersResolver")
 		assertField(t, class, "activeUsers", "", "integer", false, false, false, "活跃用户数", "CountActiveUsersResolver")
 	})

@@ -146,18 +146,12 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	}
 
 	sr := func() *compiler.Context { return ctx.Quote(`__sr_`, u.index) }
-	written := 0
-	comma := func() {
-		if written > 0 {
-			ctx.Write(`, `)
-		}
-		written++
-	}
+	next := comma(ctx)
 
 	// 响应只含选择的字段：items未请求（仅total）时不输出
 	ctx.Write(`SELECT JSONB_BUILD_OBJECT(`)
 	if len(items) > 0 {
-		comma()
+		next()
 		// items聚合：游标模式剔除辅助列、按行号FILTER并保持显示顺序
 		ctx.Write(`'`, protocol.ITEMS, `', COALESCE(JSONB_AGG(`)
 		if page == nil {
@@ -184,17 +178,17 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	}
 
 	if hasTotal {
-		comma()
+		next()
 		ctx.Write(`'`, protocol.TOTAL, `', COALESCE(MIN(`)
 		sr().Write(`."__total"), 0)`)
 	}
 	if pageInfo != nil {
-		comma()
+		next()
 		ctx.Write(`'`, pageInfo.Alias, `', `)
 		my.buildPageInfo(ctx, u, pageInfo)
 	}
 	for _, f := range typeNames {
-		comma()
+		next()
 		ctx.Write(`'`, f.Alias, `', '`, u.class.Name, protocol.SUFFIX_RESULT, `'`)
 	}
 	ctx.Write(`) AS "json" FROM (`)
@@ -240,21 +234,21 @@ func (my *Dialect) buildPageInfo(ctx *compiler.Context, u *unit, field *ast.Fiel
 		switch f.Name {
 		case typename:
 			ctx.Write(`'`, protocol.TYPE_PAGE_INFO, `'`)
-		case "hasNext":
+		case protocol.HAS_NEXT:
 			if page.last {
 				my.boundaryGiven(ctx, page)
 			} else {
 				probe()
 			}
-		case "hasPrev":
+		case protocol.HAS_PREV:
 			if page.last {
 				probe()
 			} else {
 				my.boundaryGiven(ctx, page)
 			}
-		case "start":
+		case protocol.START:
 			boundary(0)
-		case "end":
+		case protocol.END:
 			boundary(-1)
 		}
 	}
@@ -282,6 +276,7 @@ func (my *Dialect) boundaryGiven(ctx *compiler.Context, page *pager) {
 func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Field, withTotal bool) error {
 	base := fmt.Sprintf("%s_%d", u.class.Table, u.index)
 	sc := scope{class: u.class, qualifier: u.class.Table}
+	sorts := sortEntries(u.args) // 单元内一次解析，列收集/排序/校验共用
 	ctx.MarkTable(u.class.Table)
 
 	// 分拣标量列与子关系，并收集基础查询所需的原始列
@@ -332,7 +327,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		scalars = append(scalars, f)
 		appendColumn(field.Column)
 	}
-	for _, column := range sortColumns(sc, u.args) {
+	for _, column := range sortColumns(sc, sorts) {
 		appendColumn(column)
 	}
 	distinctNames, err := fieldNames(sc, u.args, protocol.DISTINCT)
@@ -358,31 +353,25 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	}
 
 	// 列投影：原始列 -> GraphQL字段别名，__typename -> 类型名字面量，子关系 -> json别名
-	written := 0
-	comma := func() {
-		if written > 0 {
-			ctx.SpaceAfter(`,`)
-		}
-		written++
-	}
+	next := comma(ctx)
 	ctx.SpaceAfter(`SELECT`)
 	for _, f := range scalars {
-		comma()
+		next()
 		ctx.Column(base, sc.column(f.Name)).Space(`AS`).Quote(f.Alias)
 	}
 	for _, f := range typeNames {
-		comma()
+		next()
 		ctx.Write(`'`, u.class.Name, `' AS `).Quote(f.Alias)
 	}
 	if withTotal {
-		comma()
+		next()
 		ctx.Quote(base).Write(`."__total"`)
 	}
 	if u.page != nil {
 		// 行号探测hasNext，行级游标=base64(排序键值JSON数组)
-		comma()
+		next()
 		ctx.Write(`ROW_NUMBER() OVER () AS "__rn"`)
-		comma()
+		next()
 		ctx.Write(`encode(convert_to(JSONB_BUILD_ARRAY(`)
 		for i, key := range u.page.keys {
 			if i > 0 {
@@ -393,7 +382,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		ctx.Write(`)::text, 'UTF8'), 'base64') AS "__cursor"`)
 	}
 	for _, child := range children {
-		comma()
+		next()
 		ctx.Quote(`__sj_`, child.unit.index).Write(`."json"`).Space(`AS`).Quote(child.alias)
 	}
 
@@ -415,20 +404,10 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	ctx.Space(`FROM (SELECT`)
 	if len(distinct) > 0 {
 		ctx.Write(` DISTINCT ON (`)
-		for i, column := range distinct {
-			if i > 0 {
-				ctx.Write(`, `)
-			}
-			ctx.Column(u.class.Table, column)
-		}
+		writeColumns(ctx, u.class.Table, distinct)
 		ctx.Write(`) `)
 	}
-	for i, column := range columns {
-		if i > 0 {
-			ctx.SpaceAfter(`,`)
-		}
-		ctx.Column(u.class.Table, column)
-	}
+	writeColumns(ctx, u.class.Table, columns)
 	if withTotal {
 		if len(columns) > 0 {
 			ctx.SpaceAfter(`,`)
@@ -447,7 +426,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		return err
 	}
 	if search != nil {
-		if u.page != nil && len(sortEntries(u.args)) == 0 {
+		if u.page != nil && len(sorts) == 0 {
 			return fmt.Errorf("search与游标分页同用时必须显式sort（相关度排序无法作为稳定游标键）")
 		}
 		conjuncts = append(conjuncts, func() error { return search.buildCondition(my, ctx, sc) })
@@ -476,28 +455,19 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			if search != nil {
 				return fmt.Errorf("distinct与search不能同时使用")
 			}
-			ctx.Space(`ORDER BY`)
-			for i, column := range distinct {
-				if i > 0 {
-					ctx.Write(`, `)
-				}
-				ctx.Column(u.class.Table, column)
-			}
-			for _, child := range sortEntries(u.args) {
-				column := sc.column(child.Name)
-				ctx.Write(`, `).Column(u.class.Table, column)
-				if child.Value != nil && child.Value.Raw != "" {
-					ctx.SpaceBefore(directions[strings.ToUpper(child.Value.Raw)])
-				}
-			}
-		// 无显式排序时按搜索相关度降序
-		case search != nil && len(sortEntries(u.args)) == 0:
-			ctx.Space(`ORDER BY`)
-			if _, err = search.buildRank(my, ctx, sc); err != nil {
+			if err = my.buildOrderBy(ctx, sc, sorts, distinct...); err != nil {
 				return err
 			}
+		// 无显式排序时按搜索相关度降序（ilike模式无相关度，维持自然序）
+		case search != nil && len(sorts) == 0:
+			if search.hasRank() {
+				ctx.Space(`ORDER BY`)
+				if err = search.buildRank(my, ctx, sc); err != nil {
+					return err
+				}
+			}
 		default:
-			if err = my.buildOrderBy(ctx, sc, u.args); err != nil {
+			if err = my.buildOrderBy(ctx, sc, sorts); err != nil {
 				return err
 			}
 		}
@@ -622,19 +592,12 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 	parentClass, _ := ctx.GetClass(u.rel.SourceClass)
 	parentCol := scope{class: parentClass}.column(u.rel.SourceFiled)
 
-	list := func(qualifier string) {
-		for i, column := range all {
-			if i > 0 {
-				ctx.Write(`, `)
-			}
-			ctx.Column(qualifier, column)
-		}
-	}
+	list := func(qualifier string) { writeColumns(ctx, qualifier, all) }
 
 	ctx.Space(`FROM (WITH RECURSIVE`).QuotedWithSpace(tree).Write(`AS (SELECT `)
 	list(u.class.Table)
 	ctx.Write(`, 1 AS "__lv" FROM `, u.class.Table, ` WHERE `).
-		Quote(u.class.Table).Write(`.`).Quote(targetCol).
+		Column(u.class.Table, targetCol).
 		Write(` = `).Column(u.parent, parentCol)
 	ctx.Write(` UNION ALL SELECT `)
 	list(u.class.Table)
@@ -651,7 +614,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 	if err = my.buildWhere(ctx, treeScope, u.args); err != nil {
 		return err
 	}
-	if err = my.buildOrderBy(ctx, treeScope, u.args); err != nil {
+	if err = my.buildOrderBy(ctx, treeScope, sortEntries(u.args)); err != nil {
 		return err
 	}
 	return my.buildLimit(ctx, u)

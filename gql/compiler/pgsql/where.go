@@ -182,10 +182,7 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, sc scope, column string,
 		return fmt.Errorf("操作符 %s 缺少值", opChild.Name)
 	}
 	qualify := func() {
-		if sc.qualifier != "" {
-			ctx.Quote(sc.qualifier).Write(".")
-		}
-		ctx.Quote(column)
+		ctx.Column(sc.qualifier, column)
 	}
 
 	// jsonb函数式操作符：jsonb_contains(列, $n::jsonb) / jsonb_exists(列, $n)

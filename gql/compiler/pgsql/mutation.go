@@ -204,7 +204,7 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 
 	// 冲突列：on参数（字段名），缺省主键
 	sc := scope{class: m.class}
-	names, err := fieldNames(sc, m.field.Arguments, "on")
+	names, err := fieldNames(sc, m.field.Arguments, protocol.ON)
 	if err != nil {
 		return err
 	}
@@ -252,7 +252,7 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 }
 
 // writeInsertValues 写INSERT INTO ... VALUES主体，返回并集列；
-// 列集合取各行并集（首现顺序），行内缺失列填DEFAULT；extra为每行追加的固定列写入器
+// 列集合取各行并集（首现顺序），行内缺失列填DEFAULT
 func (my *Dialect) writeInsertValues(ctx *compiler.Context, table string, rows []inputRow) ([]string, error) {
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("input不能为空")
@@ -724,9 +724,8 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 				if _, exists := row.values[fk]; !exists {
 					row.columns = append(row.columns, fk)
 				}
-				row.values[fk] = func(c *compiler.Context) error {
-					sourceCol := scope{class: class}.column(rel.SourceFiled)
-					c.Write(`(SELECT `).Quote(sourceCol).Write(` FROM `).Quote(class.Table).Write(`)`)
+				row.values[fk] = func(*compiler.Context) error {
+					anchor(rel)
 					return nil
 				}
 			}

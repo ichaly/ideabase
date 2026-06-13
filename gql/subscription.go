@@ -62,7 +62,7 @@ func (my *Executor) stream(ctx context.Context, plan *Plan, variables map[string
 func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]interface{}, last *uint64) (gqlReply, bool) {
 	var r gqlReply
 
-	data, _, err := my.fetch(ctx, plan, variables)
+	data, err := my.fetch(ctx, plan, variables)
 	if err != nil {
 		if ctx.Err() != nil {
 			return r, false
@@ -79,6 +79,7 @@ func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]i
 	}
 	*last = sum
 
+	// 订阅是公开API：始终解包为Data供程序化消费（变更推送频率低，非热路径）
 	result, err := my.unpack(ctx, plan, data)
 	if err != nil {
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
@@ -92,8 +93,8 @@ func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]i
 
 // wsMessage graphql-transport-ws 协议消息（出站Payload为任意值，入站为原始JSON延迟解析）
 type wsMessage struct {
-	ID      string          `json:"id,omitempty"`
-	Type    string          `json:"type"`
+	ID      string             `json:"id,omitempty"`
+	Type    string             `json:"type"`
 	Payload stdjson.RawMessage `json:"payload,omitempty"`
 }
 

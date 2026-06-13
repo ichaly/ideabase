@@ -140,5 +140,4 @@ type BatchResolver interface {
 ## 遗留事项（后续版本）
 
 - MySQL 方言实现（接口已就位，参照 pgsql 单元化结构）
-- upsert
 - `metadata.go` 中 loader_base 反向关系挂在主键字段会被多个外键覆写（仅影响极端多外键场景）

@@ -21,15 +21,15 @@ const (
 	SEPARATOR_LINE = "------------------"
 
 	// 描述性文本
-	DESC_SCHEMA_TITLE    = "IdeaBase GraphQL Schema"
-	DESC_SCALAR_TYPES    = "自定义标量类型"
-	DESC_SORT_ENUM       = "排序方向枚举，包含NULL值处理"
-	DESC_IS_ENUM         = "空值条件枚举"
+	DESC_SCHEMA_TITLE = "IdeaBase GraphQL Schema"
+	DESC_SCALAR_TYPES = "自定义标量类型"
+	DESC_SORT_ENUM    = "排序方向枚举，包含NULL值处理"
+	DESC_IS_ENUM      = "空值条件枚举"
 
 	// 分类标题
-	SECTION_FILTER      = "过滤器类型定义"
-	SECTION_QUERY       = "查询和变更"
-	SECTION_CONNECTION  = "连接和边类型（游标分页）"
+	SECTION_FILTER     = "过滤器类型定义"
+	SECTION_QUERY      = "查询和变更"
+	SECTION_CONNECTION = "连接和边类型（游标分页）"
 )
 
 // Renderer 负责将元数据渲染为GraphQL schema
@@ -122,9 +122,9 @@ func (my *Renderer) saveToFile(content string) error {
 // renderScalars 渲染标量类型
 func (my *Renderer) renderScalars() error {
 	my.writeLine("# ", DESC_SCALAR_TYPES)
-	my.writeLine("scalar ", SCALAR_JSON)
-	my.writeLine("scalar ", SCALAR_CURSOR)
-	my.writeLine("scalar ", SCALAR_DATE_TIME)
+	my.writeLine("scalar ", protocol.SCALAR_JSON)
+	my.writeLine("scalar ", protocol.SCALAR_CURSOR)
+	my.writeLine("scalar ", protocol.SCALAR_DATE_TIME)
 	my.writeLine()
 	return nil
 }
@@ -133,7 +133,7 @@ func (my *Renderer) renderScalars() error {
 func (my *Renderer) renderEnums() error {
 	// 渲染排序方向枚举
 	my.writeLine("# ", DESC_SORT_ENUM)
-	my.writeLine("enum ", TYPE_SORT_DIRECTION, " {")
+	my.writeLine("enum ", protocol.TYPE_SORT_DIRECTION, " {")
 	my.writeLine("  ASC")
 	my.writeLine("  DESC")
 	my.writeLine("  ASC_NULLS_FIRST")
@@ -154,22 +154,36 @@ func (my *Renderer) renderEnums() error {
 	return nil
 }
 
+// eachClass 遍历可见实体类（跳过表名索引与隐藏的中间表），按类名有序
+func (my *Renderer) eachClass(fn func(className string, class *protocol.Class)) {
+	for _, className := range utl.SortKeys(my.meta.Nodes) {
+		class := my.meta.Nodes[className]
+		if className != class.Name || (class.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
+			continue
+		}
+		fn(className, class)
+	}
+}
+
+// hiddenField 字段是否随中间表隐藏：自身是中间表字段，或引用了隐藏的中间表类型
+func (my *Renderer) hiddenField(field *protocol.Field) bool {
+	if my.meta.cfg.Metadata.ShowThrough {
+		return false
+	}
+	if field.IsThrough {
+		return true
+	}
+	refType := field.Type
+	if field.Relation != nil && field.Relation.TargetClass != "" {
+		refType = field.Relation.TargetClass
+	}
+	refClass, ok := my.meta.Nodes[refType]
+	return ok && refClass.IsThrough
+}
+
 // renderTypes 渲染所有实体类型定义
 func (my *Renderer) renderTypes() error {
-	// 遍历所有类定义，确保只使用类名作为键
-	keys := utl.SortKeys(my.meta.Nodes)
-	for _, className := range keys {
-		class := my.meta.Nodes[className]
-		// 确保只处理真正的类名，跳过表名索引
-		if className != class.Name {
-			continue
-		}
-
-		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-			continue
-		}
-
+	my.eachClass(func(className string, class *protocol.Class) {
 		// 添加类型描述
 		if class.Description != "" {
 			my.writeLine("# ", class.Description)
@@ -178,32 +192,11 @@ func (my *Renderer) renderTypes() error {
 		// 开始类型定义
 		my.writeLine("type ", className, " {")
 
-		// 添加所有字段，确保只处理真正的字段名
-		fields := utl.SortKeys(class.Fields)
-		for _, fieldName := range fields {
+		// 添加所有字段：跳过列名索引与随中间表隐藏的字段
+		for _, fieldName := range utl.SortKeys(class.Fields) {
 			field := class.Fields[fieldName]
-			// 确保只处理真正的字段名，跳过列名索引
-			if fieldName != field.Name {
+			if fieldName != field.Name || my.hiddenField(field) {
 				continue
-			}
-
-			// 判断是否应该跳过中间表字段
-			if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-				continue
-			}
-
-			// 判断字段类型是否引用了中间表类型
-			if !my.meta.cfg.Metadata.ShowThrough {
-				// 检查字段是否引用了中间表类型
-				refType := field.Type
-				if field.Relation != nil && field.Relation.TargetClass != "" {
-					refType = field.Relation.TargetClass
-				}
-
-				// 如果引用的类型是中间表类型，则跳过该字段
-				if refClass, exists := my.meta.Nodes[refType]; exists && refClass.IsThrough {
-					continue
-				}
 			}
 
 			// 添加描述作为注释
@@ -223,13 +216,13 @@ func (my *Renderer) renderTypes() error {
 			if field.Column == "" && field.Relation != nil && field.IsList {
 				target := field.Relation.TargetClass
 				args := []renderer.Argument{
-					{Name: WHERE, Type: target + SUFFIX_WHERE_INPUT},
-					{Name: SORT, Type: "[" + target + SUFFIX_SORT_INPUT + "!]"},
-					{Name: LIMIT, Type: SCALAR_INT},
-					{Name: OFFSET, Type: SCALAR_INT},
+					{Name: protocol.WHERE, Type: target + protocol.SUFFIX_WHERE_INPUT},
+					{Name: protocol.SORT, Type: "[" + target + protocol.SUFFIX_SORT_INPUT + "!]"},
+					{Name: protocol.LIMIT, Type: protocol.SCALAR_INT},
+					{Name: protocol.OFFSET, Type: protocol.SCALAR_INT},
 				}
 				if field.Relation.Deep {
-					args = append(args, renderer.Argument{Name: DEPTH, Type: SCALAR_INT})
+					args = append(args, renderer.Argument{Name: protocol.DEPTH, Type: protocol.SCALAR_INT})
 				}
 				my.writeField(fieldName, typeName, renderer.WithArgs(args...))
 				continue
@@ -242,7 +235,7 @@ func (my *Renderer) renderTypes() error {
 		// 结束类型定义
 		my.writeLine("}")
 		my.writeLine()
-	}
+	})
 
 	return nil
 }
@@ -275,18 +268,18 @@ func (my *Renderer) getGraphQLType(field *protocol.Field) string {
 
 	// 1. 主键固定映射为ID类型
 	if field.IsPrimary {
-		return SCALAR_ID
+		return protocol.SCALAR_ID
 	}
 
 	// 处理标量类型
-	if fieldType == SCALAR_STRING ||
-		fieldType == SCALAR_INT ||
-		fieldType == SCALAR_FLOAT ||
-		fieldType == SCALAR_BOOLEAN ||
-		fieldType == SCALAR_ID ||
-		fieldType == SCALAR_JSON ||
-		fieldType == SCALAR_CURSOR ||
-		fieldType == SCALAR_DATE_TIME {
+	if fieldType == protocol.SCALAR_STRING ||
+		fieldType == protocol.SCALAR_INT ||
+		fieldType == protocol.SCALAR_FLOAT ||
+		fieldType == protocol.SCALAR_BOOLEAN ||
+		fieldType == protocol.SCALAR_ID ||
+		fieldType == protocol.SCALAR_JSON ||
+		fieldType == protocol.SCALAR_CURSOR ||
+		fieldType == protocol.SCALAR_DATE_TIME {
 		return fieldType
 	}
 
@@ -306,7 +299,7 @@ func (my *Renderer) getGraphQLType(field *protocol.Field) string {
 	// 4. 确保返回非空实体类型
 	if fieldType == "" {
 		// 如果类型为空，使用默认类型
-		return SCALAR_STRING
+		return protocol.SCALAR_STRING
 	}
 
 	// 默认假设是实体类型
@@ -336,13 +329,8 @@ func (my *Renderer) writeRelationOps(class *protocol.Class) {
 	for _, fieldName := range utl.SortKeys(class.Fields) {
 		field := class.Fields[fieldName]
 		// 仅列表关系虚拟字段（一对多/多对多），中间表隐藏时跳过
-		if fieldName != field.Name || field.Column != "" || field.Relation == nil || !field.IsList {
-			continue
-		}
-		if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-			continue
-		}
-		if target, ok := my.meta.Nodes[field.Relation.TargetClass]; ok && target.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
+		if fieldName != field.Name || field.Column != "" || field.Relation == nil ||
+			!field.IsList || my.hiddenField(field) {
 			continue
 		}
 		my.writeField(fieldName, field.Relation.TargetClass+"RelationInput")
@@ -352,28 +340,16 @@ func (my *Renderer) writeRelationOps(class *protocol.Class) {
 // renderInput 渲染输入类型
 func (my *Renderer) renderInput() error {
 	// 为每个实体类生成创建和更新输入类型
-	keys := utl.SortKeys(my.meta.Nodes)
-	for _, className := range keys {
-		class := my.meta.Nodes[className]
-		// 确保只处理真正的类名，跳过表名索引
-		if className != class.Name {
-			continue
-		}
-
-		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-			continue
-		}
-
+	my.eachClass(func(className string, class *protocol.Class) {
 		// 无可写字段的类（如纯主键表）不生成输入类型
 		writable := my.writableFields(class)
 		if len(writable) == 0 {
-			continue
+			return
 		}
 
 		// 生成创建输入类型
 		my.writeLine("# ", className, "创建输入")
-		my.writeLine("input ", className, SUFFIX_CREATE_INPUT, " {")
+		my.writeLine("input ", className, protocol.SUFFIX_CREATE_INPUT, " {")
 		for _, fieldName := range writable {
 			field := class.Fields[fieldName]
 			typeName := my.getGraphQLType(field)
@@ -389,7 +365,7 @@ func (my *Renderer) renderInput() error {
 
 		// 生成更新输入类型（全部可选）
 		my.writeLine("# ", className, "更新输入")
-		my.writeLine("input ", className, SUFFIX_UPDATE_INPUT, " {")
+		my.writeLine("input ", className, protocol.SUFFIX_UPDATE_INPUT, " {")
 		for _, fieldName := range writable {
 			my.writeField(fieldName, my.getGraphQLType(class.Fields[fieldName]))
 		}
@@ -397,24 +373,20 @@ func (my *Renderer) renderInput() error {
 
 		my.writeLine("}")
 		my.writeLine("")
-	}
+	})
 
 	// 按目标类生成关系操作输入：connect/disconnect挂接解除既有行，create内联建新行
-	for _, className := range keys {
-		class := my.meta.Nodes[className]
-		if className != class.Name || (class.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
-			continue
-		}
+	my.eachClass(func(className string, class *protocol.Class) {
 		my.writeLine("# ", className, "关系操作（原子挂接/解除/内联创建）")
 		my.writeLine("input ", className, "RelationInput {")
-		my.writeField("connect", SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("挂接既有行主键"))
-		my.writeField("disconnect", SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("解除既有行主键(仅更新)"))
+		my.writeField("connect", protocol.SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("挂接既有行主键"))
+		my.writeField("disconnect", protocol.SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("解除既有行主键(仅更新)"))
 		if len(my.writableFields(class)) > 0 {
-			my.writeField("create", "["+className+SUFFIX_CREATE_INPUT+"!]", renderer.WithComment("内联创建新行"))
+			my.writeField("create", "["+className+protocol.SUFFIX_CREATE_INPUT+"!]", renderer.WithComment("内联创建新行"))
 		}
 		my.writeLine("}")
 		my.writeLine()
-	}
+	})
 
 	return nil
 }
@@ -424,10 +396,10 @@ func (my *Renderer) renderFilter() error {
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_FILTER, " ", SEPARATOR_LINE, "\n")
 
 	// 定义过滤器映射表，每种类型支持的操作
-	keys := utl.SortKeys(grouping)
+	keys := utl.SortKeys(protocol.Grouping)
 	for _, scalarType := range keys {
-		operators := grouping[scalarType]
-		filterName := scalarType + SUFFIX_WHERE_INPUT
+		operators := protocol.Grouping[scalarType]
+		filterName := scalarType + protocol.SUFFIX_WHERE_INPUT
 		my.writeLine("# ", scalarType, "过滤器")
 		my.writeLine("input ", filterName, " {")
 
@@ -442,12 +414,12 @@ func (my *Renderer) renderFilter() error {
 			}
 			renderedOps[op.Name] = true
 
-			if op.Name == HAS_KEY {
-				my.writeField(op.Name, SCALAR_STRING, renderer.WithComment(op.Description))
-			} else if op.Name == IN {
+			if op.Name == protocol.HAS_KEY {
+				my.writeField(op.Name, protocol.SCALAR_STRING, renderer.WithComment(op.Description))
+			} else if op.Name == protocol.IN {
 				my.writeField(op.Name, scalarType, renderer.ListNonNull(), renderer.WithComment(op.Description))
-			} else if op.Name == IS {
-				my.writeField(op.Name, ENUM_IS_INPUT, renderer.WithComment(op.Description))
+			} else if op.Name == protocol.IS {
+				my.writeField(op.Name, protocol.ENUM_IS_INPUT, renderer.WithComment(op.Description))
 			} else {
 				my.writeField(op.Name, scalarType, renderer.WithComment(op.Description))
 			}
@@ -462,69 +434,29 @@ func (my *Renderer) renderFilter() error {
 // renderEntity 渲染实体过滤器
 func (my *Renderer) renderEntity() error {
 	// 为每个实体类生成过滤器
-	keys := utl.SortKeys(my.meta.Nodes)
-	for _, className := range keys {
-		class := my.meta.Nodes[className]
-		// 确保只处理真正的类名，跳过表名索引
-		if className != class.Name {
-			continue
-		}
-
-		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-			continue
-		}
-
+	my.eachClass(func(className string, class *protocol.Class) {
 		// 生成过滤器类型
 		my.writeLine("# ", className, "查询条件")
-		my.writeLine("input ", className, SUFFIX_WHERE_INPUT, " {")
+		my.writeLine("input ", className, protocol.SUFFIX_WHERE_INPUT, " {")
 
-		// 添加常规字段过滤条件
-		fields := utl.SortKeys(class.Fields)
-		for _, fieldName := range fields {
+		// 添加常规字段过滤条件：跳过列名索引/虚拟关系字段/随中间表隐藏的字段
+		for _, fieldName := range utl.SortKeys(class.Fields) {
 			field := class.Fields[fieldName]
-			// 确保只处理真正的字段名，跳过列名索引
-			if fieldName != field.Name {
+			if fieldName != field.Name || field.Virtual || my.hiddenField(field) {
 				continue
 			}
-
-			// 判断是否应该跳过中间表字段
-			if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-				continue
-			}
-
-			// 跳过虚拟关系字段
-			if field.Virtual {
-				continue
-			}
-
-			// 判断字段类型是否引用了中间表类型
-			if !my.meta.cfg.Metadata.ShowThrough {
-				// 检查字段是否引用了中间表类型
-				refType := field.Type
-				if field.Relation != nil && field.Relation.TargetClass != "" {
-					refType = field.Relation.TargetClass
-				}
-
-				// 如果引用的类型是中间表类型，则跳过该字段
-				if refClass, exists := my.meta.Nodes[refType]; exists && refClass.IsThrough {
-					continue
-				}
-			}
-
-			// 获取字段类型
 			fieldType := my.getGraphQLType(field)
-			my.writeLine("  ", fieldName, ": ", fieldType, SUFFIX_WHERE_INPUT)
+			my.writeLine("  ", fieldName, ": ", fieldType, protocol.SUFFIX_WHERE_INPUT)
 		}
 
 		// 添加布尔逻辑操作符
-		my.writeLine("  and: [", className, SUFFIX_WHERE_INPUT, "!]")
-		my.writeLine("  or: [", className, SUFFIX_WHERE_INPUT, "!]")
-		my.writeLine("  not: ", className, SUFFIX_WHERE_INPUT)
+		my.writeLine("  and: [", className, protocol.SUFFIX_WHERE_INPUT, "!]")
+		my.writeLine("  or: [", className, protocol.SUFFIX_WHERE_INPUT, "!]")
+		my.writeLine("  not: ", className, protocol.SUFFIX_WHERE_INPUT)
 
 		my.writeLine("}")
 		my.writeLine("")
-	}
+	})
 
 	return nil
 }
@@ -532,58 +464,23 @@ func (my *Renderer) renderEntity() error {
 // renderSort 渲染排序类型
 func (my *Renderer) renderSort() error {
 	// 为每个实体类生成排序类型
-	keys := utl.SortKeys(my.meta.Nodes)
-	for _, className := range keys {
-		class := my.meta.Nodes[className]
-		// 确保只处理真正的类名，跳过表名索引
-		if className != class.Name {
-			continue
-		}
-
-		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-			continue
-		}
-
+	my.eachClass(func(className string, class *protocol.Class) {
 		// 生成排序类型
 		my.writeLine("# ", className, "排序")
-		my.writeLine("input ", className, SUFFIX_SORT_INPUT, " {")
+		my.writeLine("input ", className, protocol.SUFFIX_SORT_INPUT, " {")
 
-		// 添加可排序字段
-		fields := utl.SortKeys(class.Fields)
-		for _, fieldName := range fields {
+		// 添加可排序字段：跳过列名索引与随中间表隐藏的字段
+		for _, fieldName := range utl.SortKeys(class.Fields) {
 			field := class.Fields[fieldName]
-			// 确保只处理真正的字段名，跳过列名索引
-			if fieldName != field.Name {
+			if fieldName != field.Name || my.hiddenField(field) {
 				continue
 			}
-
-			// 判断是否应该跳过中间表字段
-			if field.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-				continue
-			}
-
-			// 判断字段类型是否引用了中间表类型
-			if !my.meta.cfg.Metadata.ShowThrough {
-				// 检查字段是否引用了中间表类型
-				refType := field.Type
-				if field.Relation != nil && field.Relation.TargetClass != "" {
-					refType = field.Relation.TargetClass
-				}
-
-				// 如果引用的类型是中间表类型，则跳过该字段
-				if refClass, exists := my.meta.Nodes[refType]; exists && refClass.IsThrough {
-					continue
-				}
-			}
-
-			// 添加排序选项
-			my.writeField(fieldName, TYPE_SORT_DIRECTION)
+			my.writeField(fieldName, protocol.TYPE_SORT_DIRECTION)
 		}
 
 		my.writeLine("}")
 		my.writeLine("")
-	}
+	})
 
 	return nil
 }
@@ -597,39 +494,34 @@ func (my *Renderer) renderQuery() error {
 		args := []renderer.Argument{}
 		// 声明了搜索列的实体提供全文搜索参数
 		if class := my.meta.Nodes[className]; class != nil && len(class.Search) > 0 {
-			args = append(args, renderer.Argument{Name: SEARCH, Type: SCALAR_STRING})
+			args = append(args, renderer.Argument{Name: protocol.SEARCH, Type: protocol.SCALAR_STRING})
 		}
 		my.writeLine("  # ", className, "查询")
 		my.writeField(
 			strcase.ToLowerCamel(inflection.Plural(className)),
-			className+SUFFIX_RESULT,
+			className+protocol.SUFFIX_RESULT,
 			renderer.NonNull(),
 			renderer.WithMultilineArgs(),
 			renderer.WithArgs(append(args, []renderer.Argument{
-				{Name: ID, Type: SCALAR_ID},
-				{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
-				{Name: SORT, Type: "[" + className + SUFFIX_SORT_INPUT + "!]"},
-				{Name: DISTINCT, Type: "[" + SCALAR_STRING + "!]"},
-				{Name: LIMIT, Type: SCALAR_INT},
-				{Name: OFFSET, Type: SCALAR_INT},
-				{Name: FIRST, Type: SCALAR_INT},
-				{Name: AFTER, Type: SCALAR_CURSOR},
-				{Name: LAST, Type: SCALAR_INT},
-				{Name: BEFORE, Type: SCALAR_CURSOR},
+				{Name: protocol.ID, Type: protocol.SCALAR_ID},
+				{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
+				{Name: protocol.SORT, Type: "[" + className + protocol.SUFFIX_SORT_INPUT + "!]"},
+				{Name: protocol.DISTINCT, Type: "[" + protocol.SCALAR_STRING + "!]"},
+				{Name: protocol.LIMIT, Type: protocol.SCALAR_INT},
+				{Name: protocol.OFFSET, Type: protocol.SCALAR_INT},
+				{Name: protocol.FIRST, Type: protocol.SCALAR_INT},
+				{Name: protocol.AFTER, Type: protocol.SCALAR_CURSOR},
+				{Name: protocol.LAST, Type: protocol.SCALAR_INT},
+				{Name: protocol.BEFORE, Type: protocol.SCALAR_CURSOR},
 			}...)...),
 		)
 	}
 
 	// 收集可渲染的实体类名
 	var names []string
-	for _, className := range utl.SortKeys(my.meta.Nodes) {
-		class := my.meta.Nodes[className]
-		// 跳过表名索引与隐藏的中间表类
-		if className != class.Name || (class.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
-			continue
-		}
+	my.eachClass(func(className string, _ *protocol.Class) {
 		names = append(names, className)
-	}
+	})
 
 	my.writeLine("# 查询根类型")
 	my.writeLine("type Query {")
@@ -639,14 +531,14 @@ func (my *Renderer) renderQuery() error {
 		// 统计查询
 		my.writeLine("  # ", className, "统计")
 		my.writeField(
-			strcase.ToLowerCamel(className)+SUFFIX_STATS,
-			"["+className+SUFFIX_STATS+"!]",
+			strcase.ToLowerCamel(className)+protocol.SUFFIX_STATS,
+			"["+className+protocol.SUFFIX_STATS+"!]",
 			renderer.NonNull(),
 			renderer.WithArgs([]renderer.Argument{
-				{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
-				{Name: GROUP_BY, Type: "[" + SCALAR_STRING + "!]"},
-				{Name: LIMIT, Type: SCALAR_INT},
-				{Name: OFFSET, Type: SCALAR_INT},
+				{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
+				{Name: protocol.GROUP_BY, Type: "[" + protocol.SCALAR_STRING + "!]"},
+				{Name: protocol.LIMIT, Type: protocol.SCALAR_INT},
+				{Name: protocol.OFFSET, Type: protocol.SCALAR_INT},
 			}...),
 		)
 	}
@@ -670,52 +562,42 @@ func (my *Renderer) renderMutation() error {
 	my.writeLine("type Mutation {")
 
 	// 按排序顺序渲染每种类型的变更操作
-	keys := utl.SortKeys(my.meta.Nodes)
-	for _, className := range keys {
-		class := my.meta.Nodes[className]
-		// 跳过表名别名
-		if className != class.Name {
-			continue
-		}
-		// 跳过中间表类（除非配置了显示中间表）
-		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-			continue
-		}
+	my.eachClass(func(className string, class *protocol.Class) {
 
 		// 无可写字段的类（如纯主键表）不生成创建/更新操作
 		if len(my.writableFields(class)) > 0 {
 			plural := inflection.Plural(className)
 
 			my.writeLine("  # ", class.Name, "创建")
-			my.writeField(CREATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-				{Name: INPUT, Type: className + SUFFIX_CREATE_INPUT + "!"},
+			my.writeField(protocol.CREATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+				{Name: protocol.INPUT, Type: className + protocol.SUFFIX_CREATE_INPUT + "!"},
 			}...))
 
 			my.writeLine("  # ", class.Name, "批量创建")
-			my.writeField(CREATE+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-				{Name: INPUT, Type: "[" + className + SUFFIX_CREATE_INPUT + "!]!"},
+			my.writeField(protocol.CREATE+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+				{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_INPUT + "!]!"},
 			}...))
 
 			my.writeLine("  # ", class.Name, "插入或更新（按on列冲突，缺省主键）")
-			my.writeField(UPSERT+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-				{Name: INPUT, Type: "[" + className + SUFFIX_CREATE_INPUT + "!]!"},
-				{Name: "on", Type: "[" + SCALAR_STRING + "!]"},
+			my.writeField(protocol.UPSERT+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+				{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_INPUT + "!]!"},
+				{Name: protocol.ON, Type: "[" + protocol.SCALAR_STRING + "!]"},
 			}...))
 
 			my.writeLine("  # ", class.Name, "更新")
-			my.writeField(UPDATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-				{Name: INPUT, Type: className + SUFFIX_UPDATE_INPUT + "!"},
-				{Name: ID, Type: SCALAR_ID},
-				{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
+			my.writeField(protocol.UPDATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+				{Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_INPUT + "!"},
+				{Name: protocol.ID, Type: protocol.SCALAR_ID},
+				{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
 			}...))
 		}
 
 		my.writeLine("  # ", class.Name, "删除")
-		my.writeField(DELETE+className, SCALAR_INT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-			{Name: ID, Type: SCALAR_ID},
-			{Name: WHERE, Type: className + SUFFIX_WHERE_INPUT},
+		my.writeField(protocol.DELETE+className, protocol.SCALAR_INT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+			{Name: protocol.ID, Type: protocol.SCALAR_ID},
+			{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
 		}...))
-	}
+	})
 
 	my.writeLine("}")
 	return nil
@@ -724,12 +606,12 @@ func (my *Renderer) renderMutation() error {
 // statsKind 标量字段对应的统计类型，空串表示不参与统计
 func statsKind(typeName string) string {
 	switch typeName {
-	case SCALAR_INT, SCALAR_FLOAT:
-		return TYPE_NUMBER_STATS
-	case SCALAR_STRING:
-		return TYPE_STRING_STATS
-	case SCALAR_DATE_TIME:
-		return TYPE_DATE_TIME_STATS
+	case protocol.SCALAR_INT, protocol.SCALAR_FLOAT:
+		return protocol.TYPE_NUMBER_STATS
+	case protocol.SCALAR_STRING:
+		return protocol.TYPE_STRING_STATS
+	case protocol.SCALAR_DATE_TIME:
+		return protocol.TYPE_DATE_TIME_STATS
 	}
 	return ""
 }
@@ -737,42 +619,38 @@ func statsKind(typeName string) string {
 // renderStats 渲染统计类型：通用聚合结果 + 每实体的Stats类型（选择驱动编译）
 func (my *Renderer) renderStats() error {
 	my.writeLine("# 数值聚合结果")
-	my.writeLine("type ", TYPE_NUMBER_STATS, " {")
-	my.writeField(FUNCTION_SUM, SCALAR_FLOAT)
-	my.writeField(FUNCTION_AVG, SCALAR_FLOAT)
-	my.writeField(FUNCTION_MIN, SCALAR_FLOAT)
-	my.writeField(FUNCTION_MAX, SCALAR_FLOAT)
-	my.writeField(FUNCTION_COUNT_DISTINCT, SCALAR_INT)
+	my.writeLine("type ", protocol.TYPE_NUMBER_STATS, " {")
+	my.writeField(protocol.FUNCTION_SUM, protocol.SCALAR_FLOAT)
+	my.writeField(protocol.FUNCTION_AVG, protocol.SCALAR_FLOAT)
+	my.writeField(protocol.FUNCTION_MIN, protocol.SCALAR_FLOAT)
+	my.writeField(protocol.FUNCTION_MAX, protocol.SCALAR_FLOAT)
+	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, protocol.SCALAR_INT)
 	my.writeLine("}")
 	my.writeLine()
 
 	my.writeLine("# 字符串聚合结果")
-	my.writeLine("type ", TYPE_STRING_STATS, " {")
-	my.writeField(FUNCTION_MIN, SCALAR_STRING)
-	my.writeField(FUNCTION_MAX, SCALAR_STRING)
-	my.writeField(FUNCTION_COUNT_DISTINCT, SCALAR_INT)
+	my.writeLine("type ", protocol.TYPE_STRING_STATS, " {")
+	my.writeField(protocol.FUNCTION_MIN, protocol.SCALAR_STRING)
+	my.writeField(protocol.FUNCTION_MAX, protocol.SCALAR_STRING)
+	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, protocol.SCALAR_INT)
 	my.writeLine("}")
 	my.writeLine()
 
 	my.writeLine("# 日期聚合结果")
-	my.writeLine("type ", TYPE_DATE_TIME_STATS, " {")
-	my.writeField(FUNCTION_MIN, SCALAR_DATE_TIME)
-	my.writeField(FUNCTION_MAX, SCALAR_DATE_TIME)
-	my.writeField(FUNCTION_COUNT_DISTINCT, SCALAR_INT)
+	my.writeLine("type ", protocol.TYPE_DATE_TIME_STATS, " {")
+	my.writeField(protocol.FUNCTION_MIN, protocol.SCALAR_DATE_TIME)
+	my.writeField(protocol.FUNCTION_MAX, protocol.SCALAR_DATE_TIME)
+	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, protocol.SCALAR_INT)
 	my.writeLine("}")
 	my.writeLine()
 
 	// 每实体统计类型：key为分组键，count恒有，标量列按类别挂聚合
-	for _, className := range utl.SortKeys(my.meta.Nodes) {
-		class := my.meta.Nodes[className]
-		if className != class.Name || (class.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
-			continue
-		}
+	my.eachClass(func(className string, class *protocol.Class) {
 
 		my.writeLine("# ", className, "统计结果")
-		my.writeLine("type ", className, SUFFIX_STATS, " {")
-		my.writeField(FUNCTION_KEY, SCALAR_JSON, renderer.WithComment("分组键(无groupBy时为null)"))
-		my.writeField(FUNCTION_COUNT, SCALAR_INT, renderer.NonNull())
+		my.writeLine("type ", className, protocol.SUFFIX_STATS, " {")
+		my.writeField(protocol.FUNCTION_KEY, protocol.SCALAR_JSON, renderer.WithComment("分组键(无groupBy时为null)"))
+		my.writeField(protocol.FUNCTION_COUNT, protocol.SCALAR_INT, renderer.NonNull())
 		for _, fieldName := range utl.SortKeys(class.Fields) {
 			field := class.Fields[fieldName]
 			// 仅真实标量列参与统计（跳过列名索引/虚拟字段/主键）
@@ -785,18 +663,18 @@ func (my *Renderer) renderStats() error {
 		}
 		my.writeLine("}")
 		my.writeLine()
-	}
+	})
 	return nil
 }
 
 // renderPageInfo 游标分页信息类型
 func (my *Renderer) renderPageInfo() {
 	my.writeLine("# 游标分页信息")
-	my.writeLine("type ", TYPE_PAGE_INFO, " {")
-	my.writeField("hasNext", SCALAR_BOOLEAN, renderer.NonNull())
-	my.writeField("hasPrev", SCALAR_BOOLEAN, renderer.NonNull())
-	my.writeField("start", SCALAR_CURSOR, renderer.WithComment("本页第一条的游标"))
-	my.writeField("end", SCALAR_CURSOR, renderer.WithComment("本页最后一条的游标"))
+	my.writeLine("type ", protocol.TYPE_PAGE_INFO, " {")
+	my.writeField(protocol.HAS_NEXT, protocol.SCALAR_BOOLEAN, renderer.NonNull())
+	my.writeField(protocol.HAS_PREV, protocol.SCALAR_BOOLEAN, renderer.NonNull())
+	my.writeField(protocol.START, protocol.SCALAR_CURSOR, renderer.WithComment("本页第一条的游标"))
+	my.writeField(protocol.END, protocol.SCALAR_CURSOR, renderer.WithComment("本页最后一条的游标"))
 	my.writeLine("}")
 	my.writeLine()
 }
@@ -805,29 +683,17 @@ func (my *Renderer) renderPageInfo() {
 func (my *Renderer) renderPaging() error {
 	my.renderPageInfo()
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_CONNECTION, " ", SEPARATOR_LINE, "\n")
-	keys := utl.SortKeys(my.meta.Nodes)
 	// 为每个实体类生成分页类型
-	for _, className := range keys {
-		class := my.meta.Nodes[className]
-		// 确保只处理真正的类名，跳过表名索引
-		if className != class.Name {
-			continue
-		}
-
-		// 判断是否应该跳过中间表类
-		if class.IsThrough && !my.meta.cfg.Metadata.ShowThrough {
-			continue
-		}
-
+	my.eachClass(func(className string, class *protocol.Class) {
 		// 生成分页类型
 		my.writeLine("# ", className, "分页结果")
-		my.writeLine("type ", className, SUFFIX_RESULT, " {")
-		my.writeField(ITEMS, className, renderer.NonNull(), renderer.ListNonNull(), renderer.WithComment("直接返回"+className+"对象数组"))
-		my.writeField(TOTAL, SCALAR_INT, renderer.NonNull())
-		my.writeField(PAGE_INFO, TYPE_PAGE_INFO, renderer.WithComment("游标分页信息(需配合first/last使用)"))
+		my.writeLine("type ", className, protocol.SUFFIX_RESULT, " {")
+		my.writeField(protocol.ITEMS, className, renderer.NonNull(), renderer.ListNonNull(), renderer.WithComment("直接返回"+className+"对象数组"))
+		my.writeField(protocol.TOTAL, protocol.SCALAR_INT, renderer.NonNull())
+		my.writeField(protocol.PAGE_INFO, protocol.TYPE_PAGE_INFO, renderer.WithComment("游标分页信息(需配合first/last使用)"))
 		my.writeLine("}")
 		my.writeLine("")
-	}
+	})
 
 	return nil
 }

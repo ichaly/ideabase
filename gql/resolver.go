@@ -44,7 +44,7 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 			if !ok {
 				continue
 			}
-			if f.Name == ITEMS {
+			if f.Name == protocol.ITEMS {
 				walk(class, f.SelectionSet, append(path[:len(path):len(path)], f.Alias))
 				continue
 			}
@@ -74,7 +74,7 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 			continue
 		}
 		// 查询根字段类型为XxxResult，变更读回直接是实体类型
-		className := strings.TrimSuffix(f.Definition.Type.Name(), SUFFIX_RESULT)
+		className := strings.TrimSuffix(f.Definition.Type.Name(), protocol.SUFFIX_RESULT)
 		if class, ok := meta.GetNode(className); ok {
 			walk(class, f.SelectionSet, []string{f.Alias})
 		}

@@ -11,15 +11,15 @@ func (my *_DialectSuite) TestSearch() {
 		{
 			name:  "trigram搜索默认按相关度排序",
 			query: `query { users(search: "数据库", limit: 5) { items { id name } } }`,
-			args:  []any{"数据库", "数据库", "数据库", "数据库"},
+			args:  []any{"数据库"},
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name"
 						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM sys_user
-							WHERE ("sys_user"."name" ILIKE '%' || $1 || '%' OR "sys_user"."email" ILIKE '%' || $2 || '%')
-							ORDER BY GREATEST(similarity("sys_user"."name", $3), similarity("sys_user"."email", $4)) DESC
+							WHERE ("sys_user"."name" ILIKE '%' || $1 || '%' OR "sys_user"."email" ILIKE '%' || $1 || '%')
+							ORDER BY GREATEST(similarity("sys_user"."name", $1), similarity("sys_user"."email", $1)) DESC
 							LIMIT 5) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
@@ -27,15 +27,15 @@ func (my *_DialectSuite) TestSearch() {
 		{
 			name:  "搜索与条件排序组合",
 			query: `query { users(search: "abc", where: { age: { gt: 18 } }, sort: { name: ASC }) { items { id } } }`,
-			args:  []any{"abc", "abc", int64(18)},
+			args:  []any{"abc", int64(18)},
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id"
 						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM sys_user
-							WHERE ("sys_user"."name" ILIKE '%' || $1 || '%' OR "sys_user"."email" ILIKE '%' || $2 || '%')
-								AND "sys_user"."age" > $3
+							WHERE ("sys_user"."name" ILIKE '%' || $1 || '%' OR "sys_user"."email" ILIKE '%' || $1 || '%')
+								AND "sys_user"."age" > $2
 							ORDER BY "sys_user"."name" ASC) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
@@ -60,7 +60,7 @@ func (my *_DialectSuite) TestSearchTsvector() {
 
 	my.Assert().Contains(sql, `to_tsvector('jiebacfg', "sys_user"."name") @@ websearch_to_tsquery('jiebacfg', $1)`)
 	my.Assert().Contains(sql, `ts_rank`)
-	my.Assert().Equal([]any{"全文检索", "全文检索"}, args)
+	my.Assert().Equal([]any{"全文检索"}, args)
 }
 
 // TestSearchGuards 搜索约束

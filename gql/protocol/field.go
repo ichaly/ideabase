@@ -6,7 +6,6 @@ type Field struct {
 	Name        string    `json:"name"`        // 字段名
 	Column      string    `json:"column"`      // 列名
 	Virtual     bool      `json:"virtual"`     // 是否虚拟字段
-	Original    bool      `json:"original"`    // 是否原始字段
 	Nullable    bool      `json:"nullable"`    // 是否可空
 	IsUnique    bool      `json:"isUnique"`    // 是否唯一
 	IsPrimary   bool      `json:"isPrimary"`   // 是否主键

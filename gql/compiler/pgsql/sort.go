@@ -20,26 +20,25 @@ var directions = map[string]string{
 	"DESC_NULLS_LAST":  "DESC NULLS LAST",
 }
 
-// buildOrderBy 构建ORDER BY子句，列名经scope映射并限定
-func (my *Dialect) buildOrderBy(ctx *compiler.Context, sc scope, args ast.ArgumentList) error {
-	entries := sortEntries(args)
-	if len(entries) == 0 {
+// buildOrderBy 构建ORDER BY子句；entries由调用方解析（sortEntries），
+// lead为前置列（DISTINCT ON要求排序以去重列开头）
+func (my *Dialect) buildOrderBy(ctx *compiler.Context, sc scope, entries []*ast.ChildValue, lead ...string) error {
+	if len(entries) == 0 && len(lead) == 0 {
 		return nil
 	}
 
 	ctx.Space("ORDER BY")
-	for i, child := range entries {
-		if i > 0 {
-			ctx.Write(", ")
-		}
+	next := comma(ctx)
+	for _, column := range lead {
+		next()
+		ctx.Column(sc.qualifier, column)
+	}
+	for _, child := range entries {
+		next()
 		if child.Name == "" {
 			return fmt.Errorf("排序字段名为空")
 		}
-
-		if sc.qualifier != "" {
-			ctx.Quote(sc.qualifier).Write(".")
-		}
-		ctx.Quote(sc.column(child.Name))
+		ctx.Column(sc.qualifier, sc.column(child.Name))
 
 		direction := "ASC"
 		if child.Value != nil && child.Value.Raw != "" {
@@ -72,8 +71,7 @@ func sortEntries(args ast.ArgumentList) []*ast.ChildValue {
 }
 
 // sortColumns 返回排序涉及的列名，用于基础查询的列收集
-func sortColumns(sc scope, args ast.ArgumentList) []string {
-	entries := sortEntries(args)
+func sortColumns(sc scope, entries []*ast.ChildValue) []string {
 	columns := make([]string, 0, len(entries))
 	for _, child := range entries {
 		columns = append(columns, sc.column(child.Name))

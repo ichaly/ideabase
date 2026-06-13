@@ -105,10 +105,10 @@ SQL 表达不了的字段逻辑用 Resolver。三步接入（完整代码见 `ma
 **1. 配置声明虚拟字段**（无列，由 resolver 在执行后填充）：
 
 ```go
-k.Set("metadata.classes", map[string]*internal.ClassConfig{
+k.Set("metadata.classes", map[string]*gql.ClassConfig{
     "User": {
         Table: "users",
-        Fields: map[string]*internal.FieldConfig{
+        Fields: map[string]*gql.FieldConfig{
             "sign": {Type: "String", IsNullable: true, Resolver: "sign"},
         },
     },
@@ -137,6 +137,8 @@ func (sign) ResolveBatch(ctx context.Context, sources []map[string]any, args map
 
 executor.Register(sign{})
 ```
+
+> 列表场景下 `Resolve` 会被并发调用，实现须线程安全；有状态逻辑请实现 `BatchResolver`。
 
 **3. 像普通字段一样查询**：
 

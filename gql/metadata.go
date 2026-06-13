@@ -102,7 +102,7 @@ func (my *HookedLoader) Load(h protocol.Hoster) error {
 
 // NewMetadata 策略模式重构，支持Loader注册与优先级排序
 func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, error) {
-	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: dataTypes}}
+	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: protocol.DataTypes}}
 
 	// 设置默认配置
 	k.SetDefault("schema.schema", "public")
@@ -179,6 +179,13 @@ func (my *Metadata) PutNode(className string, node *protocol.Class) error {
 	return nil
 }
 
+// 配置类型公开别名：实体/字段的代码内配置（k.Set("metadata.classes", ...)）
+// internal包外部模块不可import，公共API经此别名暴露
+type (
+	ClassConfig = internal.ClassConfig
+	FieldConfig = internal.FieldConfig
+)
+
 // SetSearchMode 记录探测/配置得到的全文搜索能力（NewExecutor启动时写入）
 func (my *Metadata) SetSearchMode(mode, config string) {
 	my.searchMode, my.searchConfig = mode, config
@@ -196,52 +203,6 @@ func (my *Metadata) GetNode(name string) (*protocol.Class, bool) {
 
 func (my *Metadata) SetVersion(version string) {
 	my.Version = version
-}
-
-// FindClass 根据类名查找类
-func (my *Metadata) FindClass(className string, virtual bool) (*protocol.Class, bool) {
-	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
-		return node, true
-	}
-	return nil, false
-}
-
-// FindField 根据类名和字段名查找字段
-func (my *Metadata) FindField(className, fieldName string, virtual bool) (*protocol.Field, bool) {
-	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
-		if field := node.Fields[fieldName]; field != nil && field.Virtual == virtual {
-			return field, true
-		}
-	}
-	return nil, false
-}
-
-// FindRelation 获取外键关系(支持字段名或列名)
-func (my *Metadata) FindRelation(sourceTable, nameOrColumn string) (*protocol.Relation, bool) {
-	if node, ok := my.Nodes[sourceTable]; ok {
-		if field := node.Fields[nameOrColumn]; field != nil {
-			return field.Relation, field.Relation != nil
-		}
-	}
-	return nil, false
-}
-
-// TableName 获取类的表名
-func (my *Metadata) TableName(className string, virtual bool) (string, bool) {
-	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
-		return node.Table, len(node.Table) > 0
-	}
-	return "", false
-}
-
-// ColumnName 获取字段的列名
-func (my *Metadata) ColumnName(className, fieldName string, virtual bool) (string, bool) {
-	if node, ok := my.Nodes[className]; ok && node.Virtual == virtual {
-		if field := node.Fields[fieldName]; field != nil && field.Virtual == virtual {
-			return field.Column, len(field.Column) > 0
-		}
-	}
-	return "", false
 }
 
 // MarshalJSON 自定义JSON序列化

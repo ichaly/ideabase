@@ -70,22 +70,12 @@ func (my *ConfigLoader) Load(h protocol.Hoster) error {
 
 		// 主类/标准类/覆盖类统一处理
 		if className == classConfig.Table || className == canonName || classConfig.Override {
-			baseClass, ok := h.GetNode(classConfig.Table)
-			if ok {
-				// 合并配置
-				// 这里只做简单覆盖，实际可用updateClass合并
-				class, err := my.buildClassFromConfig(className, classConfig, baseClass)
-				if err != nil {
-					return err
-				}
-				h.PutNode(classConfig.Table, class)
-			} else {
-				class, err := my.buildClassFromConfig(className, classConfig, nil)
-				if err != nil {
-					return err
-				}
-				h.PutNode(classConfig.Table, class)
+			baseClass, _ := h.GetNode(classConfig.Table) // 未命中时为nil，按新建处理
+			class, err := my.buildClassFromConfig(className, classConfig, baseClass)
+			if err != nil {
+				return err
 			}
+			h.PutNode(classConfig.Table, class)
 			continue
 		}
 
@@ -121,9 +111,6 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	}
 	if classConfig.Description != "" {
 		newClass.Description = classConfig.Description
-	}
-	if classConfig.Resolver != "" {
-		newClass.Resolver = classConfig.Resolver
 	}
 	if len(classConfig.PrimaryKeys) > 0 {
 		newClass.PrimaryKeys = classConfig.PrimaryKeys

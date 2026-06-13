@@ -33,16 +33,14 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 	column := func(name string) {
 		ctx.Column(u.class.Table, sc.column(name))
 	}
-	written := 0
-	comma := func() {
-		if written > 0 {
-			ctx.SpaceAfter(`,`)
-		}
-		written++
+	fields := fieldsOf(u.field.SelectionSet)
+	if len(fields) == 0 {
+		return fmt.Errorf("统计查询 %s 选择集为空", u.field.Name)
 	}
+	next := comma(ctx)
 	ctx.SpaceAfter(`SELECT`)
-	for _, f := range fieldsOf(u.field.SelectionSet) {
-		comma()
+	for _, f := range fields {
+		next()
 		switch f.Name {
 		case typename:
 			ctx.Write(`'`, u.class.Name, protocol.SUFFIX_STATS, `' AS `).Quote(f.Alias)
@@ -89,10 +87,6 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 			ctx.Write(`) AS `).Quote(f.Alias)
 		}
 	}
-	if written == 0 {
-		return fmt.Errorf("统计查询 %s 选择集为空", u.field.Name)
-	}
-
 	ctx.Space(`FROM`).Write(u.class.Table)
 	if err = my.buildWhere(ctx, sc, u.args); err != nil {
 		return err

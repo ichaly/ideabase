@@ -4,16 +4,14 @@ import "github.com/ichaly/ideabase/utl"
 
 // Class 表示一个数据类/表的完整定义
 type Class struct {
-	Name        string            `json:"name"`               // 类名（可能是转换后的名称）
-	Table       string            `json:"table"`              // 原始表名
-	Virtual     bool              `json:"virtual"`            // 是否为虚拟类
-	Original    bool              `json:"original"`           // 是否为原始类
-	PrimaryKeys []string          `json:"primaryKeys"`        // 主键列表
-	Description string            `json:"description"`        // 描述信息
-	Fields      map[string]*Field `json:"fields"`             // 字段映射表(包含字段名和列名的索引)
-	Resolver    string            `json:"resolver,omitempty"` // 类级别自定义Resolver
-	Search      []string          `json:"search,omitempty"`   // 参与全文搜索的字段
-	IsThrough   bool              `json:"isThrough"`          // 是否为中间表关系表
+	Name        string            `json:"name"`             // 类名（可能是转换后的名称）
+	Table       string            `json:"table"`            // 原始表名
+	Virtual     bool              `json:"virtual"`          // 是否为虚拟类
+	PrimaryKeys []string          `json:"primaryKeys"`      // 主键列表
+	Description string            `json:"description"`      // 描述信息
+	Fields      map[string]*Field `json:"fields"`           // 字段映射表(包含字段名和列名的索引)
+	Search      []string          `json:"search,omitempty"` // 参与全文搜索的字段
+	IsThrough   bool              `json:"isThrough"`        // 是否为中间表关系表
 }
 
 // AddField 添加字段到类中
@@ -28,20 +26,6 @@ func (my *Class) AddField(field *Field) {
 	// 如果列名与字段名不同，添加列名索引
 	if field.Column != "" && field.Column != field.Name {
 		my.Fields[field.Column] = field
-	}
-}
-
-// DelField 移除字段
-func (my *Class) DelField(field *Field) {
-	if field == nil {
-		return
-	}
-	// 删除字段名索引
-	delete(my.Fields, field.Name)
-
-	// 如果列名与字段名不同，删除列名索引
-	if field.Column != "" && field.Column != field.Name {
-		delete(my.Fields, field.Column)
 	}
 }
 
@@ -64,7 +48,6 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		Virtual:     my.Virtual,
 		PrimaryKeys: my.PrimaryKeys,
 		Description: my.Description,
-		Resolver:    my.Resolver,
 		Search:      my.Search,
 	})
 }

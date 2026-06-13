@@ -11,7 +11,6 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/gql"
 	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 自注册PostgreSQL方言
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/std"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -47,11 +46,11 @@ func main() {
 	die(err)
 	k.Set("mode", "dev")
 	k.Set("app.root", ".") // schema.graphql与元数据缓存输出到 ./cfg
-	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+	k.Set("metadata.classes", map[string]*gql.ClassConfig{
 		"User": {
 			Table:  "users",
 			Search: []string{"name"}, // 声明搜索列后获得 search 参数
-			Fields: map[string]*internal.FieldConfig{
+			Fields: map[string]*gql.FieldConfig{
 				// 虚拟字段：无列、由resolver在执行后填充
 				"sign": {Type: "String", IsNullable: true, Resolver: "sign"},
 			},

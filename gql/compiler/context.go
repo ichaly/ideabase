@@ -35,29 +35,12 @@ type Slot struct {
 	Cursor   int    // >=0时变量为base64游标，解码JSON数组后取第Cursor个键值
 }
 
-// Resolve 解析槽位的实际参数值
+// Resolve 解析槽位的实际参数值（游标槽位由ResolveSlots统一memoize解码）
 func (my Slot) Resolve(variables map[string]interface{}) any {
 	if my.Variable == "" {
 		return my.Value
 	}
-	value := variables[my.Variable]
-	if my.Cursor >= 0 {
-		return cursorElement(value, my.Cursor)
-	}
-	return value
-}
-
-// cursorElement 解码游标并取键值：base64(JSON数组)
-func cursorElement(value any, index int) any {
-	text, ok := value.(string)
-	if !ok {
-		return nil
-	}
-	keys, err := DecodeCursor(text)
-	if err != nil || index >= len(keys) {
-		return nil
-	}
-	return keys[index]
+	return variables[my.Variable]
 }
 
 // DecodeCursor 解码游标为排序键值数组
@@ -80,9 +63,8 @@ var contextPool = sync.Pool{
 		sb := &strings.Builder{}
 		sb.Grow(1024) // 预分配1KB初始容量
 		return &Context{
-			variables: make(map[string]interface{}),
-			slots:     make([]Slot, 0, 8),
-			buf:       sb,
+			slots: make([]Slot, 0, 8),
+			buf:   sb,
 		}
 	},
 }
@@ -164,26 +146,6 @@ func (my *Context) GetClass(className string) (*protocol.Class, bool) {
 		return nil, false
 	}
 	return my.hoster.GetNode(className)
-}
-
-func (my *Context) FindField(className, fieldName string) (*protocol.Field, bool) {
-	class, ok := my.GetClass(className)
-	if !ok {
-		return nil, false
-	}
-	field, ok := class.Fields[fieldName]
-	return field, ok
-}
-
-func (my *Context) TableName(className string) (string, bool) {
-	if my.hoster == nil {
-		return "", false
-	}
-	class, ok := my.hoster.GetNode(className)
-	if !ok || class.Table == "" {
-		return "", false
-	}
-	return class.Table, true
 }
 
 // Args 返回参数列表（按当前变量表解析所有槽位）

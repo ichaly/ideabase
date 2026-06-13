@@ -6,14 +6,10 @@
 package intro
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
-	"github.com/samber/lo"
-	"github.com/vektah/gqlparser/v2"
+	"github.com/ichaly/ideabase/utl"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -31,44 +27,23 @@ func New(schema *ast.Schema) *Handler {
 	return my
 }
 
-// ErrNotIntrospection 选择集中没有自省字段：调用方应落回正常数据查询路径
-var ErrNotIntrospection = errors.New("不是自省查询")
-
-// Introspect 处理自省查询：解析校验后按选择集投影数据集
-func (my *Handler) Introspect(ctx context.Context, query string, variables map[string]interface{}, operationName string) (map[string]interface{}, error) {
-	doc, errs := gqlparser.LoadQuery(my.schema, query)
-	if len(errs) > 0 {
-		return nil, errs
-	}
-
-	operation := doc.Operations.ForName(operationName)
-	if operation == nil {
-		if operationName == "" && len(doc.Operations) == 1 {
-			operation = doc.Operations[0]
-		} else {
-			return nil, fmt.Errorf("未找到名为'%s'的操作", operationName)
-		}
-	}
-
-	fields := expand(doc, operation.SelectionSet)
-	if !lo.SomeBy(fields, func(f *ast.Field) bool { return f.Name == "__schema" || f.Name == "__type" }) {
-		return nil, ErrNotIntrospection
-	}
-
+// Introspect 按选择集投影自省数据集
+// operation须已完成解析校验与fragment展开（调用方统一处理，全请求只解析一次）
+func (my *Handler) Introspect(operation *ast.OperationDefinition, variables map[string]interface{}) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
-	for _, field := range fields {
+	for _, field := range fieldsOf(operation.SelectionSet) {
 		switch field.Name {
 		case "__typename":
 			result[field.Alias] = "Query"
 		case "__schema":
-			result[field.Alias] = my.project(doc, field.SelectionSet, my.data)
+			result[field.Alias] = my.project(field.SelectionSet, my.data)
 		case "__type":
 			name, err := typeArgument(field, variables)
 			if err != nil {
 				return nil, err
 			}
 			if value, ok := my.types[name]; ok {
-				result[field.Alias] = my.project(doc, field.SelectionSet, value)
+				result[field.Alias] = my.project(field.SelectionSet, value)
 			} else {
 				result[field.Alias] = nil
 			}
@@ -95,12 +70,12 @@ func typeArgument(field *ast.Field, variables map[string]interface{}) (string, e
 }
 
 // project 按选择集投影数据：map按字段取值，数组逐项递归，叶子原样返回
-func (my *Handler) project(doc *ast.QueryDocument, set ast.SelectionSet, value interface{}) interface{} {
+func (my *Handler) project(set ast.SelectionSet, value interface{}) interface{} {
 	switch node := value.(type) {
 	case []interface{}:
 		out := make([]interface{}, len(node))
 		for i, item := range node {
-			out[i] = my.project(doc, set, item)
+			out[i] = my.project(set, item)
 		}
 		return out
 	case map[string]interface{}:
@@ -108,14 +83,14 @@ func (my *Handler) project(doc *ast.QueryDocument, set ast.SelectionSet, value i
 			return nil
 		}
 		out := make(map[string]interface{}, len(set))
-		for _, field := range expand(doc, set) {
+		for _, field := range fieldsOf(set) {
 			child, ok := node[field.Name]
 			if !ok || child == nil {
 				out[field.Alias] = nil
 				continue
 			}
 			if len(field.SelectionSet) > 0 {
-				out[field.Alias] = my.project(doc, field.SelectionSet, child)
+				out[field.Alias] = my.project(field.SelectionSet, child)
 			} else {
 				out[field.Alias] = child
 			}
@@ -126,19 +101,12 @@ func (my *Handler) project(doc *ast.QueryDocument, set ast.SelectionSet, value i
 	}
 }
 
-// expand 展开选择集中的fragment（命名与内联），返回纯字段列表
-func expand(doc *ast.QueryDocument, set ast.SelectionSet) []*ast.Field {
+// fieldsOf 选择集中的纯字段列表（fragment已由调用方inline展开）
+func fieldsOf(set ast.SelectionSet) []*ast.Field {
 	fields := make([]*ast.Field, 0, len(set))
 	for _, selection := range set {
-		switch s := selection.(type) {
-		case *ast.Field:
-			fields = append(fields, s)
-		case *ast.FragmentSpread:
-			if fragment := doc.Fragments.ForName(s.Name); fragment != nil {
-				fields = append(fields, expand(doc, fragment.SelectionSet)...)
-			}
-		case *ast.InlineFragment:
-			fields = append(fields, expand(doc, s.SelectionSet)...)
+		if field, ok := selection.(*ast.Field); ok {
+			fields = append(fields, field)
 		}
 	}
 	return fields
@@ -148,12 +116,10 @@ func expand(doc *ast.QueryDocument, set ast.SelectionSet) []*ast.Field {
 
 // build 构建__schema数据集；类型先建空容器再填充，支持相互引用与ofType环
 func (my *Handler) build() {
-	names := make([]string, 0, len(my.schema.Types))
-	for name := range my.schema.Types {
-		names = append(names, name)
+	names := utl.SortKeys(my.schema.Types)
+	for _, name := range names {
 		my.types[name] = map[string]interface{}{"__typename": "__Type"}
 	}
-	sort.Strings(names)
 
 	typeList := make([]interface{}, 0, len(names))
 	for _, name := range names {
@@ -162,12 +128,7 @@ func (my *Handler) build() {
 	}
 
 	directives := make([]interface{}, 0, len(my.schema.Directives))
-	directiveNames := make([]string, 0, len(my.schema.Directives))
-	for name := range my.schema.Directives {
-		directiveNames = append(directiveNames, name)
-	}
-	sort.Strings(directiveNames)
-	for _, name := range directiveNames {
+	for _, name := range utl.SortKeys(my.schema.Directives) {
 		directives = append(directives, my.directive(my.schema.Directives[name]))
 	}
 

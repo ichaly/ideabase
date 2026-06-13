@@ -32,6 +32,29 @@ type searcher struct {
 	config  string   // tsvector模式的text search配置
 	columns []string // 参与搜索的列
 	value   *ast.Value
+	param   string // 搜索值的参数占位符；多列共享同一槽位
+}
+
+// hasRank 是否支持相关度排序（ilike模式无相关度）
+func (my *searcher) hasRank() bool {
+	return my.mode != searchIlike
+}
+
+// writeParam 写搜索值参数；首次注册槽位，后续复用同一占位符
+func (my *searcher) writeParam(d *Dialect, ctx *compiler.Context) error {
+	if my.param == "" {
+		if my.value.Kind == ast.Variable {
+			my.param = d.Placeholder(ctx.AddVariable(my.value.Raw))
+		} else {
+			val, err := my.value.Value(nil)
+			if err != nil {
+				return fmt.Errorf("获取搜索值失败: %w", err)
+			}
+			my.param = d.Placeholder(ctx.AddParam(normalizeArg(val)))
+		}
+	}
+	ctx.Write(my.param)
+	return nil
 }
 
 // newSearcher 解析search参数；未携带返回nil
@@ -84,14 +107,14 @@ func (my *searcher) buildCondition(d *Dialect, ctx *compiler.Context, sc scope) 
 			ctx.Write(`to_tsvector('`, my.config, `', `)
 			column(name)
 			ctx.Write(`) @@ websearch_to_tsquery('`, my.config, `', `)
-			if err := d.buildParam(ctx, my.value); err != nil {
+			if err := my.writeParam(d, ctx); err != nil {
 				return err
 			}
 			ctx.Write(`)`)
 		default: // trigram与ilike的过滤形态一致，差异在索引与排序
 			column(name)
 			ctx.Write(` ILIKE '%' || `)
-			if err := d.buildParam(ctx, my.value); err != nil {
+			if err := my.writeParam(d, ctx); err != nil {
 				return err
 			}
 			ctx.Write(` || '%'`)
@@ -101,12 +124,8 @@ func (my *searcher) buildCondition(d *Dialect, ctx *compiler.Context, sc scope) 
 	return nil
 }
 
-// buildRank 相关度排序表达式；ilike模式无相关度返回false
-func (my *searcher) buildRank(d *Dialect, ctx *compiler.Context, sc scope) (bool, error) {
-	if my.mode == searchIlike {
-		return false, nil
-	}
-
+// buildRank 相关度排序表达式（调用方先以hasRank判断）
+func (my *searcher) buildRank(d *Dialect, ctx *compiler.Context, sc scope) error {
 	column := func(name string) {
 		ctx.Column(sc.qualifier, name)
 	}
@@ -120,20 +139,20 @@ func (my *searcher) buildRank(d *Dialect, ctx *compiler.Context, sc scope) (bool
 			ctx.Write(`ts_rank(to_tsvector('`, my.config, `', `)
 			column(name)
 			ctx.Write(`), websearch_to_tsquery('`, my.config, `', `)
-			if err := d.buildParam(ctx, my.value); err != nil {
-				return false, err
+			if err := my.writeParam(d, ctx); err != nil {
+				return err
 			}
 			ctx.Write(`))`)
 		case searchTrigram:
 			ctx.Write(`similarity(`)
 			column(name)
 			ctx.Write(`, `)
-			if err := d.buildParam(ctx, my.value); err != nil {
-				return false, err
+			if err := my.writeParam(d, ctx); err != nil {
+				return err
 			}
 			ctx.Write(`)`)
 		}
 	}
 	ctx.Write(`) DESC`)
-	return true, nil
+	return nil
 }

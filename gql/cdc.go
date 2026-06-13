@@ -62,11 +62,12 @@ type watcher struct {
 }
 
 // listener WAL监听器：一个进程一条复制连接，表变更扇出给关注它的watcher
+// watcher按表名索引，notify只触达关注该表的子集
 type listener struct {
 	mu       sync.Mutex
 	once     sync.Once
-	err      error // 首次启动失败的原因，Subscribe据此报错
-	watchers map[*watcher]bool
+	err      error                        // 首次启动失败的原因，Subscribe据此报错
+	watchers map[string]map[*watcher]bool // 表名 -> 关注该表的watcher集合
 
 	dsn         string
 	publication string
@@ -80,7 +81,7 @@ func newListener(dsn, publication string) *listener {
 	return &listener{
 		dsn:         dsn,
 		publication: publication,
-		watchers:    make(map[*watcher]bool),
+		watchers:    make(map[string]map[*watcher]bool),
 	}
 }
 
@@ -99,11 +100,16 @@ func (my *listener) watch(tables []string) (*watcher, error) {
 	}
 
 	w := &watcher{tables: make(map[string]bool, len(tables)), wake: make(chan struct{}, 1)}
+	my.mu.Lock()
 	for _, table := range tables {
 		w.tables[table] = true
+		group := my.watchers[table]
+		if group == nil {
+			group = make(map[*watcher]bool)
+			my.watchers[table] = group
+		}
+		group[w] = true
 	}
-	my.mu.Lock()
-	my.watchers[w] = true
 	my.mu.Unlock()
 	return w, nil
 }
@@ -111,20 +117,39 @@ func (my *listener) watch(tables []string) (*watcher, error) {
 // unwatch 注销唤醒端
 func (my *listener) unwatch(w *watcher) {
 	my.mu.Lock()
-	delete(my.watchers, w)
+	for table := range w.tables {
+		if group := my.watchers[table]; group != nil {
+			delete(group, w)
+			if len(group) == 0 {
+				delete(my.watchers, table)
+			}
+		}
+	}
 	my.mu.Unlock()
 }
 
-// notify 表变更扇出；table为空表示广播（重连后补偿可能错过的变更）
-func (my *listener) notify(table string) {
+// notify 表变更扇出；tables为空表示广播（重连后补偿可能错过的变更）
+func (my *listener) notify(tables ...string) {
+	wake := func(w *watcher) {
+		select {
+		case w.wake <- struct{}{}:
+		default: // 已有未消费的唤醒，合并
+		}
+	}
+
 	my.mu.Lock()
 	defer my.mu.Unlock()
-	for w := range my.watchers {
-		if table == "" || w.tables[table] {
-			select {
-			case w.wake <- struct{}{}:
-			default: // 已有未消费的唤醒，合并
+	if len(tables) == 0 {
+		for _, group := range my.watchers {
+			for w := range group {
+				wake(w)
 			}
+		}
+		return
+	}
+	for _, table := range tables {
+		for w := range my.watchers[table] {
+			wake(w)
 		}
 	}
 }
@@ -189,7 +214,7 @@ func (my *listener) run(conn *pgconn.PgConn) {
 				continue
 			}
 			conn, backoff = next, time.Second
-			my.notify("") // 广播：补偿断线期间可能错过的变更
+			my.notify() // 广播：补偿断线期间可能错过的变更
 			break
 		}
 	}
@@ -199,6 +224,7 @@ func (my *listener) run(conn *pgconn.PgConn) {
 func (my *listener) receive(conn *pgconn.PgConn) {
 	position := pglogrepl.LSN(0)
 	relations := make(map[uint32]string) // relation id -> 表名
+	touched := make(map[string]bool)     // 当前事务内变更过的表，Commit时统一扇出
 	deadline := time.Now().Add(statusInterval)
 
 	for {
@@ -246,13 +272,14 @@ func (my *listener) receive(conn *pgconn.PgConn) {
 			if data.WALStart > position {
 				position = data.WALStart
 			}
-			my.dispatch(data.WALData, relations)
+			my.dispatch(data.WALData, relations, touched)
 		}
 	}
 }
 
-// dispatch 解码pgoutput消息：维护关系表映射，数据变更按表名扇出
-func (my *listener) dispatch(walData []byte, relations map[uint32]string) {
+// dispatch 解码pgoutput消息：维护关系表映射，行变更累积到事务的touched集合，
+// Commit时统一扇出——通知次数从行数降到每事务的去重表数，批量写入不放大
+func (my *listener) dispatch(walData []byte, relations map[uint32]string, touched map[string]bool) {
 	message, err := pglogrepl.Parse(walData)
 	if err != nil {
 		return
@@ -261,14 +288,23 @@ func (my *listener) dispatch(walData []byte, relations map[uint32]string) {
 	case *pglogrepl.RelationMessage:
 		relations[m.RelationID] = m.RelationName
 	case *pglogrepl.InsertMessage:
-		my.notify(relations[m.RelationID])
+		touched[relations[m.RelationID]] = true
 	case *pglogrepl.UpdateMessage:
-		my.notify(relations[m.RelationID])
+		touched[relations[m.RelationID]] = true
 	case *pglogrepl.DeleteMessage:
-		my.notify(relations[m.RelationID])
+		touched[relations[m.RelationID]] = true
 	case *pglogrepl.TruncateMessage:
 		for _, id := range m.RelationIDs {
-			my.notify(relations[id])
+			touched[relations[id]] = true
+		}
+	case *pglogrepl.CommitMessage:
+		if len(touched) > 0 {
+			tables := make([]string, 0, len(touched))
+			for table := range touched {
+				tables = append(tables, table)
+				delete(touched, table)
+			}
+			my.notify(tables...)
 		}
 	}
 }
@@ -287,4 +323,3 @@ func replicationDSN(dsn string) string {
 	}
 	return dsn + " replication=database"
 }
-

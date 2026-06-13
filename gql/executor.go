@@ -9,20 +9,15 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"gorm.io/gorm"
 )
-
-// introPattern 自省查询特征：__schema字段 或 __type(调用；不会误伤__typename
-var introPattern = regexp.MustCompile(`__schema\b|__type\s*\(`)
 
 // 请求和结果类型定义
 type (
@@ -37,12 +32,28 @@ type (
 	// gqlReply 表示GraphQL响应
 	// 包含执行结果数据或错误信息
 	gqlReply struct {
-		sql    string                 // 生成的SQL语句，仅内部使用
-		args   []any                  // SQL参数，仅内部使用
 		Data   map[string]interface{} `json:"data,omitempty"`   // 成功结果数据
 		Errors gqlerror.List          `json:"errors,omitempty"` // 错误信息列表
+		raw    []byte                 // 直通字节：无resolver时DB返回的__root JSON原样输出
 	}
 )
+
+// MarshalJSON 直通快路径：__root字节直接拼入响应，免解包重序列化
+// （典型列表响应实测省~0.7ms与上万次分配，HTTP与订阅推送共用）
+func (my gqlReply) MarshalJSON() ([]byte, error) {
+	if my.raw == nil || len(my.Errors) > 0 {
+		type alias gqlReply // 别名擦除方法集，避免递归
+		return json.Marshal(alias(my))
+	}
+	data := my.raw
+	if len(data) == 0 {
+		data = []byte(`{}`)
+	}
+	buf := make([]byte, 0, len(data)+9)
+	buf = append(buf, `{"data":`...)
+	buf = append(buf, data...)
+	return append(buf, '}'), nil
+}
 
 // Executor GraphQL执行器
 // 负责解析GraphQL查询、编译为SQL并执行查询，支持多种数据库方言
@@ -111,8 +122,14 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 	executor.intro = intro.New(s)
 
 	if d != nil {
-		// 全文搜索能力：配置优先，否则探测数据库（jieba/zhparser分词 > pg_trgm > ilike降级）
-		executor.metadata.SetSearchMode(detectSearch(d, m.cfg.Search))
+		// 全文搜索能力：配置优先，否则按驱动从注册表探测（无探测器的数据库降级ilike）
+		if mode := strings.TrimSpace(m.cfg.Search.Mode); mode != "" {
+			executor.metadata.SetSearchMode(mode, m.cfg.Search.Config)
+		} else if detect, ok := searchDetectors[d.Name()]; ok {
+			executor.metadata.SetSearchMode(detect(d))
+		} else {
+			executor.metadata.SetSearchMode("ilike", "")
+		}
 		// 订阅唤醒源：按驱动名从注册表选取CDC实现（复制连接延迟到首个订阅时建立）
 		if factory, ok := notifiers[d.Name()]; ok {
 			if source, err := factory(d, m.cfg.Subscription); err == nil {
@@ -121,37 +138,6 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		}
 	}
 	return executor, nil
-}
-
-// detectSearch 探测全文搜索能力：
-// 1. 配置显式指定则直接采用；2. 存在挂在jieba/zhparser解析器上的分词配置则tsvector；
-// 3. pg_trgm可用（尝试自动创建，contrib模块官方镜像自带）则trigram；4. 否则ilike降级
-func detectSearch(db *gorm.DB, cfg internal.SearchConfig) (string, string) {
-	if mode := strings.TrimSpace(cfg.Mode); mode != "" {
-		return mode, cfg.Config
-	}
-
-	var config string
-	if err := db.Raw(`SELECT c.cfgname FROM pg_ts_config c
-		JOIN pg_ts_parser p ON c.cfgparser = p.oid
-		WHERE p.prsname IN ('jieba', 'zhparser') LIMIT 1`).Scan(&config).Error; err == nil && config != "" {
-		return "tsvector", config
-	}
-
-	// 先探测已安装（常态），缺失才尝试创建（contrib模块，权限不足时静默降级）
-	probe := func() bool {
-		var trigram int
-		err := db.Raw(`SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'`).Scan(&trigram).Error
-		return err == nil && trigram == 1
-	}
-	if probe() {
-		return "trigram", ""
-	}
-	db.Exec(`CREATE EXTENSION IF NOT EXISTS pg_trgm`)
-	if probe() {
-		return "trigram", ""
-	}
-	return "ilike", ""
 }
 
 // loadSchema 解析schema来源：schema.file配置 > renderer现场生成
@@ -195,8 +181,10 @@ func (my *Executor) loadDocument(content string) error {
 			return fmt.Errorf("持久化文档中的操作必须命名")
 		}
 		my.documents[operation.Name] = content
-		// 尽力预热编译缓存；依赖变量内容的操作（volatile）留到执行期编译
-		_, _ = my.plan(content, operation.Name, nil)
+		// 复用已解析的AST预热编译缓存（不再重复解析文档）；
+		// 依赖变量内容的操作（volatile）缓存AST，执行期免解析重编译
+		operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
+		_, _ = my.compile(planKey{operation: operation.Name, query: content}, operation, nil)
 	}
 	return nil
 }
@@ -250,15 +238,16 @@ func (my *Executor) Handler(c fiber.Ctx) error {
 	}
 
 	// 空查询且携带操作名时按持久化查询执行
-	var result gqlReply
 	if strings.TrimSpace(req.Query) == "" && req.OperationName != "" {
-		result = my.ExecuteOperation(c.Context(), req.OperationName, req.Variables)
-	} else {
-		result = my.Execute(c.Context(), req.Query, req.Variables, req.OperationName)
+		query, ok := my.documents[req.OperationName]
+		if !ok {
+			return c.JSON(gqlReply{Errors: gqlerror.List{gqlerror.Errorf("未找到名为'%s'的持久化操作", req.OperationName)}})
+		}
+		req.Query = query
 	}
 
-	// 返回结果
-	return c.JSON(result)
+	// 返回结果（无resolver路径经MarshalJSON直通输出）
+	return c.JSON(my.execute(c.Context(), req.Query, req.Variables, req.OperationName))
 }
 
 // 主要公开方法
@@ -280,35 +269,53 @@ func (my *Executor) Handler(c fiber.Ctx) error {
 //	    "query { user(id: 1) { name email } }",
 //	    nil, "")
 func (my *Executor) Execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
+	r := my.execute(ctx, query, variables, operationName)
+	// 公开API契约：Data始终可编程访问（直通字节解包回map）
+	if r.raw != nil {
+		result := make(map[string]interface{})
+		if len(r.raw) > 0 {
+			if err := json.Unmarshal(r.raw, &result); err != nil {
+				return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
+			}
+		}
+		r.Data, r.raw = result, nil
+	}
+	return r
+}
+
+// execute 执行核心：无resolver的成功结果以直通字节形态返回（raw）
+func (my *Executor) execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	var r gqlReply
 
-	// 处理自省查询（特征预筛可能误命中字面量，sentinel回退到正常编译路径）
-	if introPattern.MatchString(query) {
-		data, err := my.intro.Introspect(ctx, query, variables, operationName)
-		switch {
-		case err == nil:
-			r.Data = data
-			return r
-		case !errors.Is(err, intro.ErrNotIntrospection):
-			r.Errors = gqlerror.List{gqlerror.Wrap(err)}
-			return r
-		}
-	}
-
-	// 获取执行计划（优先命中缓存）并执行
+	// 获取执行计划（缓存命中零解析）；缓存未命中时解析一次，
+	// 顶层选择集含__schema/__type则路由到自省投影，否则编译为SQL
 	plan, err := my.plan(query, operationName, variables)
 	if err != nil {
+		var introErr *introQuery
+		if errors.As(err, &introErr) {
+			data, ierr := my.intro.Introspect(introErr.operation, variables)
+			if ierr != nil {
+				r.Errors = gqlerror.List{gqlerror.Wrap(ierr)}
+			} else {
+				r.Data = data
+			}
+			return r
+		}
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
 	}
 
-	data, args, err := my.fetch(ctx, plan, variables)
-	r.sql, r.args = plan.SQL, args
+	data, err := my.fetch(ctx, plan, variables)
 	if err != nil {
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
 	}
 
+	// 无resolver时跳过解包，序列化期直通输出
+	if len(plan.resolvers) == 0 {
+		r.raw = data
+		return r
+	}
 	result, err := my.unpack(ctx, plan, data)
 	if err != nil {
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
@@ -319,11 +326,11 @@ func (my *Executor) Execute(ctx context.Context, query string, variables map[str
 }
 
 // fetch 执行计划：单条SQL返回单行单列的__root JSON原始字节
-func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, []any, error) {
+func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, error) {
 	args := plan.Args(variables)
 	var data []byte
 	err := my.database.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
-	return data, args, err
+	return data, err
 }
 
 // unpack 解包__root JSON为data（顶层key即字段别名）并执行resolver后处理
@@ -342,65 +349,76 @@ func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte) (map[st
 	return result, nil
 }
 
-// plan 获取执行计划：命中缓存直接返回，未命中则解析编译并缓存
+// introQuery 解析后发现是自省查询：经error通道带出已解析的operation，
+// 调用方（Execute）路由到自省投影，其余入口（订阅/持久化预热）按错误处理
+type introQuery struct {
+	operation *ast.OperationDefinition
+}
+
+func (my *introQuery) Error() string { return "自省查询不支持此入口" }
+
+// plan 获取执行计划：命中缓存零解析；volatile命中仅重做SQL构建；
+// 未命中则解析一次（fragment就地展开），自省查询经introQuery带出
 func (my *Executor) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
+	key := planKey{operation: operationName, query: query}
+	if entry, ok := my.cache.Get(key); ok {
+		if entry.plan != nil {
+			return entry.plan, nil
+		}
+		return my.compiler.Compile(entry.operation, variables)
+	}
+
+	operation, err := my.parse(query, operationName)
+	if err != nil {
+		return nil, err
+	}
+	if hasIntroField(operation.SelectionSet) {
+		return nil, &introQuery{operation: operation}
+	}
 	if my.compiler == nil || my.database == nil {
 		return nil, fmt.Errorf("执行器未配置数据库或编译器")
 	}
+	return my.compile(key, operation, variables)
+}
 
-	key := planKey{operation: operationName, query: query}
-	if plan, ok := my.cache.Get(key); ok {
-		return plan, nil
-	}
-
+// parse 解析校验查询并选定操作，fragment就地展开为纯字段选择集
+func (my *Executor) parse(query, operationName string) (*ast.OperationDefinition, error) {
 	doc, errs := gqlparser.LoadQuery(my.schema, query)
 	if len(errs) > 0 {
 		return nil, errs
 	}
-	operation, err := getOperation(doc.Operations, operationName)
-	if err != nil {
-		return nil, err
+	operation := doc.Operations.ForName(operationName)
+	if operation == nil {
+		if operationName != "" || len(doc.Operations) != 1 {
+			return nil, fmt.Errorf("未找到名为'%s'的操作（多操作查询必须提供operationName）", operationName)
+		}
+		operation = doc.Operations[0]
 	}
-	// fragment展开后编译器只需处理纯字段选择集
 	operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
+	return operation, nil
+}
 
+// compile 编译并缓存：volatile计划依赖变量内容（如整体input变量），
+// SQL不可复用但AST可以——缓存operation供后续请求免解析重编译
+func (my *Executor) compile(key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*Plan, error) {
 	plan, err := my.compiler.Compile(operation, variables)
 	if err != nil {
 		return nil, err
 	}
-	// volatile计划依赖变量内容（如整体input变量），不可复用
-	if !plan.Volatile() {
-		my.cache.Put(key, plan)
+	if plan.Volatile() {
+		my.cache.Put(key, &planEntry{operation: operation})
+	} else {
+		my.cache.Put(key, &planEntry{plan: plan})
 	}
 	return plan, nil
 }
 
-// 获取操作
-// getOperation 根据GraphQL标准从操作列表中选择要执行的操作
-// 根据GraphQL规范:
-// 1. 如果只有一个操作，直接返回该操作
-// 2. 如果有多个操作，必须通过operationName指定要执行哪个
-// 3. 如果指定的operationName未找到，返回错误
-//
-// 参数:
-//   - operations: GraphQL操作列表
-//   - operationName: 要执行的操作名称(多操作时必须)
-//
-// 返回:
-//   - 选定的操作定义和可能的错误
-func getOperation(operations ast.OperationList, operationName string) (*ast.OperationDefinition, error) {
-	// 单操作直接返回，多操作需要操作名
-	if len(operations) == 1 {
-		return operations[0], nil
-	} else if operationName == "" {
-		return nil, fmt.Errorf("必须提供operationName，因为该查询包含多个操作")
-	}
-
-	// 查找指定操作
-	for _, op := range operations {
-		if op.Name == operationName {
-			return op, nil
+// hasIntroField 顶层选择集是否含自省字段（fragment已展开）
+func hasIntroField(set ast.SelectionSet) bool {
+	for _, s := range set {
+		if f, ok := s.(*ast.Field); ok && (f.Name == "__schema" || f.Name == "__type") {
+			return true
 		}
 	}
-	return nil, fmt.Errorf("未找到名为'%s'的操作", operationName)
+	return false
 }

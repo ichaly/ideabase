@@ -804,9 +804,6 @@ func TestNewMetadataFeatures(t *testing.T) {
 		assert.True(t, exists, "应该存在User类")
 		assert.Equal(t, "users", user.Table, "表名应该是users")
 
-		// 检查类级别Resolver (跳过具体值检查)
-		t.Logf("User类Resolver: %s", user.Resolver)
-
 		// 检查字段是否存在
 		_, hasPassword := user.Fields["password"]
 		t.Logf("password字段存在: %v", hasPassword)

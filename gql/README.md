@@ -69,7 +69,7 @@ app.Post("/graphql", executor.Handler)     // fiber v3
 - 变更：`createX(input)` / `updateX(input, id|where)` / `deleteX(id|where)`，
   变更 CTE + 读回单条 SQL 原子完成；update/delete 强制要求条件
 - 批量与 upsert：`createUsers(input: [..!]!)` 多行单条 INSERT（约束：参数总数
-  受 PG 协议 65535 上限，万行级请分批）；`upsertUsers(input, on: ["email"])`
+  受 PG 协议 65535 上限，万行级请分批）；`upsertUsers(input, on: ["email"])`（`on` 兼容单值写法 `on: "email"`）
   ON CONFLICT DO UPDATE，on 缺省主键
 - 嵌套写入：输入中列表关系字段接受 `{connect:[ID!], disconnect:[ID!], create:[子CreateInput!]}`
   （connect/disconnect 挂接解除既有行，create 内联建新行并自动填外键），
@@ -101,6 +101,9 @@ func (Greet) Resolve(ctx context.Context, source, args map[string]any) (any, err
 }
 executor.Register(Greet{})
 ```
+
+> 列表场景下 `Resolve` 会被**并发调用**（有界并发），实现须线程安全；
+> 有状态或需要共享资源的逻辑请实现 `BatchResolver`（整批单次调用，无并发约束）。
 
 ## 订阅（CDC 驱动）
 

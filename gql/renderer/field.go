@@ -76,16 +76,3 @@ func WithMultilineArgs() Option {
 		f.Multiline = true
 	}
 }
-
-// New 创建新字段
-func New(name string, typeName string, options ...Option) *Field {
-	f := getFromPool()
-	f.Name = name
-	f.Type.Name = typeName
-
-	for _, opt := range options {
-		opt(f)
-	}
-
-	return f
-}
