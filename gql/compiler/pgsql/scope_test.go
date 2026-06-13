@@ -139,3 +139,29 @@ func (my *_DialectSuite) TestScopeMulti() {
 	my.Assert().Contains(sql, `"sys_user"."tenant_id" = $1 AND "sys_user"."owner_id" = $2`)
 	my.T().Logf("多作用域SQL片段:\n%s", sql)
 }
+
+// TestScopeStats 统计聚合也注入作用域：count/sum 不泄露全表跨租户统计
+func (my *_DialectSuite) TestScopeStats() {
+	meta, schema, dialect := my.newSuite(map[string]interface{}{
+		"metadata.classes": map[string]*internal.ClassConfig{
+			"User": {
+				Table: "sys_user",
+				Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}},
+				Fields: map[string]*internal.FieldConfig{
+					"id":   {Type: "ID", Column: "id", IsPrimary: true},
+					"name": {Type: "String", Column: "name"},
+				},
+			},
+		},
+	})
+
+	doc, gqlErr := gqlparser.LoadQuery(schema, `query { userStats { count } }`)
+	my.Require().Empty(gqlErr)
+	compile, err := gql.NewCompiler(meta, []compiler.Dialect{dialect})
+	my.Require().NoError(err)
+	sql, _, err := compile.Build(doc.Operations[0], nil)
+	my.Require().NoError(err)
+
+	// 聚合 FROM 表也带作用域 WHERE
+	my.Assert().Contains(sql, `FROM sys_user WHERE "sys_user"."tenant_id" = $1`)
+}

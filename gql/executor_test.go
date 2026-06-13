@@ -618,4 +618,12 @@ func TestExecutorScope(t *testing.T) {
 	require.NoError(t, db.Raw(`SELECT name, tenant_id FROM users WHERE email = 'new1@x.com'`).Row().Scan(&name, &hijTenant))
 	require.Equal(t, "own", name, "租户2 不应劫持租户1 的行（DO UPDATE 被作用域 WHERE 阻止）")
 	require.Equal(t, 1, hijTenant, "租户1 行的 tenant_id 未被改写")
+
+	// 统计聚合也隔离：count 应与查询 total 一致（都只算本租户），不泄露全表
+	reply = executor.Execute(ctx1, `query { userStats { count } users { total } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	statsCount := reply.Data["userStats"].([]interface{})[0].(map[string]interface{})["count"]
+	queryTotal := reply.Data["users"].(map[string]interface{})["total"]
+	require.NotZero(t, statsCount, "租户1 应有数据")
+	require.EqualValues(t, queryTotal, statsCount, "统计聚合应与查询同样按作用域隔离，不泄露全表")
 }

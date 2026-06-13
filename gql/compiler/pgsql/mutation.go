@@ -670,24 +670,38 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			// 多对多：中间表插入/删除/内联创建
 			ctx.MarkTable(through.TableName)
 			if len(op.connect) > 0 {
-				// INSERT VALUES 上下文中参数类型由目标列推断
 				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).
 					Write(` AS (INSERT INTO `, through.TableName, ` (`).
-					Quote(through.SourceKey).Write(`, `).Quote(through.TargetKey).
-					Write(`) VALUES `)
-				for i, write := range op.connect {
-					if i > 0 {
-						ctx.Write(`, `)
-					}
-					ctx.Write(`(`)
+					Quote(through.SourceKey).Write(`, `).Quote(through.TargetKey).Write(`) `)
+				if len(target.Scope) > 0 {
+					// 目标有作用域：经SELECT校验目标行属当前作用域，防建立跨租户关联（中间表污染）
+					ctx.Write(`SELECT `)
 					anchor(op.rel)
-					ctx.Write(`, `)
-					if err := write(ctx); err != nil {
+					ctx.Write(`, `).Column(target.Table, pk).Write(` FROM `, target.Table).
+						Write(` WHERE `).Column(target.Table, pk).Write(` IN (`)
+					if err := params(op.connect); err != nil {
 						return err
 					}
 					ctx.Write(`)`)
+					my.appendScope(ctx, target.Table, target.Scope)
+					ctx.Write(`)`)
+				} else {
+					// 无作用域：INSERT VALUES（参数类型由目标列推断），目标存在性由外键约束保证
+					ctx.Write(`VALUES `)
+					for i, write := range op.connect {
+						if i > 0 {
+							ctx.Write(`, `)
+						}
+						ctx.Write(`(`)
+						anchor(op.rel)
+						ctx.Write(`, `)
+						if err := write(ctx); err != nil {
+							return err
+						}
+						ctx.Write(`)`)
+					}
+					ctx.Write(`)`)
 				}
-				ctx.Write(`)`)
 			}
 			if len(op.disconnect) > 0 {
 				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).
@@ -731,7 +745,9 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			if err := params(op.connect); err != nil {
 				return err
 			}
-			ctx.Write(`))`)
+			ctx.Write(`)`)
+			my.appendScope(ctx, target.Table, target.Scope) // 只能挂接当前作用域的目标行（防跨租户劫持）
+			ctx.Write(`)`)
 		}
 		if len(op.disconnect) > 0 {
 			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).
@@ -742,7 +758,9 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			if err := params(op.disconnect); err != nil {
 				return err
 			}
-			ctx.Write(`))`)
+			ctx.Write(`)`)
+			my.appendScope(ctx, target.Table, target.Scope)
+			ctx.Write(`)`)
 		}
 		if len(op.create) > 0 {
 			// 内联建子行：外键列取主CTE锚点（覆盖行内同名列）

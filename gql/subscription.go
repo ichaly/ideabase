@@ -128,7 +128,11 @@ var upgrader = websocket.FastHTTPUpgrader{
 
 // SubscribeHandler 处理GraphQL订阅的WebSocket升级（graphql-transport-ws子协议）
 func (my *Executor) SubscribeHandler(c fiber.Ctx) error {
-	return upgrader.Upgrade(c.RequestCtx(), my.serveSocket)
+	// 升级前提取行级作用域：WebSocket升级后fiber请求ctx不可用，否则订阅丢失隔离
+	scope := scopeValues(c.Context())
+	return upgrader.Upgrade(c.RequestCtx(), func(conn *websocket.Conn) {
+		my.serveSocket(conn, scope)
+	})
 }
 
 // socketSession 单个WebSocket连接的订阅会话
@@ -146,8 +150,9 @@ func (my *socketSession) write(message wsReply) error {
 }
 
 // serveSocket 连接读循环：init/ack、subscribe、complete、ping/pong
-func (my *Executor) serveSocket(conn *websocket.Conn) {
-	ctx, cancel := context.WithCancel(context.Background())
+// scope 为HTTP升级阶段提取的行级作用域，注入连接ctx供订阅查询隔离
+func (my *Executor) serveSocket(conn *websocket.Conn, scope map[string]any) {
+	ctx, cancel := context.WithCancel(WithScope(context.Background(), scope))
 	defer cancel()
 
 	session := &socketSession{conn: conn, subs: make(map[string]context.CancelFunc)}

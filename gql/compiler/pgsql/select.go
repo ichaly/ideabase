@@ -604,12 +604,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 	list := func(qualifier string) { writeColumns(ctx, qualifier, all) }
 
 	// 行级作用域：递归CTE的起始层与步进层都注入，递归只在本租户内遍历（限范围、防跨租户）
-	scopeFilter := func() {
-		for _, rule := range u.class.Scope {
-			ctx.Space(`AND`)
-			my.scopeCondition(ctx, u.class.Table, rule)
-		}
-	}
+	scopeFilter := func() { my.appendScope(ctx, u.class.Table, u.class.Scope) }
 
 	ctx.Space(`FROM (WITH RECURSIVE`).QuotedWithSpace(tree).Write(`AS (SELECT `)
 	list(u.class.Table)

@@ -272,3 +272,11 @@ func (my *Dialect) scopeConjuncts(ctx *compiler.Context, qualifier string, class
 	}
 	return conjuncts
 }
+
+// appendScope 在已有WHERE后追加 AND 作用域条件（递归CTE层、关系操作目标行校验）
+func (my *Dialect) appendScope(ctx *compiler.Context, table string, rules []protocol.ScopeRule) {
+	for _, rule := range rules {
+		ctx.Space(`AND`)
+		my.scopeCondition(ctx, table, rule)
+	}
+}

@@ -89,7 +89,8 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 		}
 	}
 	ctx.Space(`FROM`).Write(u.class.Table)
-	if err = my.buildWhere(ctx, sc, u.args); err != nil {
+	// 行级作用域：聚合也强制隔离，否则 count/sum 泄露全表跨租户统计
+	if err = my.buildWhere(ctx, sc, u.args, my.scopeConjuncts(ctx, sc.qualifier, u.class)...); err != nil {
 		return err
 	}
 	if len(groups) > 0 {
