@@ -118,6 +118,9 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	if len(classConfig.Search) > 0 {
 		newClass.Search = classConfig.Search
 	}
+	for _, s := range classConfig.Scope {
+		newClass.Scope = append(newClass.Scope, protocol.ScopeRule{Column: s.Column, Context: s.Context})
+	}
 	my.applyFieldFilter(newClass, classConfig)
 	if err := my.applyFieldConfig(newClass, classConfig.Fields); err != nil {
 		return nil, err

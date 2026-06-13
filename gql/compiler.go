@@ -43,9 +43,10 @@ func (my *Plan) Volatile() bool {
 	return my.volatile
 }
 
-// Args 按变量表解析参数槽位，缺失变量回退到操作定义的默认值
-func (my *Plan) Args(variables map[string]interface{}) []any {
-	args := compiler.ResolveSlots(my.slots, variables)
+// Args 按变量表解析参数槽位，缺失变量回退到操作定义的默认值；
+// scope 提供行级作用域值（租户/属主，认证注入），无作用域时传nil
+func (my *Plan) Args(variables, scope map[string]interface{}) []any {
+	args := compiler.ResolveSlots(my.slots, variables, scope)
 	for i, slot := range my.slots {
 		if args[i] == nil && slot.Variable != "" {
 			args[i] = my.defaults[slot.Variable]
@@ -116,7 +117,7 @@ func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[stri
 	if err != nil {
 		return "", nil, err
 	}
-	return plan.SQL, plan.Args(variables), nil
+	return plan.SQL, plan.Args(variables, nil), nil
 }
 
 // selectDialect 选择适合当前数据库的SQL方言

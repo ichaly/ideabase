@@ -89,12 +89,21 @@ type ClassConfig struct {
 	// 参与全文搜索的字段
 	Search []string `mapstructure:"search"`
 
+	// 行级作用域：编译期强制注入的过滤（租户/属主隔离），值由 gql.WithScope 在请求上下文注入
+	Scope []ScopeConfig `mapstructure:"scope"`
+
 	// 字段过滤配置
 	ExcludeFields []string `mapstructure:"exclude_fields"` // 排除这些字段
 	IncludeFields []string `mapstructure:"include_fields"` // 仅包含这些字段
 
 	// override: true 表示别名覆盖主类指针，false（默认）为附加模式
 	Override bool `mapstructure:"override"`
+}
+
+// ScopeConfig 行级作用域规则配置
+type ScopeConfig struct {
+	Column  string `mapstructure:"column"`  // 数据库列名（如 tenant_id / user_id）
+	Context string `mapstructure:"context"` // 上下文键名（如 tenant / userId）
 }
 
 // FieldConfig 表示字段配置

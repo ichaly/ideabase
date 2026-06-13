@@ -26,14 +26,15 @@ const (
 
 // unit 一个LATERAL JOIN子查询单元：查询根字段、关系字段或变更读回
 type unit struct {
-	field  *ast.Field         // GraphQL字段
-	class  *protocol.Class    // 对应实体
-	rel    *protocol.Relation // 与父级的关系，根字段为nil
-	parent string             // 父级基表别名（lateral关联引用）
-	index  int                // 单元序号，决定 __sj_N/__sr_N 别名
-	shape  shape              // JSON包装形态
-	page   *pager             // 游标分页参数（first/last模式）
-	args   ast.ArgumentList   // 生效的查询参数；变更读回为nil（参数已被CTE消费）
+	field    *ast.Field         // GraphQL字段
+	class    *protocol.Class    // 对应实体
+	rel      *protocol.Relation // 与父级的关系，根字段为nil
+	parent   string             // 父级基表别名（lateral关联引用）
+	index    int                // 单元序号，决定 __sj_N/__sr_N 别名
+	shape    shape              // JSON包装形态
+	page     *pager             // 游标分页参数（first/last模式）
+	args     ast.ArgumentList   // 生效的查询参数；变更读回为nil（参数已被CTE消费）
+	readback bool               // 变更读回顶层单元（读CTE非基表），跳过行级作用域注入
 }
 
 // BuildQuery 构建查询语句：根JSON对象 + 每个根字段一个LATERAL单元
@@ -435,6 +436,17 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	}
 	if u.page != nil && u.page.cursor != nil {
 		conjuncts = append(conjuncts, func() error { return my.buildKeyset(ctx, sc, u.page) })
+	}
+	// 行级作用域：实体声明scope时强制注入 列=上下文值（租户/属主隔离）；
+	// 读基表的查询单元才注入，变更读回顶层单元读CTE跳过
+	if !u.readback {
+		for _, rule := range u.class.Scope {
+			conjuncts = append(conjuncts, func() error {
+				ctx.Column(sc.qualifier, rule.Column).Write(` = `)
+				ctx.Write(my.Placeholder(ctx.AddContextSlot(rule.Context)))
+				return nil
+			})
+		}
 	}
 	if err = my.buildWhere(ctx, sc, u.args, conjuncts...); err != nil {
 		return err

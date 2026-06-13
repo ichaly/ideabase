@@ -325,7 +325,7 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 
 // fetch 执行计划：单条SQL返回单行单列的__root JSON原始字节
 func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, error) {
-	args := plan.Args(variables)
+	args := plan.Args(variables, scopeValues(ctx)) // 行级作用域值从请求上下文取
 	var data []byte
 	err := my.database.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
 	return data, err

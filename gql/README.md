@@ -110,6 +110,44 @@ executor.Register(Greet{})
 > 列表场景下 `Resolve` 会被**并发调用**（有界并发），实现须线程安全；
 > 有状态或需要共享资源的逻辑请实现 `BatchResolver`（整批单次调用，无并发约束）。
 
+## 行级作用域（多租户 / 当前登录人）
+
+按当前租户或登录人强制过滤数据。核心是：作用域值来自**服务端认证上下文**，
+不是客户端查询参数，所以不进 schema、对客户端透明，**完整自省不受影响**。
+
+实体声明作用域列与上下文键的对应：
+
+```yaml
+metadata:
+  classes:
+    Post: { table: posts, scope: [{ column: tenant_id, context: tenant }] }
+    # 当前登录人:{ column: user_id, context: userId }；可同时声明多条，各注入一条 AND
+```
+
+认证中间件把值注入请求上下文（`gql.WithScope`）：
+
+```go
+func AuthMiddleware(c fiber.Ctx) error {
+    claims := parseJWT(c.Get("Authorization"))      // 服务端解出当前租户/登录人
+    ctx := gql.WithScope(c.Context(),
+        map[string]any{"tenant": claims.Tenant, "userId": claims.UserId})
+    c.SetContext(ctx)
+    return c.Next()
+}
+```
+
+编译期自动 AND 进 WHERE（作用域值执行期从上下文取，作为参数槽位，计划仍缓存）：
+
+```sql
+-- 客户端只写 { posts { items { title } } }，引擎强制注入：
+SELECT ... FROM posts WHERE posts.tenant_id = $1   -- $1 = ctx 的 tenant
+```
+
+- 嵌套关系字段（读基表）同样注入；变更读回（读 CTE）跳过
+- 客户端自己叠 `where: { tenantId: { eq: 99 } }` 只会 AND 出更窄的集合，绕不过
+- 无作用域上下文时该参数为 `NULL`，匹配不到任何行（安全默认）
+- 当前覆盖**查询读隔离**；变更（update/delete 的 WHERE、create 自动填列）的写隔离为后续
+
 ### 批量机制：resolver 如何不产生 N+1
 
 关系嵌套的 N+1 由单条 SQL 根除；resolver 在 SQL 之外，靠**整结果集批量收集 +

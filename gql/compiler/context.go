@@ -32,6 +32,7 @@ type Slot struct {
 	Value    any    // 字面量值
 	Variable string // 变量名，非空时优先生效
 	Cursor   int    // >=0时变量为base64游标，解码JSON数组后取第Cursor个键值
+	Context  string // 非空时从执行期scope表取值（行级作用域：租户/属主，认证注入）
 }
 
 // Resolve 解析槽位的实际参数值（游标槽位由ResolveSlots统一memoize解码）
@@ -152,14 +153,18 @@ func (my *Context) GetClass(className string) (*protocol.Class, bool) {
 
 // Args 返回参数列表（按当前变量表解析所有槽位）
 func (my *Context) Args() []any {
-	return ResolveSlots(my.slots, my.variables)
+	return ResolveSlots(my.slots, my.variables, nil)
 }
 
 // ResolveSlots 解析槽位为参数列表；同一游标变量只解码一次（K个排序键共享）
-func ResolveSlots(slots []Slot, variables map[string]interface{}) []any {
+func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) []any {
 	var cursors map[string][]any // 惰性：仅游标槽位存在时分配
 	args := make([]any, len(slots))
 	for i, slot := range slots {
+		if slot.Context != "" { // 行级作用域：从请求上下文取值（认证注入，缺失则nil=匹配不到行）
+			args[i] = scope[slot.Context]
+			continue
+		}
 		if slot.Variable != "" && slot.Cursor >= 0 {
 			if cursors == nil {
 				cursors = make(map[string][]any, 1)
@@ -195,6 +200,12 @@ func (my *Context) AddParam(value any) int {
 // AddVariable 添加变量引用参数并返回参数序号（从1开始）
 func (my *Context) AddVariable(name string) int {
 	my.slots = append(my.slots, Slot{Variable: name, Cursor: -1})
+	return len(my.slots)
+}
+
+// AddContextSlot 添加上下文参数槽位：执行期从scope表按key取值（行级作用域）
+func (my *Context) AddContextSlot(key string) int {
+	my.slots = append(my.slots, Slot{Context: key, Cursor: -1})
 	return len(my.slots)
 }
 

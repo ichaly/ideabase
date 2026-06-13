@@ -11,7 +11,14 @@ type Class struct {
 	Description string            `json:"description"`      // 描述信息
 	Fields      map[string]*Field `json:"fields"`           // 字段映射表(包含字段名和列名的索引)
 	Search      []string          `json:"search,omitempty"` // 参与全文搜索的字段
+	Scope       []ScopeRule       `json:"scope,omitempty"`  // 行级作用域：编译期强制注入的过滤（租户/属主隔离）
 	IsThrough   bool              `json:"isThrough"`        // 是否为中间表关系表
+}
+
+// ScopeRule 行级作用域规则：列 = 执行期从请求上下文取的值（认证注入，不进schema）
+type ScopeRule struct {
+	Column  string `json:"column"`  // 数据库列名（如 tenant_id / user_id）
+	Context string `json:"context"` // 上下文键名（如 tenant / userId），值由 gql.WithScope 注入
 }
 
 // AddField 添加字段到类中

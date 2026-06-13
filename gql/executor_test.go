@@ -531,3 +531,52 @@ func TestExecutorDocuments(t *testing.T) {
 	require.NotEmpty(t, reply.Errors)
 	require.Contains(t, reply.Errors[0].Message, "未找到")
 }
+
+// TestExecutorScope 行级作用域真库验证：WithScope 注入租户，查询只返回该租户的行，
+// 对客户端透明（schema 不变）。无作用域上下文则匹配不到行（安全默认）
+func TestExecutorScope(t *testing.T) {
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+
+	require.NoError(t, db.Exec(`ALTER TABLE users ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
+
+	k, err := std.NewKonfig()
+	require.NoError(t, err)
+	k.Set("mode", "dev")
+	k.Set("app.root", t.TempDir())
+	k.Set("schema.schema", "public")
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+		"User": {Table: "users", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+	})
+	meta, err := NewMetadata(k, db)
+	require.NoError(t, err, "加载元数据失败")
+	compile, err := NewCompiler(meta, nil)
+	require.NoError(t, err)
+	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	require.NoError(t, err)
+
+	require.NoError(t, db.Exec(`INSERT INTO users (name, email, tenant_id) VALUES
+		('t1a','t1a@x.com',1), ('t1b','t1b@x.com',1), ('t2a','t2a@x.com',2)`).Error)
+
+	// 租户1上下文：只看到自己的2条
+	ctx := WithScope(context.Background(), map[string]any{"tenant": 1})
+	reply := executor.Execute(ctx, `{ users { items { name } total } }`, nil, "")
+	require.Empty(t, reply.Errors, "租户1查询失败: %v", reply.Errors)
+	require.EqualValues(t, 2, reply.Data["users"].(map[string]interface{})["total"], "租户1应只看到2条")
+
+	// 租户2：只看到1条
+	ctx = WithScope(context.Background(), map[string]any{"tenant": 2})
+	reply = executor.Execute(ctx, `{ users { total } }`, nil, "")
+	require.Empty(t, reply.Errors, "租户2查询失败: %v", reply.Errors)
+	require.EqualValues(t, 1, reply.Data["users"].(map[string]interface{})["total"], "租户2应只看到1条")
+
+	// 客户端想偷看别的租户：where 叠加只会更窄，绕不过强制作用域
+	reply = executor.Execute(ctx, `{ users(where: { name: { eq: "t1a" } }) { total } }`, nil, "")
+	require.Empty(t, reply.Errors)
+	require.EqualValues(t, 0, reply.Data["users"].(map[string]interface{})["total"], "租户2看不到租户1的行")
+
+	// 无作用域上下文：tenant_id = NULL，匹配不到任何行（安全默认）
+	reply = executor.Execute(context.Background(), `{ users { total } }`, nil, "")
+	require.Empty(t, reply.Errors)
+	require.EqualValues(t, 0, reply.Data["users"].(map[string]interface{})["total"], "无作用域应查不到行")
+}

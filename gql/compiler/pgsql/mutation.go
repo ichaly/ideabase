@@ -73,7 +73,7 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 			if m.bulk {
 				kind = shapeList
 			}
-			m.unit = &unit{field: field, class: m.class, shape: kind, index: ctx.NextIndex()}
+			m.unit = &unit{field: field, class: m.class, shape: kind, index: ctx.NextIndex(), readback: true}
 		}
 		muts = append(muts, m)
 	}
