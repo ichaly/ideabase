@@ -614,6 +614,8 @@ func TestExecutorScope(t *testing.T) {
 	// 安全回归：别租户用本租户行的唯一键 upsert → DO UPDATE 被作用域 WHERE 阻止，不劫持
 	reply = executor.Execute(ctx2, `mutation { upsertUsers(input: [{ name: "hijacked", email: "new1@x.com" }], on: ["email"]) { id } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.NoError(t, db.Raw(`SELECT name, tenant_id FROM users WHERE email = 'new1@x.com'`).Row().Scan(&name, new(int)))
+	var hijTenant int
+	require.NoError(t, db.Raw(`SELECT name, tenant_id FROM users WHERE email = 'new1@x.com'`).Row().Scan(&name, &hijTenant))
 	require.Equal(t, "own", name, "租户2 不应劫持租户1 的行（DO UPDATE 被作用域 WHERE 阻止）")
+	require.Equal(t, 1, hijTenant, "租户1 行的 tenant_id 未被改写")
 }
