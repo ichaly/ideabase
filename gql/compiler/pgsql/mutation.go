@@ -183,6 +183,7 @@ func (my *Dialect) buildInsert(ctx *compiler.Context, m *mutation) ([]relationOp
 		ops = append(ops, row.ops...)
 	}
 
+	my.applyScope(m.class, rows) // 强制作用域列=上下文值（防越租户创建）
 	if _, err = my.writeInsertValues(ctx, m.class.Table, rows); err != nil {
 		return nil, err
 	}
@@ -216,6 +217,7 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 		return fmt.Errorf("upsert需要冲突列（on参数或实体主键）")
 	}
 
+	my.applyScope(m.class, rows) // 强制作用域列=上下文值（防越租户创建）
 	columns, err := my.writeInsertValues(ctx, m.class.Table, rows)
 	if err != nil {
 		return err
@@ -352,7 +354,31 @@ func (my *Dialect) buildMutationWhere(ctx *compiler.Context, class *protocol.Cla
 	if len(my.collectConditions(field.Arguments)) == 0 {
 		return fmt.Errorf("%s需要id或where条件", field.Name)
 	}
-	return my.buildWhere(ctx, sc, field.Arguments)
+	// 行级作用域：update/delete 强制 AND 作用域，只能改本租户/属主的行
+	var conjuncts []func() error
+	for _, rule := range class.Scope {
+		conjuncts = append(conjuncts, func() error {
+			my.scopeCondition(ctx, sc.qualifier, rule)
+			return nil
+		})
+	}
+	return my.buildWhere(ctx, sc, field.Arguments, conjuncts...)
+}
+
+// applyScope 给每行强制填充作用域列=上下文值（覆盖客户端传值，防越租户/越属主创建）
+func (my *Dialect) applyScope(class *protocol.Class, rows []inputRow) {
+	for _, rule := range class.Scope {
+		for i := range rows {
+			row := &rows[i]
+			if _, has := row.values[rule.Column]; !has {
+				row.columns = append(row.columns, rule.Column)
+			}
+			row.values[rule.Column] = func(c *compiler.Context) error {
+				c.Write(my.Placeholder(c.AddContextSlot(rule.Context)))
+				return nil
+			}
+		}
+	}
 }
 
 // ---------- 输入行解析 ----------
@@ -668,6 +694,7 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 				ctx.MarkTable(target.Table)
 				made := ctx.NextIndex()
 				ctx.Write(`, `).Quote(`__c_`, made).Write(` AS (`)
+				my.applyScope(target, op.create) // 嵌套创建的子行也填作用域
 				if _, err := my.writeInsertValues(ctx, target.Table, op.create); err != nil {
 					return err
 				}
@@ -720,6 +747,7 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 				}
 			}
 			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (`)
+			my.applyScope(target, op.create) // 嵌套创建的子行也填作用域
 			if _, err := my.writeInsertValues(ctx, target.Table, op.create); err != nil {
 				return err
 			}

@@ -442,8 +442,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	if !u.readback {
 		for _, rule := range u.class.Scope {
 			conjuncts = append(conjuncts, func() error {
-				ctx.Column(sc.qualifier, rule.Column).Write(` = `)
-				ctx.Write(my.Placeholder(ctx.AddContextSlot(rule.Context)))
+				my.scopeCondition(ctx, sc.qualifier, rule)
 				return nil
 			})
 		}
@@ -609,17 +608,27 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 
 	list := func(qualifier string) { writeColumns(ctx, qualifier, all) }
 
+	// 行级作用域：递归CTE的起始层与步进层都注入，递归只在本租户内遍历（限范围、防跨租户）
+	scopeFilter := func() {
+		for _, rule := range u.class.Scope {
+			ctx.Space(`AND`)
+			my.scopeCondition(ctx, u.class.Table, rule)
+		}
+	}
+
 	ctx.Space(`FROM (WITH RECURSIVE`).QuotedWithSpace(tree).Write(`AS (SELECT `)
 	list(u.class.Table)
 	ctx.Write(`, 1 AS "__lv" FROM `, u.class.Table, ` WHERE `).
 		Column(u.class.Table, targetCol).
 		Write(` = `).Column(u.parent, parentCol)
+	scopeFilter()
 	ctx.Write(` UNION ALL SELECT `)
 	list(u.class.Table)
 	ctx.Write(`, `).Quote(tree).Write(`."__lv" + 1 FROM `, u.class.Table, `, `).Quote(tree).
 		Write(` WHERE `).Column(u.class.Table, targetCol).
 		Write(` = `).Column(tree, sourceCol).
 		Write(` AND `).Quote(tree).Write(`."__lv" < `, depth)
+	scopeFilter()
 	ctx.Write(`) SELECT `)
 	list(tree)
 	ctx.Write(` FROM `).Quote(tree)

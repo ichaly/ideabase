@@ -291,12 +291,17 @@ func (my *Renderer) getGraphQLType(field *protocol.Field) string {
 
 // writableFields 返回类的可写字段名（排除主键、时间戳、虚拟与中间表字段）
 func (my *Renderer) writableFields(class *protocol.Class) []string {
+	// 作用域列由服务端强制填充，不进可写输入（客户端碰不到，也避免必填冲突）
+	scoped := make(map[string]bool, len(class.Scope))
+	for _, s := range class.Scope {
+		scoped[s.Column] = true
+	}
 	names := make([]string, 0, len(class.Fields))
 	for _, fieldName := range utl.SortKeys(class.Fields) {
 		field := class.Fields[fieldName]
-		// 跳过列名索引、无列字段（关系/resolver）、自动生成字段（主键/时间戳）、虚拟字段与中间表字段
+		// 跳过列名索引、无列字段（关系/resolver）、自动生成字段（主键/时间戳）、虚拟字段、中间表字段、作用域列
 		if fieldName != field.Name || field.Virtual || field.Column == "" ||
-			field.IsPrimary ||
+			field.IsPrimary || scoped[field.Column] ||
 			strings.EqualFold(fieldName, "createdAt") ||
 			strings.EqualFold(fieldName, "updatedAt") ||
 			(field.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {

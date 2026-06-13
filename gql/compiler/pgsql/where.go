@@ -254,3 +254,9 @@ func (my *Dialect) buildParam(ctx *compiler.Context, value *ast.Value) error {
 	ctx.Write(my.Placeholder(ctx.AddParam(normalizeArg(val))))
 	return nil
 }
+
+// scopeCondition 写一条行级作用域过滤："限定符"."列" = $ctx（值执行期从请求上下文取）
+func (my *Dialect) scopeCondition(ctx *compiler.Context, qualifier string, rule protocol.ScopeRule) {
+	ctx.Column(qualifier, rule.Column).Write(` = `)
+	ctx.Write(my.Placeholder(ctx.AddContextSlot(rule.Context)))
+}

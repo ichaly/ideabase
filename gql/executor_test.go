@@ -579,4 +579,27 @@ func TestExecutorScope(t *testing.T) {
 	reply = executor.Execute(context.Background(), `{ users { total } }`, nil, "")
 	require.Empty(t, reply.Errors)
 	require.EqualValues(t, 0, reply.Data["users"].(map[string]interface{})["total"], "无作用域应查不到行")
+
+	// 写隔离：create 自动填租户列（即使不传/传错），新行落在当前租户
+	ctx1 := WithScope(context.Background(), map[string]any{"tenant": 1})
+	reply = executor.Execute(ctx1, `mutation { createUser(input: { name: "new1", email: "new1@x.com" }) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "租户1创建失败: %v", reply.Errors)
+	newID := reply.Data["createUser"].(map[string]interface{})["id"]
+	var tid int
+	require.NoError(t, db.Raw(`SELECT tenant_id FROM users WHERE id = ?`, newID).Scan(&tid).Error)
+	require.Equal(t, 1, tid, "create 应自动填当前租户")
+
+	// 写隔离：update/delete 只能改本租户的行——租户2 改不到租户1 的 new1
+	ctx2 := WithScope(context.Background(), map[string]any{"tenant": 2})
+	reply = executor.Execute(ctx2, `mutation { updateUser(input: { name: "hacked" }, where: { name: { eq: "new1" } }) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Empty(t, reply.Data["updateUser"], "租户2 不应改到租户1 的行")
+	var name string
+	require.NoError(t, db.Raw(`SELECT name FROM users WHERE id = ?`, newID).Scan(&name).Error)
+	require.Equal(t, "new1", name, "租户1 的行未被租户2 篡改")
+
+	// 租户1 自己能改
+	reply = executor.Execute(ctx1, `mutation { updateUser(input: { name: "own" }, where: { name: { eq: "new1" } }) { id name } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, "own", reply.Data["updateUser"].(map[string]interface{})["name"], "租户1 改自己的行成功")
 }

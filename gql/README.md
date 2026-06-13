@@ -143,10 +143,19 @@ func AuthMiddleware(c fiber.Ctx) error {
 SELECT ... FROM posts WHERE posts.tenant_id = $1   -- $1 = ctx 的 tenant
 ```
 
-- 嵌套关系字段（读基表）同样注入；变更读回（读 CTE）跳过
-- 客户端自己叠 `where: { tenantId: { eq: 99 } }` 只会 AND 出更窄的集合，绕不过
-- 无作用域上下文时该参数为 `NULL`，匹配不到任何行（安全默认）
-- 当前覆盖**查询读隔离**；变更（update/delete 的 WHERE、create 自动填列）的写隔离为后续
+读写全覆盖：
+
+- **查询**：根字段、任意深度嵌套关系、递归全树（递归 CTE 起始层+步进层）都注入
+- **变更**：`update/delete` 的 WHERE 强制 AND 作用域（只能改本租户/属主的行）；
+  `create/upsert`（含嵌套创建）自动填作用域列为上下文值（防越租户创建）
+- 作用域列**不进** CreateInput/UpdateInput（服务端强制填，客户端碰不到）
+
+其他保证：
+
+- 客户端自己叠 `where: { ... }` 只会 AND 出更窄的集合，绕不过
+- 无作用域上下文时该参数为 `NULL`，匹配/影响不到任何行（安全默认）
+- 变更读回（读 CTE）跳过注入，不误过滤刚写入的行
+- 作用域值是参数（不影响 SQL 文本），同查询不同租户共享一份计划
 
 ### 批量机制：resolver 如何不产生 N+1
 
