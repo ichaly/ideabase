@@ -48,8 +48,8 @@ func NewRenderer(meta *Metadata) *Renderer {
 
 // Generate 生成完整的GraphQL schema
 func (my *Renderer) Generate() (string, error) {
-	// 初始化字符串构建器
-	my.sb = &strings.Builder{}
+	// 复用构造时分配的构建器（支持重复Generate）
+	my.sb.Reset()
 
 	// 添加schema版本和说明
 	my.writeLine("# ", DESC_SCHEMA_TITLE)
@@ -244,26 +244,9 @@ func (my *Renderer) renderTypes() error {
 func (my *Renderer) getGraphQLType(field *protocol.Field) string {
 	fieldType := field.Type
 
-	// 处理集合类型
+	// 列表字段仅由关系处理生成，元素类型即关系目标类名
 	if field.IsList {
-		innerType := fieldType
-		if strings.HasPrefix(innerType, "[") && strings.HasSuffix(innerType, "]") {
-			innerType = innerType[1 : len(innerType)-1]
-		}
-
-		// 检查内部类型是否是类名
-		if _, exists := my.meta.Nodes[innerType]; exists {
-			// 如果是类名，直接使用类名
-			return "[" + innerType + "]"
-		}
-
-		// 避免递归调用导致嵌套数组，直接处理内部类型
-		innerField := &protocol.Field{
-			Type:      innerType,
-			IsPrimary: false,
-			IsList:    false, // 重要：确保内部字段不是集合类型
-		}
-		return "[" + my.getGraphQLType(innerField) + "]"
+		return "[" + fieldType + "]"
 	}
 
 	// 1. 主键固定映射为ID类型

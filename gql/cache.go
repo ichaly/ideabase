@@ -14,10 +14,11 @@ type planKey struct {
 }
 
 // planEntry 缓存值：非volatile存编译成品；volatile存已解析展开的AST，
-// 执行期仅重做SQL构建（省去每请求的解析与校验）
+// 执行期仅重做SQL构建（省去每请求的解析、校验与binding收集）
 type planEntry struct {
 	plan      *Plan                    // 编译成品，volatile时为nil
 	operation *ast.OperationDefinition // volatile重编译入口
+	resolvers []binding                // resolver绑定只依赖AST，volatile重编译复用
 }
 
 // planCache 执行计划LRU缓存：命中路径零解析；非volatile零编译

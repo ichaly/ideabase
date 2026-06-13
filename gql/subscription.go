@@ -58,7 +58,7 @@ func (my *Executor) stream(ctx context.Context, plan *Plan, variables map[string
 	}
 }
 
-// tick 单次轮询：结果指纹无变化时返回false
+// tick 表变更唤醒后重查一次：结果指纹无变化时返回false（不推送）
 func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]interface{}, last *uint64) (gqlReply, bool) {
 	var r gqlReply
 

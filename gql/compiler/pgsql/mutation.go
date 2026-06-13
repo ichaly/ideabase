@@ -222,12 +222,7 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 	}
 
 	ctx.Write(` ON CONFLICT (`)
-	for i, column := range conflicts {
-		if i > 0 {
-			ctx.Write(`, `)
-		}
-		ctx.Quote(column)
-	}
+	writeColumns(ctx, "", conflicts)
 	ctx.Write(`) DO UPDATE SET `)
 	conflictSet := make(map[string]bool, len(conflicts))
 	for _, column := range conflicts {
@@ -273,12 +268,7 @@ func (my *Dialect) writeInsertValues(ctx *compiler.Context, table string, rows [
 	}
 
 	ctx.Write(`INSERT INTO `).Write(table).Write(` (`)
-	for i, column := range columns {
-		if i > 0 {
-			ctx.Write(`, `)
-		}
-		ctx.Quote(column)
-	}
+	writeColumns(ctx, "", columns)
 	ctx.Write(`) VALUES `)
 	for i, row := range rows {
 		if i > 0 {

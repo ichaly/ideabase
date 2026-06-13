@@ -4,7 +4,6 @@ package gql
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -291,8 +290,7 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 	// 顶层选择集含__schema/__type则路由到自省投影，否则编译为SQL
 	plan, err := my.plan(query, operationName, variables)
 	if err != nil {
-		var introErr *introQuery
-		if errors.As(err, &introErr) {
+		if introErr, ok := err.(*introQuery); ok {
 			data, ierr := my.intro.Introspect(introErr.operation, variables)
 			if ierr != nil {
 				r.Errors = gqlerror.List{gqlerror.Wrap(ierr)}
@@ -365,7 +363,13 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 		if entry.plan != nil {
 			return entry.plan, nil
 		}
-		return my.compiler.Compile(entry.operation, variables)
+		// volatile：仅重做SQL构建，binding复用缓存（不依赖变量）
+		plan, err := my.compiler.Compile(entry.operation, variables)
+		if err != nil {
+			return nil, err
+		}
+		plan.resolvers = entry.resolvers
+		return plan, nil
 	}
 
 	operation, err := my.parse(query, operationName)
@@ -398,15 +402,16 @@ func (my *Executor) parse(query, operationName string) (*ast.OperationDefinition
 	return operation, nil
 }
 
-// compile 编译并缓存：volatile计划依赖变量内容（如整体input变量），
-// SQL不可复用但AST可以——缓存operation供后续请求免解析重编译
+// compile 编译并缓存：resolver绑定在此一次性收集（不依赖变量内容）；
+// volatile计划SQL不可复用但AST与绑定可以——缓存供后续请求免解析重编译
 func (my *Executor) compile(key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*Plan, error) {
 	plan, err := my.compiler.Compile(operation, variables)
 	if err != nil {
 		return nil, err
 	}
+	plan.resolvers = collectBindings(my.metadata, operation)
 	if plan.Volatile() {
-		my.cache.Put(key, &planEntry{operation: operation})
+		my.cache.Put(key, &planEntry{operation: operation, resolvers: plan.resolvers})
 	} else {
 		my.cache.Put(key, &planEntry{plan: plan})
 	}

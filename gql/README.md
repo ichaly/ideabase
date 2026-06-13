@@ -162,10 +162,12 @@ services:
    `NewCompiler(meta, nil)` 自动按驱动名路由；已知驱动未注册方言会明确报错
 2. **订阅唤醒源**：新增文件实现 `notifier` 接口（binlog 监听）并
    `registerNotifier("mysql", 工厂)`——执行器按 `db.Name()` 自动选取
-3. **元数据**：`MysqlLoader` 已就绪，按驱动自动启用，无需任何动作
+3. **全文搜索探测**：新增文件实现探测函数并 `registerSearchDetector("mysql", 探测)`
+   ——执行器按 `db.Name()` 自动选取；未注册的驱动降级为 ilike
+4. **元数据**：`MysqlLoader` 已就绪，按驱动自动启用，无需任何动作
 
 当前未注册 MySQL 的任何实现：连 MySQL 时编译器报「没有注册对应的SQL
-方言实现」，订阅报「没有注册CDC唤醒源」，不会静默出错。
+方言实现」，订阅报「没有注册CDC唤醒源」，搜索降级 ilike，不会静默出错。
 
 ## 契约一致性
 

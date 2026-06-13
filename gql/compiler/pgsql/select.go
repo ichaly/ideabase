@@ -234,14 +234,9 @@ func (my *Dialect) buildPageInfo(ctx *compiler.Context, u *unit, field *ast.Fiel
 		switch f.Name {
 		case typename:
 			ctx.Write(`'`, protocol.TYPE_PAGE_INFO, `'`)
-		case protocol.HAS_NEXT:
-			if page.last {
-				my.boundaryGiven(ctx, page)
-			} else {
-				probe()
-			}
-		case protocol.HAS_PREV:
-			if page.last {
+		case protocol.HAS_NEXT, protocol.HAS_PREV:
+			// hasNext探测正向边界、hasPrev探测反向；last模式两者语义对调
+			if (f.Name == protocol.HAS_NEXT) != page.last {
 				probe()
 			} else {
 				my.boundaryGiven(ctx, page)
@@ -287,12 +282,16 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	var scalars, typeNames []*ast.Field
 	var children []relIndex
 	columns := make([]string, 0, len(selection))
-	seen := make(map[string]bool)
 	appendColumn := func(column string) {
-		if column != "" && !seen[column] {
-			seen[column] = true
-			columns = append(columns, column)
+		if column == "" {
+			return
 		}
+		for _, c := range columns { // 列集通常≤16，线性去重免map分配
+			if c == column {
+				return
+			}
+		}
+		columns = append(columns, column)
 	}
 
 	for _, f := range selection {

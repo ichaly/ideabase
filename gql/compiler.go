@@ -91,11 +91,10 @@ func (my *Compiler) Compile(operation *ast.OperationDefinition, variables map[st
 	}
 
 	plan := &Plan{
-		SQL:       ctx.String(),
-		slots:     ctx.Slots(),
-		volatile:  ctx.Volatile(),
-		resolvers: collectBindings(my.meta, operation),
-		tables:    ctx.Tables(),
+		SQL:      ctx.String(),
+		slots:    ctx.Slots(),
+		volatile: ctx.Volatile(),
+		tables:   ctx.Tables(),
 	}
 	for _, def := range operation.VariableDefinitions {
 		if def.DefaultValue == nil {

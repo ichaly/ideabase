@@ -93,12 +93,7 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 	}
 	if len(groups) > 0 {
 		ctx.Space(`GROUP BY`)
-		for i, name := range groups {
-			if i > 0 {
-				ctx.Write(`, `)
-			}
-			column(name)
-		}
+		writeColumns(ctx, u.class.Table, columnsOf(sc, groups))
 	}
 	return my.buildLimit(ctx, u)
 }
