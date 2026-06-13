@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20260613121528
+# 版本: 20260613150335
 
 # 自定义标量类型
 scalar Json
@@ -158,6 +158,29 @@ type DateTimeStats {
   countDistinct: Int
 }
 
+# 数值聚合having过滤
+input NumberHaving {
+  sum: FloatWhereInput
+  avg: FloatWhereInput
+  min: FloatWhereInput
+  max: FloatWhereInput
+  countDistinct: IntWhereInput
+}
+
+# 字符串聚合having过滤
+input StringHaving {
+  min: StringWhereInput
+  max: StringWhereInput
+  countDistinct: IntWhereInput
+}
+
+# 日期聚合having过滤
+input DateTimeHaving {
+  min: DateTimeWhereInput
+  max: DateTimeWhereInput
+  countDistinct: IntWhereInput
+}
+
 # Comment统计结果
 type CommentStats {
   key: Json  # 分组键(无groupBy时为null)
@@ -167,6 +190,16 @@ type CommentStats {
   parentId: NumberStats
   postId: NumberStats
   userId: NumberStats
+}
+
+# Commenthaving过滤(分组后按聚合值过滤)
+input CommentHavingInput {
+  count: IntWhereInput
+  content: StringHaving
+  createdAt: DateTimeHaving
+  parentId: NumberHaving
+  postId: NumberHaving
+  userId: NumberHaving
 }
 
 # Post统计结果
@@ -179,10 +212,24 @@ type PostStats {
   userId: NumberStats
 }
 
+# Posthaving过滤(分组后按聚合值过滤)
+input PostHavingInput {
+  count: IntWhereInput
+  content: StringHaving
+  createdAt: DateTimeHaving
+  title: StringHaving
+  userId: NumberHaving
+}
+
 # PostTag统计结果
 type PostTagStats {
   key: Json  # 分组键(无groupBy时为null)
   count: Int!
+}
+
+# PostTaghaving过滤(分组后按聚合值过滤)
+input PostTagHavingInput {
+  count: IntWhereInput
 }
 
 # Tag统计结果
@@ -192,6 +239,12 @@ type TagStats {
   name: StringStats
 }
 
+# Taghaving过滤(分组后按聚合值过滤)
+input TagHavingInput {
+  count: IntWhereInput
+  name: StringHaving
+}
+
 # User统计结果
 type UserStats {
   key: Json  # 分组键(无groupBy时为null)
@@ -199,6 +252,14 @@ type UserStats {
   createdAt: DateTimeStats
   email: StringStats
   name: StringStats
+}
+
+# Userhaving过滤(分组后按聚合值过滤)
+input UserHavingInput {
+  count: IntWhereInput
+  createdAt: DateTimeHaving
+  email: StringHaving
+  name: StringHaving
 }
 
 # ------------------ 过滤器类型定义 ------------------
@@ -520,7 +581,7 @@ type Query {
     before: Cursor
   ): CommentResult!
   # Comment统计
-  commentStats(where: CommentWhereInput, groupBy: [String!], limit: Int, offset: Int): [CommentStats!]!
+  commentStats(where: CommentWhereInput, groupBy: [String!], having: CommentHavingInput, limit: Int, offset: Int): [CommentStats!]!
   # Post查询
   posts(
     search: String
@@ -536,7 +597,7 @@ type Query {
     before: Cursor
   ): PostResult!
   # Post统计
-  postStats(where: PostWhereInput, groupBy: [String!], limit: Int, offset: Int): [PostStats!]!
+  postStats(where: PostWhereInput, groupBy: [String!], having: PostHavingInput, limit: Int, offset: Int): [PostStats!]!
   # PostTag查询
   postTags(
     id: ID
@@ -551,7 +612,7 @@ type Query {
     before: Cursor
   ): PostTagResult!
   # PostTag统计
-  postTagStats(where: PostTagWhereInput, groupBy: [String!], limit: Int, offset: Int): [PostTagStats!]!
+  postTagStats(where: PostTagWhereInput, groupBy: [String!], having: PostTagHavingInput, limit: Int, offset: Int): [PostTagStats!]!
   # Tag查询
   tags(
     id: ID
@@ -566,7 +627,7 @@ type Query {
     before: Cursor
   ): TagResult!
   # Tag统计
-  tagStats(where: TagWhereInput, groupBy: [String!], limit: Int, offset: Int): [TagStats!]!
+  tagStats(where: TagWhereInput, groupBy: [String!], having: TagHavingInput, limit: Int, offset: Int): [TagStats!]!
   # User查询
   users(
     search: String
@@ -582,7 +643,7 @@ type Query {
     before: Cursor
   ): UserResult!
   # User统计
-  userStats(where: UserWhereInput, groupBy: [String!], limit: Int, offset: Int): [UserStats!]!
+  userStats(where: UserWhereInput, groupBy: [String!], having: UserHavingInput, limit: Int, offset: Int): [UserStats!]!
 }
 
 # 订阅根类型

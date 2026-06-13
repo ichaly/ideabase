@@ -520,6 +520,7 @@ func (my *Renderer) renderQuery() error {
 			renderer.WithArgs([]renderer.Argument{
 				{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
 				{Name: protocol.GROUP_BY, Type: "[" + protocol.SCALAR_STRING + "!]"},
+				{Name: protocol.HAVING, Type: className + protocol.SUFFIX_HAVING_INPUT},
 				{Name: protocol.LIMIT, Type: protocol.SCALAR_INT},
 				{Name: protocol.OFFSET, Type: protocol.SCALAR_INT},
 			}...),
@@ -627,9 +628,40 @@ func (my *Renderer) renderStats() error {
 	my.writeLine("}")
 	my.writeLine()
 
-	// 每实体统计类型：key为分组键，count恒有，标量列按类别挂聚合
-	my.eachClass(func(className string, class *protocol.Class) {
+	// having过滤类型：镜像聚合结果，各聚合字段复用对应标量的WhereInput操作符
+	intWhere := protocol.SCALAR_INT + protocol.SUFFIX_WHERE_INPUT
+	floatWhere := protocol.SCALAR_FLOAT + protocol.SUFFIX_WHERE_INPUT
+	stringWhere := protocol.SCALAR_STRING + protocol.SUFFIX_WHERE_INPUT
+	dateWhere := protocol.SCALAR_DATE_TIME + protocol.SUFFIX_WHERE_INPUT
 
+	my.writeLine("# 数值聚合having过滤")
+	my.writeLine("input ", protocol.TYPE_NUMBER_HAVING, " {")
+	my.writeField(protocol.FUNCTION_SUM, floatWhere)
+	my.writeField(protocol.FUNCTION_AVG, floatWhere)
+	my.writeField(protocol.FUNCTION_MIN, floatWhere)
+	my.writeField(protocol.FUNCTION_MAX, floatWhere)
+	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, intWhere)
+	my.writeLine("}")
+	my.writeLine()
+
+	my.writeLine("# 字符串聚合having过滤")
+	my.writeLine("input ", protocol.TYPE_STRING_HAVING, " {")
+	my.writeField(protocol.FUNCTION_MIN, stringWhere)
+	my.writeField(protocol.FUNCTION_MAX, stringWhere)
+	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, intWhere)
+	my.writeLine("}")
+	my.writeLine()
+
+	my.writeLine("# 日期聚合having过滤")
+	my.writeLine("input ", protocol.TYPE_DATE_TIME_HAVING, " {")
+	my.writeField(protocol.FUNCTION_MIN, dateWhere)
+	my.writeField(protocol.FUNCTION_MAX, dateWhere)
+	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, intWhere)
+	my.writeLine("}")
+	my.writeLine()
+
+	// 每实体统计类型 + having入参：key为分组键，count恒有，标量列按类别挂聚合
+	my.eachClass(func(className string, class *protocol.Class) {
 		my.writeLine("# ", className, "统计结果")
 		my.writeLine("type ", className, protocol.SUFFIX_STATS, " {")
 		my.writeField(protocol.FUNCTION_KEY, protocol.SCALAR_JSON, renderer.WithComment("分组键(无groupBy时为null)"))
@@ -646,8 +678,37 @@ func (my *Renderer) renderStats() error {
 		}
 		my.writeLine("}")
 		my.writeLine()
+
+		// having入参：count + 各可聚合列指向对应聚合having类型
+		my.writeLine("# ", className, "having过滤(分组后按聚合值过滤)")
+		my.writeLine("input ", className, protocol.SUFFIX_HAVING_INPUT, " {")
+		my.writeField(protocol.FUNCTION_COUNT, intWhere)
+		for _, fieldName := range utl.SortKeys(class.Fields) {
+			field := class.Fields[fieldName]
+			if fieldName != field.Name || field.Column == "" || field.Virtual || field.IsPrimary {
+				continue
+			}
+			if h := havingType(statsKind(my.getGraphQLType(field))); h != "" {
+				my.writeField(fieldName, h)
+			}
+		}
+		my.writeLine("}")
+		my.writeLine()
 	})
 	return nil
+}
+
+// havingType 列统计类别对应的having过滤类型
+func havingType(statsType string) string {
+	switch statsType {
+	case protocol.TYPE_NUMBER_STATS:
+		return protocol.TYPE_NUMBER_HAVING
+	case protocol.TYPE_STRING_STATS:
+		return protocol.TYPE_STRING_HAVING
+	case protocol.TYPE_DATE_TIME_STATS:
+		return protocol.TYPE_DATE_TIME_HAVING
+	}
+	return ""
 }
 
 // renderPageInfo 游标分页信息类型

@@ -61,6 +61,7 @@ GQL '{"query":"query ($c: Cursor) { posts(first: 2, after: $c, sort: { id: ASC }
 ```bash
 GQL '{"query":"{ posts(distinct: [\"userId\"]) { items { userId } } }"}'
 GQL '{"query":"{ postStats(groupBy: [\"userId\"]) { key count } }"}'
+GQL '{"query":"{ postStats(groupBy: [\"userId\"], having: { count: { gt: 1 } }) { key count } }"}'   # 分组后按聚合值过滤(HAVING)
 GQL '{"query":"{ comments(id: 1) { items { content descendants(depth: 5) { content } } } }"}'   # 全部后代
 GQL '{"query":"{ comments(id: 3) { items { ancestors { content } } } }"}'                        # 祖先链
 ```

@@ -153,11 +153,12 @@ func (my *Dialect) buildFieldCondition(ctx *compiler.Context, sc scope, child *a
 	}
 
 	column := sc.column(child.Name)
+	lhs := func() { ctx.Column(sc.qualifier, column) } // 左值为列引用
 	for i, opChild := range child.Value.Children {
 		if i > 0 {
 			ctx.Space("AND")
 		}
-		if err := my.buildOperator(ctx, sc, column, opChild); err != nil {
+		if err := my.buildOperator(ctx, lhs, opChild); err != nil {
 			return err
 		}
 	}
@@ -171,8 +172,9 @@ var jsonbFunctions = map[string]bool{
 	protocol.HAS_KEY:      true,
 }
 
-// buildOperator 构建单个字段条件表达式（含列引用）
-func (my *Dialect) buildOperator(ctx *compiler.Context, sc scope, column string, opChild *ast.ChildValue) error {
+// buildOperator 构建单个条件表达式：lhs写左值（列引用或聚合表达式），op + 参数。
+// 左值抽象使where（列）与having（聚合）共享同一操作符引擎
+func (my *Dialect) buildOperator(ctx *compiler.Context, lhs func(), opChild *ast.ChildValue) error {
 	op, ok := protocol.GetOperator(opChild.Name)
 	if !ok {
 		return fmt.Errorf("不支持的操作符: %s", opChild.Name)
@@ -181,15 +183,12 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, sc scope, column string,
 	if value == nil {
 		return fmt.Errorf("操作符 %s 缺少值", opChild.Name)
 	}
-	qualify := func() {
-		ctx.Column(sc.qualifier, column)
-	}
 
 	// jsonb函数式操作符：jsonb_contains(列, $n::jsonb) / jsonb_exists(列, $n)
 	// （gorm会劫持@>/<@/?符号形态，函数形式语义与索引利用一致）
 	if jsonbFunctions[opChild.Name] {
 		ctx.Write(op.Value, `(`)
-		qualify()
+		lhs()
 		ctx.Write(`, `)
 		if err := my.buildParam(ctx, value); err != nil {
 			return err
@@ -201,7 +200,7 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, sc scope, column string,
 		return nil
 	}
 
-	qualify()
+	lhs()
 	ctx.Space(op.Value)
 
 	switch opChild.Name {

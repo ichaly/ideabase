@@ -12,17 +12,21 @@ type Operator struct {
 // 类型常量
 const (
 	// GraphQL类型名称
-	TYPE_SORT_DIRECTION  = "SortDirection"
-	TYPE_PAGE_INFO       = "PageInfo"
-	TYPE_NUMBER_STATS    = "NumberStats"
-	TYPE_STRING_STATS    = "StringStats"
-	TYPE_DATE_TIME_STATS = "DateTimeStats"
+	TYPE_SORT_DIRECTION   = "SortDirection"
+	TYPE_PAGE_INFO        = "PageInfo"
+	TYPE_NUMBER_STATS     = "NumberStats"
+	TYPE_STRING_STATS     = "StringStats"
+	TYPE_DATE_TIME_STATS  = "DateTimeStats"
+	TYPE_NUMBER_HAVING    = "NumberHaving"   // 数值聚合的having过滤（镜像NumberStats）
+	TYPE_STRING_HAVING    = "StringHaving"   // 字符串聚合的having过滤
+	TYPE_DATE_TIME_HAVING = "DateTimeHaving" // 日期聚合的having过滤
 
 	// GraphQL入参名称后缀
 	SUFFIX_STATS        = "Stats"
 	SUFFIX_RESULT       = "Result"
 	SUFFIX_SORT_INPUT   = "SortInput"
 	SUFFIX_WHERE_INPUT  = "WhereInput"
+	SUFFIX_HAVING_INPUT = "HavingInput" // 每实体的having入参类型后缀
 	SUFFIX_CREATE_INPUT = "CreateInput"
 	SUFFIX_UPDATE_INPUT = "UpdateInput"
 )
@@ -47,6 +51,7 @@ const (
 	CONNECT    = "connect"
 	DISCONNECT = "disconnect"
 	GROUP_BY   = "groupBy"
+	HAVING     = "having"
 	SEARCH     = "search"
 	DEPTH      = "depth"
 )

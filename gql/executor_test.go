@@ -475,6 +475,15 @@ func TestExecutorStats(t *testing.T) {
 	row = rows[0].(map[string]interface{})
 	require.EqualValues(t, 2, row["count"])
 	require.Equal(t, "B", row["key"].(map[string]interface{})["name"])
+
+	// having：分组后按聚合值过滤（库内HAVING，A组count=1被滤，只剩B组count=2）
+	reply = executor.Execute(ctx, `query { userStats(groupBy: ["name"], having: { count: { gt: 1 } }) { key count } }`, nil, "")
+	require.Empty(t, reply.Errors, "having过滤失败: %v", reply.Errors)
+	rows = reply.Data["userStats"].([]interface{})
+	require.Len(t, rows, 1, "having count>1 只应返回B组")
+	row = rows[0].(map[string]interface{})
+	require.EqualValues(t, 2, row["count"])
+	require.Equal(t, "B", row["key"].(map[string]interface{})["name"])
 }
 
 // TestExecutorDocuments 持久化查询文档：加载、按名执行、未知操作报错
