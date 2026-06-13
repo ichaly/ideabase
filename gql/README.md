@@ -47,7 +47,8 @@ executor.Bind(app.Group(executor.Path()))  // fiber v3：POST查询变更 + GET�
 - 排序：`sort: { name: ASC, age: DESC_NULLS_LAST }`（单对象或列表均可）
 - 分页：`limit/offset` + `total`（窗口函数一次查询同时取数与总数）；
   游标分页 `first/after`、`last/before` + `pageInfo{hasNext,hasPrev,start,end}`，
-  keyset 语义性能恒定（排序键自动追加主键兜底；排序键应为非空列）
+  keyset 语义性能恒定（排序键自动追加主键兜底；排序键应为非空列）；页大小
+  支持变量（`first: $n`），同一查询文本一份计划适配任意页大小
 - 统计：`userStats(where, groupBy, having, limit, offset)` 返回 `count` 与各列的
   sum/avg/min/max/countDistinct，选择驱动只算请求的聚合。`having` 对聚合值过滤
   （`having: { count: { gt: 10 }, score: { sum: { gt: 1000 } } }`），复用 where
@@ -226,7 +227,6 @@ schema、能力、自省三者严格一致，没有任何方向的偏差：
 
 - MySQL 方言未实现（扩展方式见上节；已知驱动未注册方言会明确报错，不会静默回退）
 - 同一 mutation 内不能两次变更同一张表（变更 CTE 同名限制）
-- first/last 必须是字面量整数（动态页大小改变查询文本即可，计划仍缓存）
 
 设计细节见 [`../doc/gql-rework-plan.md`](../doc/gql-rework-plan.md) 与
 [`../doc/pgsql-template-design.md`](../doc/pgsql-template-design.md)。

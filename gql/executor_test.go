@@ -441,6 +441,17 @@ func TestExecutorCursor(t *testing.T) {
 	info := users["pageInfo"].(map[string]interface{})
 	require.Equal(t, true, info["hasPrev"])
 	require.Equal(t, false, info["hasNext"])
+
+	// 页大小用变量：同一查询文本不同$n（一份计划适配任意页大小）
+	for _, n := range []int{2, 3} {
+		reply = executor.Execute(ctx, `query ($n: Int) {
+			users(first: $n, sort: { name: ASC }) { items { name } pageInfo { hasNext } }
+		}`, map[string]interface{}{"n": n}, "")
+		require.Empty(t, reply.Errors, "变量页大小失败: %v", reply.Errors)
+		users = reply.Data["users"].(map[string]interface{})
+		require.Len(t, users["items"].([]interface{}), n, "first=$n 应返回n条")
+		require.Equal(t, true, users["pageInfo"].(map[string]interface{})["hasNext"], "5条数据取前%d应有下一页", n)
+	}
 }
 
 // TestExecutorStats 统计聚合真库验证：全表聚合与分组聚合

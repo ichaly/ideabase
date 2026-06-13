@@ -172,7 +172,8 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 				ctx.Write(` DESC`)
 			}
 			ctx.Write(`) FILTER (WHERE `)
-			sr().Write(`."__rn" <= `, page.limit)
+			sr().Write(`."__rn" <= `)
+			page.writeSize(ctx, my, 0)
 		}
 		ctx.Write(`), '[]')`)
 	}
@@ -209,7 +210,8 @@ func (my *Dialect) buildPageInfo(ctx *compiler.Context, u *unit, field *ast.Fiel
 	// 探测：取到的行数超过N说明边界外还有数据
 	probe := func() {
 		ctx.Write(`COALESCE(MAX(`)
-		sr().Write(`."__rn") > `, page.limit)
+		sr().Write(`."__rn") > `)
+		page.writeSize(ctx, my, 0)
 		ctx.Write(`, FALSE)`)
 	}
 	// 显示顺序的游标聚合，->>0 首条 ->>-1 末条
@@ -221,7 +223,8 @@ func (my *Dialect) buildPageInfo(ctx *compiler.Context, u *unit, field *ast.Fiel
 			ctx.Write(` DESC`)
 		}
 		ctx.Write(`) FILTER (WHERE `)
-		sr().Write(`."__rn" <= `, page.limit)
+		sr().Write(`."__rn" <= `)
+		page.writeSize(ctx, my, 0)
 		ctx.Write(`) ->> `, index, `)`)
 	}
 
@@ -446,7 +449,8 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			}
 			ctx.Column(sc.qualifier, key.column).SpaceBefore(u.page.order(i))
 		}
-		ctx.Space(`LIMIT`).Write(u.page.limit + 1)
+		ctx.Space(`LIMIT`)
+		u.page.writeSize(ctx, my, 1)
 	} else {
 		switch {
 		case len(distinct) > 0:

@@ -23,49 +23,66 @@ type pageKey struct {
 
 // pager 游标分页编译参数
 type pager struct {
-	limit  int        // first/last 的N
-	last   bool       // 向后翻页（last/before）
-	keys   []pageKey  // 排序键（含主键兜底）
-	cursor *ast.Value // after/before 的游标值，可为nil（首页）
+	limit    int        // first/last 的N（字面量；变量时为0）
+	countVar string     // first/last 为变量时的变量名（非空=变量）
+	last     bool       // 向后翻页（last/before）
+	keys     []pageKey  // 排序键（含主键兜底）
+	cursor   *ast.Value // after/before 的游标值，可为nil（首页）
+}
+
+// writeSize 写页大小N：字面量内联（可选+plus），变量注册参数槽位（$k [+ plus]）
+// 变量化使 first:$n 的查询缓存一份计划即可适配任意页大小
+func (p *pager) writeSize(ctx *compiler.Context, d *Dialect, plus int) {
+	if p.countVar != "" {
+		ctx.Write(d.Placeholder(ctx.AddVariable(p.countVar)))
+		if plus != 0 {
+			ctx.Write(" + ", plus)
+		}
+		return
+	}
+	ctx.Write(p.limit + plus)
 }
 
 // newPager 解析游标分页参数并校验约束；非游标模式返回nil
 func newPager(sc scope, args ast.ArgumentList) (*pager, error) {
-	first, err := pageCount(args, protocol.FIRST)
+	firstHas, first, firstVar, err := parseCount(args, protocol.FIRST)
 	if err != nil {
 		return nil, err
 	}
-	last, err := pageCount(args, protocol.LAST)
+	lastHas, last, lastVar, err := parseCount(args, protocol.LAST)
 	if err != nil {
 		return nil, err
 	}
 	after, before := args.ForName(protocol.AFTER), args.ForName(protocol.BEFORE)
 
-	if first == 0 && last == 0 {
+	if !firstHas && !lastHas {
 		if after != nil || before != nil {
 			return nil, fmt.Errorf("after/before必须配合first/last使用")
 		}
 		return nil, nil
 	}
 	switch {
-	case first > 0 && last > 0:
+	case firstHas && lastHas:
 		return nil, fmt.Errorf("first与last不能同时使用")
 	case args.ForName(protocol.LIMIT) != nil || args.ForName(protocol.OFFSET) != nil:
 		return nil, fmt.Errorf("游标分页与limit/offset不能同时使用")
-	case first > 0 && before != nil:
+	case firstHas && before != nil:
 		return nil, fmt.Errorf("before必须配合last使用")
-	case last > 0 && after != nil:
+	case lastHas && after != nil:
 		return nil, fmt.Errorf("after必须配合first使用")
 	}
 
-	my := &pager{limit: first}
-	if last > 0 {
-		my.limit, my.last = last, true
+	my := &pager{}
+	if lastHas {
+		my.limit, my.countVar, my.last = last, lastVar, true
 		if before != nil {
 			my.cursor = before.Value
 		}
-	} else if after != nil {
-		my.cursor = after.Value
+	} else {
+		my.limit, my.countVar = first, firstVar
+		if after != nil {
+			my.cursor = after.Value
+		}
 	}
 
 	// 排序键 = 用户sort + 主键兜底（保证全序与游标确定性）
@@ -90,20 +107,21 @@ func newPager(sc scope, args ast.ArgumentList) (*pager, error) {
 	return my, nil
 }
 
-// pageCount 解析first/last参数，必须是正整数字面量（计划缓存按查询文本生效）
-func pageCount(args ast.ArgumentList, name string) (int, error) {
+// parseCount 解析first/last：present标识是否提供，变量返回varName，字面量返回正整数。
+// 变量页大小执行期填入（须为正整数），同一查询文本缓存一份计划
+func parseCount(args ast.ArgumentList, name string) (present bool, count int, varName string, err error) {
 	arg := args.ForName(name)
 	if arg == nil || arg.Value == nil {
-		return 0, nil
+		return false, 0, "", nil
 	}
 	if arg.Value.Kind == ast.Variable {
-		return 0, fmt.Errorf("%s必须是字面量整数（如需动态页大小请改变查询文本）", name)
+		return true, 0, arg.Value.Raw, nil
 	}
-	count, err := strconv.Atoi(arg.Value.Raw)
+	count, err = strconv.Atoi(arg.Value.Raw)
 	if err != nil || count <= 0 {
-		return 0, fmt.Errorf("%s必须是正整数", name)
+		return false, 0, "", fmt.Errorf("%s必须是正整数或变量", name)
 	}
-	return count, nil
+	return true, count, "", nil
 }
 
 // order 第i个键的实际方向（向后翻页时反转取行，items聚合时再还原显示顺序）

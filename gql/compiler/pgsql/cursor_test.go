@@ -29,6 +29,28 @@ func (my *_DialectSuite) TestCursor() {
 				) AS "__sj_0" ON TRUE`,
 		},
 		{
+			name:      "first变量页大小",
+			query:     `query ($n: Int) { users(first: $n, sort: { name: ASC }) { items { id name } pageInfo { hasNext hasPrev end } } }`,
+			variables: map[string]interface{}{"n": 3},
+			args:      []any{3, 3, 3, 3},
+			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT JSONB_BUILD_OBJECT(
+						'items', COALESCE(JSONB_AGG((TO_JSONB("__sr_0".*) - '__rn' - '__cursor') ORDER BY "__sr_0"."__rn") FILTER (WHERE "__sr_0"."__rn" <= $1), '[]'),
+						'pageInfo', JSONB_BUILD_OBJECT(
+							'hasNext', COALESCE(MAX("__sr_0"."__rn") > $2, FALSE),
+							'hasPrev', false,
+							'end', (JSONB_AGG("__sr_0"."__cursor" ORDER BY "__sr_0"."__rn") FILTER (WHERE "__sr_0"."__rn" <= $3) ->> -1))
+					) AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name",
+							ROW_NUMBER() OVER () AS "__rn",
+							encode(convert_to(JSONB_BUILD_ARRAY("sys_user_0"."name", "sys_user_0"."id")::text, 'UTF8'), 'base64') AS "__cursor"
+						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM sys_user ORDER BY "sys_user"."name" ASC, "sys_user"."id" ASC LIMIT $4 + 1) AS "sys_user_0"
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+		{
 			name:      "续页after变量游标",
 			query:     `query ($c: Cursor) { users(first: 2, after: $c, sort: { name: ASC }) { items { id } pageInfo { hasNext hasPrev } } }`,
 			variables: map[string]interface{}{"c": EncodeCursor([]any{"Bob", 2})},
@@ -82,7 +104,7 @@ func (my *_DialectSuite) TestCursorGuards() {
 		"与limit互斥":     {`query { users(first: 1, limit: 5) { items { id } } }`, "不能同时使用"},
 		"after需要first": {`query ($c: Cursor) { users(after: $c) { items { id } } }`, "必须配合first/last"},
 		"pageInfo需要游标": {`query { users { items { id } pageInfo { hasNext } } }`, "需要配合first/last"},
-		"first必须字面量":   {`query ($n: Int) { users(first: $n) { items { id } } }`, "必须是字面量整数"},
+		"first字面量须正":   {`query { users(first: 0) { items { id } } }`, "必须是正整数或变量"},
 	} {
 		my.Run(name, func() {
 			doc, gqlErr := gqlparser.LoadQuery(my.schema, c.query)
