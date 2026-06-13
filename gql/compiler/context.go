@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/samber/lo"
 )
 
 // Context 负责SQL编译过程中的上下文状态，包括SQL拼接、参数、变量、方言等
@@ -24,7 +23,7 @@ type Context struct {
 	volatile  bool
 	hoster    protocol.Hoster
 	variables map[string]interface{}
-	tables    map[string]bool
+	tables    []string // 涉及的表（去重slice，表数极少；省去map与Keys分配）
 }
 
 // Slot 表示SQL参数槽位：字面量值或变量引用
@@ -99,15 +98,18 @@ func (my *Context) Variable(name string) (interface{}, bool) {
 
 // MarkTable 记录本次编译涉及的表，订阅按表变更唤醒
 func (my *Context) MarkTable(name string) {
-	if my.tables == nil {
-		my.tables = make(map[string]bool, 4)
+	for _, t := range my.tables { // 表数极少，线性去重免map
+		if t == name {
+			return
+		}
 	}
-	my.tables[name] = true
+	my.tables = append(my.tables, name)
 }
 
 // Tables 返回本次编译涉及的表集合
+// 返回内部slice：Release将其置nil（不复用底层数组），故Plan.tables独立安全
 func (my *Context) Tables() []string {
-	return lo.Keys(my.tables)
+	return my.tables
 }
 
 // MarkVolatile 标记编译产物依赖变量内容（如整体input变量），不可按查询文本缓存
@@ -238,10 +240,17 @@ func (my *Context) Write(args ...any) *Context {
 
 // Wrap 包装内容
 func (my *Context) Wrap(with string, list ...any) *Context {
-	my.Write(with)
+	my.buf.WriteString(with) // 直写避免字面量装箱进[]any
 	my.Write(list...)
-	my.Write(with)
+	my.buf.WriteString(with)
 	return my
+}
+
+// writeQuoted 写带引号标识符 "s"，零分配（不经可变参数）
+func (my *Context) writeQuoted(s string) {
+	my.buf.WriteString(my.quote)
+	my.buf.WriteString(s)
+	my.buf.WriteString(my.quote)
 }
 
 // Space 添加空格并写入内容(可选)
@@ -273,11 +282,14 @@ func (my *Context) Quote(list ...any) *Context {
 }
 
 // Column 写入（可选限定符的）带引号列引用："限定符"."列"
-func (my *Context) Column(qualifier string, column any) *Context {
+// 列名为string直写buf，零分配（编译热路径，列引用占编译期分配大头）
+func (my *Context) Column(qualifier string, column string) *Context {
 	if qualifier != "" {
-		my.Quote(qualifier).Write(".")
+		my.writeQuoted(qualifier)
+		my.buf.WriteString(".")
 	}
-	return my.Quote(column)
+	my.writeQuoted(column)
+	return my
 }
 
 // QuotedWithSpace 添加引号和空格
