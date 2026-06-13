@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/ichaly/ideabase/gql/internal"
-	"reflect"
-	"sort"
 	"time"
 
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -187,22 +185,13 @@ func detectManyToManyRelations(classes map[string]*protocol.Class, foreignKeys [
 		}
 		pks := tableToPKs[tableName]
 		// 主键必须正好是这两个外键，或表名符合中间表命名规则
-		if !containsSameElements(pks, []string{fks[0].SourceColumn, fks[1].SourceColumn}) {
+		if !(lo.Every(pks, []string{fks[0].SourceColumn, fks[1].SourceColumn}) && len(pks) == 2) {
 			if !isThroughTableByName(tableName, fks[0].TargetTable, fks[1].TargetTable) {
 				continue
 			}
 		}
 		createManyToManyRelation(classes, tableName, fks[0], fks[1])
 	}
-}
-
-// containsSameElements 检查两个字符串切片是否包含相同的元素(不考虑顺序)
-func containsSameElements(a, b []string) bool {
-	aCopy := append([]string(nil), a...)
-	bCopy := append([]string(nil), b...)
-	sort.Strings(aCopy)
-	sort.Strings(bCopy)
-	return reflect.DeepEqual(aCopy, bCopy)
 }
 
 // isThroughTableByName 判断表名是否为中间表

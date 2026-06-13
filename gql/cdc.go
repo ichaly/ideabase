@@ -302,8 +302,8 @@ func (my *listener) dispatch(walData []byte, relations map[uint32]string, touche
 			tables := make([]string, 0, len(touched))
 			for table := range touched {
 				tables = append(tables, table)
-				delete(touched, table)
 			}
+			clear(touched) // 单次runtime清空替代逐项delete
 			my.notify(tables...)
 		}
 	}

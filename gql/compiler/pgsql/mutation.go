@@ -46,7 +46,7 @@ type relationOp struct {
 
 // BuildMutation 构建变更语句
 func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) error {
-	fields := fieldsOf(set)
+	fields := compiler.FieldsOf(set)
 	if len(fields) == 0 {
 		return fmt.Errorf("变更选择集为空")
 	}

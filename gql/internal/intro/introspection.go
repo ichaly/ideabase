@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -31,7 +32,7 @@ func New(schema *ast.Schema) *Handler {
 // operation须已完成解析校验与fragment展开（调用方统一处理，全请求只解析一次）
 func (my *Handler) Introspect(operation *ast.OperationDefinition, variables map[string]interface{}) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
-	for _, field := range fieldsOf(operation.SelectionSet) {
+	for _, field := range compiler.FieldsOf(operation.SelectionSet) {
 		switch field.Name {
 		case "__typename":
 			result[field.Alias] = "Query"
@@ -83,7 +84,7 @@ func (my *Handler) project(set ast.SelectionSet, value interface{}) interface{} 
 			return nil
 		}
 		out := make(map[string]interface{}, len(set))
-		for _, field := range fieldsOf(set) {
+		for _, field := range compiler.FieldsOf(set) {
 			child, ok := node[field.Name]
 			if !ok || child == nil {
 				out[field.Alias] = nil
@@ -99,17 +100,6 @@ func (my *Handler) project(set ast.SelectionSet, value interface{}) interface{} 
 	default:
 		return node
 	}
-}
-
-// fieldsOf 选择集中的纯字段列表（fragment已由调用方inline展开）
-func fieldsOf(set ast.SelectionSet) []*ast.Field {
-	fields := make([]*ast.Field, 0, len(set))
-	for _, selection := range set {
-		if field, ok := selection.(*ast.Field); ok {
-			fields = append(fields, field)
-		}
-	}
-	return fields
 }
 
 // ---------- 数据集构建 ----------

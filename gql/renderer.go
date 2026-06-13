@@ -267,7 +267,7 @@ func (my *Renderer) getGraphQLType(field *protocol.Field) string {
 	}
 
 	// 2. 只从配置中获取类型映射
-	if my.meta != nil && my.meta.cfg != nil && my.meta.cfg.Schema.TypeMapping != nil {
+	if my.meta.cfg.Schema.TypeMapping != nil {
 		if gqlType, ok := my.meta.cfg.Schema.TypeMapping[fieldType]; ok {
 			return gqlType
 		}

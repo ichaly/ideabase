@@ -30,12 +30,14 @@ GraphQL 请求
 ## 快速开始
 
 ```go
+import _ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 空白导入自注册PostgreSQL方言
+
 k, _ := std.NewKonfig()                    // 配置（可声明虚拟字段/关系/排除表等）
 meta, _ := gql.NewMetadata(k, db)          // db: *gorm.DB，自动加载表结构与外键关系
-compile, _ := gql.NewCompiler(meta, []compiler.Dialect{pgsql.NewDialect()})
+compile, _ := gql.NewCompiler(meta, nil)   // nil：按驱动名从注册表自动路由方言
 executor, _ := gql.NewExecutor(db, gql.NewRenderer(meta), meta, compile)
 
-app.Post("/graphql", executor.Handler)     // fiber v3
+executor.Bind(app.Group(executor.Path()))  // fiber v3：POST查询变更 + GET订阅WebSocket升级
 ```
 
 ## 查询能力
@@ -174,7 +176,7 @@ services:
 schema、能力、自省三者严格一致，没有任何方向的偏差：
 
 - **没有隐藏能力**：所有请求先经 schema 校验（gqlparser），schema 没有的字段/参数直接报错——不存在 graphjin 那种"文档不展示但提交能用"的隐含关键字
-- **没有虚假展示**：未实现的能力（游标分页、统计、嵌套写入）不渲染进 schema，文档里看到的就是能用的
+- **没有虚假展示**：未实现的能力（如尚未支持的 MySQL 方言）不渲染进 schema，文档里看到的就是能用的
 - **自省完整**：按客户端查询形状投影（支持别名/fragment），GraphiQL、Apollo codegen 的标准 IntrospectionQuery 直接对接（有测试覆盖）；`__typename` 在根/Result/实体各层级编译为类型名字面量，Apollo 客户端缓存正常工作
 
 ## 当前限制

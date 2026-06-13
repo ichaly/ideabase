@@ -33,7 +33,7 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 	column := func(name string) {
 		ctx.Column(u.class.Table, sc.column(name))
 	}
-	fields := fieldsOf(u.field.SelectionSet)
+	fields := compiler.FieldsOf(u.field.SelectionSet)
 	if len(fields) == 0 {
 		return fmt.Errorf("统计查询 %s 选择集为空", u.field.Name)
 	}
@@ -68,7 +68,7 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 			}
 			// 字段级聚合对象：按子选择生成各聚合函数
 			ctx.Write(`JSONB_BUILD_OBJECT(`)
-			for i, sub := range fieldsOf(f.SelectionSet) {
+			for i, sub := range compiler.FieldsOf(f.SelectionSet) {
 				if i > 0 {
 					ctx.Write(`, `)
 				}

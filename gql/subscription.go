@@ -4,6 +4,7 @@ import (
 	"context"
 	stdjson "encoding/json"
 	"fmt"
+	"hash"
 	"hash/fnv"
 	"sync"
 
@@ -42,8 +43,9 @@ func (my *Executor) stream(ctx context.Context, plan *Plan, variables map[string
 	defer my.cdc.unwatch(w)
 
 	var last uint64
+	digest := fnv.New64a() // stream单goroutine持有，tick内Reset复用免每次分配
 	for {
-		if reply, changed := my.tick(ctx, plan, variables, &last); changed {
+		if reply, changed := my.tick(ctx, plan, variables, digest, &last); changed {
 			select {
 			case events <- reply:
 			case <-ctx.Done():
@@ -59,7 +61,7 @@ func (my *Executor) stream(ctx context.Context, plan *Plan, variables map[string
 }
 
 // tick 表变更唤醒后重查一次：结果指纹无变化时返回false（不推送）
-func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]interface{}, last *uint64) (gqlReply, bool) {
+func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]interface{}, digest hash.Hash64, last *uint64) (gqlReply, bool) {
 	var r gqlReply
 
 	data, err := my.fetch(ctx, plan, variables)
@@ -71,7 +73,7 @@ func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]i
 		return r, true
 	}
 
-	digest := fnv.New64a()
+	digest.Reset()
 	_, _ = digest.Write(data)
 	sum := digest.Sum64()
 	if sum == *last {

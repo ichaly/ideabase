@@ -83,33 +83,26 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 }
 
 // hosts 按路径收集宿主对象，数组层级自动展开
+// 单遍原地复用工作切片，无interface{}装箱中间层
 func hosts(root map[string]interface{}, path []string) []map[string]interface{} {
-	nodes := []interface{}{root}
+	cur := []map[string]interface{}{root}
 	for _, segment := range path {
-		flat := make([]interface{}, 0, len(nodes))
-		for _, node := range nodes {
-			object, ok := node.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			switch value := object[segment].(type) {
+		next := cur[:0] // 复用底层数组：next长度恒不超过cur
+		for _, node := range cur {
+			switch value := node[segment].(type) {
 			case []interface{}:
-				flat = append(flat, value...)
-			case nil:
-			default:
-				flat = append(flat, value)
+				for _, item := range value {
+					if object, ok := item.(map[string]interface{}); ok {
+						next = append(next, object)
+					}
+				}
+			case map[string]interface{}:
+				next = append(next, value)
 			}
 		}
-		nodes = flat
+		cur = next
 	}
-
-	out := make([]map[string]interface{}, 0, len(nodes))
-	for _, node := range nodes {
-		if object, ok := node.(map[string]interface{}); ok {
-			out = append(out, object)
-		}
-	}
-	return out
+	return cur
 }
 
 // resolve 按绑定填充resolver字段：批量解析器整列表一次调用，

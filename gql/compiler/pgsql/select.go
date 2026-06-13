@@ -38,7 +38,7 @@ type unit struct {
 
 // BuildQuery 构建查询语句：根JSON对象 + 每个根字段一个LATERAL单元
 func (my *Dialect) BuildQuery(ctx *compiler.Context, set ast.SelectionSet) error {
-	fields := fieldsOf(set)
+	fields := compiler.FieldsOf(set)
 	if len(fields) == 0 {
 		return fmt.Errorf("查询选择集为空")
 	}
@@ -90,12 +90,12 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 	case shapeSingle:
 		ctx.Write(`SELECT TO_JSONB(`).
 			Quote(`__sr_`, u.index).Write(`.*) AS "json" FROM (`)
-		err = my.buildCore(ctx, u, fieldsOf(u.field.SelectionSet), false)
+		err = my.buildCore(ctx, u, compiler.FieldsOf(u.field.SelectionSet), false)
 		ctx.Write(`) AS `).Quote(`__sr_`, u.index)
 	case shapeResult:
 		err = my.buildResultWrap(ctx, u)
 	default: // shapeList / shapeStats：纯数组包装
-		core := func() error { return my.buildCore(ctx, u, fieldsOf(u.field.SelectionSet), false) }
+		core := func() error { return my.buildCore(ctx, u, compiler.FieldsOf(u.field.SelectionSet), false) }
 		if u.shape == shapeStats {
 			core = func() error { return my.buildStatsCore(ctx, u) }
 		}
@@ -117,10 +117,10 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	var items, typeNames []*ast.Field
 	var pageInfo *ast.Field
 	var hasTotal bool
-	for _, f := range fieldsOf(u.field.SelectionSet) {
+	for _, f := range compiler.FieldsOf(u.field.SelectionSet) {
 		switch f.Name {
 		case protocol.ITEMS:
-			items = fieldsOf(f.SelectionSet)
+			items = compiler.FieldsOf(f.SelectionSet)
 		case protocol.TOTAL:
 			hasTotal = true
 		case protocol.PAGE_INFO:
@@ -226,7 +226,7 @@ func (my *Dialect) buildPageInfo(ctx *compiler.Context, u *unit, field *ast.Fiel
 	}
 
 	ctx.Write(`JSONB_BUILD_OBJECT(`)
-	for i, f := range fieldsOf(field.SelectionSet) {
+	for i, f := range compiler.FieldsOf(field.SelectionSet) {
 		if i > 0 {
 			ctx.Write(`, `)
 		}
@@ -633,15 +633,4 @@ func treeDepth(args ast.ArgumentList) (int, error) {
 		return 0, fmt.Errorf("depth必须在1..32之间")
 	}
 	return depth, nil
-}
-
-// fieldsOf 提取选择集中的字段列表
-func fieldsOf(set ast.SelectionSet) []*ast.Field {
-	fields := make([]*ast.Field, 0, len(set))
-	for _, s := range set {
-		if f, ok := s.(*ast.Field); ok {
-			fields = append(fields, f)
-		}
-	}
-	return fields
 }

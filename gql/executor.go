@@ -339,12 +339,8 @@ func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte) (map[st
 			return nil, err
 		}
 	}
-	if len(plan.resolvers) > 0 {
-		if err := my.resolve(ctx, plan.resolvers, result); err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
+	// 调用方已保证 resolvers 非空（无resolver走直通路径不进此函数）
+	return result, my.resolve(ctx, plan.resolvers, result)
 }
 
 // introQuery 解析后发现是自省查询：经error通道带出已解析的operation，
