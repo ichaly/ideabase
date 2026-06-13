@@ -156,7 +156,11 @@ func loadSchema(m *Metadata, r *Renderer) (string, error) {
 
 // LoadDocuments 从目录加载.graphql操作文档（持久化查询）
 // 操作按名注册，可通过ExecuteOperation按名执行；编译缓存尽力预热
+// 目录是可选的：不存在则跳过（无持久化查询不影响服务启动）
 func (my *Executor) LoadDocuments(dir string) error {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil
+	}
 	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".graphql") {
 			return err

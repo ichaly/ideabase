@@ -42,7 +42,7 @@ func (sign) ResolveBatch(ctx context.Context, sources []map[string]any, args map
 
 // demoDSN demo数据库连接串（docker compose暴露5433），可用DEMO_DSN覆盖
 func demoDSN() string {
-	return cmp.Or(os.Getenv("DEMO_DSN"), "host=localhost port=5433 user=demo password=demo dbname=demo sslmode=disable")
+	return cmp.Or(os.Getenv("DEMO_DSN"), "host=localhost port=5678 user=postgres password=postgres dbname=demo sslmode=disable")
 }
 
 // buildExecutor 装配完整引擎：配置 -> 元数据 -> 编译器（方言自注册） -> 执行器 + resolver
