@@ -62,7 +62,10 @@ type MetadataConfig struct {
 	// 表名前缀（将被去除）
 	TablePrefix []string `mapstructure:"table-prefix"`
 
-	// 要排除的表
+	// 仅包含的表（白名单，支持尾部*通配，如 bot_*；非空时未命中的表一律排除，排除规则优先）
+	IncludeTables []string `mapstructure:"include-tables"`
+
+	// 要排除的表（支持尾部*通配）
 	ExcludeTables []string `mapstructure:"exclude-tables"`
 
 	// 要排除的字段

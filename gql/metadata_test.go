@@ -555,6 +555,34 @@ func TestTableAndFieldFiltering(t *testing.T) {
 	assert.False(t, ok, "posts表应该被过滤掉")
 }
 
+// 测试include-tables白名单（含尾部*通配，排除优先）
+func TestIncludeTablesWhitelist(t *testing.T) {
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", t.TempDir())
+	k.Set("metadata.include-tables", []string{"bot_*", "users"})
+	k.Set("metadata.exclude-tables", []string{"bot_action"})
+	k.Set("metadata.classes", map[string]map[string]interface{}{
+		"User":       {"table": "users", "fields": map[string]map[string]interface{}{"id": {"column": "id", "type": "integer", "primary": true}}},
+		"Post":       {"table": "posts", "fields": map[string]map[string]interface{}{"id": {"column": "id", "type": "integer", "primary": true}}},
+		"BotProfile": {"table": "bot_profile", "fields": map[string]map[string]interface{}{"id": {"column": "id", "type": "integer", "primary": true}}},
+		"BotAction":  {"table": "bot_action", "fields": map[string]map[string]interface{}{"id": {"column": "id", "type": "integer", "primary": true}}},
+	})
+
+	meta, err := NewMetadata(k, nil)
+	require.NoError(t, err, "创建元数据加载器失败")
+
+	_, ok := meta.Nodes["User"]
+	assert.True(t, ok, "users命中白名单应保留")
+	_, ok = meta.Nodes["BotProfile"]
+	assert.True(t, ok, "bot_profile命中bot_*通配应保留")
+	_, ok = meta.Nodes["Post"]
+	assert.False(t, ok, "posts未命中白名单应被过滤")
+	_, ok = meta.Nodes["BotAction"]
+	assert.False(t, ok, "bot_action命中排除规则应优先被过滤")
+}
+
 // 测试从文件加载元数据
 func TestLoadMetadataFromFile(t *testing.T) {
 	// 初始化测试数据库

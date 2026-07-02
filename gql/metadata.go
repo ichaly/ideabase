@@ -504,9 +504,14 @@ func (my *Metadata) normalize() error {
 	relations := make([]*protocol.Field, 0)
 
 	for classKey, class := range my.Nodes {
-		// 跳过需要忽略的表
-		if class.Table != "" && lo.IndexOf(config.ExcludeTables, class.Table) > -1 {
-			continue
+		// 跳过需要忽略的表；白名单非空时未命中即排除，排除规则优先
+		if class.Table != "" {
+			if matchTables(config.ExcludeTables, class.Table) {
+				continue
+			}
+			if len(config.IncludeTables) > 0 && !matchTables(config.IncludeTables, class.Table) {
+				continue
+			}
 		}
 
 		fields := make(map[string]*protocol.Field)
@@ -573,4 +578,18 @@ func (my *Metadata) normalize() error {
 
 	my.Nodes = nodes
 	return nil
+}
+
+// matchTables 表名匹配：精确或尾部*前缀通配（如 bot_*）
+func matchTables(patterns []string, table string) bool {
+	for _, p := range patterns {
+		if prefix, ok := strings.CutSuffix(p, "*"); ok {
+			if strings.HasPrefix(table, prefix) {
+				return true
+			}
+		} else if p == table {
+			return true
+		}
+	}
+	return false
 }
