@@ -4,6 +4,7 @@ package gql
 
 import (
 	"context"
+	stdjson "encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -277,9 +278,10 @@ func (my *Executor) Execute(ctx context.Context, query string, variables map[str
 	if r.raw != nil {
 		result := make(map[string]interface{})
 		if len(r.raw) > 0 {
-			if err := json.Unmarshal(r.raw, &result); err != nil {
+			if err := jsonNumeric.Unmarshal(r.raw, &result); err != nil {
 				return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
 			}
+			normalizeNumbers(result)
 		}
 		r.Data, r.raw = result, nil
 	}
@@ -339,12 +341,37 @@ func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]
 func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
 	if len(data) > 0 {
-		if err := json.Unmarshal(data, &result); err != nil {
+		if err := jsonNumeric.Unmarshal(data, &result); err != nil {
 			return nil, err
 		}
+		normalizeNumbers(result)
 	}
 	// 调用方已保证 resolvers 非空（无resolver走直通路径不进此函数）
 	return result, my.resolve(ctx, plan.resolvers, result)
+}
+
+// normalizeNumbers 就地把json.Number收敛为int64/float64：
+// 整数走int64无损(bigint主键如雪花ID>2^53经float64必丢精度)，非整数才降级float64。
+func normalizeNumbers(v interface{}) interface{} {
+	switch val := v.(type) {
+	case stdjson.Number:
+		if i, err := val.Int64(); err == nil {
+			return i
+		}
+		if f, err := val.Float64(); err == nil {
+			return f
+		}
+		return val.String()
+	case map[string]interface{}:
+		for k, item := range val {
+			val[k] = normalizeNumbers(item)
+		}
+	case []interface{}:
+		for i, item := range val {
+			val[i] = normalizeNumbers(item)
+		}
+	}
+	return v
 }
 
 // introQuery 解析后发现是自省查询：经error通道带出已解析的operation，
