@@ -19,6 +19,7 @@ type planEntry struct {
 	plan      *Plan                    // 编译成品，volatile时为nil
 	operation *ast.OperationDefinition // volatile重编译入口
 	resolvers []binding                // resolver绑定只依赖AST，volatile重编译复用
+	action    bool                     // Action操作：无SQL计划，缓存AST供执行期分发
 }
 
 // planCache 执行计划LRU缓存：命中路径零解析；非volatile零编译

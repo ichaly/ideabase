@@ -66,6 +66,8 @@ type Executor struct {
 	compiler  *Compiler           // 编译器，将GraphQL查询编译为SQL
 	cache     *planCache          // 执行计划缓存，命中路径零解析零编译
 	resolvers map[string]Resolver // 自定义字段解析器注册表
+	actions   map[string]Action   // 操作级Action注册表：顶层字段名 -> 实现
+	source    string              // 原始schema文本，RegisterAction合并SDL时重建的基底
 	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
 	cdc       notifier            // CDC唤醒源（按数据库驱动从注册表选取）
 }
@@ -102,6 +104,7 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		compiler:  c,
 		cache:     newPlanCache(512),
 		resolvers: make(map[string]Resolver),
+		actions:   make(map[string]Action),
 		documents: make(map[string]string),
 	}
 
@@ -118,6 +121,7 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		return nil, err
 	}
 
+	executor.source = data
 	executor.schema = s
 	executor.intro = intro.New(s)
 
@@ -188,6 +192,9 @@ func (my *Executor) loadDocument(content string) error {
 		// 复用已解析的AST预热编译缓存（不再重复解析文档）；
 		// 依赖变量内容的操作（volatile）缓存AST，执行期免解析重编译
 		operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
+		if hit, _ := my.checkActions(operation.SelectionSet); hit {
+			continue // Action操作无SQL计划，执行期走分发路径
+		}
 		_, _ = my.compile(planKey{operation: operation.Name, query: content}, operation, nil)
 	}
 	return nil
@@ -305,6 +312,9 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 			}
 			return r
 		}
+		if actionErr, ok := err.(*actionQuery); ok {
+			return my.executeActions(ctx, actionErr.operation, variables)
+		}
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
 	}
@@ -387,6 +397,9 @@ func (my *introQuery) Error() string { return "自省查询不支持此入口" }
 func (my *Executor) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
 	key := planKey{operation: operationName, query: query}
 	if entry, ok := my.cache.Get(key); ok {
+		if entry.action {
+			return nil, &actionQuery{operation: entry.operation}
+		}
 		if entry.plan != nil {
 			return entry.plan, nil
 		}
@@ -405,6 +418,13 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 	}
 	if hasIntroField(operation.SelectionSet) {
 		return nil, &introQuery{operation: operation}
+	}
+	if hit, err := my.checkActions(operation.SelectionSet); hit {
+		if err != nil {
+			return nil, err
+		}
+		my.cache.Put(key, &planEntry{operation: operation, action: true})
+		return nil, &actionQuery{operation: operation}
 	}
 	if my.compiler == nil || my.database == nil {
 		return nil, fmt.Errorf("执行器未配置数据库或编译器")
