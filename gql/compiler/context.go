@@ -146,6 +146,19 @@ func (my *Context) SearchMode() (string, string) {
 	return "", ""
 }
 
+// Limiter 元数据承载者的可选能力：列表查询缺省LIMIT（防无界全表扫描）
+type Limiter interface {
+	DefaultLimit() int
+}
+
+// DefaultLimit 返回列表查询缺省LIMIT；未实现Limiter或未配置时为0（不注入）
+func (my *Context) DefaultLimit() int {
+	if limiter, ok := my.hoster.(Limiter); ok {
+		return limiter.DefaultLimit()
+	}
+	return 0
+}
+
 // GetClass 按类名（或表名索引）获取类定义
 func (my *Context) GetClass(className string) (*protocol.Class, bool) {
 	if my.hoster == nil {

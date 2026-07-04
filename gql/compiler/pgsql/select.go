@@ -427,7 +427,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		}
 		ctx.Write(`COUNT(*) OVER() AS "__total"`)
 	}
-	ctx.Space(`FROM`).Write(u.class.Table)
+	ctx.Space(`FROM`).Quote(u.class.Table)
 
 	// WHERE位的合取条件：父子关联 + 全文搜索 + keyset续页边界
 	conjuncts, err := my.relationBond(ctx, u, sc)
@@ -521,7 +521,7 @@ func (my *Dialect) relationBond(ctx *compiler.Context, u *unit, sc scope) ([]fun
 	if through := u.rel.Through; through != nil {
 		// 中间表JOIN：中间表.目标键 = 目标表.目标列
 		ctx.MarkTable(through.TableName)
-		ctx.Space(`INNER JOIN`).Write(through.TableName).
+		ctx.Space(`INNER JOIN`).Quote(through.TableName).
 			Space(`ON`).Column(through.TableName, through.TargetKey).
 			Space(`=`).Column(u.class.Table, targetCol)
 		// 关联条件：中间表.源键 = 父别名.源列
@@ -555,10 +555,14 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 		return nil
 	}
 
+	limited := false
 	for _, name := range []string{protocol.LIMIT, protocol.OFFSET} {
 		arg := u.args.ForName(name)
 		if arg == nil || arg.Value == nil {
 			continue
+		}
+		if name == protocol.LIMIT {
+			limited = true
 		}
 		ctx.Space(strings.ToUpper(name))
 		if arg.Value.Kind == ast.Variable {
@@ -576,6 +580,13 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 		ctx.Write(int(count))
 	}
 
+	// 缺省LIMIT兜底：无显式limit的列表注入配置的default-limit，防无界全表扫描；
+	// 变更读回须返回全部受影响行、统计分组保持完整语义、递归全树已有depth限深，均不注入
+	if !limited && !u.readback && u.shape != shapeStats && (u.rel == nil || !u.rel.Deep) {
+		if n := ctx.DefaultLimit(); n > 0 {
+			ctx.Space(`LIMIT`).Write(n)
+		}
+	}
 	return nil
 }
 
@@ -618,13 +629,13 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 
 	ctx.Space(`FROM (WITH RECURSIVE`).QuotedWithSpace(tree).Write(`AS (SELECT `)
 	list(u.class.Table)
-	ctx.Write(`, 1 AS "__lv" FROM `, u.class.Table, ` WHERE `).
+	ctx.Write(`, 1 AS "__lv" FROM `).Quote(u.class.Table).Write(` WHERE `).
 		Column(u.class.Table, targetCol).
 		Write(` = `).Column(u.parent, parentCol)
 	scopeFilter()
 	ctx.Write(` UNION ALL SELECT `)
 	list(u.class.Table)
-	ctx.Write(`, `).Quote(tree).Write(`."__lv" + 1 FROM `, u.class.Table, `, `).Quote(tree).
+	ctx.Write(`, `).Quote(tree).Write(`."__lv" + 1 FROM `).Quote(u.class.Table).Write(`, `).Quote(tree).
 		Write(` WHERE `).Column(u.class.Table, targetCol).
 		Write(` = `).Column(tree, sourceCol).
 		Write(` AND `).Quote(tree).Write(`."__lv" < `, depth)

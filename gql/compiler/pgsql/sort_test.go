@@ -7,7 +7,7 @@ func sortQuery(clause string) string {
 			SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 			FROM (
 				SELECT "sys_user_0"."id" AS "id"
-				FROM (SELECT "sys_user"."id", "sys_user"."name" FROM sys_user ` + clause + `) AS "sys_user_0"
+				FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "sys_user" ` + clause + `) AS "sys_user_0"
 			) AS "__sr_0"
 		) AS "__sj_0" ON TRUE`
 }
@@ -17,12 +17,12 @@ func (my *_DialectSuite) TestSort() {
 		{
 			name:     "单字段降序",
 			query:    `query { users(sort: { name: DESC }) { items { id } } }`,
-			expected: sortQuery(`ORDER BY "sys_user"."name" DESC`),
+			expected: sortQuery(`ORDER BY "sys_user"."name" DESC LIMIT 10`),
 		},
 		{
 			name:     "默认方向为升序",
 			query:    `query { users(sort: { name: ASC }) { items { id } } }`,
-			expected: sortQuery(`ORDER BY "sys_user"."name" ASC`),
+			expected: sortQuery(`ORDER BY "sys_user"."name" ASC LIMIT 10`),
 		},
 		{
 			name:  "多字段混合排序",
@@ -32,8 +32,8 @@ func (my *_DialectSuite) TestSort() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id"
-						FROM (SELECT "sys_user"."id", "sys_user"."name", "sys_user"."age" FROM sys_user
-							ORDER BY "sys_user"."name" ASC, "sys_user"."age" DESC NULLS LAST) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id", "sys_user"."name", "sys_user"."age" FROM "sys_user"
+							ORDER BY "sys_user"."name" ASC, "sys_user"."age" DESC NULLS LAST LIMIT 10) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},
@@ -45,7 +45,7 @@ func (my *_DialectSuite) TestSort() {
 		{
 			name:     "条件排序组合",
 			query:    `query { users(where: { name: { like: "%a%" } }, sort: { name: ASC }) { items { id } } }`,
-			expected: sortQuery(`WHERE "sys_user"."name" LIKE $1 ORDER BY "sys_user"."name" ASC`),
+			expected: sortQuery(`WHERE "sys_user"."name" LIKE $1 ORDER BY "sys_user"."name" ASC LIMIT 10`),
 			args:     []any{"%a%"},
 		},
 	}

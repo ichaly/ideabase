@@ -260,6 +260,14 @@ func (my *Metadata) SearchMode() (string, string) {
 	return my.searchMode, my.searchConfig
 }
 
+// DefaultLimit 返回列表查询缺省LIMIT（实现compiler.Limiter），0=不注入
+func (my *Metadata) DefaultLimit() int {
+	if my.cfg == nil {
+		return 0
+	}
+	return my.cfg.Schema.DefaultLimit
+}
+
 func (my *Metadata) GetNode(name string) (*protocol.Class, bool) {
 	n, ok := my.Nodes[name]
 	return n, ok
