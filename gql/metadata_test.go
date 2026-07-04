@@ -1049,3 +1049,38 @@ func TestMetadataIndexPointers(t *testing.T) {
 		}
 	})
 }
+
+// TestProcessRelationsRecursive 递归字段的生成判据是"非主键侧"而非外键命名：
+// 外键列不叫 xxxId 同样生成 parent/children/descendants/ancestors，
+// 反向关系挂在主键字段上被跳过（防重复生成）
+func TestProcessRelationsRecursive(t *testing.T) {
+	build := func(fk string, fkPrimary bool) *Metadata {
+		class := &protocol.Class{
+			Name: "Category", Table: "categories", PrimaryKeys: []string{"id"},
+			Fields: map[string]*protocol.Field{
+				"id": {Name: "id", Column: "id", IsPrimary: true, Relation: &protocol.Relation{
+					Type: protocol.RECURSIVE, SourceClass: "Category", SourceField: "id",
+					TargetClass: "Category", TargetField: fk,
+				}},
+				fk: {Name: fk, Column: fk, IsPrimary: fkPrimary, Relation: &protocol.Relation{
+					Type: protocol.RECURSIVE, SourceClass: "Category", SourceField: fk,
+					TargetClass: "Category", TargetField: "id",
+				}},
+			},
+		}
+		return &Metadata{Nodes: map[string]*protocol.Class{"Category": class}}
+	}
+
+	meta := build("pid", false)
+	meta.processRelations()
+	class := meta.Nodes["Category"]
+	for _, name := range []string{"parent", "children", "descendants", "ancestors"} {
+		assert.NotNilf(t, class.Fields[name], "外键列pid应生成%s字段", name)
+	}
+	assert.Nil(t, class.Fields["parent1"], "主键侧反向关系不应重复生成")
+
+	// 已知边界：自引用外键本身是复合主键成员（闭包表）时，两侧均为主键，不生成递归字段
+	meta = build("ancestorId", true)
+	meta.processRelations()
+	assert.Nil(t, meta.Nodes["Category"].Fields["parent"], "复合主键自引用不生成递归字段")
+}

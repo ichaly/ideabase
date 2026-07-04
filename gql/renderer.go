@@ -636,65 +636,43 @@ func statsKind(typeName string) string {
 	return ""
 }
 
+// statsSpecs 聚合类型表：一份定义同时驱动聚合结果类型与having过滤类型
+// （having镜像聚合结果，各聚合字段复用对应标量的WhereInput操作符，countDistinct恒为Int）
+var statsSpecs = []struct {
+	comment, stats, having, scalar string
+	funcs                          []string
+}{
+	{"数值", protocol.TYPE_NUMBER_STATS, protocol.TYPE_NUMBER_HAVING, protocol.SCALAR_FLOAT,
+		[]string{protocol.FUNCTION_SUM, protocol.FUNCTION_AVG, protocol.FUNCTION_MIN, protocol.FUNCTION_MAX}},
+	{"字符串", protocol.TYPE_STRING_STATS, protocol.TYPE_STRING_HAVING, protocol.SCALAR_STRING,
+		[]string{protocol.FUNCTION_MIN, protocol.FUNCTION_MAX}},
+	{"日期", protocol.TYPE_DATE_TIME_STATS, protocol.TYPE_DATE_TIME_HAVING, protocol.SCALAR_DATE_TIME,
+		[]string{protocol.FUNCTION_MIN, protocol.FUNCTION_MAX}},
+}
+
 // renderStats 渲染统计类型：通用聚合结果 + 每实体的Stats类型（选择驱动编译）
 func (my *Renderer) renderStats() error {
-	my.writeLine("# 数值聚合结果")
-	my.writeLine("type ", protocol.TYPE_NUMBER_STATS, " {")
-	my.writeField(protocol.FUNCTION_SUM, protocol.SCALAR_FLOAT)
-	my.writeField(protocol.FUNCTION_AVG, protocol.SCALAR_FLOAT)
-	my.writeField(protocol.FUNCTION_MIN, protocol.SCALAR_FLOAT)
-	my.writeField(protocol.FUNCTION_MAX, protocol.SCALAR_FLOAT)
-	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, protocol.SCALAR_INT)
-	my.writeLine("}")
-	my.writeLine()
-
-	my.writeLine("# 字符串聚合结果")
-	my.writeLine("type ", protocol.TYPE_STRING_STATS, " {")
-	my.writeField(protocol.FUNCTION_MIN, protocol.SCALAR_STRING)
-	my.writeField(protocol.FUNCTION_MAX, protocol.SCALAR_STRING)
-	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, protocol.SCALAR_INT)
-	my.writeLine("}")
-	my.writeLine()
-
-	my.writeLine("# 日期聚合结果")
-	my.writeLine("type ", protocol.TYPE_DATE_TIME_STATS, " {")
-	my.writeField(protocol.FUNCTION_MIN, protocol.SCALAR_DATE_TIME)
-	my.writeField(protocol.FUNCTION_MAX, protocol.SCALAR_DATE_TIME)
-	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, protocol.SCALAR_INT)
-	my.writeLine("}")
-	my.writeLine()
-
-	// having过滤类型：镜像聚合结果，各聚合字段复用对应标量的WhereInput操作符
 	intWhere := protocol.SCALAR_INT + protocol.SUFFIX_WHERE_INPUT
-	floatWhere := protocol.SCALAR_FLOAT + protocol.SUFFIX_WHERE_INPUT
-	stringWhere := protocol.SCALAR_STRING + protocol.SUFFIX_WHERE_INPUT
-	dateWhere := protocol.SCALAR_DATE_TIME + protocol.SUFFIX_WHERE_INPUT
-
-	my.writeLine("# 数值聚合having过滤")
-	my.writeLine("input ", protocol.TYPE_NUMBER_HAVING, " {")
-	my.writeField(protocol.FUNCTION_SUM, floatWhere)
-	my.writeField(protocol.FUNCTION_AVG, floatWhere)
-	my.writeField(protocol.FUNCTION_MIN, floatWhere)
-	my.writeField(protocol.FUNCTION_MAX, floatWhere)
-	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, intWhere)
-	my.writeLine("}")
-	my.writeLine()
-
-	my.writeLine("# 字符串聚合having过滤")
-	my.writeLine("input ", protocol.TYPE_STRING_HAVING, " {")
-	my.writeField(protocol.FUNCTION_MIN, stringWhere)
-	my.writeField(protocol.FUNCTION_MAX, stringWhere)
-	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, intWhere)
-	my.writeLine("}")
-	my.writeLine()
-
-	my.writeLine("# 日期聚合having过滤")
-	my.writeLine("input ", protocol.TYPE_DATE_TIME_HAVING, " {")
-	my.writeField(protocol.FUNCTION_MIN, dateWhere)
-	my.writeField(protocol.FUNCTION_MAX, dateWhere)
-	my.writeField(protocol.FUNCTION_COUNT_DISTINCT, intWhere)
-	my.writeLine("}")
-	my.writeLine()
+	for _, s := range statsSpecs {
+		my.writeLine("# ", s.comment, "聚合结果")
+		my.writeLine("type ", s.stats, " {")
+		for _, fn := range s.funcs {
+			my.writeField(fn, s.scalar)
+		}
+		my.writeField(protocol.FUNCTION_COUNT_DISTINCT, protocol.SCALAR_INT)
+		my.writeLine("}")
+		my.writeLine()
+	}
+	for _, s := range statsSpecs {
+		my.writeLine("# ", s.comment, "聚合having过滤")
+		my.writeLine("input ", s.having, " {")
+		for _, fn := range s.funcs {
+			my.writeField(fn, s.scalar+protocol.SUFFIX_WHERE_INPUT)
+		}
+		my.writeField(protocol.FUNCTION_COUNT_DISTINCT, intWhere)
+		my.writeLine("}")
+		my.writeLine()
+	}
 
 	// 每实体统计类型 + having入参：key为分组键，count恒有，标量列按类别挂聚合
 	my.eachTableClass(func(className string, class *protocol.Class) {

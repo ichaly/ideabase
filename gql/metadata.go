@@ -293,97 +293,53 @@ func (my *Metadata) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// processRelations 处理实体间的关系，包含两个阶段：
-// 1. 收集阶段：遍历所有节点，收集需要处理的关系信息
-//   - 处理各种关系类型（一对多、多对一、多对多、递归关系）
-//   - 处理双向关系引用
-//   - 处理中间表关系
-//
-// 2. 创建阶段：根据收集的信息创建关系字段
-//   - 创建虚拟字段作为关系的载体
-//   - 确保字段名唯一性
-//   - 维护双向关系引用
+// relationField 收集阶段产出的关系虚拟字段：owner类上名为name、指向target的字段
+type relationField struct {
+	owner, target, name, description string
+	isList, nullable, isThrough      bool
+	relation                         *protocol.Relation // join元数据，编译器据此生成关联条件
+}
+
+// cloneRelation 复制关系元数据，reverse为true时交换源和目标方向
+func cloneRelation(rel *protocol.Relation, relType protocol.RelationType, reverse bool) *protocol.Relation {
+	result := &protocol.Relation{
+		Type:        relType,
+		SourceClass: rel.SourceClass,
+		SourceField: rel.SourceField,
+		TargetClass: rel.TargetClass,
+		TargetField: rel.TargetField,
+	}
+	if reverse {
+		result.SourceClass, result.TargetClass = result.TargetClass, result.SourceClass
+		result.SourceField, result.TargetField = result.TargetField, result.SourceField
+	}
+	if rel.Through != nil {
+		through := *rel.Through
+		if reverse {
+			through.SourceKey, through.TargetKey = through.TargetKey, through.SourceKey
+		}
+		result.Through = &through
+	}
+	return result
+}
+
+// processRelations 处理实体间关系：先按关系类型收集待建的虚拟字段，再统一挂载到类
 func (my *Metadata) processRelations() {
 	log.Debug().Msg("处理所有关系信息")
 
-	// 定义关系字段信息结构体
-	type RelationFieldInfo struct {
-		SourceClass string
-		TargetClass string
-		FieldName   string
-		IsList      bool
-		Nullable    bool
-		Description string
-		IsThrough   bool
-		Relation    *protocol.Relation // 关系字段的join元数据，编译器据此生成关联条件
-	}
+	var pending []relationField
+	reverseSeen := make(map[string]bool) // 同一对类的反向一对多只建一次
 
-	// 存储所有需要创建的关系字段
-	fieldsToCreate := make([]RelationFieldInfo, 0)
-	// 用于避免重复创建反向关系字段的映射
-	reverseRelationKeys := make(map[string]bool)
-
-	// 添加关系字段信息的辅助函数
-	addRelationField := func(sourceClass, targetClass string, isList, nullable, isThrough bool,
-		fieldName string, description string, rel *protocol.Relation) {
-
-		fieldsToCreate = append(fieldsToCreate, RelationFieldInfo{
-			SourceClass: sourceClass,
-			TargetClass: targetClass,
-			FieldName:   fieldName,
-			IsList:      isList,
-			Nullable:    nullable,
-			Description: description,
-			IsThrough:   isThrough,
-			Relation:    rel,
-		})
-	}
-
-	// 复制关系元数据的辅助函数，reverse为true时交换源和目标方向
-	cloneRelation := func(rel *protocol.Relation, relType protocol.RelationType, reverse bool) *protocol.Relation {
-		result := &protocol.Relation{
-			Type:        relType,
-			SourceClass: rel.SourceClass,
-			SourceField: rel.SourceField,
-			TargetClass: rel.TargetClass,
-			TargetField: rel.TargetField,
-		}
-		if reverse {
-			result.SourceClass, result.TargetClass = result.TargetClass, result.SourceClass
-			result.SourceField, result.TargetField = result.TargetField, result.SourceField
-		}
-		if rel.Through != nil {
-			through := *rel.Through
-			if reverse {
-				through.SourceKey, through.TargetKey = through.TargetKey, through.SourceKey
-			}
-			result.Through = &through
-		}
-		return result
-	}
-
-	// 创建描述文本的辅助函数
-	createDescription := func(targetClass string, isList bool) string {
-		if isList {
-			return "关联的" + targetClass + "列表"
-		}
-		return "关联的" + targetClass
-	}
-
-	// 第一阶段：收集所有关系字段信息
 	for className, class := range my.Nodes {
 		// 跳过表名索引，只处理类名索引
 		if className != class.Name {
 			continue
 		}
-
 		for fieldName, field := range class.Fields {
-			// 跳过非主字段或没有关系的字段
 			if fieldName != field.Name || field.Relation == nil {
 				continue
 			}
 
-			// 获取并补充关系信息
 			relation := field.Relation
 			if relation.SourceClass == "" {
 				relation.SourceClass = class.Name
@@ -391,127 +347,127 @@ func (my *Metadata) processRelations() {
 			if relation.SourceField == "" {
 				relation.SourceField = field.Name
 			}
-
-			// 查找目标类
-			targetClassName := relation.TargetClass
-			targetClass := my.Nodes[targetClassName]
+			targetClass := my.Nodes[relation.TargetClass]
 			if targetClass == nil {
 				log.Warn().Str("class", class.Name).Str("field", field.Name).
-					Str("targetClass", targetClassName).Msg("关系目标类不存在")
+					Str("targetClass", relation.TargetClass).Msg("关系目标类不存在")
 				continue
 			}
-
-			// 找到目标字段
-			targetField := targetClass.Fields[relation.TargetField]
-			if targetField == nil {
+			if targetClass.Fields[relation.TargetField] == nil {
 				log.Warn().Str("class", class.Name).Str("field", field.Name).
-					Str("targetClass", targetClassName).Str("targetField", relation.TargetField).
+					Str("targetClass", relation.TargetClass).Str("targetField", relation.TargetField).
 					Msg("关系目标字段不存在")
 				continue
 			}
 
-			// 根据关系类型收集需要创建的字段信息
 			switch relation.Type {
 			case protocol.MANY_TO_MANY:
-				// 添加多对多关系字段
-				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(targetClassName)))
-				desc := createDescription(targetClassName, true)
-				addRelationField(class.Name, targetClassName, true, false, false,
-					relName, desc, cloneRelation(relation, protocol.MANY_TO_MANY, false))
-
-				// 处理中间表
-				if relation.Through != nil {
-					// 从 Nodes 中查找表对应的类并添加中间表关系
-					if throughClass := my.Nodes[relation.Through.TableName]; throughClass != nil {
-						throughFieldName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(throughClass.Name)))
-						throughDesc := createDescription(throughClass.Name, true)
-						// 指向中间表本身是普通一对多：源类主键 -> 中间表的源外键
-						addRelationField(class.Name, throughClass.Name, true, false, true,
-							throughFieldName, throughDesc, &protocol.Relation{
-								Type:        protocol.ONE_TO_MANY,
-								SourceClass: class.Name,
-								SourceField: relation.SourceField,
-								TargetClass: throughClass.Name,
-								TargetField: relation.Through.SourceKey,
-							})
-					}
-				}
-
+				pending = append(pending, my.collectManyToMany(class, relation)...)
 			case protocol.ONE_TO_MANY:
-				// 添加一对多关系字段
-				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(targetClassName)))
-				desc := createDescription(targetClassName, true)
-				addRelationField(class.Name, targetClassName, true, false, false,
-					relName, desc, cloneRelation(relation, protocol.ONE_TO_MANY, false))
-
+				pending = append(pending, my.listField(class, relation.TargetClass, false,
+					cloneRelation(relation, protocol.ONE_TO_MANY, false)))
 			case protocol.MANY_TO_ONE:
-				// 添加多对一关系字段
-				relName := my.uniqueFieldName(class, strcase.ToLowerCamel(targetClassName))
-				desc := createDescription(targetClassName, false)
-				addRelationField(class.Name, targetClassName, false, field.Nullable, false,
-					relName, desc, cloneRelation(relation, protocol.MANY_TO_ONE, false))
-
-				// 收集反向关系字段信息（一对多）
-				// 创建唯一的键来防止重复
-				reverseKey := targetClassName + ":" + class.Name
-				if !reverseRelationKeys[reverseKey] {
-					reverseName := my.uniqueFieldName(targetClass, strcase.ToLowerCamel(inflection.Plural(className)))
-					reverseDesc := createDescription(className, true)
-					addRelationField(targetClassName, class.Name, true, false, false,
-						reverseName, reverseDesc, cloneRelation(relation, protocol.ONE_TO_MANY, true))
-					reverseRelationKeys[reverseKey] = true
-				}
-
+				pending = append(pending, my.collectManyToOne(class, targetClass, field, relation, reverseSeen)...)
 			case protocol.RECURSIVE:
-				// 处理递归关系
-				if strings.HasSuffix(fieldName, "Id") || strings.HasSuffix(fieldName, "ID") {
-					// 添加父级关系字段：本类外键 -> 本类主键
-					parentName := my.uniqueFieldName(class, "parent")
-					parentDesc := "父" + className + "对象"
-					addRelationField(class.Name, className, false, true, false,
-						parentName, parentDesc, cloneRelation(relation, protocol.RECURSIVE, false))
-
-					// 添加子级关系字段：本类主键 -> 本类外键
-					childrenName := my.uniqueFieldName(targetClass, "children")
-					childrenDesc := "子" + className + "列表"
-					addRelationField(className, className, true, false, false,
-						childrenName, childrenDesc, cloneRelation(relation, protocol.RECURSIVE, true))
-
-					// 深度递归字段：全树后代/祖先（递归CTE，depth参数限深）
-					descendants := cloneRelation(relation, protocol.RECURSIVE, true)
-					descendants.Deep = true
-					addRelationField(className, className, true, false, false,
-						my.uniqueFieldName(class, "descendants"), "全部后代（递归）", descendants)
-
-					ancestors := cloneRelation(relation, protocol.RECURSIVE, false)
-					ancestors.Deep = true
-					addRelationField(className, className, true, false, false,
-						my.uniqueFieldName(class, "ancestors"), "全部祖先（递归）", ancestors)
+				// 自引用外键的正反关系分别挂在外键列与主键列上，只从外键侧生成一组字段
+				if !field.IsPrimary {
+					pending = append(pending, my.collectRecursive(class, relation)...)
 				}
 			}
 		}
 	}
 
-	// 第二阶段：创建所有关系字段
-	for _, info := range fieldsToCreate {
-		if class := my.Nodes[info.SourceClass]; class != nil {
-			// 如果字段不存在，则创建
-			if _, has := class.Fields[info.FieldName]; !has {
-				class.Fields[info.FieldName] = &protocol.Field{
-					Type:        info.TargetClass,
-					Name:        info.FieldName,
-					Virtual:     true,
-					IsList:      info.IsList,
-					Nullable:    info.Nullable,
-					IsThrough:   info.IsThrough,
-					Description: info.Description,
-					Relation:    info.Relation,
-				}
-			}
+	for _, f := range pending {
+		class := my.Nodes[f.owner]
+		if class == nil {
+			continue
+		}
+		if _, has := class.Fields[f.name]; has {
+			continue
+		}
+		class.Fields[f.name] = &protocol.Field{
+			Type:        f.target,
+			Name:        f.name,
+			Virtual:     true,
+			IsList:      f.isList,
+			Nullable:    f.nullable,
+			IsThrough:   f.isThrough,
+			Description: f.description,
+			Relation:    f.relation,
 		}
 	}
 
 	log.Debug().Msg("关系处理和字段创建完成")
+}
+
+// listField 指向目标类的列表字段（一对多/多对多共用形态）
+func (my *Metadata) listField(class *protocol.Class, target string, isThrough bool, rel *protocol.Relation) relationField {
+	return relationField{
+		owner:       class.Name,
+		target:      target,
+		name:        my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(target))),
+		isList:      true,
+		isThrough:   isThrough,
+		description: "关联的" + target + "列表",
+		relation:    rel,
+	}
+}
+
+// collectManyToMany 多对多列表字段；有中间表时额外生成指向中间表的一对多字段
+func (my *Metadata) collectManyToMany(class *protocol.Class, rel *protocol.Relation) []relationField {
+	fields := []relationField{my.listField(class, rel.TargetClass, false, cloneRelation(rel, protocol.MANY_TO_MANY, false))}
+	if through := rel.Through; through != nil {
+		if throughClass := my.Nodes[through.TableName]; throughClass != nil {
+			// 指向中间表本身是普通一对多：源类主键 -> 中间表的源外键
+			fields = append(fields, my.listField(class, throughClass.Name, true, &protocol.Relation{
+				Type:        protocol.ONE_TO_MANY,
+				SourceClass: class.Name,
+				SourceField: rel.SourceField,
+				TargetClass: throughClass.Name,
+				TargetField: through.SourceKey,
+			}))
+		}
+	}
+	return fields
+}
+
+// collectManyToOne 多对一单对象字段 + 目标类上的反向一对多列表字段
+func (my *Metadata) collectManyToOne(class, targetClass *protocol.Class, field *protocol.Field,
+	rel *protocol.Relation, seen map[string]bool) []relationField {
+	fields := []relationField{{
+		owner:       class.Name,
+		target:      rel.TargetClass,
+		name:        my.uniqueFieldName(class, strcase.ToLowerCamel(rel.TargetClass)),
+		nullable:    field.Nullable,
+		description: "关联的" + rel.TargetClass,
+		relation:    cloneRelation(rel, protocol.MANY_TO_ONE, false),
+	}}
+	key := rel.TargetClass + ":" + class.Name
+	if !seen[key] {
+		seen[key] = true
+		fields = append(fields, my.listField(targetClass, class.Name, false, cloneRelation(rel, protocol.ONE_TO_MANY, true)))
+	}
+	return fields
+}
+
+// collectRecursive 自关联实体的parent/children直接关系 + descendants/ancestors全树字段
+func (my *Metadata) collectRecursive(class *protocol.Class, rel *protocol.Relation) []relationField {
+	deep := func(reverse bool) *protocol.Relation {
+		r := cloneRelation(rel, protocol.RECURSIVE, reverse)
+		r.Deep = true // 递归CTE全树遍历，depth参数限深
+		return r
+	}
+	name := class.Name
+	return []relationField{
+		{owner: name, target: name, name: my.uniqueFieldName(class, "parent"), nullable: true,
+			description: "父" + name + "对象", relation: cloneRelation(rel, protocol.RECURSIVE, false)},
+		{owner: name, target: name, name: my.uniqueFieldName(class, "children"), isList: true,
+			description: "子" + name + "列表", relation: cloneRelation(rel, protocol.RECURSIVE, true)},
+		{owner: name, target: name, name: my.uniqueFieldName(class, "descendants"), isList: true,
+			description: "全部后代（递归）", relation: deep(true)},
+		{owner: name, target: name, name: my.uniqueFieldName(class, "ancestors"), isList: true,
+			description: "全部祖先（递归）", relation: deep(false)},
+	}
 }
 
 // uniqueFieldName 确保字段名在类中唯一
@@ -592,50 +548,22 @@ func (my *Metadata) normalize() error {
 			if field.Column != "" && lo.IndexOf(config.ExcludeFields, field.Column) > -1 {
 				continue
 			}
-			// 如果是列索引且列名和字段名一致，则用标准名赋值并用标准名做key
-			if field.Column != "" {
-				canonName := metadata.ConvertFieldName(field.Column, config)
-				if fieldKey == field.Column {
-					if field.Name == field.Column {
-						field.Name = canonName
-					}
-					fields[field.Name] = field
-				} else if field.Name == canonName {
-					fields[field.Column] = field
-				} else if fieldKey != field.Name {
-					fields[field.Name] = field
-				}
+			if field.Column == "" {
+				fields[fieldKey] = field
+			} else {
+				indexKeys(fields, fieldKey, field.Column, &field.Name, metadata.ConvertFieldName(field.Column, config), field)
 			}
-			// 始终用原始字段名做key
-			fields[fieldKey] = field
-
 			if field.Relation != nil {
 				relations = append(relations, field)
 			}
 		}
 		class.Fields = fields
 
-		// 如果是表索引且表名和类名一致，则用标准名赋值并用标准名做key
-		if class.Table != "" {
-			canonName := metadata.ConvertClassName(class.Table, config)
-			// classKey就三种情况：原始表名、标准类名、别名类名
-			if classKey == class.Table {
-				// 覆盖模式时类名和表名不一致就不用标准化类名,所以这里只处理类名使用了表名的情况
-				if class.Name == class.Table {
-					class.Name = canonName // 标准化类名
-				}
-				// 用标准化类名做key，支持通过类名查找
-				nodes[class.Name] = class
-			} else if class.Name == canonName {
-				// 用原始表名做key，支持通过表名查找
-				nodes[class.Table] = class
-			} else if classKey != class.Name {
-				// 用标准化类名做key，确保所有标准化名都能索引到
-				nodes[class.Name] = class
-			}
+		if class.Table == "" {
+			nodes[classKey] = class
+		} else {
+			indexKeys(nodes, classKey, class.Table, &class.Name, metadata.ConvertClassName(class.Table, config), class)
 		}
-		// 始终用原始类名做key
-		nodes[classKey] = class
 	}
 
 	// 修正关系依赖中的类名
@@ -650,6 +578,26 @@ func (my *Metadata) normalize() error {
 
 	my.Nodes = nodes
 	return nil
+}
+
+// indexKeys 多键索引：同一对象在map中挂主名/原始名（表名或列名）/别名多个键指向自身，
+// 每次按访问键补齐缺失键。类与字段的三重索引共用此逻辑：
+//   - 访问键是原始名：主名未定名时先标准化，补主名键
+//   - 主名即标准名（主对象）：补原始名键
+//   - 别名访问：只补主名键，不占原始名键（避免别名对象覆盖主对象）
+func indexKeys[T any](dst map[string]T, key, rawName string, name *string, canon string, obj T) {
+	switch {
+	case key == rawName:
+		if *name == rawName {
+			*name = canon
+		}
+		dst[*name] = obj
+	case *name == canon:
+		dst[rawName] = obj
+	case key != *name:
+		dst[*name] = obj
+	}
+	dst[key] = obj
 }
 
 // matchTables 表名匹配：精确或尾部*前缀通配（如 bot_*）
