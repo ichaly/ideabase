@@ -5,9 +5,9 @@ type Relation struct {
 	Type        RelationType `json:"type"`              // 关系类型
 	Through     *Through     `json:"through,omitempty"` // 多对多配置
 	SourceClass string       `json:"sourceClass"`       // 源类名
-	SourceFiled string       `json:"sourceFiled"`       // 源字段名
+	SourceField string       `json:"sourceField"`       // 源字段名
 	TargetClass string       `json:"targetClass"`       // 目标类名
-	TargetFiled string       `json:"targetFiled"`       // 目标字段名
+	TargetField string       `json:"targetField"`       // 目标字段名
 	Deep        bool         `json:"deep,omitempty"`    // 深度递归（descendants/ancestors全树遍历）
 }
 

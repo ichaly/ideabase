@@ -177,9 +177,9 @@ func createMockMetadata(t *testing.T) *Metadata {
 	// 创建关系
 	userIdField.Relation = &protocol.Relation{
 		SourceClass: "Post",
-		SourceFiled: "userId",
+		SourceField: "userId",
 		TargetClass: "User",
-		TargetFiled: "id",
+		TargetField: "id",
 		Type:        protocol.MANY_TO_ONE,
 	}
 

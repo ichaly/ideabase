@@ -336,13 +336,13 @@ func (my *Metadata) processRelations() {
 		result := &protocol.Relation{
 			Type:        relType,
 			SourceClass: rel.SourceClass,
-			SourceFiled: rel.SourceFiled,
+			SourceField: rel.SourceField,
 			TargetClass: rel.TargetClass,
-			TargetFiled: rel.TargetFiled,
+			TargetField: rel.TargetField,
 		}
 		if reverse {
 			result.SourceClass, result.TargetClass = result.TargetClass, result.SourceClass
-			result.SourceFiled, result.TargetFiled = result.TargetFiled, result.SourceFiled
+			result.SourceField, result.TargetField = result.TargetField, result.SourceField
 		}
 		if rel.Through != nil {
 			through := *rel.Through
@@ -380,8 +380,8 @@ func (my *Metadata) processRelations() {
 			if relation.SourceClass == "" {
 				relation.SourceClass = class.Name
 			}
-			if relation.SourceFiled == "" {
-				relation.SourceFiled = field.Name
+			if relation.SourceField == "" {
+				relation.SourceField = field.Name
 			}
 
 			// 查找目标类
@@ -394,10 +394,10 @@ func (my *Metadata) processRelations() {
 			}
 
 			// 找到目标字段
-			targetField := targetClass.Fields[relation.TargetFiled]
+			targetField := targetClass.Fields[relation.TargetField]
 			if targetField == nil {
 				log.Warn().Str("class", class.Name).Str("field", field.Name).
-					Str("targetClass", targetClassName).Str("targetField", relation.TargetFiled).
+					Str("targetClass", targetClassName).Str("targetField", relation.TargetField).
 					Msg("关系目标字段不存在")
 				continue
 			}
@@ -422,9 +422,9 @@ func (my *Metadata) processRelations() {
 							throughFieldName, throughDesc, &protocol.Relation{
 								Type:        protocol.ONE_TO_MANY,
 								SourceClass: class.Name,
-								SourceFiled: relation.SourceFiled,
+								SourceField: relation.SourceField,
 								TargetClass: throughClass.Name,
-								TargetFiled: relation.Through.SourceKey,
+								TargetField: relation.Through.SourceKey,
 							})
 					}
 				}

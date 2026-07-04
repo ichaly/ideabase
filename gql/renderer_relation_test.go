@@ -471,9 +471,9 @@ func createRelationTestMetadata() *Metadata {
 		Type:   "integer",
 		Relation: &protocol.Relation{
 			SourceClass: "Comment",
-			SourceFiled: "parentId",
+			SourceField: "parentId",
 			TargetClass: "Comment",
-			TargetFiled: "id",
+			TargetField: "id",
 			Type:        protocol.RECURSIVE,
 		},
 	}

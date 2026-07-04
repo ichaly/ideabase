@@ -257,7 +257,7 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 		if field.Relation == nil {
 			field.Relation = &protocol.Relation{
 				SourceClass: className,
-				SourceFiled: fieldName,
+				SourceField: fieldName,
 			}
 		}
 		rel := field.Relation
@@ -266,7 +266,7 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 			rel.TargetClass = relConfig.TargetClass
 		}
 		if relConfig.TargetField != "" {
-			rel.TargetFiled = relConfig.TargetField
+			rel.TargetField = relConfig.TargetField
 		}
 		if relConfig.Type != "" {
 			rel.Type = protocol.RelationType(relConfig.Type)

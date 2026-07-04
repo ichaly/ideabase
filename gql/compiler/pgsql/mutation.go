@@ -640,7 +640,7 @@ func rawWriters(my *Dialect, values []interface{}) []paramWriter {
 func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class, ops []relationOp) error {
 	// 主CTE单行锚点：(SELECT 源列 FROM "表名CTE")
 	anchor := func(rel *protocol.Relation) {
-		sourceCol := scope{class: class}.column(rel.SourceFiled)
+		sourceCol := scope{class: class}.column(rel.SourceField)
 		ctx.Write(`(SELECT `).Quote(sourceCol).Write(` FROM `).Quote(class.Table).Write(`)`)
 	}
 	params := func(writers []paramWriter) error {
@@ -736,7 +736,7 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 
 		// 一对多：更新/解除/内联创建目标表行
 		ctx.MarkTable(target.Table)
-		fk := sc.column(op.rel.TargetFiled)
+		fk := sc.column(op.rel.TargetField)
 		if len(op.connect) > 0 {
 			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).
 				Write(` AS (UPDATE `, target.Table, ` SET `).Quote(fk).Write(` = `)

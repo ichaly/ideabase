@@ -135,17 +135,17 @@ func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface
 		// 正向关系（多对一/递归）：如 comments.user_id -> users.id
 		sourceField.Relation = &protocol.Relation{
 			SourceClass: sourceTable,
-			SourceFiled: sourceColumn,
+			SourceField: sourceColumn,
 			TargetClass: targetTable,
-			TargetFiled: targetColumn,
+			TargetField: targetColumn,
 			Type:        lo.Ternary(isRecursive, protocol.RECURSIVE, protocol.MANY_TO_ONE),
 		}
 		// 反向关系（一对多/递归）：如 users.id <- comments.user_id
 		targetField.Relation = &protocol.Relation{
 			SourceClass: targetTable,
-			SourceFiled: targetColumn,
+			SourceField: targetColumn,
 			TargetClass: sourceTable,
-			TargetFiled: sourceColumn,
+			TargetField: sourceColumn,
 			Type:        lo.Ternary(isRecursive, protocol.RECURSIVE, protocol.ONE_TO_MANY),
 		}
 	}
@@ -215,9 +215,9 @@ func createManyToManyRelation(classes map[string]*protocol.Class, tableName stri
 	) protocol.Relation {
 		return protocol.Relation{
 			SourceClass: sourceTable,
-			SourceFiled: sourceColumn,
+			SourceField: sourceColumn,
 			TargetClass: targetTable,
-			TargetFiled: targetColumn,
+			TargetField: targetColumn,
 			Type:        protocol.MANY_TO_MANY,
 			Through: &protocol.Through{
 				TableName: tableName,

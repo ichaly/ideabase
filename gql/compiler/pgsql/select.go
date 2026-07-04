@@ -321,7 +321,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 				alias: f.Alias,
 			})
 			// 子关系的关联条件引用父级源列，基础查询必须带出
-			appendColumn(sc.column(field.Relation.SourceFiled))
+			appendColumn(sc.column(field.Relation.SourceField))
 			continue
 		}
 		if field.Remote != nil {
@@ -515,8 +515,8 @@ func (my *Dialect) relationBond(ctx *compiler.Context, u *unit, sc scope) ([]fun
 	if !ok {
 		return nil, fmt.Errorf("关系源类不存在: %s", u.rel.SourceClass)
 	}
-	parentCol := scope{class: parentClass}.column(u.rel.SourceFiled)
-	targetCol := sc.column(u.rel.TargetFiled)
+	parentCol := scope{class: parentClass}.column(u.rel.SourceField)
+	targetCol := sc.column(u.rel.TargetField)
 
 	if through := u.rel.Through; through != nil {
 		// 中间表JOIN：中间表.目标键 = 目标表.目标列
@@ -598,7 +598,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 	for _, column := range columns {
 		need[column] = true
 	}
-	sourceCol, targetCol := sc.column(u.rel.SourceFiled), sc.column(u.rel.TargetFiled)
+	sourceCol, targetCol := sc.column(u.rel.SourceField), sc.column(u.rel.TargetField)
 	all := append([]string{}, columns...)
 	for _, column := range []string{sourceCol, targetCol} {
 		if !need[column] {
@@ -609,7 +609,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 
 	tree := fmt.Sprintf("__tree_%d", u.index)
 	parentClass, _ := ctx.GetClass(u.rel.SourceClass)
-	parentCol := scope{class: parentClass}.column(u.rel.SourceFiled)
+	parentCol := scope{class: parentClass}.column(u.rel.SourceField)
 
 	list := func(qualifier string) { writeColumns(ctx, qualifier, all) }
 
