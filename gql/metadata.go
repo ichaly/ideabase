@@ -38,6 +38,19 @@ type Metadata struct {
 	// 全文搜索能力（启动探测或配置指定）
 	searchMode   string
 	searchConfig string
+
+	// 标量编解码器（注册顺序即认领优先级；同名后注册者生效）
+	codecs []Codec
+}
+
+// findCodec 按标量名查编解码器（后注册者覆盖同名；数量极少线性查找免map）
+func (my *Metadata) findCodec(name string) Codec {
+	for i := len(my.codecs) - 1; i >= 0; i-- {
+		if my.codecs[i].Name() == name {
+			return my.codecs[i]
+		}
+	}
+	return nil
 }
 
 // MetadataOption 用于自定义Loader注册与移除
@@ -45,6 +58,7 @@ type MetadataOption func(*metadataOptions)
 
 type metadataOptions struct {
 	loaders []protocol.Loader
+	codecs  []Codec
 }
 
 // WithLoader 添加或替换Loader
@@ -144,10 +158,15 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 		metadata.NewConfigLoader(cfg),
 	}
 	options := &metadataOptions{loaders: defaultLoaders}
+	// encode-id开关即注册内置ID codec；业务codec经WithCodecs追加，同名覆盖内置
+	if cfg.Metadata.EncodeId {
+		options.codecs = append(options.codecs, NewIdCodec())
+	}
 	// 应用自定义选项
 	for _, opt := range opts {
 		opt(options)
 	}
+	my.codecs = options.codecs
 	// 按优先级排序
 	loaders := options.loaders
 	if len(loaders) > 1 {
@@ -168,7 +187,40 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	my.normalize()
 	// 统一关系处理
 	my.processRelations()
+	// Codec按Match认领字段
+	my.claim()
 	return my, nil
+}
+
+// claim 元数据定型：实现了Matcher的codec认领命中字段，改写为对应标量类型；
+// 字段级配置显式指定类型时保留配置（配置是最终裁决的例外通道）
+func (my *Metadata) claim() {
+	for className, class := range my.Nodes {
+		if className != class.Name {
+			continue
+		}
+		for name, field := range class.Fields {
+			if name != field.Name || field.Virtual || my.configured(className, name) {
+				continue
+			}
+			for _, codec := range my.codecs {
+				if m, ok := codec.(Matcher); ok && m.Match(class, field) {
+					field.Type = codec.Name()
+					break
+				}
+			}
+		}
+	}
+}
+
+// configured 字段类型是否被配置显式指定
+func (my *Metadata) configured(className, fieldName string) bool {
+	if class, ok := my.cfg.Metadata.Classes[className]; ok {
+		if field, ok := class.Fields[fieldName]; ok {
+			return field.Type != ""
+		}
+	}
+	return false
 }
 
 func (my *Metadata) PutNode(className string, node *protocol.Class) error {

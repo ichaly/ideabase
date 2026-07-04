@@ -677,7 +677,7 @@ func TestRenderer_RenderRelation(t *testing.T) {
 	generatedSchema := schema.String()
 
 	// 验证Posts类包含userId字段
-	assert.Contains(t, generatedSchema, "userId: Int!")
+	assert.Contains(t, generatedSchema, "userId: ID!")
 
 	// 注：在此测试中，由于mockMetadata中的设计，可能不会生成关系字段
 	// 实际项目中应确保mockMetadata包含关系字段以验证renderRelation方法
@@ -848,7 +848,7 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 	assert.Contains(t, schema, "age: Int!")
 	assert.Contains(t, schema, "title: String!")
 	assert.Contains(t, schema, "content: String!")
-	assert.Contains(t, schema, "userId: Int!")
+	assert.Contains(t, schema, "userId: ID!")
 	// 验证注释
 	assert.Contains(t, schema, "# 用户名")
 	assert.Contains(t, schema, "# 邮箱")

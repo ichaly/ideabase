@@ -59,6 +59,10 @@ type MetadataConfig struct {
 	// 关系配置
 	ShowThrough bool `mapstructure:"show-through"`
 
+	// ID出入参加解密：开启后ID标量出参在直通字节上流式编码为shortId，
+	// 入参shortId按类型还原为数字；数据库任何场景（含jsonb）始终存bigint
+	EncodeId bool `mapstructure:"encode-id"`
+
 	// 表名前缀（将被去除）
 	TablePrefix []string `mapstructure:"table-prefix"`
 

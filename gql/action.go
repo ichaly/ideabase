@@ -3,7 +3,9 @@ package gql
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/iancoleman/strcase"
@@ -130,9 +132,20 @@ func (my *Executor) enrich(ctx context.Context, f *ast.Field, variables map[stri
 		return result, nil
 	}
 
-	id, err := json.Marshal(result)
-	if err != nil {
-		return result, nil
+	// 主键取数据库层字面量拼接:实体 id 类型可能自带 MarshalJSON(如 std.Id 的 shortId 加密),
+	// 不能经 JSON 编码变形
+	var id string
+	switch rv := reflect.ValueOf(result); {
+	case rv.CanUint():
+		id = strconv.FormatUint(rv.Uint(), 10)
+	case rv.CanInt():
+		id = strconv.FormatInt(rv.Int(), 10)
+	default:
+		data, err := json.Marshal(result)
+		if err != nil {
+			return result, nil
+		}
+		id = string(data)
 	}
 	var sb strings.Builder
 	sb.WriteString("query { ")

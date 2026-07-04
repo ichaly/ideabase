@@ -206,7 +206,8 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, lhs func(), opChild *ast
 	switch opChild.Name {
 	case protocol.IN:
 		ctx.Write("(")
-		if value.Kind == ast.ListValue {
+		switch {
+		case value.Kind == ast.ListValue:
 			for i, child := range value.Children {
 				if i > 0 {
 					ctx.Write(", ")
@@ -215,8 +216,28 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, lhs func(), opChild *ast
 					return err
 				}
 			}
-		} else if err := my.buildParam(ctx, value); err != nil {
-			return err
+		case value.Kind == ast.Variable:
+			// 变量数组逐元素展开为标量参数：数组整体绑单槽位时驱动缺少元素
+			// 类型信息无法编码；元素个数取决于变量内容，计划volatile按请求重建
+			ctx.MarkVolatile()
+			raw, _ := ctx.Variable(value.Raw)
+			list, ok := raw.([]interface{})
+			if !ok && raw != nil {
+				list = []interface{}{raw}
+			}
+			if len(list) == 0 {
+				ctx.Write("NULL") // 恒不匹配且保持SQL合法
+			}
+			for i, item := range list {
+				if i > 0 {
+					ctx.Write(", ")
+				}
+				ctx.Write(my.Placeholder(ctx.AddParam(item)))
+			}
+		default:
+			if err := my.buildParam(ctx, value); err != nil {
+				return err
+			}
 		}
 		ctx.Write(")")
 		return nil

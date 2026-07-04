@@ -110,7 +110,7 @@ func TestResolver(t *testing.T) {
 	userId := created["id"]
 
 	for _, title := range []string{"A", "B"} {
-		reply = executor.Execute(ctx, `mutation ($t: String!, $u: Int!) {
+		reply = executor.Execute(ctx, `mutation ($t: String!, $u: ID!) {
 			createPost(input: { title: $t, userId: $u }) { id }
 		}`, map[string]interface{}{"t": title, "u": userId}, "")
 		require.Empty(t, reply.Errors, "创建文章失败: %v", reply.Errors)

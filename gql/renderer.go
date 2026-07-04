@@ -119,14 +119,31 @@ func (my *Renderer) saveToFile(content string) error {
 	return nil
 }
 
-// renderScalars 渲染标量类型
+// renderScalars 渲染标量类型（含codec带来的自定义标量，如Phone）
 func (my *Renderer) renderScalars() error {
 	my.writeLine("# ", DESC_SCALAR_TYPES)
 	my.writeLine("scalar ", protocol.SCALAR_JSON)
 	my.writeLine("scalar ", protocol.SCALAR_CURSOR)
 	my.writeLine("scalar ", protocol.SCALAR_DATE_TIME)
+	my.eachCodecScalar(func(name, _ string) {
+		my.writeLine("scalar ", name)
+	})
 	my.writeLine()
 	return nil
+}
+
+// eachCodecScalar 遍历codec引入的自定义标量（跳过内置标量如ID，同名去重），
+// fn收到标量名与其底层标量名
+func (my *Renderer) eachCodecScalar(fn func(name, base string)) {
+	seen := make(map[string]bool, len(my.meta.codecs))
+	for _, codec := range my.meta.codecs {
+		name := codec.Name()
+		if _, builtin := protocol.Grouping[name]; builtin || seen[name] {
+			continue
+		}
+		seen[name] = true
+		fn(name, codec.Base())
+	}
 }
 
 // renderEnums 渲染枚举类型
@@ -249,8 +266,9 @@ func (my *Renderer) getGraphQLType(field *protocol.Field) string {
 		return "[" + fieldType + "]"
 	}
 
-	// 1. 主键固定映射为ID类型
-	if field.IsPrimary {
+	// 1. 主键与外键实列固定映射为ID类型（关系载体是Virtual字段不受影响；
+	// 外键列取ID让加解密与精度处理覆盖全部主外键，而非仅主键）
+	if field.IsPrimary || (field.Relation != nil && !field.Virtual) {
 		return protocol.SCALAR_ID
 	}
 
@@ -383,40 +401,43 @@ func (my *Renderer) renderInput() error {
 func (my *Renderer) renderFilter() error {
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_FILTER, " ", SEPARATOR_LINE, "\n")
 
-	// 定义过滤器映射表，每种类型支持的操作
+	// 内置标量按操作符分组渲染；codec自定义标量借用其底层标量的操作符集
 	keys := utl.SortKeys(protocol.Grouping)
 	for _, scalarType := range keys {
-		operators := protocol.Grouping[scalarType]
-		filterName := scalarType + protocol.SUFFIX_WHERE_INPUT
-		my.writeLine("# ", scalarType, "过滤器")
-		my.writeLine("input ", filterName, " {")
-
-		// 使用map防止操作符重复
-		renderedOps := make(map[string]bool)
-
-		// 渲染该类型支持的所有操作符
-		for _, op := range operators {
-			// 跳过已经渲染过的操作符
-			if renderedOps[op.Name] {
-				continue
-			}
-			renderedOps[op.Name] = true
-
-			if op.Name == protocol.HAS_KEY {
-				my.writeField(op.Name, protocol.SCALAR_STRING, renderer.WithComment(op.Description))
-			} else if op.Name == protocol.IN {
-				my.writeField(op.Name, scalarType, renderer.ListNonNull(), renderer.WithComment(op.Description))
-			} else if op.Name == protocol.IS {
-				my.writeField(op.Name, protocol.ENUM_IS_INPUT, renderer.WithComment(op.Description))
-			} else {
-				my.writeField(op.Name, scalarType, renderer.WithComment(op.Description))
-			}
-		}
-
-		my.writeLine("}")
-		my.writeLine()
+		my.writeScalarFilter(scalarType, protocol.Grouping[scalarType])
 	}
+	my.eachCodecScalar(func(name, base string) {
+		my.writeScalarFilter(name, protocol.Grouping[base])
+	})
 	return nil
+}
+
+// writeScalarFilter 渲染一个标量的过滤器input类型
+func (my *Renderer) writeScalarFilter(scalarType string, operators []*protocol.Operator) {
+	my.writeLine("# ", scalarType, "过滤器")
+	my.writeLine("input ", scalarType, protocol.SUFFIX_WHERE_INPUT, " {")
+
+	// 使用map防止操作符重复
+	renderedOps := make(map[string]bool)
+	for _, op := range operators {
+		if renderedOps[op.Name] {
+			continue
+		}
+		renderedOps[op.Name] = true
+
+		if op.Name == protocol.HAS_KEY {
+			my.writeField(op.Name, protocol.SCALAR_STRING, renderer.WithComment(op.Description))
+		} else if op.Name == protocol.IN {
+			my.writeField(op.Name, scalarType, renderer.ListNonNull(), renderer.WithComment(op.Description))
+		} else if op.Name == protocol.IS {
+			my.writeField(op.Name, protocol.ENUM_IS_INPUT, renderer.WithComment(op.Description))
+		} else {
+			my.writeField(op.Name, scalarType, renderer.WithComment(op.Description))
+		}
+	}
+
+	my.writeLine("}")
+	my.writeLine()
 }
 
 // renderEntity 渲染实体过滤器

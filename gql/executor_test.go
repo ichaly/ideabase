@@ -52,7 +52,7 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.NotNil(t, userId)
 
 	// 2. 创建文章（验证变量参数 + 创建后读回关系）
-	reply = executor.Execute(ctx, `mutation ($title: String!, $uid: Int!) {
+	reply = executor.Execute(ctx, `mutation ($title: String!, $uid: ID!) {
 		createPost(input: { title: $title, userId: $uid }) { id title user { name } }
 	}`, map[string]interface{}{"title": "Hello", "uid": userId}, "")
 	require.Empty(t, reply.Errors, "创建文章失败: %v", reply.Errors)
@@ -138,7 +138,7 @@ func TestExecutorTree(t *testing.T) {
 	}
 
 	uid := run(`mutation { createUser(input: { name: "U", email: "u@x.com" }) { id } }`, nil)["createUser"].(map[string]interface{})["id"]
-	pid := run(`mutation ($u: Int!) { createPost(input: { title: "P", userId: $u }) { id } }`,
+	pid := run(`mutation ($u: ID!) { createPost(input: { title: "P", userId: $u }) { id } }`,
 		map[string]interface{}{"u": uid})["createPost"].(map[string]interface{})["id"]
 
 	make := func(content string, parent interface{}) interface{} {
@@ -234,7 +234,7 @@ func TestExecutorBulk(t *testing.T) {
 	require.Len(t, posts, 2, "内联创建的子行应挂在新用户名下")
 
 	// m2m内联创建：更新文章时内联建新标签并关联
-	postId := run(`mutation ($u: Int!) { createPost(input: { title: "M", userId: $u }) { id } }`,
+	postId := run(`mutation ($u: ID!) { createPost(input: { title: "M", userId: $u }) { id } }`,
 		map[string]interface{}{"u": owner["id"]})["createPost"].(map[string]interface{})["id"]
 	run(`mutation ($id: ID) { updatePost(input: { tags: { create: [{ name: "newtag" }] } }, id: $id) { id } }`,
 		map[string]interface{}{"id": postId})
@@ -349,9 +349,9 @@ func TestExecutorRelationOps(t *testing.T) {
 
 	// 既有数据：作者 + 两篇游离文章 + 两个标签
 	author := run(`mutation { createUser(input: { name: "Au", email: "au@x.com" }) { id } }`, nil)["createUser"].(map[string]interface{})["id"]
-	orphanA := run(`mutation ($u: Int!) { createPost(input: { title: "PA", userId: $u }) { id } }`,
+	orphanA := run(`mutation ($u: ID!) { createPost(input: { title: "PA", userId: $u }) { id } }`,
 		map[string]interface{}{"u": author})["createPost"].(map[string]interface{})["id"]
-	_ = run(`mutation ($u: Int!) { createPost(input: { title: "PB", userId: $u }) { id } }`, map[string]interface{}{"u": author})
+	_ = run(`mutation ($u: ID!) { createPost(input: { title: "PB", userId: $u }) { id } }`, map[string]interface{}{"u": author})
 	tag1 := run(`mutation { createTag(input: { name: "t1" }) { id } }`, nil)["createTag"].(map[string]interface{})["id"]
 	tag2 := run(`mutation { createTag(input: { name: "t2" }) { id } }`, nil)["createTag"].(map[string]interface{})["id"]
 

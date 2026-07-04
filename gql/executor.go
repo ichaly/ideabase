@@ -70,6 +70,7 @@ type Executor struct {
 	source    string              // 原始schema文本，RegisterAction合并SDL时重建的基底
 	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
 	cdc       notifier            // CDC唤醒源（按数据库驱动从注册表选取）
+	enabled   bool                // 有codec注册即启用出入参转换管线
 }
 
 // Register 注册自定义字段解析器，与元数据中 Field.Resolver 按名绑定
@@ -106,6 +107,7 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		resolvers: make(map[string]Resolver),
 		actions:   make(map[string]Action),
 		documents: make(map[string]string),
+		enabled:   len(m.codecs) > 0,
 	}
 
 	// 加载GraphQL模式：配置了schema.file优先从文件加载（生产推荐），否则由renderer生成
@@ -339,11 +341,16 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 	return r
 }
 
-// fetch 执行计划：单条SQL返回单行单列的__root JSON原始字节
+// fetch 执行计划：单条SQL返回单行单列的__root JSON原始字节。
+// ID加解密的出参编码挂在此唯一出口：直通响应、resolver解包、订阅推送、
+// Action回查全部经此取数，下游看到的字节里ID已是shortId
 func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, error) {
 	args := plan.Args(variables, scopeValues(ctx)) // 行级作用域值从请求上下文取
 	var data []byte
 	err := my.database.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
+	if err == nil && my.enabled {
+		data = encodeBytes(data, plan.paths)
+	}
 	return data, err
 }
 
@@ -398,12 +405,16 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 	key := planKey{operation: operationName, query: query}
 	if entry, ok := my.cache.Get(key); ok {
 		if entry.action {
+			my.decodeIds(entry.operation.VariableDefinitions, variables)
 			return nil, &actionQuery{operation: entry.operation}
 		}
 		if entry.plan != nil {
+			my.decodeIds(entry.plan.vars, variables)
 			return entry.plan, nil
 		}
-		// volatile：仅重做SQL构建，binding复用缓存（不依赖变量）
+		// volatile：仅重做SQL构建，binding复用缓存（不依赖变量）；
+		// 变量内容参与编译，ID解码必须先行
+		my.decodeIds(entry.operation.VariableDefinitions, variables)
 		plan, err := my.compiler.Compile(entry.operation, variables)
 		if err != nil {
 			return nil, err
@@ -416,6 +427,7 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 	if err != nil {
 		return nil, err
 	}
+	my.decodeIds(operation.VariableDefinitions, variables)
 	if hasIntroField(operation.SelectionSet) {
 		return nil, &introQuery{operation: operation}
 	}
@@ -446,7 +458,18 @@ func (my *Executor) parse(query, operationName string) (*ast.OperationDefinition
 		operation = doc.Operations[0]
 	}
 	operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
+	if my.enabled {
+		// codec标量字面量就地还原：解析仅发生一次，改写随计划缓存复用
+		decodeLiterals(my.schema, operation.SelectionSet, my.metadata)
+	}
 	return operation, nil
+}
+
+// decodeIds 有codec注册时按变量声明类型还原变量表入参
+func (my *Executor) decodeIds(defs ast.VariableDefinitionList, variables map[string]interface{}) {
+	if my.enabled {
+		decodeVariables(my.schema, defs, variables, my.metadata)
+	}
 }
 
 // compile 编译并缓存：resolver绑定在此一次性收集（不依赖变量内容）；

@@ -35,7 +35,9 @@ type Plan struct {
 	defaults  map[string]interface{}
 	volatile  bool
 	resolvers []binding
-	tables    []string // 涉及的表集合，订阅按表变更唤醒
+	tables    []string                   // 涉及的表集合，订阅按表变更唤醒
+	vars      ast.VariableDefinitionList // 变量声明，codec入参按类型定位解码
+	paths     codecPaths                 // 选择集中codec字段路径树，出参流式转换用
 }
 
 // Volatile 编译产物是否依赖变量内容（如整体input变量），不可缓存
@@ -96,6 +98,8 @@ func (my *Compiler) Compile(operation *ast.OperationDefinition, variables map[st
 		slots:    ctx.Slots(),
 		volatile: ctx.Volatile(),
 		tables:   ctx.Tables(),
+		vars:     operation.VariableDefinitions,
+		paths:    collectCodecPaths(operation.SelectionSet, my.meta),
 	}
 	for _, def := range operation.VariableDefinitions {
 		if def.DefaultValue == nil {
