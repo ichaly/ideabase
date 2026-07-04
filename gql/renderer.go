@@ -271,48 +271,18 @@ func (my *Renderer) renderTypes() error {
 	return nil
 }
 
-// getGraphQLType 获取GraphQL类型
+// getGraphQLType 字段元数据类型转GraphQL类型名：
+// 数据库原生类型经映射表转换；标量/类名/codec标量在元数据定型期已是最终名，原样返回
+// （映射表key全为小写数据库类型名，与标量/类名不冲突；空类型是元数据bug，交由schema解析报错暴露）
 func (my *Renderer) getGraphQLType(field *protocol.Field) string {
-	fieldType := field.Type
-
-	// 列表字段仅由关系处理生成，元素类型即关系目标类名
 	if field.IsList {
-		return "[" + fieldType + "]"
+		// 列表字段仅由关系处理生成，元素类型即关系目标类名
+		return "[" + field.Type + "]"
 	}
-
-	// 处理标量类型（主外键→ID已在元数据定型期完成，此处纯投影）
-	if fieldType == protocol.SCALAR_STRING ||
-		fieldType == protocol.SCALAR_INT ||
-		fieldType == protocol.SCALAR_FLOAT ||
-		fieldType == protocol.SCALAR_BOOLEAN ||
-		fieldType == protocol.SCALAR_ID ||
-		fieldType == protocol.SCALAR_JSON ||
-		fieldType == protocol.SCALAR_CURSOR ||
-		fieldType == protocol.SCALAR_DATE_TIME {
-		return fieldType
+	if gqlType, ok := my.meta.cfg.Schema.TypeMapping[field.Type]; ok {
+		return gqlType
 	}
-
-	// 2. 只从配置中获取类型映射
-	if my.meta.cfg.Schema.TypeMapping != nil {
-		if gqlType, ok := my.meta.cfg.Schema.TypeMapping[fieldType]; ok {
-			return gqlType
-		}
-	}
-
-	// 3. 检查是否是类名
-	if _, exists := my.meta.Nodes[fieldType]; exists {
-		// 如果是类名，直接使用类名
-		return fieldType
-	}
-
-	// 4. 确保返回非空实体类型
-	if fieldType == "" {
-		// 如果类型为空，使用默认类型
-		return protocol.SCALAR_STRING
-	}
-
-	// 默认假设是实体类型
-	return fieldType
+	return field.Type
 }
 
 // writableFields 返回类的可写字段名（排除主键、时间戳、虚拟与中间表字段）
