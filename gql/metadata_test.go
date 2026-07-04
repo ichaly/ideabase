@@ -1084,3 +1084,28 @@ func TestProcessRelationsRecursive(t *testing.T) {
 	meta.processRelations()
 	assert.Nil(t, meta.Nodes["Category"].Fields["parent"], "复合主键自引用不生成递归字段")
 }
+
+// TestProcessRelationsDuplicateTargets 同类上两条指向同一目标的关系：
+// 后缀命名而非静默丢失，且排序遍历保证命名跨启动稳定
+func TestProcessRelationsDuplicateTargets(t *testing.T) {
+	user := &protocol.Class{Name: "User", Table: "users", Fields: map[string]*protocol.Field{
+		"id": {Name: "id", Column: "id", IsPrimary: true},
+	}}
+	relation := func(source string) *protocol.Relation {
+		return &protocol.Relation{Type: protocol.MANY_TO_ONE, SourceClass: "Order",
+			SourceField: source, TargetClass: "User", TargetField: "id"}
+	}
+	order := &protocol.Class{Name: "Order", Table: "orders", Fields: map[string]*protocol.Field{
+		"id":       {Name: "id", Column: "id", IsPrimary: true},
+		"buyerId":  {Name: "buyerId", Column: "buyer_id", Relation: relation("buyerId")},
+		"sellerId": {Name: "sellerId", Column: "seller_id", Relation: relation("sellerId")},
+	}}
+	meta := &Metadata{Nodes: map[string]*protocol.Class{"User": user, "Order": order}}
+	meta.processRelations()
+
+	fields := meta.Nodes["Order"].Fields
+	assert.NotNil(t, fields["user"], "第一条关系字段")
+	assert.NotNil(t, fields["user1"], "第二条同目标关系应后缀命名而非静默丢失")
+	assert.Equal(t, "buyerId", fields["user"].Relation.SourceField, "排序遍历下user恒指向buyerId")
+	assert.Equal(t, "sellerId", fields["user1"].Relation.SourceField)
+}

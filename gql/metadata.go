@@ -15,6 +15,7 @@ import (
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
+	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -330,12 +331,15 @@ func (my *Metadata) processRelations() {
 	var pending []relationField
 	reverseSeen := make(map[string]bool) // 同一对类的反向一对多只建一次
 
-	for className, class := range my.Nodes {
+	// 排序遍历保证收集顺序确定，冲突字段的后缀命名跨启动稳定
+	for _, className := range utl.SortKeys(my.Nodes) {
+		class := my.Nodes[className]
 		// 跳过表名索引，只处理类名索引
 		if className != class.Name {
 			continue
 		}
-		for fieldName, field := range class.Fields {
+		for _, fieldName := range utl.SortKeys(class.Fields) {
+			field := class.Fields[fieldName]
 			if fieldName != field.Name || field.Relation == nil {
 				continue
 			}
@@ -377,17 +381,16 @@ func (my *Metadata) processRelations() {
 		}
 	}
 
+	// 创建期才定名：此时能看到同批已建字段，同名冲突自动后缀（收集期定名会静默丢字段）
 	for _, f := range pending {
 		class := my.Nodes[f.owner]
 		if class == nil {
 			continue
 		}
-		if _, has := class.Fields[f.name]; has {
-			continue
-		}
-		class.Fields[f.name] = &protocol.Field{
+		name := my.uniqueFieldName(class, f.name)
+		class.Fields[name] = &protocol.Field{
 			Type:        f.target,
-			Name:        f.name,
+			Name:        name,
 			Virtual:     true,
 			IsList:      f.isList,
 			Nullable:    f.nullable,
@@ -400,12 +403,12 @@ func (my *Metadata) processRelations() {
 	log.Debug().Msg("关系处理和字段创建完成")
 }
 
-// listField 指向目标类的列表字段（一对多/多对多共用形态）
+// listField 指向目标类的列表字段（一对多/多对多共用形态）；name为基础名，创建期唯一化
 func (my *Metadata) listField(class *protocol.Class, target string, isThrough bool, rel *protocol.Relation) relationField {
 	return relationField{
 		owner:       class.Name,
 		target:      target,
-		name:        my.uniqueFieldName(class, strcase.ToLowerCamel(inflection.Plural(target))),
+		name:        strcase.ToLowerCamel(inflection.Plural(target)),
 		isList:      true,
 		isThrough:   isThrough,
 		description: "关联的" + target + "列表",
@@ -437,7 +440,7 @@ func (my *Metadata) collectManyToOne(class, targetClass *protocol.Class, field *
 	fields := []relationField{{
 		owner:       class.Name,
 		target:      rel.TargetClass,
-		name:        my.uniqueFieldName(class, strcase.ToLowerCamel(rel.TargetClass)),
+		name:        strcase.ToLowerCamel(rel.TargetClass),
 		nullable:    field.Nullable,
 		description: "关联的" + rel.TargetClass,
 		relation:    cloneRelation(rel, protocol.MANY_TO_ONE, false),
@@ -459,13 +462,13 @@ func (my *Metadata) collectRecursive(class *protocol.Class, rel *protocol.Relati
 	}
 	name := class.Name
 	return []relationField{
-		{owner: name, target: name, name: my.uniqueFieldName(class, "parent"), nullable: true,
+		{owner: name, target: name, name: "parent", nullable: true,
 			description: "父" + name + "对象", relation: cloneRelation(rel, protocol.RECURSIVE, false)},
-		{owner: name, target: name, name: my.uniqueFieldName(class, "children"), isList: true,
+		{owner: name, target: name, name: "children", isList: true,
 			description: "子" + name + "列表", relation: cloneRelation(rel, protocol.RECURSIVE, true)},
-		{owner: name, target: name, name: my.uniqueFieldName(class, "descendants"), isList: true,
+		{owner: name, target: name, name: "descendants", isList: true,
 			description: "全部后代（递归）", relation: deep(true)},
-		{owner: name, target: name, name: my.uniqueFieldName(class, "ancestors"), isList: true,
+		{owner: name, target: name, name: "ancestors", isList: true,
 			description: "全部祖先（递归）", relation: deep(false)},
 	}
 }
