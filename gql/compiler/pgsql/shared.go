@@ -8,6 +8,15 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
+// tableRef 写基表引用："schema"."表"（配置schema为空则不限定）。
+// 仅限真实基表位置；变更CTE与表同名，读回/计数/锚点等CTE引用必须保持裸名
+func tableRef(ctx *compiler.Context, table string) {
+	if schema := ctx.SchemaName(); schema != "" {
+		ctx.Quote(schema).Write(`.`)
+	}
+	ctx.Quote(table)
+}
+
 // comma 逗号分隔写入器：首项不写，后续项前写", "
 func comma(ctx *compiler.Context) func() {
 	n := 0

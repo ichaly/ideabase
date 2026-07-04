@@ -163,5 +163,5 @@ func (my *_DialectSuite) TestScopeStats() {
 	my.Require().NoError(err)
 
 	// 聚合 FROM 表也带作用域 WHERE
-	my.Assert().Contains(sql, `FROM "sys_user" WHERE "sys_user"."tenant_id" = $1`)
+	my.Assert().Contains(sql, `FROM "public"."sys_user" WHERE "sys_user"."tenant_id" = $1`)
 }

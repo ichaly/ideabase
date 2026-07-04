@@ -7,7 +7,7 @@ func userQuery(where string) string {
 			SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 			FROM (
 				SELECT "sys_user_0"."id" AS "id"
-				FROM (SELECT "sys_user"."id" FROM "sys_user" ` + where + ` LIMIT 10) AS "sys_user_0"
+				FROM (SELECT "sys_user"."id" FROM "public"."sys_user" ` + where + ` LIMIT 10) AS "sys_user_0"
 			) AS "__sr_0"
 		) AS "__sj_0" ON TRUE`
 }

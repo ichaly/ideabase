@@ -10,7 +10,7 @@ func (my *_DialectSuite) TestSelect() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name", "sys_user_0"."email" AS "email"
-						FROM (SELECT "sys_user"."id", "sys_user"."name", "sys_user"."email" FROM "sys_user" LIMIT 10) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id", "sys_user"."name", "sys_user"."email" FROM "public"."sys_user" LIMIT 10) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},
@@ -23,7 +23,7 @@ func (my *_DialectSuite) TestSelect() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name"
-						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "sys_user" WHERE "sys_user"."id" = $1 LIMIT 10) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "public"."sys_user" WHERE "sys_user"."id" = $1 LIMIT 10) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},
@@ -35,7 +35,7 @@ func (my *_DialectSuite) TestSelect() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__total'), '[]'), 'total', COALESCE(MIN("__sr_0"."__total"), 0)) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."__total"
-						FROM (SELECT "sys_user"."id", COUNT(*) OVER() AS "__total" FROM "sys_user" LIMIT 10 OFFSET 20) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id", COUNT(*) OVER() AS "__total" FROM "public"."sys_user" LIMIT 10 OFFSET 20) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},
@@ -47,7 +47,7 @@ func (my *_DialectSuite) TestSelect() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "uid", "sys_user_0"."name" AS "userName"
-						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "sys_user" LIMIT 10) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "public"."sys_user" LIMIT 10) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},
@@ -59,12 +59,12 @@ func (my *_DialectSuite) TestSelect() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]'), '__typename', 'UserResult') AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id", 'User' AS "__typename", "__sj_1"."json" AS "posts"
-						FROM (SELECT "sys_user"."id" FROM "sys_user" LIMIT 10) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id" FROM "public"."sys_user" LIMIT 10) AS "sys_user_0"
 						LEFT OUTER JOIN LATERAL (
 							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
 							FROM (
 								SELECT "sys_post_1"."title" AS "title", 'Post' AS "__typename"
-								FROM (SELECT "sys_post"."title" FROM "sys_post" WHERE "sys_post"."user_id" = "sys_user_0"."id" LIMIT 10) AS "sys_post_1"
+								FROM (SELECT "sys_post"."title" FROM "public"."sys_post" WHERE "sys_post"."user_id" = "sys_user_0"."id" LIMIT 10) AS "sys_post_1"
 							) AS "__sr_1"
 						) AS "__sj_1" ON TRUE
 					) AS "__sr_0"
@@ -78,14 +78,14 @@ func (my *_DialectSuite) TestSelect() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id"
-						FROM (SELECT "sys_user"."id" FROM "sys_user" LIMIT 10) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id" FROM "public"."sys_user" LIMIT 10) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE
 				LEFT OUTER JOIN LATERAL (
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_tag_1"."name" AS "name"
-						FROM (SELECT "sys_tag"."name" FROM "sys_tag" LIMIT 10) AS "sys_tag_1"
+						FROM (SELECT "sys_tag"."name" FROM "public"."sys_tag" LIMIT 10) AS "sys_tag_1"
 					) AS "__sr_1"
 				) AS "__sj_1" ON TRUE`,
 		},
@@ -103,12 +103,12 @@ func (my *_DialectSuite) TestRelation() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id", "__sj_1"."json" AS "posts"
-						FROM (SELECT "sys_user"."id" FROM "sys_user" LIMIT 10) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id" FROM "public"."sys_user" LIMIT 10) AS "sys_user_0"
 						LEFT OUTER JOIN LATERAL (
 							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
 							FROM (
 								SELECT "sys_post_1"."title" AS "title"
-								FROM (SELECT "sys_post"."title" FROM "sys_post" WHERE "sys_post"."user_id" = "sys_user_0"."id" LIMIT 10) AS "sys_post_1"
+								FROM (SELECT "sys_post"."title" FROM "public"."sys_post" WHERE "sys_post"."user_id" = "sys_user_0"."id" LIMIT 10) AS "sys_post_1"
 							) AS "__sr_1"
 						) AS "__sj_1" ON TRUE
 					) AS "__sr_0"
@@ -122,12 +122,12 @@ func (my *_DialectSuite) TestRelation() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_post_0"."title" AS "title", "__sj_1"."json" AS "user"
-						FROM (SELECT "sys_post"."title", "sys_post"."user_id" FROM "sys_post" LIMIT 10) AS "sys_post_0"
+						FROM (SELECT "sys_post"."title", "sys_post"."user_id" FROM "public"."sys_post" LIMIT 10) AS "sys_post_0"
 						LEFT OUTER JOIN LATERAL (
 							SELECT TO_JSONB("__sr_1".*) AS "json"
 							FROM (
 								SELECT "sys_user_1"."name" AS "name"
-								FROM (SELECT "sys_user"."name" FROM "sys_user" WHERE "sys_user"."id" = "sys_post_0"."user_id" LIMIT 1) AS "sys_user_1"
+								FROM (SELECT "sys_user"."name" FROM "public"."sys_user" WHERE "sys_user"."id" = "sys_post_0"."user_id" LIMIT 1) AS "sys_user_1"
 							) AS "__sr_1"
 						) AS "__sj_1" ON TRUE
 					) AS "__sr_0"
@@ -141,14 +141,14 @@ func (my *_DialectSuite) TestRelation() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_post_0"."id" AS "id", "__sj_1"."json" AS "tags"
-						FROM (SELECT "sys_post"."id" FROM "sys_post" LIMIT 10) AS "sys_post_0"
+						FROM (SELECT "sys_post"."id" FROM "public"."sys_post" LIMIT 10) AS "sys_post_0"
 						LEFT OUTER JOIN LATERAL (
 							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
 							FROM (
 								SELECT "sys_tag_1"."name" AS "name"
 								FROM (
-									SELECT "sys_tag"."name" FROM "sys_tag"
-									INNER JOIN "sys_post_tag" ON "sys_post_tag"."tag_id" = "sys_tag"."id"
+									SELECT "sys_tag"."name" FROM "public"."sys_tag"
+									INNER JOIN "public"."sys_post_tag" ON "sys_post_tag"."tag_id" = "sys_tag"."id"
 									WHERE "sys_post_tag"."post_id" = "sys_post_0"."id"
 								 LIMIT 10) AS "sys_tag_1"
 							) AS "__sr_1"
@@ -164,19 +164,19 @@ func (my *_DialectSuite) TestRelation() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_comment_0"."id" AS "id", "__sj_1"."json" AS "children", "__sj_2"."json" AS "parent"
-						FROM (SELECT "sys_comment"."id", "sys_comment"."parent_id" FROM "sys_comment" LIMIT 10) AS "sys_comment_0"
+						FROM (SELECT "sys_comment"."id", "sys_comment"."parent_id" FROM "public"."sys_comment" LIMIT 10) AS "sys_comment_0"
 						LEFT OUTER JOIN LATERAL (
 							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
 							FROM (
 								SELECT "sys_comment_1"."id" AS "id"
-								FROM (SELECT "sys_comment"."id" FROM "sys_comment" WHERE "sys_comment"."parent_id" = "sys_comment_0"."id" LIMIT 10) AS "sys_comment_1"
+								FROM (SELECT "sys_comment"."id" FROM "public"."sys_comment" WHERE "sys_comment"."parent_id" = "sys_comment_0"."id" LIMIT 10) AS "sys_comment_1"
 							) AS "__sr_1"
 						) AS "__sj_1" ON TRUE
 						LEFT OUTER JOIN LATERAL (
 							SELECT TO_JSONB("__sr_2".*) AS "json"
 							FROM (
 								SELECT "sys_comment_2"."id" AS "id"
-								FROM (SELECT "sys_comment"."id" FROM "sys_comment" WHERE "sys_comment"."id" = "sys_comment_0"."parent_id" LIMIT 1) AS "sys_comment_2"
+								FROM (SELECT "sys_comment"."id" FROM "public"."sys_comment" WHERE "sys_comment"."id" = "sys_comment_0"."parent_id" LIMIT 1) AS "sys_comment_2"
 							) AS "__sr_2"
 						) AS "__sj_2" ON TRUE
 					) AS "__sr_0"
@@ -191,12 +191,12 @@ func (my *_DialectSuite) TestRelation() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id", "__sj_1"."json" AS "posts"
-						FROM (SELECT "sys_user"."id" FROM "sys_user" LIMIT 10) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id" FROM "public"."sys_user" LIMIT 10) AS "sys_user_0"
 						LEFT OUTER JOIN LATERAL (
 							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
 							FROM (
 								SELECT "sys_post_1"."title" AS "title"
-								FROM (SELECT "sys_post"."title" FROM "sys_post"
+								FROM (SELECT "sys_post"."title" FROM "public"."sys_post"
 									WHERE "sys_post"."user_id" = "sys_user_0"."id" AND "sys_post"."title" LIKE $1
 									ORDER BY "sys_post"."title" DESC LIMIT 3) AS "sys_post_1"
 							) AS "__sr_1"
@@ -212,19 +212,19 @@ func (my *_DialectSuite) TestRelation() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id", "__sj_1"."json" AS "posts"
-						FROM (SELECT "sys_user"."id" FROM "sys_user" LIMIT 10) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id" FROM "public"."sys_user" LIMIT 10) AS "sys_user_0"
 						LEFT OUTER JOIN LATERAL (
 							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
 							FROM (
 								SELECT "sys_post_1"."title" AS "title", "__sj_2"."json" AS "tags"
-								FROM (SELECT "sys_post"."title", "sys_post"."id" FROM "sys_post" WHERE "sys_post"."user_id" = "sys_user_0"."id" LIMIT 10) AS "sys_post_1"
+								FROM (SELECT "sys_post"."title", "sys_post"."id" FROM "public"."sys_post" WHERE "sys_post"."user_id" = "sys_user_0"."id" LIMIT 10) AS "sys_post_1"
 								LEFT OUTER JOIN LATERAL (
 									SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_2".*)), '[]') AS "json"
 									FROM (
 										SELECT "sys_tag_2"."name" AS "name"
 										FROM (
-											SELECT "sys_tag"."name" FROM "sys_tag"
-											INNER JOIN "sys_post_tag" ON "sys_post_tag"."tag_id" = "sys_tag"."id"
+											SELECT "sys_tag"."name" FROM "public"."sys_tag"
+											INNER JOIN "public"."sys_post_tag" ON "sys_post_tag"."tag_id" = "sys_tag"."id"
 											WHERE "sys_post_tag"."post_id" = "sys_post_1"."id"
 										 LIMIT 10) AS "sys_tag_2"
 									) AS "__sr_2"

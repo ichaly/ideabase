@@ -261,6 +261,14 @@ func (my *Metadata) SearchMode() (string, string) {
 	return my.searchMode, my.searchConfig
 }
 
+// SchemaName 返回数据库schema名（实现compiler.Schemer），空=不限定
+func (my *Metadata) SchemaName() string {
+	if my.cfg == nil {
+		return ""
+	}
+	return my.cfg.Schema.Schema
+}
+
 // DefaultLimit 返回列表查询缺省LIMIT（实现compiler.Limiter），0=不注入
 func (my *Metadata) DefaultLimit() int {
 	if my.cfg == nil {

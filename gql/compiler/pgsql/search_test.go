@@ -17,7 +17,7 @@ func (my *_DialectSuite) TestSearch() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name"
-						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "sys_user"
+						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "public"."sys_user"
 							WHERE ("sys_user"."name" ILIKE '%' || $1 || '%' OR "sys_user"."email" ILIKE '%' || $1 || '%')
 							ORDER BY GREATEST(similarity("sys_user"."name", $1), similarity("sys_user"."email", $1)) DESC
 							LIMIT 5) AS "sys_user_0"
@@ -33,7 +33,7 @@ func (my *_DialectSuite) TestSearch() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id"
-						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "sys_user"
+						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "public"."sys_user"
 							WHERE ("sys_user"."name" ILIKE '%' || $1 || '%' OR "sys_user"."email" ILIKE '%' || $1 || '%')
 								AND "sys_user"."age" > $2
 							ORDER BY "sys_user"."name" ASC LIMIT 10) AS "sys_user_0"
@@ -84,7 +84,7 @@ func (my *_DialectSuite) TestDistinctAndJsonb() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name"
-						FROM (SELECT DISTINCT ON ("sys_user"."name") "sys_user"."id", "sys_user"."name", "sys_user"."age" FROM "sys_user"
+						FROM (SELECT DISTINCT ON ("sys_user"."name") "sys_user"."id", "sys_user"."name", "sys_user"."age" FROM "public"."sys_user"
 							ORDER BY "sys_user"."name", "sys_user"."age" DESC LIMIT 10) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
@@ -98,7 +98,7 @@ func (my *_DialectSuite) TestDistinctAndJsonb() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id"
-						FROM (SELECT "sys_user"."id" FROM "sys_user" WHERE jsonb_contains("sys_user"."metadata", $1::jsonb) LIMIT 10) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id" FROM "public"."sys_user" WHERE jsonb_contains("sys_user"."metadata", $1::jsonb) LIMIT 10) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},
@@ -117,17 +117,17 @@ func (my *_DialectSuite) TestRecursiveTree() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_comment_0"."id" AS "id", "__sj_1"."json" AS "descendants"
-						FROM (SELECT "sys_comment"."id" FROM "sys_comment" LIMIT 10) AS "sys_comment_0"
+						FROM (SELECT "sys_comment"."id" FROM "public"."sys_comment" LIMIT 10) AS "sys_comment_0"
 						LEFT OUTER JOIN LATERAL (
 							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
 							FROM (
 								SELECT "sys_comment_1"."id" AS "id", "sys_comment_1"."content" AS "content"
 								FROM (WITH RECURSIVE "__tree_1" AS (
 									SELECT "sys_comment"."id", "sys_comment"."content", "sys_comment"."parent_id", 1 AS "__lv"
-									FROM "sys_comment" WHERE "sys_comment"."parent_id" = "sys_comment_0"."id"
+									FROM "public"."sys_comment" WHERE "sys_comment"."parent_id" = "sys_comment_0"."id"
 									UNION ALL
 									SELECT "sys_comment"."id", "sys_comment"."content", "sys_comment"."parent_id", "__tree_1"."__lv" + 1
-									FROM "sys_comment", "__tree_1"
+									FROM "public"."sys_comment", "__tree_1"
 									WHERE "sys_comment"."parent_id" = "__tree_1"."id" AND "__tree_1"."__lv" < 5
 								) SELECT "__tree_1"."id", "__tree_1"."content", "__tree_1"."parent_id" FROM "__tree_1") AS "sys_comment_1"
 							) AS "__sr_1"
@@ -143,17 +143,17 @@ func (my *_DialectSuite) TestRecursiveTree() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_comment_0"."id" AS "id", "__sj_1"."json" AS "ancestors"
-						FROM (SELECT "sys_comment"."id", "sys_comment"."parent_id" FROM "sys_comment" LIMIT 10) AS "sys_comment_0"
+						FROM (SELECT "sys_comment"."id", "sys_comment"."parent_id" FROM "public"."sys_comment" LIMIT 10) AS "sys_comment_0"
 						LEFT OUTER JOIN LATERAL (
 							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
 							FROM (
 								SELECT "sys_comment_1"."id" AS "id"
 								FROM (WITH RECURSIVE "__tree_1" AS (
 									SELECT "sys_comment"."id", "sys_comment"."parent_id", 1 AS "__lv"
-									FROM "sys_comment" WHERE "sys_comment"."id" = "sys_comment_0"."parent_id"
+									FROM "public"."sys_comment" WHERE "sys_comment"."id" = "sys_comment_0"."parent_id"
 									UNION ALL
 									SELECT "sys_comment"."id", "sys_comment"."parent_id", "__tree_1"."__lv" + 1
-									FROM "sys_comment", "__tree_1"
+									FROM "public"."sys_comment", "__tree_1"
 									WHERE "sys_comment"."id" = "__tree_1"."parent_id" AND "__tree_1"."__lv" < 2
 								) SELECT "__tree_1"."id", "__tree_1"."parent_id" FROM "__tree_1") AS "sys_comment_1"
 							) AS "__sr_1"

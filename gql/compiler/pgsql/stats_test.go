@@ -11,7 +11,7 @@ func (my *_DialectSuite) TestStats() {
 					FROM (
 						SELECT COUNT(*) AS "count",
 							JSONB_BUILD_OBJECT('avg', AVG("sys_user"."age"), 'max', MAX("sys_user"."age")) AS "age"
-						FROM "sys_user"
+						FROM "public"."sys_user"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},
@@ -25,7 +25,7 @@ func (my *_DialectSuite) TestStats() {
 						SELECT JSONB_BUILD_OBJECT('name', "sys_user"."name") AS "key",
 							COUNT(*) AS "count",
 							JSONB_BUILD_OBJECT('countDistinct', COUNT(DISTINCT "sys_user"."email")) AS "email"
-						FROM "sys_user"
+						FROM "public"."sys_user"
 						GROUP BY "sys_user"."name"
 						LIMIT 10
 					) AS "__sr_0"
@@ -40,7 +40,7 @@ func (my *_DialectSuite) TestStats() {
 					SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]') AS "json"
 					FROM (
 						SELECT COUNT(*) AS "count"
-						FROM "sys_user"
+						FROM "public"."sys_user"
 						WHERE "sys_user"."age" > $1
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
@@ -54,7 +54,7 @@ func (my *_DialectSuite) TestStats() {
 					SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]') AS "json"
 					FROM (
 						SELECT COUNT(*) AS "count"
-						FROM "sys_user"
+						FROM "public"."sys_user"
 						GROUP BY "sys_user"."name"
 						HAVING COUNT(*) > $1 AND AVG("sys_user"."age") >= $2
 					) AS "__sr_0"
@@ -66,13 +66,13 @@ func (my *_DialectSuite) TestStats() {
 			expected: `SELECT JSONB_BUILD_OBJECT('userStats', "__sj_0"."json", 'users', "__sj_1"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]') AS "json"
-					FROM (SELECT COUNT(*) AS "count" FROM "sys_user") AS "__sr_0"
+					FROM (SELECT COUNT(*) AS "count" FROM "public"."sys_user") AS "__sr_0"
 				) AS "__sj_0" ON TRUE
 				LEFT OUTER JOIN LATERAL (
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_1"."id" AS "id"
-						FROM (SELECT "sys_user"."id" FROM "sys_user" LIMIT 10) AS "sys_user_1"
+						FROM (SELECT "sys_user"."id" FROM "public"."sys_user" LIMIT 10) AS "sys_user_1"
 					) AS "__sr_1"
 				) AS "__sj_1" ON TRUE`,
 		},

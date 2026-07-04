@@ -306,6 +306,12 @@ services:
 - 复制连接缺省复用主连接 DSN，可用 `subscription.dsn` 单独指定
 - 断线自动退避重连，重连后广播唤醒补偿期间可能错过的变更
 
+## 数据库 schema
+
+元数据按 `schema.schema`（缺省 `public`）加载，生成 SQL 中所有基表引用
+带 schema 限定（`"public"."users"`），不依赖 search_path；变更 CTE 及其
+读回引用为裸名（CTE 名与表名一致，语句作用域内命中）。
+
 ## schema 与操作文档加载
 
 - `schema.file` 配置后从文件加载 schema（生产推荐，启动更快且可人工裁剪）；

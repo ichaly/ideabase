@@ -159,6 +159,19 @@ func (my *Context) DefaultLimit() int {
 	return 0
 }
 
+// Schemer 元数据承载者的可选能力：数据库schema名（基表引用限定，防search_path歧义）
+type Schemer interface {
+	SchemaName() string
+}
+
+// SchemaName 返回数据库schema名；未实现Schemer或未配置时为空（不限定）
+func (my *Context) SchemaName() string {
+	if schemer, ok := my.hoster.(Schemer); ok {
+		return schemer.SchemaName()
+	}
+	return ""
+}
+
 // GetClass 按类名（或表名索引）获取类定义
 func (my *Context) GetClass(className string) (*protocol.Class, bool) {
 	if my.hoster == nil {

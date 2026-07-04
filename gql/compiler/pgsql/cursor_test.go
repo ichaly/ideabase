@@ -33,7 +33,7 @@ func (my *_DialectSuite) TestCursor() {
 						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name",
 							ROW_NUMBER() OVER () AS "__rn",
 							encode(convert_to(JSONB_BUILD_ARRAY("sys_user_0"."name", "sys_user_0"."id")::text, 'UTF8'), 'base64') AS "__cursor"
-						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "sys_user" ORDER BY "sys_user"."name" ASC, "sys_user"."id" ASC LIMIT 3) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "public"."sys_user" ORDER BY "sys_user"."name" ASC, "sys_user"."id" ASC LIMIT 3) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},
@@ -55,7 +55,7 @@ func (my *_DialectSuite) TestCursor() {
 						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name",
 							ROW_NUMBER() OVER () AS "__rn",
 							encode(convert_to(JSONB_BUILD_ARRAY("sys_user_0"."name", "sys_user_0"."id")::text, 'UTF8'), 'base64') AS "__cursor"
-						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "sys_user" ORDER BY "sys_user"."name" ASC, "sys_user"."id" ASC LIMIT $4 + 1) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "public"."sys_user" ORDER BY "sys_user"."name" ASC, "sys_user"."id" ASC LIMIT $4 + 1) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},
@@ -76,7 +76,7 @@ func (my *_DialectSuite) TestCursor() {
 						SELECT "sys_user_0"."id" AS "id",
 							ROW_NUMBER() OVER () AS "__rn",
 							encode(convert_to(JSONB_BUILD_ARRAY("sys_user_0"."name", "sys_user_0"."id")::text, 'UTF8'), 'base64') AS "__cursor"
-						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "sys_user"
+						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "public"."sys_user"
 							WHERE ($4::text IS NULL OR "sys_user"."name" > $2 OR ("sys_user"."name" = $2 AND "sys_user"."id" > $3))
 							ORDER BY "sys_user"."name" ASC, "sys_user"."id" ASC LIMIT 3) AS "sys_user_0"
 					) AS "__sr_0"
@@ -98,7 +98,7 @@ func (my *_DialectSuite) TestCursor() {
 						SELECT "sys_user_0"."id" AS "id",
 							ROW_NUMBER() OVER () AS "__rn",
 							encode(convert_to(JSONB_BUILD_ARRAY("sys_user_0"."id")::text, 'UTF8'), 'base64') AS "__cursor"
-						FROM (SELECT "sys_user"."id" FROM "sys_user" ORDER BY "sys_user"."id" DESC LIMIT 3) AS "sys_user_0"
+						FROM (SELECT "sys_user"."id" FROM "public"."sys_user" ORDER BY "sys_user"."id" DESC LIMIT 3) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},

@@ -7,7 +7,7 @@ func sortQuery(clause string) string {
 			SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 			FROM (
 				SELECT "sys_user_0"."id" AS "id"
-				FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "sys_user" ` + clause + `) AS "sys_user_0"
+				FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "public"."sys_user" ` + clause + `) AS "sys_user_0"
 			) AS "__sr_0"
 		) AS "__sj_0" ON TRUE`
 }
@@ -32,7 +32,7 @@ func (my *_DialectSuite) TestSort() {
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id"
-						FROM (SELECT "sys_user"."id", "sys_user"."name", "sys_user"."age" FROM "sys_user"
+						FROM (SELECT "sys_user"."id", "sys_user"."name", "sys_user"."age" FROM "public"."sys_user"
 							ORDER BY "sys_user"."name" ASC, "sys_user"."age" DESC NULLS LAST LIMIT 10) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,

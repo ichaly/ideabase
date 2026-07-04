@@ -427,7 +427,12 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		}
 		ctx.Write(`COUNT(*) OVER() AS "__total"`)
 	}
-	ctx.Space(`FROM`).Quote(u.class.Table)
+	ctx.Space(`FROM`)
+	if u.readback {
+		ctx.Quote(u.class.Table) // 读回单元：裸名命中同名变更CTE
+	} else {
+		tableRef(ctx, u.class.Table)
+	}
 
 	// WHERE位的合取条件：父子关联 + 全文搜索 + keyset续页边界
 	conjuncts, err := my.relationBond(ctx, u, sc)
@@ -521,8 +526,9 @@ func (my *Dialect) relationBond(ctx *compiler.Context, u *unit, sc scope) ([]fun
 	if through := u.rel.Through; through != nil {
 		// 中间表JOIN：中间表.目标键 = 目标表.目标列
 		ctx.MarkTable(through.TableName)
-		ctx.Space(`INNER JOIN`).Quote(through.TableName).
-			Space(`ON`).Column(through.TableName, through.TargetKey).
+		ctx.Space(`INNER JOIN`)
+		tableRef(ctx, through.TableName)
+		ctx.Space(`ON`).Column(through.TableName, through.TargetKey).
 			Space(`=`).Column(u.class.Table, targetCol)
 		// 关联条件：中间表.源键 = 父别名.源列
 		return []func() error{func() error {
@@ -629,13 +635,17 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 
 	ctx.Space(`FROM (WITH RECURSIVE`).QuotedWithSpace(tree).Write(`AS (SELECT `)
 	list(u.class.Table)
-	ctx.Write(`, 1 AS "__lv" FROM `).Quote(u.class.Table).Write(` WHERE `).
+	ctx.Write(`, 1 AS "__lv" FROM `)
+	tableRef(ctx, u.class.Table)
+	ctx.Write(` WHERE `).
 		Column(u.class.Table, targetCol).
 		Write(` = `).Column(u.parent, parentCol)
 	scopeFilter()
 	ctx.Write(` UNION ALL SELECT `)
 	list(u.class.Table)
-	ctx.Write(`, `).Quote(tree).Write(`."__lv" + 1 FROM `).Quote(u.class.Table).Write(`, `).Quote(tree).
+	ctx.Write(`, `).Quote(tree).Write(`."__lv" + 1 FROM `)
+	tableRef(ctx, u.class.Table)
+	ctx.Write(`, `).Quote(tree).
 		Write(` WHERE `).Column(u.class.Table, targetCol).
 		Write(` = `).Column(tree, sourceCol).
 		Write(` AND `).Quote(tree).Write(`."__lv" < `, depth)

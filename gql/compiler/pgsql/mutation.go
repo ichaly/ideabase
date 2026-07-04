@@ -282,7 +282,9 @@ func (my *Dialect) writeInsertValues(ctx *compiler.Context, table string, rows [
 		return nil, fmt.Errorf("input不能为空")
 	}
 
-	ctx.Write(`INSERT INTO `).Quote(table).Write(` (`)
+	ctx.Write(`INSERT INTO `)
+	tableRef(ctx, table)
+	ctx.Write(` (`)
 	writeColumns(ctx, "", columns)
 	ctx.Write(`) VALUES `)
 	for i, row := range rows {
@@ -330,11 +332,14 @@ func (my *Dialect) buildUpdate(ctx *compiler.Context, m *mutation) ([]relationOp
 		if len(row.ops) == 0 {
 			return nil, fmt.Errorf("%s的input不能为空", m.field.Name)
 		}
-		ctx.Write(`SELECT * FROM `).Quote(m.class.Table)
+		ctx.Write(`SELECT * FROM `)
+		tableRef(ctx, m.class.Table)
 		return row.ops, my.buildMutationWhere(ctx, m.class, m.field)
 	}
 
-	ctx.Write(`UPDATE `).Quote(m.class.Table).Write(` SET `)
+	ctx.Write(`UPDATE `)
+	tableRef(ctx, m.class.Table)
+	ctx.Write(` SET `)
 	for i, column := range row.columns {
 		if i > 0 {
 			ctx.Write(`, `)
@@ -353,7 +358,8 @@ func (my *Dialect) buildUpdate(ctx *compiler.Context, m *mutation) ([]relationOp
 
 // buildDelete 构建DELETE语句，必须携带id或where条件
 func (my *Dialect) buildDelete(ctx *compiler.Context, m *mutation) error {
-	ctx.Write(`DELETE FROM `).Quote(m.class.Table)
+	ctx.Write(`DELETE FROM `)
+	tableRef(ctx, m.class.Table)
 	if err := my.buildMutationWhere(ctx, m.class, m.field); err != nil {
 		return err
 	}
@@ -670,15 +676,16 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			// 多对多：中间表插入/删除/内联创建
 			ctx.MarkTable(through.TableName)
 			if len(op.connect) > 0 {
-				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).
-					Write(` AS (INSERT INTO `).Quote(through.TableName).Write(` (`).
-					Quote(through.SourceKey).Write(`, `).Quote(through.TargetKey).Write(`) `)
+				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (INSERT INTO `)
+				tableRef(ctx, through.TableName)
+				ctx.Write(` (`).Quote(through.SourceKey).Write(`, `).Quote(through.TargetKey).Write(`) `)
 				if len(target.Scope) > 0 {
 					// 目标有作用域：经SELECT校验目标行属当前作用域，防建立跨租户关联（中间表污染）
 					ctx.Write(`SELECT `)
 					anchor(op.rel)
-					ctx.Write(`, `).Column(target.Table, pk).Write(` FROM `).Quote(target.Table).
-						Write(` WHERE `).Column(target.Table, pk).Write(` IN (`)
+					ctx.Write(`, `).Column(target.Table, pk).Write(` FROM `)
+					tableRef(ctx, target.Table)
+					ctx.Write(` WHERE `).Column(target.Table, pk).Write(` IN (`)
 					if err := params(op.connect); err != nil {
 						return err
 					}
@@ -704,9 +711,9 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 				}
 			}
 			if len(op.disconnect) > 0 {
-				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).
-					Write(` AS (DELETE FROM `).Quote(through.TableName).Write(` WHERE `).
-					Quote(through.SourceKey).Write(` = `)
+				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (DELETE FROM `)
+				tableRef(ctx, through.TableName)
+				ctx.Write(` WHERE `).Quote(through.SourceKey).Write(` = `)
 				anchor(op.rel)
 				ctx.Write(` AND `).Quote(through.TargetKey).Write(` IN (`)
 				if err := params(op.disconnect); err != nil {
@@ -724,9 +731,9 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 					return err
 				}
 				ctx.Write(` RETURNING `).Quote(pk).Write(`)`)
-				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).
-					Write(` AS (INSERT INTO `).Quote(through.TableName).Write(` (`).
-					Quote(through.SourceKey).Write(`, `).Quote(through.TargetKey).
+				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (INSERT INTO `)
+				tableRef(ctx, through.TableName)
+				ctx.Write(` (`).Quote(through.SourceKey).Write(`, `).Quote(through.TargetKey).
 					Write(`) SELECT `)
 				anchor(op.rel)
 				ctx.Write(`, `).Quote(pk).Write(` FROM `).Quote(`__c_`, made).Write(`)`)
@@ -738,8 +745,9 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 		ctx.MarkTable(target.Table)
 		fk := sc.column(op.rel.TargetField)
 		if len(op.connect) > 0 {
-			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).
-				Write(` AS (UPDATE `).Quote(target.Table).Write(` SET `).Quote(fk).Write(` = `)
+			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (UPDATE `)
+			tableRef(ctx, target.Table)
+			ctx.Write(` SET `).Quote(fk).Write(` = `)
 			anchor(op.rel)
 			ctx.Write(` WHERE `).Quote(pk).Write(` IN (`)
 			if err := params(op.connect); err != nil {
@@ -750,8 +758,9 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			ctx.Write(`)`)
 		}
 		if len(op.disconnect) > 0 {
-			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).
-				Write(` AS (UPDATE `).Quote(target.Table).Write(` SET `).Quote(fk).Write(` = NULL WHERE `).
+			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (UPDATE `)
+			tableRef(ctx, target.Table)
+			ctx.Write(` SET `).Quote(fk).Write(` = NULL WHERE `).
 				Quote(fk).Write(` = `)
 			anchor(op.rel)
 			ctx.Write(` AND `).Quote(pk).Write(` IN (`)
