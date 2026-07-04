@@ -4,8 +4,6 @@
 package pgsql
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -202,10 +200,4 @@ func (my *Dialect) cursorParams(ctx *compiler.Context, p *pager) ([]string, erro
 		placeholders[i] = my.Placeholder(ctx.AddParam(value))
 	}
 	return placeholders, nil
-}
-
-// EncodeCursor 编码游标（测试与文档用）
-func EncodeCursor(keys []any) string {
-	data, _ := json.Marshal(keys)
-	return base64.StdEncoding.EncodeToString(data)
 }

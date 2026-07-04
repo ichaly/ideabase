@@ -3,9 +3,7 @@ package gql
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/iancoleman/strcase"
@@ -132,32 +130,19 @@ func (my *Executor) enrich(ctx context.Context, f *ast.Field, variables map[stri
 		return result, nil
 	}
 
-	// 主键取数据库层字面量拼接:实体 id 类型可能自带 MarshalJSON(如 std.Id 的 shortId 加密),
-	// 不能经 JSON 编码变形
-	var id string
-	switch rv := reflect.ValueOf(result); {
-	case rv.CanUint():
-		id = strconv.FormatUint(rv.Uint(), 10)
-	case rv.CanInt():
-		id = strconv.FormatInt(rv.Int(), 10)
-	default:
-		data, err := json.Marshal(result)
-		if err != nil {
-			return result, nil
-		}
-		id = string(data)
-	}
+	// 主键经变量通道传入：免字面量拼接的类型变形问题（自定义MarshalJSON等），
+	// 且合成查询文本与id无关，回查计划可按实体+选择集缓存复用
 	var sb strings.Builder
-	sb.WriteString("query { ")
+	sb.WriteString("query ($id: ID!) { ")
 	sb.WriteString(strcase.ToLowerCamel(inflection.Plural(className)))
-	sb.WriteString(fmt.Sprintf("(id: %s, limit: 1) { ", id))
+	sb.WriteString("(id: $id, limit: 1) { ")
 	sb.WriteString(protocol.ITEMS)
 	sb.WriteString(" ")
 	writeSelectionSet(&sb, f.SelectionSet, variables)
 	sb.WriteString(" } }")
 
-	reply := my.Execute(ctx, sb.String(), nil, "")
-	if len(reply.Errors) > 0 {
+	reply := my.Execute(ctx, sb.String(), map[string]interface{}{"id": result}, "")
+	if reply.Data == nil && len(reply.Errors) > 0 { // 部分错误(如远程警告)与data共存时视为成功
 		return nil, fmt.Errorf("Action回查失败: %w", reply.Errors)
 	}
 	wrapper, _ := reply.Data[strcase.ToLowerCamel(inflection.Plural(className))].(map[string]interface{})

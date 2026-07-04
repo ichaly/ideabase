@@ -324,6 +324,16 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			appendColumn(sc.column(field.Relation.SourceFiled))
 			continue
 		}
+		if field.Remote != nil {
+			// 远程关系字段不落SQL，但把宿主键列以内部别名补进投影：
+			// 执行期批量取数依赖它，别名避开选择集与codec路径保证键值原始，回填后剥除
+			alias := field.Remote.Alias()
+			if !hasAlias(scalars, alias) {
+				scalars = append(scalars, &ast.Field{Name: field.Remote.Key, Alias: alias})
+				appendColumn(sc.column(field.Remote.Key))
+			}
+			continue
+		}
 		if field.Column == "" {
 			continue // 虚拟字段（resolver等）不参与SQL
 		}

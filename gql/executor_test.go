@@ -10,10 +10,12 @@ import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
-// setupTestExecutor 基于真实PostgreSQL构建完整执行器
-func setupTestExecutor(t *testing.T) (*Executor, func()) {
+// newTestExecutor 基于真实PostgreSQL构建完整执行器（各测试的唯一构造入口）；
+// tweak 在元数据构建前调整配置，opts 传递元数据选项（如WithCodecs）
+func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOption) (*Executor, *gorm.DB, func()) {
 	db, cleanup := setupTestDatabase(t)
 
 	k, err := std.NewKonfig()
@@ -21,8 +23,11 @@ func setupTestExecutor(t *testing.T) (*Executor, func()) {
 	k.Set("mode", "dev")
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
+	if tweak != nil {
+		tweak(k)
+	}
 
-	meta, err := NewMetadata(k, db)
+	meta, err := NewMetadata(k, db, opts...)
 	require.NoError(t, err, "加载元数据失败")
 
 	// 走方言自注册路径（导入pgsql包即注册）
@@ -32,6 +37,12 @@ func setupTestExecutor(t *testing.T) (*Executor, func()) {
 	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err, "创建执行器失败")
 
+	return executor, db, cleanup
+}
+
+// setupTestExecutor 默认配置的执行器
+func setupTestExecutor(t *testing.T) (*Executor, func()) {
+	executor, _, cleanup := newTestExecutor(t, nil)
 	return executor, cleanup
 }
 

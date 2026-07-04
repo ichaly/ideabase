@@ -82,12 +82,12 @@ func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]i
 	*last = sum
 
 	// 订阅是公开API：始终解包为Data供程序化消费（变更推送频率低，非热路径）
-	result, err := my.unpack(ctx, plan, data)
+	result, warnings, err := my.unpack(ctx, plan, data)
 	if err != nil {
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r, true
 	}
-	r.Data = result
+	r.Errors, r.Data = warnings, result
 	return r, true
 }
 

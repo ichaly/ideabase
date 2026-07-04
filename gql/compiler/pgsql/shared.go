@@ -57,3 +57,13 @@ func writeColumns(ctx *compiler.Context, qualifier string, columns []string) {
 		ctx.Column(qualifier, column)
 	}
 }
+
+// hasAlias 选择集切片中是否已有指定别名（远程键补投影去重，数量极小线性即可）
+func hasAlias(fields []*ast.Field, alias string) bool {
+	for _, f := range fields {
+		if f.Alias == alias {
+			return true
+		}
+	}
+	return false
+}

@@ -189,6 +189,8 @@ func createMockMetadata(t *testing.T) *Metadata {
 	meta.Nodes["User"] = userClass
 	meta.Nodes["Post"] = postClass
 
+	// 与真实构建流程对齐：类型定型（主外键→ID等）在元数据层完成
+	meta.finalize()
 	return meta
 }
 
@@ -848,7 +850,8 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 	assert.Contains(t, schema, "age: Int!")
 	assert.Contains(t, schema, "title: String!")
 	assert.Contains(t, schema, "content: String!")
-	assert.Contains(t, schema, "userId: ID!")
+	// 配置显式指定 Type: Int，定型期豁免结构推导——配置是最终裁决
+	assert.Contains(t, schema, "userId: Int!")
 	// 验证注释
 	assert.Contains(t, schema, "# 用户名")
 	assert.Contains(t, schema, "# 邮箱")

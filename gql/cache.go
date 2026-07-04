@@ -13,12 +13,13 @@ type planKey struct {
 	query     string
 }
 
-// planEntry 缓存值：非volatile存编译成品；volatile存已解析展开的AST，
-// 执行期仅重做SQL构建（省去每请求的解析、校验与binding收集）
+// planEntry 缓存值：恒存operation（变量声明的唯一事实源，入参解码用）；
+// 非volatile另存编译成品，volatile执行期仅重做SQL构建（binding与codec路径树复用）
 type planEntry struct {
 	plan      *Plan                    // 编译成品，volatile时为nil
-	operation *ast.OperationDefinition // volatile重编译入口
-	resolvers []binding                // resolver绑定只依赖AST，volatile重编译复用
+	operation *ast.OperationDefinition // 已解析展开的AST
+	resolvers []binding                // resolver绑定只依赖AST，volatile重编译复用（非volatile时plan内已含，恒存仅为构造统一）
+	paths     codecPaths               // codec路径树只依赖AST，volatile重编译复用（同上）
 	action    bool                     // Action操作：无SQL计划，缓存AST供执行期分发
 }
 

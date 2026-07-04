@@ -69,8 +69,8 @@ type Executor struct {
 	actions   map[string]Action   // 操作级Action注册表：顶层字段名 -> 实现
 	source    string              // 原始schema文本，RegisterAction合并SDL时重建的基底
 	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
+	remotes   map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
 	cdc       notifier            // CDC唤醒源（按数据库驱动从注册表选取）
-	enabled   bool                // 有codec注册即启用出入参转换管线
 }
 
 // Register 注册自定义字段解析器，与元数据中 Field.Resolver 按名绑定
@@ -107,7 +107,7 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		resolvers: make(map[string]Resolver),
 		actions:   make(map[string]Action),
 		documents: make(map[string]string),
-		enabled:   len(m.codecs) > 0,
+		remotes:   make(map[string]Remote),
 	}
 
 	// 加载GraphQL模式：配置了schema.file优先从文件加载（生产推荐），否则由renderer生成
@@ -332,12 +332,13 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 		r.raw = data
 		return r
 	}
-	result, err := my.unpack(ctx, plan, data)
+	result, warnings, err := my.unpack(ctx, plan, data)
 	if err != nil {
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
 	}
-	r.Data = result
+	// 非致命警告与data共存（GraphQL部分错误语义）
+	r.Errors, r.Data = warnings, result
 	return r
 }
 
@@ -348,23 +349,24 @@ func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]
 	args := plan.Args(variables, scopeValues(ctx)) // 行级作用域值从请求上下文取
 	var data []byte
 	err := my.database.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
-	if err == nil && my.enabled {
-		data = encodeBytes(data, plan.paths)
+	if err == nil {
+		data = encodeBytes(data, plan.paths) // 空路径树零成本短路
 	}
 	return data, err
 }
 
-// unpack 解包__root JSON为data（顶层key即字段别名）并执行resolver后处理
-func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte) (map[string]interface{}, error) {
+// unpack 解包__root JSON为data（顶层key即字段别名）并执行后处理；
+// 第二返回值为非致命警告（如远程取数失败），随响应errors返回但不影响data
+func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte) (map[string]interface{}, gqlerror.List, error) {
 	result := make(map[string]interface{})
 	if len(data) > 0 {
 		if err := jsonNumeric.Unmarshal(data, &result); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		normalizeNumbers(result)
 	}
-	// 调用方已保证 resolvers 非空（无resolver走直通路径不进此函数）
-	return result, my.resolve(ctx, plan.resolvers, result)
+	warnings, err := my.resolve(ctx, plan.resolvers, result)
+	return result, warnings, err
 }
 
 // normalizeNumbers 就地把json.Number收敛为int64/float64：
@@ -404,22 +406,20 @@ func (my *introQuery) Error() string { return "自省查询不支持此入口" }
 func (my *Executor) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
 	key := planKey{operation: operationName, query: query}
 	if entry, ok := my.cache.Get(key); ok {
+		// 命中收口：任何消费（Action分发/执行/volatile重编译）前统一还原codec入参
+		decodeVariables(my.schema, entry.operation.VariableDefinitions, variables, my.metadata)
 		if entry.action {
-			my.decodeIds(entry.operation.VariableDefinitions, variables)
 			return nil, &actionQuery{operation: entry.operation}
 		}
 		if entry.plan != nil {
-			my.decodeIds(entry.plan.vars, variables)
 			return entry.plan, nil
 		}
-		// volatile：仅重做SQL构建，binding复用缓存（不依赖变量）；
-		// 变量内容参与编译，ID解码必须先行
-		my.decodeIds(entry.operation.VariableDefinitions, variables)
+		// volatile：仅重做SQL构建，binding与codec路径树复用缓存（均只依赖AST）
 		plan, err := my.compiler.Compile(entry.operation, variables)
 		if err != nil {
 			return nil, err
 		}
-		plan.resolvers = entry.resolvers
+		plan.resolvers, plan.paths = entry.resolvers, entry.paths
 		return plan, nil
 	}
 
@@ -427,7 +427,8 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 	if err != nil {
 		return nil, err
 	}
-	my.decodeIds(operation.VariableDefinitions, variables)
+	// 未命中收口：volatile编译会消费变量，解码先行
+	decodeVariables(my.schema, operation.VariableDefinitions, variables, my.metadata)
 	if hasIntroField(operation.SelectionSet) {
 		return nil, &introQuery{operation: operation}
 	}
@@ -458,33 +459,25 @@ func (my *Executor) parse(query, operationName string) (*ast.OperationDefinition
 		operation = doc.Operations[0]
 	}
 	operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
-	if my.enabled {
-		// codec标量字面量就地还原：解析仅发生一次，改写随计划缓存复用
-		decodeLiterals(my.schema, operation.SelectionSet, my.metadata)
-	}
+	// codec标量字面量就地还原：解析仅发生一次，改写随计划缓存复用
+	decodeLiterals(my.schema, operation.SelectionSet, my.metadata)
 	return operation, nil
 }
 
-// decodeIds 有codec注册时按变量声明类型还原变量表入参
-func (my *Executor) decodeIds(defs ast.VariableDefinitionList, variables map[string]interface{}) {
-	if my.enabled {
-		decodeVariables(my.schema, defs, variables, my.metadata)
-	}
-}
-
-// compile 编译并缓存：resolver绑定在此一次性收集（不依赖变量内容）；
-// volatile计划SQL不可复用但AST与绑定可以——缓存供后续请求免解析重编译
+// compile 编译并缓存：resolver绑定与codec路径树在此一次性收集（均只依赖AST）；
+// volatile计划SQL不可复用但AST与两类产物可以——缓存供后续请求免解析重收集
 func (my *Executor) compile(key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*Plan, error) {
 	plan, err := my.compiler.Compile(operation, variables)
 	if err != nil {
 		return nil, err
 	}
 	plan.resolvers = collectBindings(my.metadata, operation)
-	if plan.Volatile() {
-		my.cache.Put(key, &planEntry{operation: operation, resolvers: plan.resolvers})
-	} else {
-		my.cache.Put(key, &planEntry{plan: plan})
+	plan.paths = collectCodecPaths(operation.SelectionSet, my.metadata)
+	entry := &planEntry{operation: operation, resolvers: plan.resolvers, paths: plan.paths}
+	if !plan.Volatile() {
+		entry.plan = plan
 	}
+	my.cache.Put(key, entry)
 	return plan, nil
 }
 

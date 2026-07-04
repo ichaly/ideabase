@@ -133,7 +133,7 @@ func (my *Renderer) renderScalars() error {
 }
 
 // eachCodecScalar 遍历codec引入的自定义标量（跳过内置标量如ID，同名去重），
-// fn收到标量名与其底层标量名
+// fn收到标量名与其底层标量名（codec未实现Baser时默认借用String）
 func (my *Renderer) eachCodecScalar(fn func(name, base string)) {
 	seen := make(map[string]bool, len(my.meta.codecs))
 	for _, codec := range my.meta.codecs {
@@ -142,7 +142,11 @@ func (my *Renderer) eachCodecScalar(fn func(name, base string)) {
 			continue
 		}
 		seen[name] = true
-		fn(name, codec.Base())
+		base := protocol.SCALAR_STRING
+		if b, ok := codec.(Baser); ok {
+			base = b.Base()
+		}
+		fn(name, base)
 	}
 }
 
@@ -180,6 +184,16 @@ func (my *Renderer) eachClass(fn func(className string, class *protocol.Class)) 
 		}
 		fn(className, class)
 	}
+}
+
+// eachTableClass 仅遍历有表实体类：虚拟类（远程关系目标/纯Resolver类）只有类型定义，
+// 不生成查询根/变更/过滤/排序/输入/分页等查询面（无SQL能力，渲染即虚假展示）
+func (my *Renderer) eachTableClass(fn func(className string, class *protocol.Class)) {
+	my.eachClass(func(className string, class *protocol.Class) {
+		if class.Table != "" {
+			fn(className, class)
+		}
+	})
 }
 
 // hiddenField 字段是否随中间表隐藏：自身是中间表字段，或引用了隐藏的中间表类型
@@ -266,13 +280,7 @@ func (my *Renderer) getGraphQLType(field *protocol.Field) string {
 		return "[" + fieldType + "]"
 	}
 
-	// 1. 主键与外键实列固定映射为ID类型（关系载体是Virtual字段不受影响；
-	// 外键列取ID让加解密与精度处理覆盖全部主外键，而非仅主键）
-	if field.IsPrimary || (field.Relation != nil && !field.Virtual) {
-		return protocol.SCALAR_ID
-	}
-
-	// 处理标量类型
+	// 处理标量类型（主外键→ID已在元数据定型期完成，此处纯投影）
 	if fieldType == protocol.SCALAR_STRING ||
 		fieldType == protocol.SCALAR_INT ||
 		fieldType == protocol.SCALAR_FLOAT ||
@@ -346,7 +354,7 @@ func (my *Renderer) writeRelationOps(class *protocol.Class) {
 // renderInput 渲染输入类型
 func (my *Renderer) renderInput() error {
 	// 为每个实体类生成创建和更新输入类型
-	my.eachClass(func(className string, class *protocol.Class) {
+	my.eachTableClass(func(className string, class *protocol.Class) {
 		// 无可写字段的类（如纯主键表）不生成输入类型
 		writable := my.writableFields(class)
 		if len(writable) == 0 {
@@ -382,7 +390,7 @@ func (my *Renderer) renderInput() error {
 	})
 
 	// 按目标类生成关系操作输入：connect/disconnect挂接解除既有行，create内联建新行
-	my.eachClass(func(className string, class *protocol.Class) {
+	my.eachTableClass(func(className string, class *protocol.Class) {
 		my.writeLine("# ", className, "关系操作（原子挂接/解除/内联创建）")
 		my.writeLine("input ", className, "RelationInput {")
 		my.writeField("connect", protocol.SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("挂接既有行主键"))
@@ -443,7 +451,7 @@ func (my *Renderer) writeScalarFilter(scalarType string, operators []*protocol.O
 // renderEntity 渲染实体过滤器
 func (my *Renderer) renderEntity() error {
 	// 为每个实体类生成过滤器
-	my.eachClass(func(className string, class *protocol.Class) {
+	my.eachTableClass(func(className string, class *protocol.Class) {
 		// 生成过滤器类型
 		my.writeLine("# ", className, "查询条件")
 		my.writeLine("input ", className, protocol.SUFFIX_WHERE_INPUT, " {")
@@ -473,15 +481,17 @@ func (my *Renderer) renderEntity() error {
 // renderSort 渲染排序类型
 func (my *Renderer) renderSort() error {
 	// 为每个实体类生成排序类型
-	my.eachClass(func(className string, class *protocol.Class) {
+	my.eachTableClass(func(className string, class *protocol.Class) {
 		// 生成排序类型
 		my.writeLine("# ", className, "排序")
 		my.writeLine("input ", className, protocol.SUFFIX_SORT_INPUT, " {")
 
-		// 添加可排序字段：跳过列名索引与随中间表隐藏的字段
+		// 添加可排序字段：跳过列名索引、全部虚拟字段（关系载体/resolver/remote
+		// 都没有可排序的物理列，渲染进SortInput即运行期SQL必错的虚假展示）
+		// 与随中间表隐藏的字段
 		for _, fieldName := range utl.SortKeys(class.Fields) {
 			field := class.Fields[fieldName]
-			if fieldName != field.Name || my.hiddenField(field) {
+			if fieldName != field.Name || field.Virtual || my.hiddenField(field) {
 				continue
 			}
 			my.writeField(fieldName, protocol.TYPE_SORT_DIRECTION)
@@ -528,7 +538,7 @@ func (my *Renderer) renderQuery() error {
 
 	// 收集可渲染的实体类名
 	var names []string
-	my.eachClass(func(className string, _ *protocol.Class) {
+	my.eachTableClass(func(className string, _ *protocol.Class) {
 		names = append(names, className)
 	})
 
@@ -572,7 +582,7 @@ func (my *Renderer) renderMutation() error {
 	my.writeLine("type Mutation {")
 
 	// 按排序顺序渲染每种类型的变更操作
-	my.eachClass(func(className string, class *protocol.Class) {
+	my.eachTableClass(func(className string, class *protocol.Class) {
 
 		// 无可写字段的类（如纯主键表）不生成创建/更新操作
 		if len(my.writableFields(class)) > 0 {
@@ -687,7 +697,7 @@ func (my *Renderer) renderStats() error {
 	my.writeLine()
 
 	// 每实体统计类型 + having入参：key为分组键，count恒有，标量列按类别挂聚合
-	my.eachClass(func(className string, class *protocol.Class) {
+	my.eachTableClass(func(className string, class *protocol.Class) {
 		my.writeLine("# ", className, "统计结果")
 		my.writeLine("type ", className, protocol.SUFFIX_STATS, " {")
 		my.writeField(protocol.FUNCTION_KEY, protocol.SCALAR_JSON, renderer.WithComment("分组键(无groupBy时为null)"))
@@ -754,7 +764,7 @@ func (my *Renderer) renderPaging() error {
 	my.renderPageInfo()
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_CONNECTION, " ", SEPARATOR_LINE, "\n")
 	// 为每个实体类生成分页类型
-	my.eachClass(func(className string, class *protocol.Class) {
+	my.eachTableClass(func(className string, class *protocol.Class) {
 		// 生成分页类型
 		my.writeLine("# ", className, "分页结果")
 		my.writeLine("type ", className, protocol.SUFFIX_RESULT, " {")

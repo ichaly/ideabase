@@ -95,6 +95,7 @@ schema:
 | use-singular   | bool                     | true   | 是否使用单数类名                 |
 | show-through   | bool                     | true   | 是否显示多对多中间表             |
 | table-prefix   | []string                 | 空     | 需要去除的表名前缀               |
+| include-tables | []string                 | 空     | 仅包含的表（白名单，尾部\*通配；排除规则优先） |
 | exclude-tables | []string                 | 空     | 需要排除的表名                   |
 | exclude-fields | []string                 | 空     | 需要排除的字段名                 |
 
@@ -131,7 +132,11 @@ metadata:
       override: false
 ```
 
-> 详细的 `ClassConfig`、`FieldConfig`、`RelationConfig`、`ThroughConfig` 字段说明请参考 internal/config.go 或相关文档。
+字段级 `remote: { source, key }` 声明远程关系（Remote Join）：字段值来自
+`executor.RegisterRemote` 注册的数据源，目标类型为无表虚拟类；编译期自动补投影
+宿主键、执行期批量取数回填，详见 README「远程关系」一节。
+
+> 详细的 `ClassConfig`、`FieldConfig`、`RelationConfig`、`ThroughConfig`、`RemoteConfig` 字段说明请参考 internal/config.go 或相关文档。
 
 ## 典型用法
 

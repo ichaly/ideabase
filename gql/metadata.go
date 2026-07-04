@@ -39,18 +39,23 @@ type Metadata struct {
 	searchMode   string
 	searchConfig string
 
-	// 标量编解码器（注册顺序即认领优先级；同名后注册者生效）
+	// 标量编解码器：slice保留注册序（认领优先级），index供热路径按名查找
 	codecs []Codec
+	index  map[string]Codec
 }
 
-// findCodec 按标量名查编解码器（后注册者覆盖同名；数量极少线性查找免map）
+// findCodec 按标量名查编解码器（同名后注册者生效，由map覆盖语义天然保证）
 func (my *Metadata) findCodec(name string) Codec {
-	for i := len(my.codecs) - 1; i >= 0; i-- {
-		if my.codecs[i].Name() == name {
-			return my.codecs[i]
-		}
+	return my.index[name]
+}
+
+// setCodecs 装配编解码器注册表（slice保留注册序，index供按名查找与同名覆盖）
+func (my *Metadata) setCodecs(codecs []Codec) {
+	my.codecs = codecs
+	my.index = make(map[string]Codec, len(codecs))
+	for _, codec := range codecs {
+		my.index[codec.Name()] = codec
 	}
-	return nil
 }
 
 // MetadataOption 用于自定义Loader注册与移除
@@ -158,15 +163,11 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 		metadata.NewConfigLoader(cfg),
 	}
 	options := &metadataOptions{loaders: defaultLoaders}
-	// encode-id开关即注册内置ID codec；业务codec经WithCodecs追加，同名覆盖内置
-	if cfg.Metadata.EncodeId {
-		options.codecs = append(options.codecs, NewIdCodec())
-	}
 	// 应用自定义选项
 	for _, opt := range opts {
 		opt(options)
 	}
-	my.codecs = options.codecs
+	my.setCodecs(options.codecs)
 	// 按优先级排序
 	loaders := options.loaders
 	if len(loaders) > 1 {
@@ -187,14 +188,18 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	my.normalize()
 	// 统一关系处理
 	my.processRelations()
-	// Codec按Match认领字段
-	my.claim()
+	// 类型定型：结构推导 + Codec认领
+	my.finalize()
 	return my, nil
 }
 
-// claim 元数据定型：实现了Matcher的codec认领命中字段，改写为对应标量类型；
+// finalize 元数据定型，field.Type自此成为schema类型的唯一真相：
+//  1. 结构推导：主键与外键实列固定为ID标量（关系载体是Virtual字段不受影响），
+//     使加解密与精度处理覆盖全部主外键；
+//  2. Codec认领：实现了Matcher的codec把命中字段改写为对应标量。
+//
 // 字段级配置显式指定类型时保留配置（配置是最终裁决的例外通道）
-func (my *Metadata) claim() {
+func (my *Metadata) finalize() {
 	for className, class := range my.Nodes {
 		if className != class.Name {
 			continue
@@ -203,7 +208,14 @@ func (my *Metadata) claim() {
 			if name != field.Name || field.Virtual || my.configured(className, name) {
 				continue
 			}
+			if field.IsPrimary || field.Relation != nil {
+				field.Type = protocol.SCALAR_ID
+				continue
+			}
 			for _, codec := range my.codecs {
+				if my.index[codec.Name()] != codec {
+					continue // 同名被后注册者覆盖，认领一并让位
+				}
 				if m, ok := codec.(Matcher); ok && m.Match(class, field) {
 					field.Type = codec.Name()
 					break

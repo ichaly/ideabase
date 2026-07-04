@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 自注册PostgreSQL方言
-	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -38,22 +37,7 @@ func (my signUpAction) Execute(ctx context.Context, args map[string]interface{})
 
 // setupActionExecutor 与setupTestExecutor同构，但透出db供Action闭包使用
 func setupActionExecutor(t *testing.T) (*Executor, *gorm.DB, func()) {
-	db, cleanup := setupTestDatabase(t)
-
-	k, err := std.NewKonfig()
-	require.NoError(t, err, "创建配置失败")
-	k.Set("mode", "dev")
-	k.Set("app.root", t.TempDir())
-	k.Set("schema.schema", "public")
-
-	meta, err := NewMetadata(k, db)
-	require.NoError(t, err, "加载元数据失败")
-	compile, err := NewCompiler(meta, nil)
-	require.NoError(t, err, "创建编译器失败")
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
-	require.NoError(t, err, "创建执行器失败")
-
-	return executor, db, cleanup
+	return newTestExecutor(t, nil)
 }
 
 // TestActionRoundTrip Action端到端：注册→内省可见→分发执行→回查补全→混排拒绝

@@ -25,8 +25,9 @@ func TestRenderRelation(t *testing.T) {
 		},
 	}
 
-	// 先处理元数据中的关系，然后才渲染
+	// 先处理元数据中的关系与类型定型，然后才渲染
 	meta.processRelations()
+	meta.finalize()
 
 	// 创建渲染器
 	renderer := NewRenderer(meta)
@@ -187,43 +188,20 @@ func TestRenderRelation(t *testing.T) {
 		assert.NotContains(t, filterSchemaWithoutThrough, "postTags")
 	})
 
-	// 验证中间表关系在排序中的显示
-	t.Run("中间表关系在排序中的显示", func(t *testing.T) {
-		// 设置ShowThrough为true
+	// 验证虚拟关系字段不进排序：关系载体无物理列，排序编译即SQL错误，
+	// 无论ShowThrough与否都不渲染（契约：schema展示的必须可用）
+	t.Run("虚拟关系字段不进排序", func(t *testing.T) {
 		meta.cfg.Metadata.ShowThrough = true
 
-		// 创建新的渲染器
 		renderer = NewRenderer(meta)
 		schema = &strings.Builder{}
 		renderer.sb = schema
+		require.NoError(t, renderer.renderSort(), "渲染排序失败")
 
-		// 渲染排序
-		err = renderer.renderSort()
-		require.NoError(t, err, "渲染排序失败")
-
-		// 获取schema文本
 		sortSchema := schema.String()
-
-		// 应该包含中间表关系字段
-		assert.Contains(t, sortSchema, "postTags: SortDirection")
-
-		// 修改配置隐藏中间表关系
-		meta.cfg.Metadata.ShowThrough = false
-
-		// 重新创建渲染器
-		renderer = NewRenderer(meta)
-		schema = &strings.Builder{}
-		renderer.sb = schema
-
-		// 重新渲染排序
-		err = renderer.renderSort()
-		require.NoError(t, err, "渲染排序失败")
-
-		// 获取新的schema文本
-		sortSchemaWithoutThrough := schema.String()
-
-		// 应该不包含中间表关系字段
-		assert.NotContains(t, sortSchemaWithoutThrough, "postTags: SortDirection")
+		assert.NotContains(t, sortSchema, "postTags: SortDirection", "中间表载体不可排序")
+		assert.NotContains(t, sortSchema, "parent: SortDirection", "关系载体不可排序")
+		assert.Contains(t, sortSchema, "parentId: SortDirection", "外键实列可排序")
 	})
 
 }

@@ -18,6 +18,9 @@ type codecPaths map[string]any
 
 // collectCodecPaths 按字段定义类型收集codec路径（列表元素与对象共享同一子树）
 func collectCodecPaths(set ast.SelectionSet, meta *Metadata) codecPaths {
+	if len(meta.codecs) == 0 {
+		return nil
+	}
 	var out codecPaths
 	for _, s := range set {
 		f, ok := s.(*ast.Field)
@@ -45,35 +48,45 @@ func collectCodecPaths(set ast.SelectionSet, meta *Metadata) codecPaths {
 // ---------- 出参：直通字节的流式转换 ----------
 
 // encodeBytes 对数据库返回的JSON字节做单遍结构化扫描，在codec路径叶子上
-// 调用codec改写token，其余字节原样拷贝；输入结构异常时原样返回（宁可不转换
-// 也不破坏响应）。零解包零重序列化，直通快路径得以保留。
+// 调用codec改写token；扫描只推进游标不拷贝，首次命中才物化输出缓冲——
+// 无命中零分配直接返回原字节。输入结构异常时原样返回（宁可不转换也不破坏响应）。
 func encodeBytes(data []byte, paths codecPaths) []byte {
 	if len(paths) == 0 || len(data) == 0 {
 		return data
 	}
-	s := codecScanner{src: data, out: make([]byte, 0, len(data)+len(data)/8)}
+	s := codecScanner{src: data}
 	s.value(paths)
 	s.space()
-	if s.bad || s.pos != len(s.src) {
+	if s.bad || s.pos != len(s.src) || s.out == nil {
 		return data
 	}
-	return s.out
+	return append(s.out, s.src[s.mark:]...) // 补上末段透传字节
 }
 
 // codecScanner 极简JSON流扫描器：只区分对象/数组/字符串/数字/字面量五种形态，
-// 携带当前codec路径树节点下行；叶子token交由codec转换，其余全部透传
+// 携带当前codec路径树节点下行。透传段不逐字节拷贝——mark记录待拷起点，
+// 命中改写时才把[mark,token起点)整段拷入out并写入替换token
 type codecScanner struct {
-	src []byte
-	out []byte
-	pos int
-	bad bool
+	src  []byte
+	out  []byte // 首次命中前为nil
+	pos  int
+	mark int // 待拷贝透传段起点
+	bad  bool
+}
+
+// patch 把[mark,start)透传段与替换token写入输出，mark推进到token之后
+func (my *codecScanner) patch(start int, repl []byte) {
+	if my.out == nil {
+		my.out = make([]byte, 0, len(my.src)+len(my.src)/8)
+	}
+	my.out = append(append(my.out, my.src[my.mark:start]...), repl...)
+	my.mark = my.pos
 }
 
 func (my *codecScanner) space() {
 	for my.pos < len(my.src) {
 		switch my.src[my.pos] {
 		case ' ', '\t', '\n', '\r':
-			my.out = append(my.out, my.src[my.pos])
 			my.pos++
 		default:
 			return
@@ -92,7 +105,7 @@ func (my *codecScanner) value(node any) {
 		tree, _ := node.(codecPaths)
 		my.object(tree)
 	case c == '[':
-		my.array(node)
+		my.list(']', func() { my.value(node) }) // 元素共享同一路径节点
 	case c == '"':
 		my.text(node)
 	case c == '-' || (c >= '0' && c <= '9'):
@@ -106,56 +119,39 @@ func (my *codecScanner) value(node any) {
 
 // object 逐键下行：键在路径树中则以对应子节点处理值，否则值整体透传
 func (my *codecScanner) object(tree codecPaths) {
-	my.copyByte() // '{'
-	my.space()
-	if my.peek('}') {
-		my.copyByte()
-		return
-	}
-	for !my.bad {
-		my.space()
+	my.list('}', func() {
 		key := my.str() // SQL别名源自GraphQL字段名，无转义形态
 		my.space()
 		if !my.peek(':') {
 			my.bad = true
 			return
 		}
-		my.copyByte() // ':'
+		my.pos++ // ':'
 		var child any
 		if tree != nil {
 			child = tree[string(key)]
 		}
 		my.value(child)
-		my.space()
-		switch {
-		case my.peek(','):
-			my.copyByte()
-		case my.peek('}'):
-			my.copyByte()
-			return
-		default:
-			my.bad = true
-			return
-		}
-	}
+	})
 }
 
-// array 元素共享同一路径节点（对象列表下行子树，标量列表逐元素转换）
-func (my *codecScanner) array(node any) {
-	my.copyByte() // '['
+// list 通用"开括号-元素-分隔符-闭括号"骨架，object/array共用
+func (my *codecScanner) list(end byte, item func()) {
+	my.pos++ // '{' 或 '['
 	my.space()
-	if my.peek(']') {
-		my.copyByte()
+	if my.peek(end) {
+		my.pos++
 		return
 	}
 	for !my.bad {
-		my.value(node)
+		my.space()
+		item()
 		my.space()
 		switch {
 		case my.peek(','):
-			my.copyByte()
-		case my.peek(']'):
-			my.copyByte()
+			my.pos++
+		case my.peek(end):
+			my.pos++
 			return
 		default:
 			my.bad = true
@@ -164,29 +160,23 @@ func (my *codecScanner) array(node any) {
 	}
 }
 
-// str 透传字符串并返回引号内的原始字节（供对象键匹配）
+// str 跳过字符串并返回引号内的原始字节（供对象键匹配），纯游标推进零拷贝
 func (my *codecScanner) str() []byte {
 	if !my.peek('"') {
 		my.bad = true
 		return nil
 	}
-	my.copyByte()
+	my.pos++
 	start := my.pos
 	for my.pos < len(my.src) {
 		switch my.src[my.pos] {
 		case '\\':
-			if my.pos+1 >= len(my.src) {
-				my.bad = true
-				return nil
-			}
-			my.out = append(my.out, my.src[my.pos], my.src[my.pos+1])
 			my.pos += 2
 		case '"':
 			raw := my.src[start:my.pos]
-			my.copyByte()
+			my.pos++
 			return raw
 		default:
-			my.out = append(my.out, my.src[my.pos])
 			my.pos++
 		}
 	}
@@ -194,58 +184,41 @@ func (my *codecScanner) str() []byte {
 	return nil
 }
 
-// text 字符串值：codec叶子把整个token（含引号）交由codec转换，否则透传
+// text 字符串值：codec叶子把整个token（含引号）交由codec转换，否则跳过
 func (my *codecScanner) text(node any) {
-	codec, ok := node.(Codec)
-	if !ok {
-		my.str()
-		return
-	}
-	mark := len(my.out)
+	start := my.pos
 	my.str()
-	if my.bad {
-		return
-	}
-	if repl, hit := codec.Encode(my.out[mark:]); hit {
-		my.out = append(my.out[:mark], repl...)
+	if !my.bad {
+		my.encode(start, node)
 	}
 }
 
-// number 数字值：codec叶子把纯数字token交由codec转换，负数/小数/科学计数透传
+// number 数字值：codec叶子把token交由codec转换（codec自校验形态），否则跳过
 func (my *codecScanner) number(node any) {
-	start, digits := my.pos, true
-	for my.pos < len(my.src) {
-		c := my.src[my.pos]
-		if c >= '0' && c <= '9' {
-			my.pos++
-			continue
-		}
-		if c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E' {
-			digits = false
-			my.pos++
-			continue
-		}
-		break
+	start := my.pos
+	for my.pos < len(my.src) && numByte(my.src[my.pos]) {
+		my.pos++
 	}
-	run := my.src[start:my.pos]
-	if codec, ok := node.(Codec); ok && digits {
-		if repl, hit := codec.Encode(run); hit {
-			my.out = append(my.out, repl...)
-			return
-		}
-	}
-	my.out = append(my.out, run...)
+	my.encode(start, node)
 }
 
-// literal 透传true/false/null
-func (my *codecScanner) literal() {
-	for my.pos < len(my.src) {
-		c := my.src[my.pos]
-		if c >= 'a' && c <= 'z' {
-			my.copyByte()
-			continue
+// encode 叶子token[start,pos)交由codec转换，命中则打补丁
+func (my *codecScanner) encode(start int, node any) {
+	if codec, ok := node.(Codec); ok {
+		if repl := codec.Encode(my.src[start:my.pos]); repl != nil {
+			my.patch(start, repl)
 		}
-		return
+	}
+}
+
+func numByte(c byte) bool {
+	return c >= '0' && c <= '9' || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E'
+}
+
+// literal 跳过true/false/null
+func (my *codecScanner) literal() {
+	for my.pos < len(my.src) && my.src[my.pos] >= 'a' && my.src[my.pos] <= 'z' {
+		my.pos++
 	}
 }
 
@@ -253,16 +226,11 @@ func (my *codecScanner) peek(c byte) bool {
 	return my.pos < len(my.src) && my.src[my.pos] == c
 }
 
-func (my *codecScanner) copyByte() {
-	my.out = append(my.out, my.src[my.pos])
-	my.pos++
-}
-
 // ---------- 入参：按GraphQL类型声明调用codec还原 ----------
 
 // decodeVariables 依据变量声明类型就地还原变量表（递归进入input对象与列表）
 func decodeVariables(schema *ast.Schema, defs ast.VariableDefinitionList, variables map[string]any, meta *Metadata) {
-	if schema == nil || len(defs) == 0 || len(variables) == 0 {
+	if len(meta.codecs) == 0 || schema == nil || len(defs) == 0 || len(variables) == 0 {
 		return
 	}
 	for _, def := range defs {
@@ -305,6 +273,9 @@ func decodeTyped(schema *ast.Schema, t *ast.Type, v any, meta *Metadata) any {
 
 // decodeLiterals 就地改写AST中codec标量的字面量（解析期一次，随计划缓存复用）
 func decodeLiterals(schema *ast.Schema, set ast.SelectionSet, meta *Metadata) {
+	if len(meta.codecs) == 0 {
+		return
+	}
 	for _, s := range set {
 		f, ok := s.(*ast.Field)
 		if !ok || f.Definition == nil {

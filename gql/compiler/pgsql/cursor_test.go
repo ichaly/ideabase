@@ -1,10 +1,19 @@
 package pgsql
 
 import (
+	"encoding/base64"
+	"encoding/json"
+
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/vektah/gqlparser/v2"
 )
+
+// EncodeCursor 测试辅助：按引擎游标格式（base64(JSON数组)）构造入参
+func EncodeCursor(keys []any) string {
+	data, _ := json.Marshal(keys)
+	return base64.StdEncoding.EncodeToString(data)
+}
 
 func (my *_DialectSuite) TestCursor() {
 	cases := []Case{

@@ -16,7 +16,7 @@ import (
 //     顶层key为GraphQL字段别名——执行器按此契约解包为data
 //  2. 根查询字段遵循 XxxResult 契约（items数组 + 可选total），
 //     嵌套列表关系输出纯数组，单对象关系输出对象或null
-//  3. 参数一律经 ctx.AddParam（字面量）/ ctx.AddVariable（变量引用）
+//  3. 参数一律经 ctx.AddParam（字面量）/ ctx.AddVariable（变量引用）/ ctx.AddListVariable（变量数组单槽位，计划可缓存）
 //     登记为槽位并配合 Placeholder 写占位符——编译产物据此按查询文本缓存
 //  4. 编译涉及的每张表调用 ctx.MarkTable 登记——订阅(CDC)据此按表变更唤醒
 //  5. 子查询别名使用 ctx.NextIndex 全局自增序号，避免递归冲突

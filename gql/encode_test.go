@@ -25,12 +25,11 @@ func TestEncodeIdBytes(t *testing.T) {
 	paths := codecPaths{
 		"users": codecPaths{
 			"items": codecPaths{
-				"id":     NewIdCodec(),
-				"userId": NewIdCodec(),
-				"tags":   codecPaths{"id": NewIdCodec()},
-				"ids":    NewIdCodec(), // ID列表叶子
+				"id":     idCodec{},
+				"userId": idCodec{},
+				"tags":   codecPaths{"id": idCodec{}},
+				"ids":    idCodec{}, // ID列表叶子
 			},
-			"total": nil, // 不会出现：收集器不产生nil，此处仅防御
 		},
 	}
 	t1, t2 := token(t, 540800000000000001), token(t, 42)
@@ -85,7 +84,7 @@ func TestEncodeIdBytes(t *testing.T) {
 
 // TestEncodeIdBytes_Equivalence 与参考实现（解包→按树编码→重序列化）语义等价
 func TestEncodeIdBytes_Equivalence(t *testing.T) {
-	paths := codecPaths{"data": codecPaths{"id": NewIdCodec(), "sub": codecPaths{"userId": NewIdCodec()}}}
+	paths := codecPaths{"data": codecPaths{"id": idCodec{}, "sub": codecPaths{"userId": idCodec{}}}}
 	payloads := []string{
 		`{"data":{"id":123,"name":"张三 \"quote\" \\","sub":[{"userId":456,"v":1.5},{"userId":null}],"n":-7,"e":2e3,"empty":{},"list":[]}}`,
 		`{"data":{"id":9007199254740993,"sub":{"userId":540800000000000001},"deep":{"id":1}}}`,
@@ -106,7 +105,7 @@ func TestEncodeIdBytes_Equivalence(t *testing.T) {
 			}
 		case gojson.Number:
 			if codec, ok := node.(Codec); ok {
-				if repl, hit := codec.Encode([]byte(val)); hit {
+				if repl := codec.Encode([]byte(val)); repl != nil {
 					var s string
 					require.NoError(t, gojson.Unmarshal(repl, &s))
 					return s
@@ -133,25 +132,9 @@ func TestEncodeIdBytes_Equivalence(t *testing.T) {
 	}
 }
 
-// setupEncodeExecutor 开启 metadata.encode-id 的完整执行器（真实PostgreSQL），
-// extra 追加业务codec（验证注册表开放性）
+// setupEncodeExecutor 注册内置ID codec的执行器，extra 追加业务codec
 func setupEncodeExecutor(t *testing.T, extra ...Codec) (*Executor, func()) {
-	db, cleanup := setupTestDatabase(t)
-
-	k, err := std.NewKonfig()
-	require.NoError(t, err, "创建配置失败")
-	k.Set("mode", "dev")
-	k.Set("app.root", t.TempDir())
-	k.Set("schema.schema", "public")
-	k.Set("metadata.encode-id", true)
-
-	meta, err := NewMetadata(k, db, WithCodecs(extra...))
-	require.NoError(t, err, "加载元数据失败")
-	compile, err := NewCompiler(meta, nil)
-	require.NoError(t, err, "创建编译器失败")
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
-	require.NoError(t, err, "创建执行器失败")
-
+	executor, _, cleanup := newTestExecutor(t, nil, WithCodecs(append([]Codec{NewIdCodec()}, extra...)...))
 	return executor, cleanup
 }
 
@@ -159,13 +142,12 @@ func setupEncodeExecutor(t *testing.T, extra ...Codec) (*Executor, func()) {
 type maskCodec struct{}
 
 func (maskCodec) Name() string { return "Masked" }
-func (maskCodec) Base() string { return "String" }
-func (maskCodec) Encode(token []byte) ([]byte, bool) {
+func (maskCodec) Encode(token []byte) []byte {
 	if len(token) < 6 || token[0] != '"' {
-		return nil, false
+		return nil
 	}
 	masked := append(append([]byte(nil), token[:3]...), []byte(`***`)...)
-	return append(masked, token[len(token)-3:]...), true
+	return append(masked, token[len(token)-3:]...)
 }
 func (maskCodec) Decode(value any) any                            { return value }
 func (maskCodec) Match(_ *protocol.Class, f *protocol.Field) bool { return f.Column == "email" }
@@ -287,4 +269,34 @@ func TestEncodeIdListVariable(t *testing.T) {
 	reply = executor.Execute(ctx, query, map[string]interface{}{"ids": ids[:1]}, "")
 	require.Empty(t, reply.Errors, "volatile缓存路径失败: %v", reply.Errors)
 	require.EqualValues(t, 1, reply.Data["users"].(map[string]interface{})["total"])
+}
+
+// BenchmarkEncodeBytes 流式转换性能：典型列表响应（100行×2个ID字段）
+func BenchmarkEncodeBytes(b *testing.B) {
+	paths := codecPaths{"users": codecPaths{"items": codecPaths{"id": idCodec{}, "userId": idCodec{}}}}
+	var sb strings.Builder
+	sb.WriteString(`{"users":{"items":[`)
+	for i := 0; i < 100; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString(`{"id":540800000000000001,"userId":540800000000000002,"name":"用户名","note":"一段较长的文本内容用于模拟真实负载"}`)
+	}
+	sb.WriteString(`],"total":100}}`)
+	data := []byte(sb.String())
+
+	b.Run("有命中", func(b *testing.B) {
+		b.SetBytes(int64(len(data)))
+		for i := 0; i < b.N; i++ {
+			encodeBytes(data, paths)
+		}
+	})
+	miss := codecPaths{"other": idCodec{}} // 路径不命中：应零分配返回原字节
+	b.Run("无命中", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(data)))
+		for i := 0; i < b.N; i++ {
+			encodeBytes(data, miss)
+		}
+	})
 }

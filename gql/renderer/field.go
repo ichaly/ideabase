@@ -56,13 +56,6 @@ func WithComment(comment string) Option {
 	}
 }
 
-// WithIndent 设置缩进级别
-func WithIndent(spaces int) Option {
-	return func(f *Field) {
-		f.Indent = spaces
-	}
-}
-
 // WithArgs 添加参数
 func WithArgs(args ...Argument) Option {
 	return func(f *Field) {

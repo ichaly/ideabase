@@ -59,10 +59,6 @@ type MetadataConfig struct {
 	// 关系配置
 	ShowThrough bool `mapstructure:"show-through"`
 
-	// ID出入参加解密：开启后ID标量出参在直通字节上流式编码为shortId，
-	// 入参shortId按类型还原为数字；数据库任何场景（含jsonb）始终存bigint
-	EncodeId bool `mapstructure:"encode-id"`
-
 	// 表名前缀（将被去除）
 	TablePrefix []string `mapstructure:"table-prefix"`
 
@@ -89,9 +85,6 @@ type ClassConfig struct {
 
 	// 字段定义 (使用字段名作为键)
 	Fields map[string]*FieldConfig `mapstructure:"fields"`
-
-	// 关系定义
-	Relations []RelationConfig `mapstructure:"relations"`
 
 	// 参与全文搜索的字段
 	Search []string `mapstructure:"search"`
@@ -138,6 +131,9 @@ type FieldConfig struct {
 	// 关系配置
 	Relation *RelationConfig `mapstructure:"relation"`
 
+	// 远程关系：字段值来自注册的远程数据源（Remote Join）
+	Remote *RemoteConfig `mapstructure:"remote"`
+
 	// override: true 表示字段别名覆盖主字段指针，false（默认）为附加模式
 	Override bool `mapstructure:"override"`
 }
@@ -165,4 +161,13 @@ type ThroughConfig struct {
 
 	// 中间表中指向目标表的外键
 	TargetKey string `mapstructure:"target_key"`
+}
+
+// RemoteConfig 远程关系配置
+type RemoteConfig struct {
+	// 数据源名（执行期按名分发到注册的Remote实现）
+	Source string `mapstructure:"source"`
+
+	// 宿主键字段名（编译期自动补投影，执行期批量取数）
+	Key string `mapstructure:"key"`
 }

@@ -112,7 +112,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		assert.Equal(t, "用户公开信息", class.Description)
 		assert.Equal(t, "users", class.Table)
 		// 字段继承与排除
-		assertField(t, class, "id", "id", "int", true, false, false, "用户ID", "")
+		assertField(t, class, "id", "id", "ID", true, false, false, "用户ID", "")
 		assertField(t, class, "name", "name", "string", false, false, false, "用户昵称", "MaskedNameResolver")
 		_, exists = class.Fields["email"]
 		assert.False(t, exists, "email字段应该被排除")
@@ -156,7 +156,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		require.True(t, exists, "应该存在MiniUser类")
 		assert.Equal(t, "users", class.Table)
 		assert.Equal(t, "用户简要信息", class.Description)
-		assertField(t, class, "id", "id", "int", true, false, false, "用户ID", "")
+		assertField(t, class, "id", "id", "ID", true, false, false, "用户ID", "")
 		assertField(t, class, "name", "name", "string", false, false, false, "用户名", "")
 		assertField(t, class, "displayName", "", "string", false, false, false, "显示名称", "DisplayNameResolver")
 		_, exists = class.Fields["email"]

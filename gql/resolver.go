@@ -7,6 +7,7 @@ import (
 
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -26,11 +27,13 @@ type BatchResolver interface {
 	ResolveBatch(ctx context.Context, sources []map[string]interface{}, args map[string]interface{}) ([]interface{}, error)
 }
 
-// binding 编译期收集的resolver绑定：宿主对象路径 + 目标字段 + resolver名
+// binding 编译期收集的后处理绑定：宿主对象路径 + 目标字段 + 处理器名。
+// Key非空即远程关系绑定（Name为数据源名，Key为补投影的内部键别名），否则为resolver绑定
 type binding struct {
 	Path  []string // data根到宿主对象的字段别名路径（数组层级在执行期透明展开）
 	Field string   // 要填充的字段别名
-	Name  string   // resolver名
+	Name  string   // resolver名或远程数据源名
+	Key   string   // 远程绑定的宿主键别名（编译期补投影的内部列）
 }
 
 // collectBindings 遍历操作选择集，收集所有resolver字段的绑定
@@ -57,6 +60,15 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 					Path:  path,
 					Field: f.Alias,
 					Name:  field.Resolver,
+				})
+				continue
+			}
+			if field.Remote != nil {
+				bindings = append(bindings, binding{
+					Path:  path,
+					Field: f.Alias,
+					Name:  field.Remote.Source,
+					Key:   remoteKeyAlias(field.Remote.Key),
 				})
 				continue
 			}
@@ -106,17 +118,45 @@ func hosts(root map[string]interface{}, path []string) []map[string]interface{} 
 	return cur
 }
 
-// resolve 按绑定填充resolver字段：批量解析器整列表一次调用，
-// 普通解析器逐宿主并行计算；计算与写回分离，避免并发写共享对象
-func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[string]interface{}) error {
+// resolve 按绑定填充后处理字段。远程关系绑定先行：网络取数并发（各job独立）、
+// 回填串行（宿主map非并发安全），失败字段置null并以警告随响应errors返回（不中断）；
+// resolver绑定随后：批量解析器整列表一次调用，普通解析器逐宿主并行计算
+func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[string]interface{}) (gqlerror.List, error) {
+	var warnings gqlerror.List
+	var jobs []*remoteJob
 	for _, b := range bindings {
-		resolver, ok := my.resolvers[b.Name]
-		if !ok {
-			return fmt.Errorf("resolver未注册: %s", b.Name)
+		if b.Key == "" {
+			continue
+		}
+		if sources := hosts(data, b.Path); len(sources) > 0 {
+			jobs = append(jobs, &remoteJob{binding: b, sources: sources})
+		}
+	}
+	if len(jobs) > 0 {
+		group, gctx := errgroup.WithContext(ctx)
+		for _, job := range jobs {
+			group.Go(func() error { job.fetch(gctx, my.remotes); return nil })
+		}
+		_ = group.Wait() // job错误不经group传播(容错语义),此处仅同步
+		for _, job := range jobs {
+			job.fill()
+			if job.err != nil {
+				warnings = append(warnings, gqlerror.Wrap(job.err))
+			}
+		}
+	}
+
+	for _, b := range bindings {
+		if b.Key != "" {
+			continue
 		}
 		sources := hosts(data, b.Path)
 		if len(sources) == 0 {
 			continue
+		}
+		resolver, ok := my.resolvers[b.Name]
+		if !ok {
+			return warnings, fmt.Errorf("resolver未注册: %s", b.Name)
 		}
 
 		var values []interface{}
@@ -130,13 +170,13 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 			values, err = resolveEach(ctx, resolver, sources)
 		}
 		if err != nil {
-			return fmt.Errorf("resolver %s 执行失败: %w", b.Name, err)
+			return warnings, fmt.Errorf("resolver %s 执行失败: %w", b.Name, err)
 		}
 		for i, source := range sources {
 			source[b.Field] = values[i]
 		}
 	}
-	return nil
+	return warnings, nil
 }
 
 // resolveEach 普通resolver逐宿主有界并发计算，返回与sources对位的结果

@@ -12,7 +12,8 @@ GraphQL 请求
   → 编译缓存命中? ──是──→ 取执行计划
         │否
   → Dialect(策略模式) 编译 → Plan{SQL, 参数槽位, resolver绑定}
-  → 槽位填充变量 → 单条 SQL 执行
+  → 槽位填充变量（codec标量入参已按类型还原） → 单条 SQL 执行
+  → codec出参转换（对__root字节流式改写，无codec零开销）
   → __root JSON 解包为 data（顶层 key = 字段别名）
   → Resolver 后处理（自定义字段，批量接口免 N+1）
   → 响应
@@ -25,7 +26,7 @@ GraphQL 请求
 | `renderer` | 从元数据生成 GraphQL schema（Result/WhereInput/SortInput/CreateInput/UpdateInput） |
 | `compiler` | 编译上下文（对象池、参数槽位、全局别名计数）与 Dialect 接口 |
 | `compiler/pgsql` | PostgreSQL 方言：SELECT 单元化编译 + 变更 CTE |
-| `executor` | HTTP 入口、计划 LRU 缓存、执行与结果组织、resolver 分发、持久化查询 |
+| `executor` | HTTP 入口、计划 LRU 缓存、执行与结果组织、resolver/Action/Remote 分发、codec 出入参转换、持久化查询 |
 
 ## 快速开始
 
@@ -109,6 +110,101 @@ executor.Register(Greet{})
 
 > 列表场景下 `Resolve` 会被**并发调用**（有界并发），实现须线程安全；
 > 有状态或需要共享资源的逻辑请实现 `BatchResolver`（整批单次调用，无并发约束）。
+
+## 操作级 Action
+
+SQL 表达不了的顶层操作（多步事务、跨服务编排）用 Action 接管整个字段，
+与表 CRUD 同 schema 同鉴权：
+
+```go
+type BotSave struct{ svc *BotService }
+func (my BotSave) Name() string { return "botSave" }
+func (my BotSave) Definition() string {
+    return `extend type Mutation { botSave(nickname: String!): BotProfile }`
+}
+func (my BotSave) Execute(ctx context.Context, args map[string]any) (any, error) {
+    profile, err := my.svc.Create(ctx, args)
+    return profile.Id, err // 返回实体id即触发回查补全：按客户端选择集读回实体
+}
+executor.RegisterAction(BotSave{})
+```
+
+返回约定：声明类型是元数据实体且返回标量 → 视作实体 id，引擎以客户端选择集回查
+（resolver/关系/codec 全部生效）；返回 map/切片/nil → 直接作为字段结果输出。
+
+## 标量编解码器（Codec）
+
+为一个 GraphQL 标量类型声明请求边界的双向转换（ID 加解密、手机号脱敏等）。
+数据库任何场景（含 jsonb）永远存原始值，转换只发生在出入参：出参在取数出口对
+数据库直通字节做**单遍流式改写**（编译期从选择集算出路径树随计划缓存，无命中
+零分配返回原字节）；入参按变量声明/字面量类型还原，递归进入 input 对象。
+
+```go
+type Codec interface {
+    Name() string                // 绑定的标量类型名，如 ID、Phone
+    Encode(token []byte) []byte  // 出参：JSON token（数字或含引号字符串）→ 替换token；nil=原样
+    Decode(value any) any        // 入参：线上值 → 数据库值；原样返回=不处理
+}
+```
+
+两个可选扩展接口：
+
+- `Matcher`——`Match(class, field) bool` 在元数据定型期主动认领字段（把命中字段
+  的类型改写为本标量）；字段级配置显式指定类型时豁免认领（配置是最终裁决）
+- `Baser`——`Base() string` 声明过滤器操作符集的借用来源，缺省借用 String
+
+主键与外键实列经元数据定型期的结构推导恒定映射为 ID 标量（零声明、与 codec 无关）。
+所有 codec 统一经 `WithCodecs` 注册（认领需改写字段类型，须在元数据构建期传入）：
+
+```go
+// 需要ID加解密就注册内置 NewIdCodec()，不注册则ID保持数字；业务codec同列追加
+meta, _ := gql.NewMetadata(k, db, gql.WithCodecs(gql.NewIdCodec(), PhoneCodec{}))
+```
+
+内置 ID codec：出参编码为 sqids shortId（`~`前缀，与 REST 通道共用 std.Id 配置），
+入参兼容 shortId / 十进制字符串 / 数字；`*_by` 整型审计列（无外键约束）由其
+Match 认领为 ID。注册同名 `"ID"` codec 即可整体替换为自定义实现（换算法/字母表）。
+
+自定义标量自动获得 `scalar X` 声明与过滤器类型；同名 codec 后注册者生效（可覆盖
+内置 ID 实现）。注意 Encode 收到的是原始 JSON token 字节：字符串 token 含引号与
+原始转义，返回值须是合法 JSON token。
+
+## 远程关系（Remote Join）
+
+把外部服务（REST/gRPC/另一个 GraphQL）声明为图里的关系字段，客户端一次查询同时
+拿到数据库数据与远程数据，拼接由引擎完成。配置声明关系（目标是无表虚拟类）：
+
+```yaml
+metadata:
+  classes:
+    Profile:                    # 虚拟类:只有类型定义,不生成查询根/过滤/排序
+      fields:
+        level: { type: String }
+    User:
+      table: users
+      fields:
+        profile:
+          type: Profile
+          remote: { source: profile-api, key: id }  # 数据源名 + 宿主键字段
+```
+
+实现并注册数据源（`Fetch` 一次收到本批**去重后的键集合**，天然免 N+1）：
+
+```go
+type ProfileAPI struct{ http *http.Client }
+func (ProfileAPI) Name() string { return "profile-api" }
+func (my ProfileAPI) Fetch(ctx context.Context, keys []any) (map[any]any, error) {
+    // 批量调用外部服务,返回 键→字段值 映射;超时用 ctx 自行控制
+}
+executor.RegisterRemote(ProfileAPI{})
+```
+
+执行语义：编译期自动把 key 列以内部别名补进投影（不受 codec 转换影响，回填后
+剥除，响应形状严格等于选择集）；数据源未注册或 Fetch 失败时字段整体置 null
+并记录告警，不中断主查询；键未命中的行该字段为 null。变更读回的选择集同样生效。
+
+> 诚实边界：远程字段不支持 where/sort 下推（数据不在库里），虚拟类不渲染任何
+> 查询面——schema 里看不到的就是不能用的。
 
 ## 行级作用域（多租户 / 当前登录人）
 
@@ -239,6 +335,10 @@ services:
   | `BenchmarkHosts`（64 宿主拍平） | ~0.6K | 11 |
 
   直通相对解包约 **40×**、分配降三个数量级——无 resolver 的查询（多数流量）走此路径。
+
+  codec 流式转换基准（`BenchmarkEncodeBytes`，100 行×2 个 ID 字段）：路径**无命中**时
+  0 分配、~460MB/s 直接返回原字节（不启用 codec 的查询零开销）；命中时成本集中在
+  sqids 编码本身，与 REST 通道单 id 编码成本一致。
 
 - **端到端基准**（`gql/example/bench_test.go`，需 demo 库在运行）：复用 demo 实际装配，
   打真实 PostgreSQL，覆盖平铺查询、嵌套关系（单条 SQL 零 N+1）、batch resolver。

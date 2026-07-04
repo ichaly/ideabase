@@ -34,6 +34,7 @@ type Slot struct {
 	Variable string // 变量名，非空时优先生效
 	Cursor   int    // >=0时变量为base64游标，解码JSON数组后取第Cursor个键值
 	Context  string // 非空时从执行期scope表取值（行级作用域：租户/属主，认证注入）
+	List     bool   // 列表槽位（如 = ANY($n)）：执行期规范化为驱动可编码的具体类型数组
 }
 
 // Resolve 解析槽位的实际参数值（游标槽位由ResolveSlots统一memoize解码）
@@ -184,8 +185,48 @@ func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) []any {
 			continue
 		}
 		args[i] = slot.Resolve(variables)
+		if slot.List {
+			args[i] = listArg(args[i])
+		}
 	}
 	return args
+}
+
+// listArg 列表槽位规范化：单值按GraphQL规范强转单元素列表，
+// 同质元素收敛为具体类型切片（驱动无法编码 []any 数组）
+func listArg(value any) any {
+	list, ok := value.([]any)
+	if !ok {
+		if value == nil {
+			return []any{}
+		}
+		list = []any{value}
+	}
+	if len(list) == 0 {
+		return list
+	}
+	switch list[0].(type) {
+	case int64:
+		return typedList[int64](list)
+	case float64:
+		return typedList[float64](list)
+	case string:
+		return typedList[string](list)
+	}
+	return list
+}
+
+// typedList 尽力收敛为T切片，遇到异质元素回退原列表
+func typedList[T any](list []any) any {
+	out := make([]T, len(list))
+	for i, e := range list {
+		v, ok := e.(T)
+		if !ok {
+			return list
+		}
+		out[i] = v
+	}
+	return out
 }
 
 // Slots 返回参数槽位列表（拷贝），供编译计划缓存复用
@@ -202,6 +243,12 @@ func (my *Context) AddParam(value any) int {
 // AddVariable 添加变量引用参数并返回参数序号（从1开始）
 func (my *Context) AddVariable(name string) int {
 	my.slots = append(my.slots, Slot{Variable: name, Cursor: -1})
+	return len(my.slots)
+}
+
+// AddListVariable 添加列表变量参数（如 = ANY($n)），执行期规范化为具体类型数组
+func (my *Context) AddListVariable(name string) int {
+	my.slots = append(my.slots, Slot{Variable: name, Cursor: -1, List: true})
 	return len(my.slots)
 }
 
