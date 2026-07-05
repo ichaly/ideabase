@@ -7,6 +7,7 @@ import (
 	"hash"
 	"hash/fnv"
 	"sync"
+	"time"
 
 	"github.com/fasthttp/websocket"
 	"github.com/gofiber/fiber/v3"
@@ -216,7 +217,19 @@ func (my *socketSession) write(message wsReply) error {
 	return my.conn.WriteJSON(message)
 }
 
-// serveSocket 连接读循环：init/ack、subscribe、complete、ping/pong
+// wsInitTimeout connection_init握手时限，超时按协议关4408（测试可缩短）
+var wsInitTimeout = 5 * time.Second
+
+// closeSocket 按graphql-transport-ws协议码关闭连接（4401/4408/4429/4409...）
+func closeSocket(conn *websocket.Conn, code int, reason string) {
+	_ = conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(code, reason), time.Now().Add(time.Second))
+	_ = conn.Close()
+}
+
+// serveSocket 连接读循环：init/ack、subscribe、complete、ping/pong。
+// 协议状态机（graphql-transport-ws）：subscribe必须在init/ack之后（否则4401），
+// init超时4408、重复init4429、重复订阅ID4409——鉴权握手不可绕过
 // scope 为HTTP升级阶段提取的行级作用域，注入连接ctx供订阅查询隔离
 func (my *Executor) serveSocket(conn *websocket.Conn, scope map[string]any) {
 	ctx, cancel := context.WithCancel(WithScope(context.Background(), scope))
@@ -226,10 +239,18 @@ func (my *Executor) serveSocket(conn *websocket.Conn, scope map[string]any) {
 	defer func() {
 		session.mu.Lock()
 		for _, stop := range session.subs {
-			stop()
+			if stop != nil {
+				stop()
+			}
 		}
 		session.mu.Unlock()
 	}()
+
+	ready := false // 已完成init/ack握手
+	watchdog := time.AfterFunc(wsInitTimeout, func() {
+		closeSocket(conn, 4408, "Connection initialisation timeout")
+	})
+	defer watchdog.Stop()
 
 	for {
 		var message wsMessage
@@ -239,6 +260,12 @@ func (my *Executor) serveSocket(conn *websocket.Conn, scope map[string]any) {
 
 		switch message.Type {
 		case wsConnectionInit:
+			if ready {
+				closeSocket(conn, 4429, "Too many initialisation requests")
+				return
+			}
+			watchdog.Stop()
+			ready = true
 			if err := session.write(wsReply{Type: wsConnectionAck}); err != nil {
 				return
 			}
@@ -247,11 +274,25 @@ func (my *Executor) serveSocket(conn *websocket.Conn, scope map[string]any) {
 				return
 			}
 		case wsSubscribe:
+			if !ready {
+				closeSocket(conn, 4401, "Unauthorized")
+				return
+			}
+			if message.ID == "" {
+				closeSocket(conn, 4400, "subscribe消息缺少id")
+				return
+			}
+			if !session.reserve(message.ID) {
+				closeSocket(conn, 4409, "Subscriber for "+message.ID+" already exists")
+				return
+			}
 			my.startSubscription(ctx, session, message)
 		case wsComplete:
 			session.mu.Lock()
 			if stop, ok := session.subs[message.ID]; ok {
-				stop()
+				if stop != nil {
+					stop()
+				}
 				delete(session.subs, message.ID)
 			}
 			session.mu.Unlock()
@@ -259,10 +300,28 @@ func (my *Executor) serveSocket(conn *websocket.Conn, scope map[string]any) {
 	}
 }
 
+// reserve 预占订阅ID（占位nil，startSubscription成功后填入真实stop），重复返回false
+func (my *socketSession) reserve(id string) bool {
+	my.mu.Lock()
+	defer my.mu.Unlock()
+	if _, exists := my.subs[id]; exists {
+		return false
+	}
+	my.subs[id] = nil
+	return true
+}
+
 // startSubscription 启动单个订阅：消费事件通道并推送next帧
+// 订阅ID已由调用方reserve预占，失败路径须释放占位
 func (my *Executor) startSubscription(ctx context.Context, session *socketSession, message wsMessage) {
+	release := func() {
+		session.mu.Lock()
+		delete(session.subs, message.ID)
+		session.mu.Unlock()
+	}
 	var req gqlQuery
 	if err := json.Unmarshal(message.Payload, &req); err != nil {
+		release()
 		_ = session.write(wsReply{ID: message.ID, Type: wsError,
 			Payload: gqlerror.List{gqlerror.Errorf("无效的subscribe载荷: %v", err)}})
 		return
@@ -272,18 +331,12 @@ func (my *Executor) startSubscription(ctx context.Context, session *socketSessio
 	events, err := my.Subscribe(subCtx, req.Query, req.Variables, req.OperationName)
 	if err != nil {
 		stop()
+		release()
 		_ = session.write(wsReply{ID: message.ID, Type: wsError, Payload: gqlerror.List{gqlerror.Wrap(err)}})
 		return
 	}
 
 	session.mu.Lock()
-	if _, exists := session.subs[message.ID]; exists {
-		session.mu.Unlock()
-		stop()
-		_ = session.write(wsReply{ID: message.ID, Type: wsError,
-			Payload: gqlerror.List{gqlerror.Errorf("订阅ID重复: %s", message.ID)}})
-		return
-	}
 	session.subs[message.ID] = stop
 	session.mu.Unlock()
 
