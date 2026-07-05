@@ -43,6 +43,12 @@ type SchemaConfig struct {
 	// 查询选择集最大嵌套深度（0=不限制）
 	MaxDepth int `mapstructure:"max-depth"`
 
+	// 是否允许自省查询（生产对外暴露时可关闭）
+	Introspection bool `mapstructure:"introspection"`
+
+	// HTTP边界只接受持久化操作（operationName查已注册文档），拒绝原始查询文本
+	PersistedOnly bool `mapstructure:"persisted-only"`
+
 	// 数据类型映射
 	TypeMapping map[string]string `mapstructure:"mapping"`
 }

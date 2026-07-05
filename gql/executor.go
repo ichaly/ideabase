@@ -11,8 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/ichaly/ideabase/log"
 	"github.com/vektah/gqlparser/v2"
@@ -80,6 +82,15 @@ type Executor struct {
 	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
 	remotes   map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
 	cdc       notifier            // CDC唤醒源（按数据库驱动从注册表选取）
+	frozen    atomic.Bool         // 首次执行后冻结注册表（rebuild与serving不互斥，运行期注册即数据竞争）
+}
+
+// options 读取schema级选项（元数据未配置时为零值安全默认）
+func (my *Executor) options() internal.SchemaConfig {
+	if my.metadata == nil || my.metadata.cfg == nil {
+		return internal.SchemaConfig{Introspection: true}
+	}
+	return my.metadata.cfg.Schema
 }
 
 // Close 释放后台资源：CDC复制连接与重连循环退出；
@@ -92,8 +103,11 @@ func (my *Executor) Close() {
 
 // Register 统一注册入口：Action/Resolver/Remote 按实现的接口路由到对应注册表，
 // 字段级声明挂载进宿主实体并重建schema。仅限启动期调用：
-// 重建schema/自省/计划缓存的过程不与并发请求互斥
+// 重建schema/自省/计划缓存的过程不与并发请求互斥，首次执行后冻结报错
 func (my *Executor) Register(items ...any) error {
+	if my.frozen.Load() {
+		return fmt.Errorf("注册表已冻结：Register仅限启动期调用（首次执行后schema重建与并发请求不互斥）")
+	}
 	for _, item := range items {
 		switch v := item.(type) {
 		case Action:
@@ -202,6 +216,9 @@ func loadSchema(m *Metadata, r *Renderer) (string, error) {
 // 操作按名注册，可通过ExecuteOperation按名执行；编译缓存尽力预热
 // 目录是可选的：不存在则跳过（无持久化查询不影响服务启动）
 func (my *Executor) LoadDocuments(dir string) error {
+	if my.frozen.Load() {
+		return fmt.Errorf("注册表已冻结：LoadDocuments仅限启动期调用")
+	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil
 	}
@@ -289,6 +306,12 @@ func (my *Executor) Handler(c fiber.Ctx) error {
 		})
 	}
 
+	// persisted-only：HTTP边界只接受持久化操作，原始查询文本一律拒绝
+	if my.options().PersistedOnly && strings.TrimSpace(req.Query) != "" {
+		return c.Status(fiber.StatusForbidden).JSON(gqlReply{Errors: gqlerror.List{
+			gqlerror.Errorf("仅接受持久化操作（省略query，以operationName执行已注册文档）")}})
+	}
+
 	// 空查询且携带操作名时按持久化查询执行
 	if strings.TrimSpace(req.Query) == "" && req.OperationName != "" {
 		query, ok := my.documents[req.OperationName]
@@ -338,6 +361,7 @@ func (my *Executor) Execute(ctx context.Context, query string, variables map[str
 
 // execute 执行核心：无resolver的成功结果以直通字节形态返回（raw）
 func (my *Executor) execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
+	my.frozen.Store(true) // 首次执行即冻结注册表（rebuild与serving不互斥）
 	var r gqlReply
 
 	// 获取执行计划（缓存命中零解析）；缓存未命中时解析一次，
@@ -488,6 +512,9 @@ func (my *Executor) miss(key planKey, variables map[string]interface{}) (*planEn
 		return nil, nil, err
 	}
 	if hasIntroField(operation.SelectionSet) {
+		if !my.options().Introspection {
+			return nil, nil, fmt.Errorf("自省查询已关闭（schema.introspection=false）")
+		}
 		return nil, nil, &introQuery{operation: operation}
 	}
 	if hit, err := my.checkActions(operation.SelectionSet); hit {

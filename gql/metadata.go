@@ -128,6 +128,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	k.SetDefault("schema.schema", "public")
 	k.SetDefault("schema.default-limit", 10)
 	k.SetDefault("schema.max-depth", 20)
+	k.SetDefault("schema.introspection", true)
 	k.SetDefault("schema.table-prefix", []string{})
 	k.SetDefault("schema.exclude-tables", []string{})
 	k.SetDefault("schema.exclude-fields", []string{})
