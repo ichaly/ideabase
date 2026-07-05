@@ -1,5 +1,11 @@
 # 关系集合重构规划（Field.Relation → 类级关系集合）
 
+> **状态：已完成**（feature/gql-rework）。实现与本规划的偏差：
+> ① 发现并一并根治了第4个bug——file重载重复生成虚拟字段（comments1幽灵），
+>    方案为虚拟字段不入文件+构建期再生+同名同关系跳过；
+> ② 反向字段命名采用词干拼接 authorComments（非 authoredComments，免动词形态学）；
+> ③ 复合自引用外键跳过递归（告警），复合嵌套关系操作编译期拒绝。
+
 ## 动机：单指针关系模型的三个已知缺陷
 
 现状 `protocol.Field.Relation *Relation` 是字段上的单指针（loader_base.go 自述

@@ -381,6 +381,8 @@ schema、能力、自省三者严格一致，没有任何方向的偏差：
 
 - MySQL 方言未实现（扩展方式见上节；已知驱动未注册方言会明确报错，不会静默回退）
 - 同一 mutation 内不能两次变更同一张表（变更 CTE 同名限制）
+- 复合外键关系支持查询 JOIN（逐列 AND），不支持嵌套关系操作（connect/create，编译期明确报错）；
+  复合自引用外键不生成递归字段；中间表识别限单列外键约束
 
 设计细节见 [`../doc/gql-rework-plan.md`](../doc/gql-rework-plan.md) 与
 [`../doc/pgsql-template-design.md`](../doc/pgsql-template-design.md)。
