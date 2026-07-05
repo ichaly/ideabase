@@ -51,7 +51,8 @@ executor.Bind(app.Group(executor.Path()))  // fiber v3：POST查询变更 + GET�
   keyset 语义性能恒定（排序键自动追加主键兜底；排序键应为非空列）；页大小
   支持变量（`first: $n`），同一查询文本一份计划适配任意页大小。无显式 limit 的
   列表自动注入 `schema.default-limit`（缺省 10，设 0 关闭）防无界全表扫描；
-  变更读回、统计分组与递归全树不受此限制
+  变更读回、统计分组与递归全树不受此限制。选择集嵌套深度超过
+  `schema.max-depth`（缺省 20，设 0 关闭）编译期拒绝，防深选择集代价攻击
 - 统计：`userStats(where, groupBy, having, limit, offset)` 返回 `count` 与各列的
   sum/avg/min/max/countDistinct，选择驱动只算请求的聚合。`having` 对聚合值过滤
   （`having: { count: { gt: 10 }, score: { sum: { gt: 1000 } } }`），复用 where

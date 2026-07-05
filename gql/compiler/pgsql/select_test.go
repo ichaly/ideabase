@@ -255,3 +255,25 @@ func (my *_DialectSuite) TestSelectGuards() {
 	_, _, err = compile.Build(doc.Operations[0], nil)
 	my.Assert().ErrorContains(err, "distinct与total不能同时使用")
 }
+
+// TestDepthGuard 查询深度护栏:嵌套LATERAL单元无上限时,深选择集可编译出
+// 巨大SQL树(代价攻击面),须编译期按schema.max-depth拒绝
+func (my *_DialectSuite) TestDepthGuard() {
+	meta, schema, dialect := my.newSuite(map[string]interface{}{"schema.max-depth": 2})
+	compile, err := gql.NewCompiler(meta, []compiler.Dialect{dialect})
+	my.Require().NoError(err)
+
+	// users>items>id 深度3,超过上限2
+	doc, gqlErr := gqlparser.LoadQuery(schema, `query { users { items { id } } }`)
+	my.Require().Empty(gqlErr)
+	_, _, err = compile.Build(doc.Operations[0], nil)
+	my.Assert().ErrorContains(err, "深度")
+
+	// total 只有2层,不超
+	doc, gqlErr = gqlparser.LoadQuery(schema, `query { users { total } }`)
+	my.Require().Empty(gqlErr)
+	_, _, err = compile.Build(doc.Operations[0], nil)
+	my.Assert().NoError(err)
+
+	// 缺省上限(20)不影响常规嵌套查询(主套件全部用例即回归)
+}

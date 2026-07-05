@@ -40,6 +40,9 @@ type SchemaConfig struct {
 	// 默认分页限制
 	DefaultLimit int `mapstructure:"default-limit"`
 
+	// 查询选择集最大嵌套深度（0=不限制）
+	MaxDepth int `mapstructure:"max-depth"`
+
 	// 数据类型映射
 	TypeMapping map[string]string `mapstructure:"mapping"`
 }

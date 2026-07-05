@@ -127,6 +127,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	// 设置默认配置
 	k.SetDefault("schema.schema", "public")
 	k.SetDefault("schema.default-limit", 10)
+	k.SetDefault("schema.max-depth", 20)
 	k.SetDefault("schema.table-prefix", []string{})
 	k.SetDefault("schema.exclude-tables", []string{})
 	k.SetDefault("schema.exclude-fields", []string{})
@@ -292,6 +293,14 @@ func (my *Metadata) DefaultLimit() int {
 		return 0
 	}
 	return my.cfg.Schema.DefaultLimit
+}
+
+// MaxDepth 返回查询选择集最大嵌套深度，0=不限制
+func (my *Metadata) MaxDepth() int {
+	if my.cfg == nil {
+		return 0
+	}
+	return my.cfg.Schema.MaxDepth
 }
 
 func (my *Metadata) GetNode(name string) (*protocol.Class, bool) {

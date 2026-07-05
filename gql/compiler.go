@@ -61,6 +61,19 @@ func (my *Plan) ResolveArgs(variables, scope map[string]interface{}) ([]any, err
 	return compiler.ResolveSlots(my.slots, variables, scope)
 }
 
+// depthOf 选择集最大嵌套深度，叶子字段计1层（fragment已在parse期展开为纯字段）
+func depthOf(set ast.SelectionSet) int {
+	deepest := 0
+	for _, s := range set {
+		if f, ok := s.(*ast.Field); ok {
+			if d := depthOf(f.SelectionSet) + 1; d > deepest {
+				deepest = d
+			}
+		}
+	}
+	return deepest
+}
+
 // inline 展开选择集中的fragment（命名与内联），编译器只需处理纯字段
 // fragment重复引用时展开是幂等的（展开后不再有spread）
 func inline(set ast.SelectionSet, fragments ast.FragmentDefinitionList) ast.SelectionSet {
@@ -83,6 +96,12 @@ func inline(set ast.SelectionSet, fragments ast.FragmentDefinitionList) ast.Sele
 
 // Compile 编译GraphQL操作为执行计划
 func (my *Compiler) Compile(operation *ast.OperationDefinition, variables map[string]interface{}) (*Plan, error) {
+	// 深度护栏：嵌套LATERAL单元无上限时深选择集可编译出巨大SQL树（代价攻击面）
+	if max := my.meta.MaxDepth(); max > 0 {
+		if depth := depthOf(operation.SelectionSet); depth > max {
+			return nil, fmt.Errorf("查询嵌套深度%d超过上限%d（schema.max-depth可调，0=不限制）", depth, max)
+		}
+	}
 	ctx := compiler.NewContext(my.meta, my.dialect.Quotation(), variables)
 	defer ctx.Release()
 
