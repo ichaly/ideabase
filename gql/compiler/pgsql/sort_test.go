@@ -1,12 +1,13 @@
 package pgsql
 
-// 排序用例共用的SQL骨架：基础查询里带name列（排序列自动带出）
+// 排序用例共用的SQL骨架：基础查询里带name列（排序列自动带出）；
+// 显式排序经__rn行号在聚合内ORDER BY固化（JSONB_AGG不保证维持输入序）
 func sortQuery(clause string) string {
 	return `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 		LEFT OUTER JOIN LATERAL (
-			SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
+			SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__rn' ORDER BY "__sr_0"."__rn"), '[]')) AS "json"
 			FROM (
-				SELECT "sys_user_0"."id" AS "id"
+				SELECT "sys_user_0"."id" AS "id", ROW_NUMBER() OVER () AS "__rn"
 				FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "public"."sys_user" ` + clause + `) AS "sys_user_0"
 			) AS "__sr_0"
 		) AS "__sj_0" ON TRUE`
@@ -29,9 +30,9 @@ func (my *_DialectSuite) TestSort() {
 			query: `query { users(sort: { name: ASC, age: DESC_NULLS_LAST }) { items { id } } }`,
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
-					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__rn' ORDER BY "__sr_0"."__rn"), '[]')) AS "json"
 					FROM (
-						SELECT "sys_user_0"."id" AS "id"
+						SELECT "sys_user_0"."id" AS "id", ROW_NUMBER() OVER () AS "__rn"
 						FROM (SELECT "sys_user"."id", "sys_user"."name", "sys_user"."age" FROM "public"."sys_user"
 							ORDER BY "sys_user"."name" ASC, "sys_user"."age" DESC NULLS LAST LIMIT 10) AS "sys_user_0"
 					) AS "__sr_0"

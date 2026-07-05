@@ -35,6 +35,13 @@ type unit struct {
 	page     *pager             // 游标分页参数（first/last模式）
 	args     ast.ArgumentList   // 生效的查询参数；变更读回为nil（参数已被CTE消费）
 	readback bool               // 变更读回顶层单元（读CTE非基表），跳过行级作用域注入
+	ordered  bool               // 显式排序的非游标列表：__rn行号在聚合内固化顺序
+}
+
+// orderedList 是否携带显式排序语义：sort参数或search相关度（JSONB_AGG不保证
+// 维持输入序，并行/归并计划下会丢失，须经__rn在聚合内ORDER BY固化）
+func orderedList(args ast.ArgumentList) bool {
+	return len(sortEntries(args)) > 0 || args.ForName(protocol.SEARCH) != nil
 }
 
 // BuildQuery 构建查询语句：根JSON对象 + 每个根字段一个LATERAL单元
@@ -99,9 +106,15 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 		core := func() error { return my.buildCore(ctx, u, compiler.FieldsOf(u.field.SelectionSet), false) }
 		if u.shape == shapeStats {
 			core = func() error { return my.buildStatsCore(ctx, u) }
+		} else {
+			u.ordered = orderedList(u.args)
 		}
 		ctx.Write(`SELECT COALESCE(JSONB_AGG(TO_JSONB(`).
-			Quote(`__sr_`, u.index).Write(`.*)), '[]') AS "json" FROM (`)
+			Quote(`__sr_`, u.index).Write(`.*)`)
+		if u.ordered {
+			ctx.Write(` - '__rn' ORDER BY `).Quote(`__sr_`, u.index).Write(`."__rn"`)
+		}
+		ctx.Write(`), '[]') AS "json" FROM (`)
 		err = core()
 		ctx.Write(`) AS `).Quote(`__sr_`, u.index)
 	}
@@ -151,6 +164,7 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 
 	// 响应只含选择的字段：items未请求（仅total）时不输出
 	ctx.Write(`SELECT JSONB_BUILD_OBJECT(`)
+	u.ordered = page == nil && orderedList(u.args)
 	if len(items) > 0 {
 		next()
 		// items聚合：游标模式剔除辅助列、按行号FILTER并保持显示顺序
@@ -158,8 +172,15 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 		if page == nil {
 			ctx.Write(`TO_JSONB(`)
 			sr().Write(`.*)`)
+			if u.ordered {
+				ctx.Write(` - '__rn'`)
+			}
 			if hasTotal {
 				ctx.Write(` - '__total'`)
+			}
+			if u.ordered { // 显式排序经__rn在聚合内固化（JSONB_AGG不保证维持输入序）
+				ctx.Write(` ORDER BY `)
+				sr().Write(`."__rn"`)
 			}
 		} else {
 			ctx.Write(`(TO_JSONB(`)
@@ -383,6 +404,11 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	if withTotal {
 		next()
 		ctx.Quote(base).Write(`."__total"`)
+	}
+	if u.ordered {
+		// 显式排序的行号：聚合内ORDER BY固化顺序后剥除
+		next()
+		ctx.Write(`ROW_NUMBER() OVER () AS "__rn"`)
 	}
 	if u.page != nil {
 		// 行号探测hasNext，行级游标=base64(排序键值JSON数组)

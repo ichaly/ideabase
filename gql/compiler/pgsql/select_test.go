@@ -199,9 +199,9 @@ func (my *_DialectSuite) TestRelation() {
 						SELECT "sys_user_0"."id" AS "id", "__sj_1"."json" AS "posts"
 						FROM (SELECT "sys_user"."id" FROM "public"."sys_user" LIMIT 10) AS "sys_user_0"
 						LEFT OUTER JOIN LATERAL (
-							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*)), '[]') AS "json"
+							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*) - '__rn' ORDER BY "__sr_1"."__rn"), '[]') AS "json"
 							FROM (
-								SELECT "sys_post_1"."title" AS "title"
+								SELECT "sys_post_1"."title" AS "title", ROW_NUMBER() OVER () AS "__rn"
 								FROM (SELECT "sys_post"."title" FROM "public"."sys_post"
 									WHERE "sys_post"."user_id" = "sys_user_0"."id" AND "sys_post"."title" LIKE $1
 									ORDER BY "sys_post"."title" DESC LIMIT 3) AS "sys_post_1"
