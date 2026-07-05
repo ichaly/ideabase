@@ -563,10 +563,14 @@ func (my *Renderer) renderMutation() error {
 				{Name: protocol.INPUT, Type: className + protocol.SUFFIX_CREATE_INPUT + "!"},
 			}...))
 
-			my.writeLine("  # ", class.Name, "批量创建")
-			my.writeField(protocol.CREATE+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-				{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_INPUT + "!]!"},
-			}...))
+			// 不可数类名（Series/News）复数同形，批量字段与单条重名会让schema加载失败；
+			// 只保留单条create，批量写入走upsert（upsert仅复数形态无冲突）
+			if plural != className {
+				my.writeLine("  # ", class.Name, "批量创建")
+				my.writeField(protocol.CREATE+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+					{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_INPUT + "!]!"},
+				}...))
+			}
 
 			my.writeLine("  # ", class.Name, "插入或更新（按on列冲突，缺省主键）")
 			my.writeField(protocol.UPSERT+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{

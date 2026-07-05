@@ -151,7 +151,9 @@ func parseMutation(ctx *compiler.Context, field *ast.Field) (*mutation, error) {
 		}
 		name := strings.TrimPrefix(field.Name, op)
 		if class, ok := ctx.GetClass(name); ok {
-			return &mutation{field: field, class: class, op: op}, nil
+			// upsert只渲染复数列表形态，恒为批量（不可数类名Series复数同形，
+			// 会直接命中本分支，不能按“单数命中=单条”误判成单对象读回）
+			return &mutation{field: field, class: class, op: op, bulk: op == protocol.UPSERT}, nil
 		}
 		// 复数字段=批量语义
 		if class, ok := ctx.GetClass(inflection.Singular(name)); ok {
