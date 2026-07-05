@@ -3,6 +3,7 @@ package gql
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -173,7 +174,10 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 		var values []interface{}
 		var err error
 		if many, ok := resolver.(BatchResolver); ok {
-			values, err = many.ResolveBatch(ctx, sources, args)
+			err = safely(func() (err error) {
+				values, err = many.ResolveBatch(ctx, sources, args)
+				return
+			})
 			if err == nil && len(values) != len(sources) {
 				err = fmt.Errorf("返回数量不匹配: 期望%d实际%d", len(sources), len(values))
 			}
@@ -197,10 +201,22 @@ func resolveEach(ctx context.Context, resolver Resolver, sources []map[string]in
 	group.SetLimit(8)
 	for i, source := range sources {
 		group.Go(func() error {
-			value, err := resolver.Resolve(ctx, source, args)
-			values[i] = value
-			return err
+			return safely(func() (err error) {
+				values[i], err = resolver.Resolve(ctx, source, args)
+				return
+			})
 		})
 	}
 	return values, group.Wait()
+}
+
+// safely 拦截用户实现（resolver/remote）的panic转为错误：
+// errgroup不recover，goroutine里的panic会打崩整个服务进程，引擎边界必须兜底
+func safely(fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v\n%s", r, debug.Stack())
+		}
+	}()
+	return fn()
 }

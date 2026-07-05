@@ -44,7 +44,11 @@ func (my *remoteJob) fetch(ctx context.Context, remotes map[string]Remote) {
 	if !ok {
 		my.err = fmt.Errorf("远程数据源未注册: %s", my.binding.Name)
 	} else if len(keys) > 0 {
-		if my.values, my.err = remote.Fetch(ctx, keys); my.err != nil {
+		my.err = safely(func() (err error) { // panic与错误同走容错语义,不打崩进程
+			my.values, err = remote.Fetch(ctx, keys)
+			return
+		})
+		if my.err != nil {
 			my.err = fmt.Errorf("远程数据源 %s 取数失败: %w", my.binding.Name, my.err)
 			my.values = nil
 		}
