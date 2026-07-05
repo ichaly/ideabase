@@ -192,6 +192,12 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	}
 	// 进行驼峰命名和过滤处理
 	my.normalize()
+	// codec标量名与实体类名冲突在构建期拦截（scalar与type同名，起服务时schema必然加载失败）
+	for _, codec := range my.codecs {
+		if class, ok := my.Nodes[codec.Name()]; ok && class.Name == codec.Name() {
+			return nil, fmt.Errorf("codec标量 %s 与实体类名冲突（scalar与type同名schema无法加载），请更换codec名或实体别名", codec.Name())
+		}
+	}
 	// 字段级关系声明（config/旧格式文件）收进类级关系集合
 	my.collectRelations()
 	// 统一关系处理

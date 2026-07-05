@@ -5,7 +5,9 @@ import (
 
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestFinalize 元数据定型规则：结构推导（主外键→ID）、codec认领（_by审计列）、
@@ -58,4 +60,27 @@ func TestIdCodec(t *testing.T) {
 	assert.Equal(t, int64(42), codec.Decode(token), "shortId还原")
 	assert.Equal(t, int64(42), codec.Decode("42"), "十进制字符串兼容")
 	assert.Equal(t, int64(7), codec.Decode(int64(7)), "数字入参原样")
+}
+
+// phoneClashCodec 与实体类同名的codec:scalar Phone与type Phone并存schema无法加载
+type phoneClashCodec struct{}
+
+func (phoneClashCodec) Name() string           { return "Phone" }
+func (phoneClashCodec) Encode(t []byte) []byte { return nil }
+func (phoneClashCodec) Decode(v any) any       { return v }
+
+// codec标量名与实体类名冲突必须在元数据构建期报错(否则起服务时schema重复定义)
+func TestCodecNameClashWithClass(t *testing.T) {
+	k, err := std.NewKonfig()
+	require.NoError(t, err)
+	k.Set("mode", "dev")
+	k.Set("app.root", t.TempDir())
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+		"Phone": {Table: "phones", Fields: map[string]*internal.FieldConfig{
+			"id": {Type: "ID", Column: "id", IsPrimary: true},
+		}},
+	})
+	_, err = NewMetadata(k, nil, WithCodecs(phoneClashCodec{}))
+	require.Error(t, err, "同名冲突应在构建期报错")
+	require.Contains(t, err.Error(), "Phone")
 }
