@@ -145,18 +145,7 @@ func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface
 		}
 
 		// 反向关系（一对多）：如 users.id <- comments.user_id
-		reverse := &protocol.Relation{
-			Name:        g[0].ConstraintName,
-			SourceClass: g[0].TargetTable,
-			SourceField: targetCols[0],
-			TargetClass: g[0].SourceTable,
-			TargetField: sourceCols[0],
-			Type:        protocol.ONE_TO_MANY,
-		}
-		if composite {
-			reverse.SourceFields, reverse.TargetFields = targetCols, sourceCols
-		}
-		targetClass.AddRelation(reverse)
+		targetClass.AddRelation(forward.Clone(protocol.ONE_TO_MANY, true))
 	}
 	// 处理多对多关系
 	detectManyToManyRelations(classMap, groups, primaryKeys)

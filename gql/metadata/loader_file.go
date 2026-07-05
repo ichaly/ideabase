@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
@@ -45,12 +44,10 @@ func ResolveMetadataPath(cfg *internal.Config) string {
 
 	// 如果未配置文件路径，则使用默认路径
 	if path == "" {
-		parts := []string{filepath.Join("cfg", "metadata")}
+		path = "cfg/metadata.json"
 		if mode != "" {
-			parts = append(parts, mode)
+			path = "cfg/metadata." + mode + ".json"
 		}
-		parts = append(parts, "json")
-		path = strings.Join(parts, ".")
 	} else {
 		// 处理占位符
 		path = modeRegex.ReplaceAllString(path, mode)
@@ -82,11 +79,6 @@ func (my *FileLoader) Support() bool {
 	return my.cfg != nil && !my.cfg.IsDebug()
 }
 
-// resolveFilePath 解析文件路径
-func (my *FileLoader) resolveFilePath() string {
-	return ResolveMetadataPath(my.cfg)
-}
-
 // Load 从文件加载元数据
 // 1. 计算文件路径
 // 2. 读取文件内容
@@ -95,7 +87,7 @@ func (my *FileLoader) resolveFilePath() string {
 // 5. 注入Hoster并设置版本号
 func (my *FileLoader) Load(h protocol.Hoster) error {
 	// 1. 计算文件路径
-	filePath := my.resolveFilePath()
+	filePath := ResolveMetadataPath(my.cfg)
 	log.Info().Str("file", filePath).Msg("开始从文件加载元数据")
 
 	// 2. 读取文件内容

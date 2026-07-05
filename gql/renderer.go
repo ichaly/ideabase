@@ -196,6 +196,15 @@ func (my *Renderer) eachTableClass(fn func(className string, class *protocol.Cla
 	})
 }
 
+// eachField 按名有序遍历类的主名字段（跳过列名索引）
+func (my *Renderer) eachField(class *protocol.Class, fn func(fieldName string, field *protocol.Field)) {
+	for _, fieldName := range utl.SortKeys(class.Fields) {
+		if field := class.Fields[fieldName]; fieldName == field.Name {
+			fn(fieldName, field)
+		}
+	}
+}
+
 // hiddenField 字段是否随中间表隐藏：自身是中间表字段，或引用了隐藏的中间表类型
 func (my *Renderer) hiddenField(field *protocol.Field) bool {
 	if my.meta.cfg.Metadata.ShowThrough {
@@ -224,10 +233,9 @@ func (my *Renderer) renderTypes() error {
 		my.writeLine("type ", className, " {")
 
 		// 添加所有字段：跳过列名索引与随中间表隐藏的字段
-		for _, fieldName := range utl.SortKeys(class.Fields) {
-			field := class.Fields[fieldName]
-			if fieldName != field.Name || my.hiddenField(field) {
-				continue
+		my.eachField(class, func(fieldName string, field *protocol.Field) {
+			if my.hiddenField(field) {
+				return
 			}
 
 			// 添加描述作为注释
@@ -256,12 +264,12 @@ func (my *Renderer) renderTypes() error {
 					args = append(args, renderer.Argument{Name: protocol.DEPTH, Type: protocol.SCALAR_INT})
 				}
 				my.writeField(fieldName, typeName, renderer.WithArgs(args...))
-				continue
+				return
 			}
 
 			// 输出字段定义
 			my.writeLine("  ", fieldName, ": ", typeName)
-		}
+		})
 
 		// 结束类型定义
 		my.writeLine("}")
@@ -293,32 +301,28 @@ func (my *Renderer) writableFields(class *protocol.Class) []string {
 		scoped[s.Column] = true
 	}
 	names := make([]string, 0, len(class.Fields))
-	for _, fieldName := range utl.SortKeys(class.Fields) {
-		field := class.Fields[fieldName]
-		// 跳过列名索引、无列字段（关系/resolver）、自动生成字段（主键/时间戳）、虚拟字段、中间表字段、作用域列
-		if fieldName != field.Name || field.Virtual || field.Column == "" ||
+	my.eachField(class, func(fieldName string, field *protocol.Field) {
+		// 跳过无列字段（关系/resolver）、自动生成字段（主键/时间戳）、虚拟字段、中间表字段、作用域列
+		if field.Virtual || field.Column == "" ||
 			field.IsPrimary || scoped[field.Column] ||
 			strings.EqualFold(fieldName, "createdAt") ||
 			strings.EqualFold(fieldName, "updatedAt") ||
 			(field.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
-			continue
+			return
 		}
 		names = append(names, fieldName)
-	}
+	})
 	return names
 }
 
 // writeRelationOps 输入类型中的列表关系操作字段（connect/disconnect原子挂接）
 func (my *Renderer) writeRelationOps(class *protocol.Class) {
-	for _, fieldName := range utl.SortKeys(class.Fields) {
-		field := class.Fields[fieldName]
+	my.eachField(class, func(fieldName string, field *protocol.Field) {
 		// 仅列表关系虚拟字段（一对多/多对多），中间表隐藏时跳过
-		if fieldName != field.Name || field.Column != "" || field.Relation == nil ||
-			!field.IsList || my.hiddenField(field) {
-			continue
+		if field.Column == "" && field.Relation != nil && field.IsList && !my.hiddenField(field) {
+			my.writeField(fieldName, field.Relation.TargetClass+"RelationInput")
 		}
-		my.writeField(fieldName, field.Relation.TargetClass+"RelationInput")
-	}
+	})
 }
 
 // renderInput 渲染输入类型
@@ -403,13 +407,14 @@ func (my *Renderer) writeScalarFilter(scalarType string, operators []*protocol.O
 		}
 		renderedOps[op.Name] = true
 
-		if op.Name == protocol.HAS_KEY {
+		switch op.Name {
+		case protocol.HAS_KEY:
 			my.writeField(op.Name, protocol.SCALAR_STRING, renderer.WithComment(op.Description))
-		} else if op.Name == protocol.IN {
+		case protocol.IN:
 			my.writeField(op.Name, scalarType, renderer.ListNonNull(), renderer.WithComment(op.Description))
-		} else if op.Name == protocol.IS {
+		case protocol.IS:
 			my.writeField(op.Name, protocol.ENUM_IS_INPUT, renderer.WithComment(op.Description))
-		} else {
+		default:
 			my.writeField(op.Name, scalarType, renderer.WithComment(op.Description))
 		}
 	}
@@ -427,14 +432,11 @@ func (my *Renderer) renderEntity() error {
 		my.writeLine("input ", className, protocol.SUFFIX_WHERE_INPUT, " {")
 
 		// 添加常规字段过滤条件：跳过列名索引/虚拟关系字段/随中间表隐藏的字段
-		for _, fieldName := range utl.SortKeys(class.Fields) {
-			field := class.Fields[fieldName]
-			if fieldName != field.Name || field.Virtual || my.hiddenField(field) {
-				continue
+		my.eachField(class, func(fieldName string, field *protocol.Field) {
+			if !field.Virtual && !my.hiddenField(field) {
+				my.writeLine("  ", fieldName, ": ", my.getGraphQLType(field), protocol.SUFFIX_WHERE_INPUT)
 			}
-			fieldType := my.getGraphQLType(field)
-			my.writeLine("  ", fieldName, ": ", fieldType, protocol.SUFFIX_WHERE_INPUT)
-		}
+		})
 
 		// 添加布尔逻辑操作符
 		my.writeLine("  and: [", className, protocol.SUFFIX_WHERE_INPUT, "!]")
@@ -459,13 +461,11 @@ func (my *Renderer) renderSort() error {
 		// 添加可排序字段：跳过列名索引、全部虚拟字段（关系载体/resolver/remote
 		// 都没有可排序的物理列，渲染进SortInput即运行期SQL必错的虚假展示）
 		// 与随中间表隐藏的字段
-		for _, fieldName := range utl.SortKeys(class.Fields) {
-			field := class.Fields[fieldName]
-			if fieldName != field.Name || field.Virtual || my.hiddenField(field) {
-				continue
+		my.eachField(class, func(fieldName string, field *protocol.Field) {
+			if !field.Virtual && !my.hiddenField(field) {
+				my.writeField(fieldName, protocol.TYPE_SORT_DIRECTION)
 			}
-			my.writeField(fieldName, protocol.TYPE_SORT_DIRECTION)
-		}
+		})
 
 		my.writeLine("}")
 		my.writeLine("")
@@ -487,7 +487,7 @@ func (my *Renderer) renderQuery() error {
 		}
 		my.writeLine("  # ", className, "查询")
 		my.writeField(
-			strcase.ToLowerCamel(inflection.Plural(className)),
+			queryField(className),
 			className+protocol.SUFFIX_RESULT,
 			renderer.NonNull(),
 			renderer.WithMultilineArgs(),
@@ -597,19 +597,6 @@ func (my *Renderer) renderMutation() error {
 	return nil
 }
 
-// statsKind 标量字段对应的统计类型，空串表示不参与统计
-func statsKind(typeName string) string {
-	switch typeName {
-	case protocol.SCALAR_INT, protocol.SCALAR_FLOAT:
-		return protocol.TYPE_NUMBER_STATS
-	case protocol.SCALAR_STRING:
-		return protocol.TYPE_STRING_STATS
-	case protocol.SCALAR_DATE_TIME:
-		return protocol.TYPE_DATE_TIME_STATS
-	}
-	return ""
-}
-
 // statsSpecs 聚合类型表：一份定义同时驱动聚合结果类型与having过滤类型
 // （having镜像聚合结果，各聚合字段复用对应标量的WhereInput操作符，countDistinct恒为Int）
 var statsSpecs = []struct {
@@ -622,6 +609,28 @@ var statsSpecs = []struct {
 		[]string{protocol.FUNCTION_MIN, protocol.FUNCTION_MAX}},
 	{"日期", protocol.TYPE_DATE_TIME_STATS, protocol.TYPE_DATE_TIME_HAVING, protocol.SCALAR_DATE_TIME,
 		[]string{protocol.FUNCTION_MIN, protocol.FUNCTION_MAX}},
+}
+
+// statsTypes 标量→(聚合结果类型, having类型)，由statsSpecs推导；Int与Float同归数值聚合
+var statsTypes = func() map[string][2]string {
+	m := make(map[string][2]string, len(statsSpecs)+1)
+	for _, s := range statsSpecs {
+		m[s.scalar] = [2]string{s.stats, s.having}
+	}
+	m[protocol.SCALAR_INT] = m[protocol.SCALAR_FLOAT]
+	return m
+}()
+
+// eachStatColumn 遍历参与统计的真实标量列（跳过虚拟字段/主键），产出其(stats, having)类型对
+func (my *Renderer) eachStatColumn(class *protocol.Class, fn func(fieldName string, kinds [2]string)) {
+	my.eachField(class, func(fieldName string, field *protocol.Field) {
+		if field.Column == "" || field.Virtual || field.IsPrimary {
+			return
+		}
+		if kinds, ok := statsTypes[my.getGraphQLType(field)]; ok {
+			fn(fieldName, kinds)
+		}
+	})
 }
 
 // renderStats 渲染统计类型：通用聚合结果 + 每实体的Stats类型（选择驱动编译）
@@ -654,16 +663,9 @@ func (my *Renderer) renderStats() error {
 		my.writeLine("type ", className, protocol.SUFFIX_STATS, " {")
 		my.writeField(protocol.FUNCTION_KEY, protocol.SCALAR_JSON, renderer.WithComment("分组键(无groupBy时为null)"))
 		my.writeField(protocol.FUNCTION_COUNT, protocol.SCALAR_INT, renderer.NonNull())
-		for _, fieldName := range utl.SortKeys(class.Fields) {
-			field := class.Fields[fieldName]
-			// 仅真实标量列参与统计（跳过列名索引/虚拟字段/主键）
-			if fieldName != field.Name || field.Column == "" || field.Virtual || field.IsPrimary {
-				continue
-			}
-			if kind := statsKind(my.getGraphQLType(field)); kind != "" {
-				my.writeField(fieldName, kind)
-			}
-		}
+		my.eachStatColumn(class, func(fieldName string, kinds [2]string) {
+			my.writeField(fieldName, kinds[0])
+		})
 		my.writeLine("}")
 		my.writeLine()
 
@@ -671,32 +673,13 @@ func (my *Renderer) renderStats() error {
 		my.writeLine("# ", className, "having过滤(分组后按聚合值过滤)")
 		my.writeLine("input ", className, protocol.SUFFIX_HAVING_INPUT, " {")
 		my.writeField(protocol.FUNCTION_COUNT, intWhere)
-		for _, fieldName := range utl.SortKeys(class.Fields) {
-			field := class.Fields[fieldName]
-			if fieldName != field.Name || field.Column == "" || field.Virtual || field.IsPrimary {
-				continue
-			}
-			if h := havingType(statsKind(my.getGraphQLType(field))); h != "" {
-				my.writeField(fieldName, h)
-			}
-		}
+		my.eachStatColumn(class, func(fieldName string, kinds [2]string) {
+			my.writeField(fieldName, kinds[1])
+		})
 		my.writeLine("}")
 		my.writeLine()
 	})
 	return nil
-}
-
-// havingType 列统计类别对应的having过滤类型
-func havingType(statsType string) string {
-	switch statsType {
-	case protocol.TYPE_NUMBER_STATS:
-		return protocol.TYPE_NUMBER_HAVING
-	case protocol.TYPE_STRING_STATS:
-		return protocol.TYPE_STRING_HAVING
-	case protocol.TYPE_DATE_TIME_STATS:
-		return protocol.TYPE_DATE_TIME_HAVING
-	}
-	return ""
 }
 
 // renderPageInfo 游标分页信息类型

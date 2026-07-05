@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/iancoleman/strcase"
-	"github.com/jinzhu/inflection"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -232,7 +230,7 @@ func (my *Executor) enrich(ctx context.Context, operation *ast.OperationDefiniti
 	}
 	args := map[string]interface{}{pk: result}
 
-	fieldName := strcase.ToLowerCamel(inflection.Plural(className))
+	fieldName := queryField(className)
 	var sb strings.Builder
 	sb.WriteString("query ($")
 	sb.WriteString(pk)

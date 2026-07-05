@@ -26,6 +26,11 @@ func init() {
 	strcase.ConfigureAcronym("ID", "Id")
 }
 
+// queryField 实体查询根字段名（schema渲染与Action回查须同一规则，改动必须同步生效）
+func queryField(className string) string {
+	return strcase.ToLowerCamel(inflection.Plural(className))
+}
+
 // Metadata 表示GraphQL元数据
 type Metadata struct {
 	k   *std.Konfig
@@ -99,18 +104,13 @@ func WithoutLoader(names ...string) MetadataOption {
 	}
 }
 
-// HookedLoader 装饰器，支持beforeLoad,afterLoad钩子
+// HookedLoader 装饰器，支持afterLoad钩子
 type HookedLoader struct {
 	protocol.Loader
-	afterLoad, beforeLoad func(h protocol.Hoster) error
+	afterLoad func(h protocol.Hoster) error
 }
 
 func (my *HookedLoader) Load(h protocol.Hoster) error {
-	if my.beforeLoad != nil {
-		if err := my.beforeLoad(h); err != nil {
-			return err
-		}
-	}
 	if err := my.Loader.Load(h); err != nil {
 		return err
 	}
@@ -173,11 +173,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	my.setCodecs(options.codecs)
 	// 按优先级排序
 	loaders := options.loaders
-	if len(loaders) > 1 {
-		sort.Slice(loaders, func(i, j int) bool {
-			return loaders[i].Priority() < loaders[j].Priority()
-		})
-	}
+	sort.Slice(loaders, func(i, j int) bool { return loaders[i].Priority() < loaders[j].Priority() })
 
 	// 依次执行Loader
 	for _, loader := range loaders {
@@ -208,6 +204,15 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	return my, nil
 }
 
+// eachClass 按类名有序遍历主名类（跳过表名/别名索引）
+func (my *Metadata) eachClass(fn func(class *protocol.Class)) {
+	for _, className := range utl.SortKeys(my.Nodes) {
+		if class := my.Nodes[className]; className == class.Name {
+			fn(class)
+		}
+	}
+}
+
 // finalize 元数据定型，field.Type自此成为schema类型的唯一真相：
 //  1. 结构推导：主键与外键实列固定为ID标量（关系载体是Virtual字段不受影响），
 //     使加解密与精度处理覆盖全部主外键；
@@ -215,10 +220,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 //
 // 字段级配置显式指定类型时保留配置（配置是最终裁决的例外通道）
 func (my *Metadata) finalize() {
-	for className, class := range my.Nodes {
-		if className != class.Name {
-			continue
-		}
+	my.eachClass(func(class *protocol.Class) {
 		for name, field := range class.Fields {
 			if name != field.Name || field.Virtual || my.configured(class, field) {
 				continue
@@ -237,7 +239,7 @@ func (my *Metadata) finalize() {
 				}
 			}
 		}
-	}
+	})
 }
 
 // configured 字段类型是否被配置显式指定
@@ -344,42 +346,11 @@ type relationField struct {
 	relation                         *protocol.Relation // join元数据，编译器据此生成关联条件
 }
 
-// cloneRelation 复制关系元数据，reverse为true时交换源和目标方向
-func cloneRelation(rel *protocol.Relation, relType protocol.RelationType, reverse bool) *protocol.Relation {
-	result := &protocol.Relation{
-		Type:         relType,
-		Name:         rel.Name,
-		SourceClass:  rel.SourceClass,
-		SourceField:  rel.SourceField,
-		SourceFields: rel.SourceFields,
-		TargetClass:  rel.TargetClass,
-		TargetField:  rel.TargetField,
-		TargetFields: rel.TargetFields,
-	}
-	if reverse {
-		result.SourceClass, result.TargetClass = result.TargetClass, result.SourceClass
-		result.SourceField, result.TargetField = result.TargetField, result.SourceField
-		result.SourceFields, result.TargetFields = result.TargetFields, result.SourceFields
-	}
-	if rel.Through != nil {
-		through := *rel.Through
-		if reverse {
-			through.SourceKey, through.TargetKey = through.TargetKey, through.SourceKey
-		}
-		result.Through = &through
-	}
-	return result
-}
-
 // collectRelations 把字段级关系声明（config通道/旧格式文件的兼容指针）收进类级
 // Relations集合：MANY_TO_ONE同时合成目标类的反向ONE_TO_MANY（与db加载器行为对齐），
 // 递归只收外键侧方向；AddRelation按身份键去重，db已登记的不重复
 func (my *Metadata) collectRelations() {
-	for _, className := range utl.SortKeys(my.Nodes) {
-		class := my.Nodes[className]
-		if className != class.Name {
-			continue
-		}
+	my.eachClass(func(class *protocol.Class) {
 		for _, fieldName := range utl.SortKeys(class.Fields) {
 			field := class.Fields[fieldName]
 			if fieldName != field.Name || field.Relation == nil || field.Virtual || field.Column == "" {
@@ -396,7 +367,7 @@ func (my *Metadata) collectRelations() {
 			case protocol.MANY_TO_ONE:
 				class.AddRelation(rel)
 				if target := my.Nodes[rel.TargetClass]; target != nil {
-					target.AddRelation(cloneRelation(rel, protocol.ONE_TO_MANY, true))
+					target.AddRelation(rel.Clone(protocol.ONE_TO_MANY, true))
 				}
 			case protocol.ONE_TO_MANY, protocol.MANY_TO_MANY:
 				class.AddRelation(rel)
@@ -406,7 +377,7 @@ func (my *Metadata) collectRelations() {
 				}
 			}
 		}
-	}
+	})
 }
 
 // processRelations 处理实体间关系：以类级Relations集合为唯一输入，
@@ -418,12 +389,7 @@ func (my *Metadata) processRelations() {
 	var pending []relationField
 
 	// 排序遍历保证收集顺序确定，命名跨启动稳定
-	for _, className := range utl.SortKeys(my.Nodes) {
-		class := my.Nodes[className]
-		// 跳过表名索引，只处理类名索引
-		if className != class.Name {
-			continue
-		}
+	my.eachClass(func(class *protocol.Class) {
 		relations := append([]*protocol.Relation(nil), class.Relations...)
 		sort.Slice(relations, func(i, j int) bool { return relations[i].Key() < relations[j].Key() })
 		for _, relation := range relations {
@@ -459,7 +425,7 @@ func (my *Metadata) processRelations() {
 				pending = append(pending, my.collectRecursive(class, relation)...)
 			}
 		}
-	}
+	})
 
 	// 同名碰撞（同目标多关系/自引用多对多）按源列词干改名：author_id→author，
 	// 反向列表 authorComments；改名后仍冲突由创建期后缀兜底
@@ -560,7 +526,7 @@ func (my *Metadata) listField(class *protocol.Class, target string, isThrough bo
 
 // collectManyToMany 多对多列表字段；有中间表时额外生成指向中间表的一对多字段
 func (my *Metadata) collectManyToMany(class *protocol.Class, rel *protocol.Relation) []relationField {
-	fields := []relationField{my.listField(class, rel.TargetClass, false, cloneRelation(rel, protocol.MANY_TO_MANY, false))}
+	fields := []relationField{my.listField(class, rel.TargetClass, false, rel.Clone(protocol.MANY_TO_MANY, false))}
 	if through := rel.Through; through != nil {
 		if throughClass := my.Nodes[through.TableName]; throughClass != nil {
 			// 指向中间表本身是普通一对多：源类主键 -> 中间表的源外键
@@ -579,16 +545,16 @@ func (my *Metadata) collectManyToMany(class *protocol.Class, rel *protocol.Relat
 // collectRecursive 自关联实体的parent/children直接关系 + descendants/ancestors全树字段
 func (my *Metadata) collectRecursive(class *protocol.Class, rel *protocol.Relation) []relationField {
 	deep := func(reverse bool) *protocol.Relation {
-		r := cloneRelation(rel, protocol.RECURSIVE, reverse)
+		r := rel.Clone(protocol.RECURSIVE, reverse)
 		r.Deep = true // 递归CTE全树遍历，depth参数限深
 		return r
 	}
 	name := class.Name
 	return []relationField{
 		{owner: name, target: name, name: "parent", nullable: true,
-			description: "父" + name + "对象", relation: cloneRelation(rel, protocol.RECURSIVE, false)},
+			description: "父" + name + "对象", relation: rel.Clone(protocol.RECURSIVE, false)},
 		{owner: name, target: name, name: "children", isList: true,
-			description: "子" + name + "列表", relation: cloneRelation(rel, protocol.RECURSIVE, true)},
+			description: "子" + name + "列表", relation: rel.Clone(protocol.RECURSIVE, true)},
 		{owner: name, target: name, name: "descendants", isList: true,
 			description: "全部后代（递归）", relation: deep(true)},
 		{owner: name, target: name, name: "ancestors", isList: true,

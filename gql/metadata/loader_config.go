@@ -214,7 +214,6 @@ func (my *ConfigLoader) applyFieldConfig(class *protocol.Class, fieldConfigs map
 		aliasField := clone.Slowly(baseField).(*protocol.Field)
 		fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, column, fieldConfig, aliasField)
 	}
-	class.Fields = fields
 	return nil
 }
 

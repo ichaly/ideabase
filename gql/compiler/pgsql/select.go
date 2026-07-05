@@ -36,12 +36,21 @@ type unit struct {
 	args     ast.ArgumentList   // 生效的查询参数；变更读回为nil（参数已被CTE消费）
 	readback bool               // 变更读回顶层单元（读CTE非基表），跳过行级作用域注入
 	ordered  bool               // 显式排序的非游标列表：__rn行号在聚合内固化顺序
+	sorts    []*ast.ChildValue  // 解析后的sort项缓存（sortEntries惰性填充）
+}
+
+// sortEntries 惰性解析并缓存sort项，单元内多处消费只解析一次
+func (u *unit) sortEntries() []*ast.ChildValue {
+	if u.sorts == nil {
+		u.sorts = sortEntries(u.args)
+	}
+	return u.sorts
 }
 
 // orderedList 是否携带显式排序语义：sort参数或search相关度（JSONB_AGG不保证
 // 维持输入序，并行/归并计划下会丢失，须经__rn在聚合内ORDER BY固化）
-func orderedList(args ast.ArgumentList) bool {
-	return len(sortEntries(args)) > 0 || args.ForName(protocol.SEARCH) != nil
+func (u *unit) orderedList() bool {
+	return len(u.sortEntries()) > 0 || u.args.ForName(protocol.SEARCH) != nil
 }
 
 // BuildQuery 构建查询语句：根JSON对象 + 每个根字段一个LATERAL单元
@@ -107,7 +116,7 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 		if u.shape == shapeStats {
 			core = func() error { return my.buildStatsCore(ctx, u) }
 		} else {
-			u.ordered = orderedList(u.args)
+			u.ordered = u.orderedList()
 		}
 		ctx.Write(`SELECT COALESCE(JSONB_AGG(TO_JSONB(`).
 			Quote(`__sr_`, u.index).Write(`.*)`)
@@ -164,7 +173,7 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 
 	// 响应只含选择的字段：items未请求（仅total）时不输出
 	ctx.Write(`SELECT JSONB_BUILD_OBJECT(`)
-	u.ordered = page == nil && orderedList(u.args)
+	u.ordered = page == nil && u.orderedList()
 	if len(items) > 0 {
 		next()
 		// items聚合：游标模式剔除辅助列、按行号FILTER并保持显示顺序
@@ -294,9 +303,9 @@ func (my *Dialect) boundaryGiven(ctx *compiler.Context, page *pager) {
 //	FROM (SELECT 原始列 FROM 表 [JOIN 中间表] WHERE 关联+条件 ORDER LIMIT) AS "base"
 //	LEFT OUTER JOIN LATERAL (子单元) AS "__sj_M" ON TRUE
 func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Field, withTotal bool) error {
-	base := fmt.Sprintf("%s_%d", u.class.Table, u.index)
+	base := u.class.Table + "_" + strconv.Itoa(u.index)
 	sc := scope{class: u.class, qualifier: u.class.Table}
-	sorts := sortEntries(u.args) // 单元内一次解析，列收集/排序/校验共用
+	sorts := u.sortEntries() // 单元内一次解析，列收集/排序/校验共用
 	ctx.MarkTable(u.class.Table)
 
 	// 分拣标量列与子关系，并收集基础查询所需的原始列
@@ -662,7 +671,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 		}
 	}
 
-	tree := fmt.Sprintf("__tree_%d", u.index)
+	tree := "__tree_" + strconv.Itoa(u.index)
 	parentClass, _ := ctx.GetClass(u.rel.SourceClass)
 	parentCol := scope{class: parentClass}.column(u.rel.SourceField)
 
@@ -697,7 +706,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 	if err = my.buildWhere(ctx, treeScope, u.args); err != nil {
 		return err
 	}
-	if err = my.buildOrderBy(ctx, treeScope, sortEntries(u.args)); err != nil {
+	if err = my.buildOrderBy(ctx, treeScope, u.sortEntries()); err != nil {
 		return err
 	}
 	return my.buildLimit(ctx, u)

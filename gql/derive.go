@@ -211,17 +211,16 @@ func plain(v any) any {
 	return out
 }
 
-// deriveObject 反射命名struct为GraphQL输出类型SDL（远程虚拟类型）；
-// 标量特化类型与非命名struct返回空（结果为标量/Json，无需辅助类型）
-func deriveObject(t reflect.Type) string {
+// deref 剥离指针层取底层类型
+func deref(t reflect.Type) reflect.Type {
 	for t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	if _, ok := scalars[t]; ok || t.Kind() != reflect.Struct || t.Name() == "" {
-		return ""
-	}
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "type %s {\n", t.Name())
+	return t
+}
+
+// eachField 遍历导出字段：json标签定名（"-"跳过，缺省小驼峰），doc标签作描述
+func eachField(t reflect.Type, fn func(f reflect.StructField, name, doc string)) {
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
@@ -231,11 +230,25 @@ func deriveObject(t reflect.Type) string {
 		if name == "" {
 			name = strcase.ToLowerCamel(f.Name)
 		}
-		if doc := f.Tag.Get("doc"); doc != "" {
+		fn(f, name, f.Tag.Get("doc"))
+	}
+}
+
+// deriveObject 反射命名struct为GraphQL输出类型SDL（远程虚拟类型）；
+// 标量特化类型与非命名struct返回空（结果为标量/Json，无需辅助类型）
+func deriveObject(t reflect.Type) string {
+	t = deref(t)
+	if _, ok := scalars[t]; ok || t.Kind() != reflect.Struct || t.Name() == "" {
+		return ""
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "type %s {\n", t.Name())
+	eachField(t, func(f reflect.StructField, name, doc string) {
+		if doc != "" {
 			fmt.Fprintf(&sb, "  \"\"\"%s\"\"\"\n", doc)
 		}
 		fmt.Fprintf(&sb, "  %s: %s\n", name, deriveScalar(f.Type))
-	}
+	})
 	sb.WriteString("}")
 	return sb.String()
 }
@@ -253,32 +266,22 @@ func check(v any) error {
 
 // deriveArgs 反射struct字段为GraphQL参数签名文本
 func deriveArgs(t reflect.Type) string {
-	for t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
+	t = deref(t)
 	if t.Kind() != reflect.Struct {
 		panic(fmt.Sprintf("Action入参必须是struct（无参用struct{}），收到 %s", t))
 	}
 	var parts []string
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-		if !f.IsExported() || name == "-" {
-			continue
-		}
-		if name == "" {
-			name = strcase.ToLowerCamel(f.Name)
-		}
+	eachField(t, func(f reflect.StructField, name, doc string) {
 		kind := deriveScalar(f.Type)
 		if required(f.Tag.Get("validate")) {
 			kind += "!"
 		}
 		part := name + ": " + kind
-		if doc := f.Tag.Get("doc"); doc != "" {
+		if doc != "" {
 			part = `"` + doc + `" ` + part
 		}
 		parts = append(parts, part)
-	}
+	})
 	return strings.Join(parts, ", ")
 }
 
@@ -295,9 +298,7 @@ func required(tag string) bool {
 // deriveScalar Go类型→GraphQL入参类型：指针剥离（可空由required缺失表达），
 // 切片元素非指针补!，map与嵌套struct视作Json透传
 func deriveScalar(t reflect.Type) string {
-	for t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
+	t = deref(t)
 	if name, ok := scalars[t]; ok {
 		return name
 	}
@@ -325,9 +326,7 @@ func deriveScalar(t reflect.Type) string {
 // deriveResult Go类型→GraphQL结果类型：struct取类型名（与元数据实体同名即触发
 // 回查补全，不一致用Result选项覆盖），其余同入参规则
 func deriveResult(t reflect.Type) string {
-	for t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
+	t = deref(t)
 	if t.Kind() == reflect.Struct {
 		if name, ok := scalars[t]; ok {
 			return name
@@ -339,6 +338,6 @@ func deriveResult(t reflect.Type) string {
 
 // scalars 特化标量映射（先于Kind分派）
 var scalars = map[reflect.Type]string{
-	reflect.TypeFor[std.Id](): "ID",
+	reflect.TypeFor[std.Id]():    "ID",
 	reflect.TypeFor[time.Time](): protocol.SCALAR_DATE_TIME,
 }

@@ -347,16 +347,25 @@ func (my *Executor) Execute(ctx context.Context, query string, variables map[str
 	r := my.execute(ctx, query, variables, operationName)
 	// 公开API契约：Data始终可编程访问（直通字节解包回map）
 	if r.raw != nil {
-		result := make(map[string]interface{})
-		if len(r.raw) > 0 {
-			if err := jsonNumeric.Unmarshal(r.raw, &result); err != nil {
-				return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
-			}
-			normalizeNumbers(result)
+		result, err := decodeRoot(r.raw)
+		if err != nil {
+			return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
 		}
 		r.Data, r.raw = result, nil
 	}
 	return r
+}
+
+// decodeRoot 解包__root JSON字节为map并收敛数字类型
+func decodeRoot(data []byte) (map[string]interface{}, error) {
+	result := make(map[string]interface{})
+	if len(data) > 0 {
+		if err := jsonNumeric.Unmarshal(data, &result); err != nil {
+			return nil, err
+		}
+		normalizeNumbers(result)
+	}
+	return result, nil
 }
 
 // execute 执行核心：无resolver的成功结果以直通字节形态返回（raw）
@@ -424,12 +433,9 @@ func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]
 // unpack 解包__root JSON为data（顶层key即字段别名）并执行后处理；
 // 第二返回值为非致命警告（如远程取数失败），随响应errors返回但不影响data
 func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte, variables map[string]interface{}) (map[string]interface{}, gqlerror.List, error) {
-	result := make(map[string]interface{})
-	if len(data) > 0 {
-		if err := jsonNumeric.Unmarshal(data, &result); err != nil {
-			return nil, nil, err
-		}
-		normalizeNumbers(result)
+	result, err := decodeRoot(data)
+	if err != nil {
+		return nil, nil, err
 	}
 	warnings, err := my.resolve(ctx, plan.resolvers, result, variables)
 	return result, warnings, err

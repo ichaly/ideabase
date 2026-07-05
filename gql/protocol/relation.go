@@ -6,16 +6,16 @@ import "strings"
 // 单列关系存 SourceField/TargetField；复合外键存 SourceFields/TargetFields（按序对齐），
 // 消费方统一经 SourceColumns/TargetColumns 读取
 type Relation struct {
-	Type         RelationType `json:"type"`                    // 关系类型
-	Name         string       `json:"name,omitempty"`          // 约束名或推导键（关系集合去重的唯一标识）
-	Through      *Through     `json:"through,omitempty"`       // 多对多配置
-	SourceClass  string       `json:"sourceClass"`             // 源类名
-	SourceField  string       `json:"sourceField"`             // 源字段名（单列；复合时为首列）
-	SourceFields []string     `json:"sourceFields,omitempty"`  // 复合外键源列组（len>1时生效）
-	TargetClass  string       `json:"targetClass"`             // 目标类名
-	TargetField  string       `json:"targetField"`             // 目标字段名（单列；复合时为首列）
-	TargetFields []string     `json:"targetFields,omitempty"`  // 复合外键目标列组（与源列组按序对齐）
-	Deep         bool         `json:"deep,omitempty"`          // 深度递归（descendants/ancestors全树遍历）
+	Type         RelationType `json:"type"`                   // 关系类型
+	Name         string       `json:"name,omitempty"`         // 约束名或推导键（关系集合去重的唯一标识）
+	Through      *Through     `json:"through,omitempty"`      // 多对多配置
+	SourceClass  string       `json:"sourceClass"`            // 源类名
+	SourceField  string       `json:"sourceField"`            // 源字段名（单列；复合时为首列）
+	SourceFields []string     `json:"sourceFields,omitempty"` // 复合外键源列组（len>1时生效）
+	TargetClass  string       `json:"targetClass"`            // 目标类名
+	TargetField  string       `json:"targetField"`            // 目标字段名（单列；复合时为首列）
+	TargetFields []string     `json:"targetFields,omitempty"` // 复合外键目标列组（与源列组按序对齐）
+	Deep         bool         `json:"deep,omitempty"`         // 深度递归（descendants/ancestors全树遍历）
 }
 
 // SourceColumns 源列组：复合外键返回列组，单列关系返回单元素切片
@@ -36,6 +36,33 @@ func (my *Relation) TargetColumns() []string {
 
 // Composite 是否复合外键关系（多列联合指向）
 func (my *Relation) Composite() bool { return len(my.SourceFields) > 1 }
+
+// Clone 复制关系并换型，reverse为true时交换源和目标方向（含Through键）
+func (my *Relation) Clone(relType RelationType, reverse bool) *Relation {
+	result := &Relation{
+		Type:         relType,
+		Name:         my.Name,
+		SourceClass:  my.SourceClass,
+		SourceField:  my.SourceField,
+		SourceFields: my.SourceFields,
+		TargetClass:  my.TargetClass,
+		TargetField:  my.TargetField,
+		TargetFields: my.TargetFields,
+	}
+	if reverse {
+		result.SourceClass, result.TargetClass = result.TargetClass, result.SourceClass
+		result.SourceField, result.TargetField = result.TargetField, result.SourceField
+		result.SourceFields, result.TargetFields = result.TargetFields, result.SourceFields
+	}
+	if my.Through != nil {
+		through := *my.Through
+		if reverse {
+			through.SourceKey, through.TargetKey = through.TargetKey, through.SourceKey
+		}
+		result.Through = &through
+	}
+	return result
+}
 
 // Key 关系身份键：源/目标的类与列组 + 类型 + 中间表，用于关系集合去重
 // （不含Name：db约束名与config推导键描述同一关系时应视为同一条）
