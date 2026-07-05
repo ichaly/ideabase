@@ -1,5 +1,11 @@
 package pgsql
 
+import (
+	"github.com/ichaly/ideabase/gql"
+	"github.com/ichaly/ideabase/gql/compiler"
+	"github.com/vektah/gqlparser/v2"
+)
+
 func (my *_DialectSuite) TestSelect() {
 	cases := []Case{
 		{
@@ -236,4 +242,16 @@ func (my *_DialectSuite) TestRelation() {
 		},
 	}
 	my.runCases(cases)
+}
+
+// TestSelectGuards 列表查询参数约束:distinct去重后行数与COUNT(*) OVER()窗口
+// 计数(去重前求值)语义冲突,须编译期拒绝而非静默返回错误total
+func (my *_DialectSuite) TestSelectGuards() {
+	doc, gqlErr := gqlparser.LoadQuery(my.schema, `query { users(distinct: ["name"]) { items { id } total } }`)
+	my.Require().Empty(gqlErr, "解析失败")
+
+	compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
+	my.Require().NoError(err)
+	_, _, err = compile.Build(doc.Operations[0], nil)
+	my.Assert().ErrorContains(err, "distinct与total不能同时使用")
 }

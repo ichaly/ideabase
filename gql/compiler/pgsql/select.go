@@ -352,6 +352,10 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		if u.page != nil {
 			return fmt.Errorf("distinct与游标分页不能同时使用")
 		}
+		if withTotal {
+			// COUNT(*) OVER()在DISTINCT ON去重前求值，total会是去重前行数（静默错数）
+			return fmt.Errorf("distinct与total不能同时使用")
+		}
 		for _, column := range distinct {
 			appendColumn(column)
 		}
