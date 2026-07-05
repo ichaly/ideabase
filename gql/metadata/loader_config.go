@@ -262,6 +262,10 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName, column string
 		if relConfig.TargetField != "" {
 			rel.TargetField = relConfig.TargetField
 		}
+		if len(relConfig.SourceFields) > 1 { // 复合外键列组（首列冗余进单列字段，消费方统一经SourceColumns读取）
+			rel.SourceFields, rel.SourceField = relConfig.SourceFields, relConfig.SourceFields[0]
+			rel.TargetFields, rel.TargetField = relConfig.TargetFields, relConfig.TargetFields[0]
+		}
 		if relConfig.Type != "" {
 			rel.Type = protocol.RelationType(relConfig.Type)
 		}

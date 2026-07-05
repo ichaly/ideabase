@@ -144,6 +144,10 @@ type RelationConfig struct {
 	TargetField string `mapstructure:"target_field"`
 	Type        string `mapstructure:"type"`
 
+	// 复合外键列组（与目标列组按序对齐，声明后覆盖单列字段）
+	SourceFields []string `mapstructure:"source_fields"`
+	TargetFields []string `mapstructure:"target_fields"`
+
 	// 多对多关系中间表配置
 	Through *ThroughConfig `mapstructure:"through,omitempty"`
 }

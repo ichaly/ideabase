@@ -685,6 +685,9 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 		if !ok {
 			return fmt.Errorf("关系目标类不存在: %s", op.rel.TargetClass)
 		}
+		if op.rel.Composite() {
+			return fmt.Errorf("复合外键关系不支持嵌套关系操作（%s，请分步写入）", op.rel.Name)
+		}
 		if len(target.PrimaryKeys) != 1 {
 			return fmt.Errorf("关系操作要求目标实体 %s 有单一主键", target.Name)
 		}

@@ -341,8 +341,10 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 				},
 				alias: f.Alias,
 			})
-			// 子关系的关联条件引用父级源列，基础查询必须带出
-			appendColumn(sc.column(field.Relation.SourceField))
+			// 子关系的关联条件引用父级源列，基础查询必须带出（复合外键全部列）
+			for _, col := range field.Relation.SourceColumns() {
+				appendColumn(sc.column(col))
+			}
 			continue
 		}
 		if field.Remote != nil {
@@ -550,7 +552,7 @@ func (my *Dialect) relationBond(ctx *compiler.Context, u *unit, sc scope) ([]fun
 	if !ok {
 		return nil, fmt.Errorf("关系源类不存在: %s", u.rel.SourceClass)
 	}
-	parentCol := scope{class: parentClass}.column(u.rel.SourceField)
+	parentScope := scope{class: parentClass}
 	targetCol := sc.column(u.rel.TargetField)
 
 	if through := u.rel.Through; through != nil {
@@ -563,15 +565,21 @@ func (my *Dialect) relationBond(ctx *compiler.Context, u *unit, sc scope) ([]fun
 		// 关联条件：中间表.源键 = 父别名.源列
 		return []func() error{func() error {
 			ctx.Column(through.TableName, through.SourceKey).
-				Space(`=`).Column(u.parent, parentCol)
+				Space(`=`).Column(u.parent, parentScope.column(u.rel.SourceField))
 			return nil
 		}}, nil
 	}
 
-	// 普通关联：目标表.目标列 = 父别名.源列
+	// 普通关联：目标表.目标列 = 父别名.源列，复合外键逐列AND（漏列即数据错配）
+	sourceCols, targetCols := u.rel.SourceColumns(), u.rel.TargetColumns()
 	return []func() error{func() error {
-		ctx.Column(u.class.Table, targetCol).
-			Space(`=`).Column(u.parent, parentCol)
+		for i := range sourceCols {
+			if i > 0 {
+				ctx.Write(` AND `)
+			}
+			ctx.Column(u.class.Table, sc.column(targetCols[i])).
+				Space(`=`).Column(u.parent, parentScope.column(sourceCols[i]))
+		}
 		return nil
 	}}, nil
 }

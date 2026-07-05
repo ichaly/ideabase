@@ -3,7 +3,10 @@ package pgsql
 import (
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
+	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/std"
 	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 func (my *_DialectSuite) TestSelect() {
@@ -276,4 +279,54 @@ func (my *_DialectSuite) TestDepthGuard() {
 	my.Assert().NoError(err)
 
 	// 缺省上限(20)不影响常规嵌套查询(主套件全部用例即回归)
+}
+
+// TestCompositeRelation 复合外键关系:JOIN必须按列组逐列AND(单列JOIN数据错配)
+func (my *_DialectSuite) TestCompositeRelation() {
+	k, err := std.NewKonfig()
+	my.Require().NoError(err)
+	k.Set("mode", "dev")
+	k.Set("app.root", my.T().TempDir())
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+		"Order": {
+			Table: "orders",
+			Fields: map[string]*internal.FieldConfig{
+				"id":       {Type: "ID", Column: "id", IsPrimary: true},
+				"tenantId": {Type: "Int", Column: "tenant_id"},
+			},
+		},
+		"OrderItem": {
+			Table: "order_items",
+			Fields: map[string]*internal.FieldConfig{
+				"id": {Type: "ID", Column: "id", IsPrimary: true},
+				// 复合关系声明在承载字段上(order_id+tenant_id → orders.id+tenant_id)
+				"orderId": {Type: "Int", Column: "order_id", Relation: &internal.RelationConfig{
+					TargetClass: "Order", Type: "ManyToOne",
+					SourceFields: []string{"order_id", "tenant_id"},
+					TargetFields: []string{"id", "tenant_id"},
+				}},
+				"tenantId": {Type: "Int", Column: "tenant_id"},
+				"sku":      {Type: "String", Column: "sku"},
+			},
+		},
+	})
+
+	meta, err := gql.NewMetadata(k, nil)
+	my.Require().NoError(err)
+	schemaStr, err := gql.NewRenderer(meta).Generate()
+	my.Require().NoError(err)
+	schema, gqlErr := gqlparser.LoadSchema(&ast.Source{Name: "composite.graphql", Input: schemaStr})
+	my.Require().Nil(gqlErr)
+
+	doc, qErr := gqlparser.LoadQuery(schema, `query { orders { items { id orderItems { sku } } } }`)
+	my.Require().Empty(qErr)
+	compile, err := gql.NewCompiler(meta, []compiler.Dialect{my.dialect})
+	my.Require().NoError(err)
+	sql, _, err := compile.Build(doc.Operations[0], nil)
+	my.Require().NoError(err)
+
+	// 反向一对多:目标(order_items)按两列同时关联父行
+	my.Assert().Contains(normalizeSQL(sql),
+		`"order_items"."order_id" = "orders_0"."id" AND "order_items"."tenant_id" = "orders_0"."tenant_id"`,
+		"复合外键JOIN须逐列AND, 实际SQL: %s", sql)
 }
