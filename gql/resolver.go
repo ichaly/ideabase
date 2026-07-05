@@ -152,6 +152,9 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 				warnings = append(warnings, gqlerror.Wrap(job.err))
 			}
 		}
+		for _, job := range jobs { // 全部回填后再剥内部键：多个远程可共用同一宿主键列
+			job.strip()
+		}
 	}
 
 	for _, b := range bindings {

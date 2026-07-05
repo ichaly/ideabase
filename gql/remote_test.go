@@ -67,3 +67,37 @@ func TestRemoteJoin(t *testing.T) {
 		}
 	}
 }
+
+// TestRemoteSharedKey 两个远程字段共用同一宿主键列:内部键别名__rk_id被先回填者
+// 剥除后,后回填者读不到键值恒为null——剥除必须在全部回填完成之后
+func TestRemoteSharedKey(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	ctx := context.Background()
+
+	fetch := func(level string) func(context.Context, []any) (map[any]Profile, error) {
+		return func(_ context.Context, keys []any) (map[any]Profile, error) {
+			out := make(map[any]Profile, len(keys))
+			for _, k := range keys {
+				out[k] = Profile{Level: level}
+			}
+			return out, nil
+		}
+	}
+	require.NoError(t, executor.Register(
+		NewRemote("User", "profileA", "画像A", "id", fetch("gold")),
+		NewRemote("User", "profileB", "画像B", "id", fetch("silver")),
+	))
+
+	reply := executor.Execute(ctx, `mutation { createUser(input: { name: "S", email: "s@x.com" }) { id } }`, nil, "")
+	require.Empty(t, reply.Errors)
+
+	reply = executor.Execute(ctx, `query { users { items { name profileA { level } profileB { level } } } }`, nil, "")
+	require.Empty(t, reply.Errors, "共享键双远程失败: %v", reply.Errors)
+	item := reply.Data["users"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})
+	require.NotNil(t, item["profileA"], "第一个远程字段应回填")
+	require.NotNil(t, item["profileB"], "第二个远程字段应回填(共享键不被先回填者剥除)")
+	assert.Equal(t, "gold", item["profileA"].(map[string]interface{})["level"])
+	assert.Equal(t, "silver", item["profileB"].(map[string]interface{})["level"])
+	assert.NotContains(t, item, "__rk_id", "内部键最终仍须剥除")
+}

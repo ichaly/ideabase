@@ -58,7 +58,8 @@ func (my *remoteJob) fetch(ctx context.Context, remotes map[string]Remote) {
 	}
 }
 
-// fill 按键回填并剥掉编译期补投影的内部键，响应形状严格等于选择集
+// fill 按键回填；内部键的剥除由调用方在全部job回填后统一执行
+// （多个远程可共用同一宿主键列，此处剥除会让后回填者读不到键值）
 func (my *remoteJob) fill() {
 	for _, source := range my.sources {
 		if v, ok := my.values[source[my.binding.Key]]; ok {
@@ -66,6 +67,12 @@ func (my *remoteJob) fill() {
 		} else {
 			source[my.binding.Field] = nil
 		}
+	}
+}
+
+// strip 剥掉编译期补投影的内部键，响应形状严格等于选择集（重复删除幂等）
+func (my *remoteJob) strip() {
+	for _, source := range my.sources {
 		delete(source, my.binding.Key)
 	}
 }
