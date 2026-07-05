@@ -370,7 +370,11 @@ func (my *Dialect) buildDelete(ctx *compiler.Context, m *mutation) error {
 // buildMutationWhere 变更条件：强制要求条件，杜绝误操作全表
 func (my *Dialect) buildMutationWhere(ctx *compiler.Context, class *protocol.Class, field *ast.Field) error {
 	sc := scope{class: class, qualifier: class.Table}
-	if len(my.collectConditions(field.Arguments)) == 0 {
+	conditions, err := my.collectConditions(field.Arguments)
+	if err != nil {
+		return err
+	}
+	if len(conditions) == 0 {
 		return fmt.Errorf("%s需要id或where条件", field.Name)
 	}
 	// 行级作用域：update/delete 强制 AND 作用域，只能改本租户/属主的行
@@ -412,7 +416,20 @@ func (my *Dialect) rowsOfValue(ctx *compiler.Context, class *protocol.Class, val
 	case ast.ListValue:
 		rows := make([]inputRow, 0, len(value.Children))
 		for _, child := range value.Children {
-			row, err := my.literalRow(ctx, class, child.Value)
+			var row inputRow
+			var err error
+			if child.Value != nil && child.Value.Kind == ast.Variable {
+				// 变量元素按内容展开（volatile），杜绝静默填成整行DEFAULT
+				ctx.MarkVolatile()
+				raw, _ := ctx.Variable(child.Value.Raw)
+				object, ok := raw.(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("input变量 %s 缺失或不是对象", child.Value.Raw)
+				}
+				row, err = my.rawRow(ctx, class, object)
+			} else {
+				row, err = my.literalRow(ctx, class, child.Value)
+			}
 			if err != nil {
 				return nil, err
 			}

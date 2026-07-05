@@ -1109,3 +1109,80 @@ func TestProcessRelationsDuplicateTargets(t *testing.T) {
 	assert.Equal(t, "buyerId", fields["user"].Relation.SourceField, "排序遍历下user恒指向buyerId")
 	assert.Equal(t, "sellerId", fields["user1"].Relation.SourceField)
 }
+
+// TestProcessRelationsReverseDeduplicated db加载器在主键侧挂ONE_TO_MANY、外键侧挂MANY_TO_ONE，
+// 两条路径生成的是同一个反向列表字段：必须共用reverseSeen查重，否则产生comments1幽灵字段
+func TestProcessRelationsReverseDeduplicated(t *testing.T) {
+	user := &protocol.Class{Name: "User", Table: "users", Fields: map[string]*protocol.Field{
+		"id": {Name: "id", Column: "id", IsPrimary: true, Relation: &protocol.Relation{
+			Type: protocol.ONE_TO_MANY, SourceClass: "User", SourceField: "id",
+			TargetClass: "Comment", TargetField: "userId",
+		}},
+	}}
+	comment := &protocol.Class{Name: "Comment", Table: "comments", Fields: map[string]*protocol.Field{
+		"id": {Name: "id", Column: "id", IsPrimary: true},
+		"userId": {Name: "userId", Column: "user_id", Relation: &protocol.Relation{
+			Type: protocol.MANY_TO_ONE, SourceClass: "Comment", SourceField: "userId",
+			TargetClass: "User", TargetField: "id",
+		}},
+	}}
+	meta := &Metadata{Nodes: map[string]*protocol.Class{"User": user, "Comment": comment}}
+	meta.processRelations()
+
+	assert.NotNil(t, user.Fields["comments"], "应生成唯一的反向列表字段")
+	assert.Nil(t, user.Fields["comments1"], "双路径不应重复生成幽灵字段")
+	assert.NotNil(t, comment.Fields["user"], "正向多对一字段应生成")
+}
+
+// TestProcessRelationsStandaloneOneToMany 配置显式声明的ONE_TO_MANY（无MANY_TO_ONE反面）仍应生成字段
+func TestProcessRelationsStandaloneOneToMany(t *testing.T) {
+	user := &protocol.Class{Name: "User", Table: "users", Fields: map[string]*protocol.Field{
+		"id": {Name: "id", Column: "id", IsPrimary: true, Relation: &protocol.Relation{
+			Type: protocol.ONE_TO_MANY, SourceClass: "User", SourceField: "id",
+			TargetClass: "Post", TargetField: "authorId",
+		}},
+	}}
+	post := &protocol.Class{Name: "Post", Table: "posts", Fields: map[string]*protocol.Field{
+		"id":       {Name: "id", Column: "id", IsPrimary: true},
+		"authorId": {Name: "authorId", Column: "author_id"},
+	}}
+	meta := &Metadata{Nodes: map[string]*protocol.Class{"User": user, "Post": post}}
+	meta.processRelations()
+
+	assert.NotNil(t, user.Fields["posts"], "单独声明的ONE_TO_MANY应正常生成列表字段")
+}
+
+// TestFinalizeConfiguredRawKeys 配置原文键是表名/列名时，finalize也应识别为"已显式配置"，
+// 不得用SCALAR_ID覆盖用户指定的字段类型
+func TestFinalizeConfiguredRawKeys(t *testing.T) {
+	cfg := &internal.Config{Metadata: internal.MetadataConfig{Classes: map[string]*internal.ClassConfig{
+		"users": {Table: "users", Fields: map[string]*internal.FieldConfig{
+			"user_id": {Column: "user_id", Type: "Custom"},
+		}},
+	}}}
+	class := &protocol.Class{Name: "User", Table: "users", Fields: map[string]*protocol.Field{
+		"userId": {Name: "userId", Column: "user_id", Type: "Custom", IsPrimary: true},
+		"id":     {Name: "id", Column: "id", Type: "integer", IsPrimary: true},
+	}}
+	meta := &Metadata{cfg: cfg, Nodes: map[string]*protocol.Class{"User": class}}
+	meta.finalize()
+
+	assert.Equal(t, "Custom", class.Fields["userId"].Type, "配置原文键(表名/列名)显式指定的类型不应被finalize覆盖")
+	assert.Equal(t, protocol.SCALAR_ID, class.Fields["id"].Type, "未配置的主键仍应定型为ID")
+}
+
+// TestNewMetadataEmptyNodesError 所有加载器执行后无任何实体：
+// 非debug模式应返回明确错误，debug模式保留宽松行为
+func TestNewMetadataEmptyNodesError(t *testing.T) {
+	build := func(mode string) error {
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
+		k.Set("mode", mode)
+		k.Set("app.root", t.TempDir())
+		_, err = NewMetadata(k, nil)
+		return err
+	}
+
+	assert.Error(t, build("test"), "非debug模式下空元数据应报错")
+	assert.NoError(t, build("dev"), "debug模式保留宽松行为")
+}

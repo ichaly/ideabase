@@ -28,7 +28,10 @@ func (my scope) column(fieldName string) string {
 
 // buildWhere 构建WHERE子句；conjuncts为前置合取条件（关联/搜索/keyset），与用户条件AND组合
 func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.ArgumentList, conjuncts ...func() error) error {
-	conditions := my.collectConditions(args)
+	conditions, err := my.collectConditions(args)
+	if err != nil {
+		return err
+	}
 	if len(conjuncts) == 0 && len(conditions) == 0 {
 		return nil
 	}
@@ -51,8 +54,8 @@ func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.Argument
 	return my.buildConditionList(ctx, sc, conditions, "AND", len(conditions) > 1)
 }
 
-// collectConditions 收集所有WHERE条件（id参数转换为主键等值条件）
-func (my *Dialect) collectConditions(args ast.ArgumentList) []*ast.Value {
+// collectConditions 收集可渲染的WHERE条件（id参数转换为主键等值条件；空对象剪枝）
+func (my *Dialect) collectConditions(args ast.ArgumentList) ([]*ast.Value, error) {
 	var conditions []*ast.Value
 
 	if idArg := args.ForName(protocol.ID); idArg != nil && idArg.Value != nil {
@@ -69,10 +72,48 @@ func (my *Dialect) collectConditions(args ast.ArgumentList) []*ast.Value {
 	}
 
 	if whereArg := args.ForName(protocol.WHERE); whereArg != nil && whereArg.Value != nil {
-		conditions = append(conditions, whereArg.Value)
+		if whereArg.Value.Kind == ast.Variable {
+			return nil, fmt.Errorf("where暂不支持整体变量，请内联条件或使用字段级变量")
+		}
+		if renderable(whereArg.Value) {
+			conditions = append(conditions, whereArg.Value)
+		}
 	}
 
-	return conditions
+	return conditions, nil
+}
+
+// renderable 条件值是否会产出SQL片段；空对象语义为无条件恒真，整体剪枝
+func renderable(value *ast.Value) bool {
+	if value == nil {
+		return false
+	}
+	for _, child := range value.Children {
+		if renderableChild(child) {
+			return true
+		}
+	}
+	return false
+}
+
+// renderableChild 子条件是否会产出SQL片段（逻辑操作符递归剪枝，字段条件恒渲染）
+func renderableChild(child *ast.ChildValue) bool {
+	switch child.Name {
+	case protocol.AND, protocol.OR:
+		if child.Value == nil {
+			return false
+		}
+		for _, sub := range child.Value.Children {
+			if renderable(sub.Value) {
+				return true
+			}
+		}
+		return false
+	case protocol.NOT:
+		return renderable(child.Value)
+	default:
+		return true
+	}
 }
 
 // buildConditionList 用指定逻辑操作符连接条件列表，wrap控制是否加括号
@@ -94,16 +135,22 @@ func (my *Dialect) buildConditionList(ctx *compiler.Context, sc scope, condition
 	return nil
 }
 
-// buildCondition 构建单个条件值（对象条件的子项以AND连接）
+// buildCondition 构建单个条件值（对象条件的子项以AND连接；不可渲染的子项剪枝）
 func (my *Dialect) buildCondition(ctx *compiler.Context, sc scope, value *ast.Value) error {
-	if value == nil || len(value.Children) == 0 {
+	if value == nil {
 		return nil
 	}
+	children := make([]*ast.ChildValue, 0, len(value.Children))
+	for _, child := range value.Children {
+		if renderableChild(child) {
+			children = append(children, child)
+		}
+	}
 
-	if len(value.Children) > 1 {
+	if len(children) > 1 {
 		ctx.Write("(")
 	}
-	for i, child := range value.Children {
+	for i, child := range children {
 		if i > 0 {
 			ctx.Space("AND")
 		}
@@ -111,7 +158,7 @@ func (my *Dialect) buildCondition(ctx *compiler.Context, sc scope, value *ast.Va
 			return err
 		}
 	}
-	if len(value.Children) > 1 {
+	if len(children) > 1 {
 		ctx.Write(")")
 	}
 	return nil
@@ -128,9 +175,11 @@ func (my *Dialect) buildChild(ctx *compiler.Context, sc scope, child *ast.ChildV
 		if child.Value == nil || len(child.Value.Children) == 0 {
 			return fmt.Errorf("逻辑操作符 %s 至少需要一个条件", child.Name)
 		}
-		values := make([]*ast.Value, len(child.Value.Children))
-		for i, sub := range child.Value.Children {
-			values[i] = sub.Value
+		values := make([]*ast.Value, 0, len(child.Value.Children))
+		for _, sub := range child.Value.Children { // 空对象元素剪枝，剩余项才参与连接
+			if renderable(sub.Value) {
+				values = append(values, sub.Value)
+			}
 		}
 		return my.buildConditionList(ctx, sc, values, strings.ToUpper(child.Name), true)
 	case protocol.NOT:
@@ -197,6 +246,12 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, lhs func(), opChild *ast
 			ctx.Write(`::jsonb`)
 		}
 		ctx.Write(`)`)
+		return nil
+	}
+
+	// 字面量空列表恒不匹配：编译为FALSE（IN ()非法SQL，与变量路径= ANY('{}')语义对齐）
+	if opChild.Name == protocol.IN && value.Kind == ast.ListValue && len(value.Children) == 0 {
+		ctx.Write("FALSE")
 		return nil
 	}
 

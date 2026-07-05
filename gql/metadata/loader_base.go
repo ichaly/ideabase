@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/ichaly/ideabase/gql/internal"
+	"sort"
 	"time"
 
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/log"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
 )
@@ -54,6 +56,13 @@ func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface
 			return fmt.Errorf("解析元数据JSON失败: %w", err)
 		}
 	}
+
+	// 外键顺序决定Relation覆盖结果与中间表fks[0/1]判定，Go侧排序保证跨方言跨启动确定
+	// （MySQL的JSON_ARRAYAGG不支持聚合内ORDER BY，无法在SQL层保证）
+	fkKey := func(fk foreignKeyInfo) string {
+		return fk.SourceTable + "." + fk.SourceColumn + ">" + fk.TargetTable + "." + fk.TargetColumn
+	}
+	sort.Slice(foreignKeys, func(i, j int) bool { return fkKey(foreignKeys[i]) < fkKey(foreignKeys[j]) })
 
 	// 组装Class结构，主索引为表名
 	classMap := make(map[string]*protocol.Class)
@@ -133,21 +142,21 @@ func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface
 		// 判断是否为自关联
 		isRecursive := sourceTable == targetTable
 		// 正向关系（多对一/递归）：如 comments.user_id -> users.id
-		sourceField.Relation = &protocol.Relation{
+		setRelation(sourceTable, sourceField, &protocol.Relation{
 			SourceClass: sourceTable,
 			SourceField: sourceColumn,
 			TargetClass: targetTable,
 			TargetField: targetColumn,
 			Type:        lo.Ternary(isRecursive, protocol.RECURSIVE, protocol.MANY_TO_ONE),
-		}
+		})
 		// 反向关系（一对多/递归）：如 users.id <- comments.user_id
-		targetField.Relation = &protocol.Relation{
+		setRelation(targetTable, targetField, &protocol.Relation{
 			SourceClass: targetTable,
 			SourceField: targetColumn,
 			TargetClass: sourceTable,
 			TargetField: sourceColumn,
 			Type:        lo.Ternary(isRecursive, protocol.RECURSIVE, protocol.ONE_TO_MANY),
-		}
+		})
 	}
 	// 处理多对多关系
 	detectManyToManyRelations(classMap, foreignKeys, primaryKeys)
@@ -229,9 +238,22 @@ func createManyToManyRelation(classes map[string]*protocol.Class, tableName stri
 	r1 := createRelation(fk1.TargetTable, fk2.TargetTable, fk1.TargetColumn, fk2.TargetColumn, fk1.SourceColumn, fk2.SourceColumn)
 	r2 := createRelation(fk2.TargetTable, fk1.TargetTable, fk2.TargetColumn, fk1.TargetColumn, fk2.SourceColumn, fk1.SourceColumn)
 	if f1 := class1.Fields[fk1.TargetColumn]; f1 != nil && f1.IsPrimary {
-		f1.Relation = &r1
+		setRelation(fk1.TargetTable, f1, &r1)
 	}
 	if f2 := class2.Fields[fk2.TargetColumn]; f2 != nil && f2.IsPrimary {
-		f2.Relation = &r2
+		setRelation(fk2.TargetTable, f2, &r2)
 	}
+}
+
+// setRelation 挂载关系并对指针覆盖告警：Field.Relation是单指针，
+// 同一字段被多条外键路径引用时后者覆盖前者会丢失关系
+// （改类级关系集合属大重构，本期只观测；SQL已加ORDER BY保证覆盖结果跨启动确定）
+func setRelation(table string, field *protocol.Field, rel *protocol.Relation) {
+	if old := field.Relation; old != nil {
+		log.Warn().Str("table", table).Str("field", field.Name).
+			Str("old", string(old.Type)+"->"+old.TargetClass+"."+old.TargetField).
+			Str("new", string(rel.Type)+"->"+rel.TargetClass+"."+rel.TargetField).
+			Msg("字段Relation被覆盖，同一列存在多条关系路径")
+	}
+	field.Relation = rel
 }

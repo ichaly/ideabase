@@ -181,12 +181,13 @@ func (my *Context) GetClass(className string) (*protocol.Class, bool) {
 }
 
 // Args 返回参数列表（按当前变量表解析所有槽位）
-func (my *Context) Args() []any {
+func (my *Context) Args() ([]any, error) {
 	return ResolveSlots(my.slots, my.variables, nil)
 }
 
-// ResolveSlots 解析槽位为参数列表；同一游标变量只解码一次（K个排序键共享）
-func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) []any {
+// ResolveSlots 解析槽位为参数列表；同一游标变量只解码一次（K个排序键共享）；
+// 游标解码失败返回错误（静默空页会掩盖坏游标）
+func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) ([]any, error) {
 	var cursors map[string][]any // 惰性：仅游标槽位存在时分配
 	args := make([]any, len(slots))
 	for i, slot := range slots {
@@ -201,7 +202,10 @@ func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) []any {
 			keys, ok := cursors[slot.Variable]
 			if !ok {
 				if text, isText := variables[slot.Variable].(string); isText {
-					keys, _ = DecodeCursor(text)
+					var err error
+					if keys, err = DecodeCursor(text); err != nil {
+						return nil, err
+					}
 				}
 				cursors[slot.Variable] = keys
 			}
@@ -215,7 +219,7 @@ func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) []any {
 			args[i] = listArg(args[i])
 		}
 	}
-	return args
+	return args, nil
 }
 
 // listArg 列表槽位规范化：单值按GraphQL规范强转单元素列表，

@@ -221,3 +221,40 @@ func (my *_DialectSuite) TestBulkMutations() {
 	}
 	my.runCases(cases)
 }
+
+// TestMutationVariableElement input字面量列表中的变量元素：按内容展开为VALUES行（volatile），
+// 变量缺失明确报错，杜绝静默填成整行DEFAULT
+func (my *_DialectSuite) TestMutationVariableElement() {
+	my.runCases([]Case{
+		{
+			name:      "列表含变量元素展开",
+			query:     `mutation ($u: UserCreateInput!) { createUsers(input: [$u, { name: "B", email: "b@x" }]) { id } }`,
+			variables: map[string]interface{}{"u": map[string]interface{}{"name": "A", "email": "a@x"}},
+			args:      []any{"a@x", "A", "b@x", "B"},
+			expected: `WITH "sys_user" AS (INSERT INTO "public"."sys_user" ("email", "name") VALUES ($1, $2), ($3, $4) RETURNING *)
+				SELECT JSONB_BUILD_OBJECT('createUsers', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]') AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id"
+						FROM (SELECT "sys_user"."id" FROM "sys_user") AS "sys_user_0"
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+	})
+
+	query := `mutation ($u: UserCreateInput!) { createUsers(input: [$u]) { id } }`
+	doc, gqlErr := gqlparser.LoadQuery(my.schema, query)
+	my.Require().Empty(gqlErr, "解析失败")
+	compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
+	my.Require().NoError(err)
+
+	// 变量元素的计划依赖变量内容，须标记volatile防错误计划被缓存
+	plan, err := compile.Compile(doc.Operations[0], map[string]interface{}{"u": map[string]interface{}{"name": "A"}})
+	my.Require().NoError(err)
+	my.Assert().True(plan.Volatile(), "变量元素计划须标记volatile")
+
+	// 变量缺失明确报错
+	_, err = compile.Compile(doc.Operations[0], nil)
+	my.Assert().ErrorContains(err, "缺失或不是对象")
+}

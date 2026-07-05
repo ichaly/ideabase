@@ -26,6 +26,7 @@ import (
 type notifier interface {
 	watch(tables []string) (*watcher, error)
 	unwatch(w *watcher)
+	close() // 停止监听并释放连接（Executor.Close调用，须幂等）
 }
 
 // notifiers 唤醒源工厂注册表（key=gorm驱动名），在各实现文件的init中登记
@@ -65,10 +66,11 @@ type watcher struct {
 // watcher按表名索引，notify只触达关注该表的子集
 type listener struct {
 	mu       sync.Mutex
-	once     sync.Once
-	err      error                        // 首次启动失败的原因，Subscribe据此报错
+	started  bool                         // 复制连接是否已启动；失败不置位，下次Subscribe自动重试
 	watchers map[string]map[*watcher]bool // 表名 -> 关注该表的watcher集合
 
+	ctx         context.Context // 监听器生命周期：close取消后接收与重连循环退出
+	cancel      context.CancelFunc
 	dsn         string
 	publication string
 }
@@ -78,29 +80,34 @@ func newListener(dsn, publication string) *listener {
 	if publication == "" {
 		publication = "ideabase_cdc"
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &listener{
+		ctx:         ctx,
+		cancel:      cancel,
 		dsn:         dsn,
 		publication: publication,
 		watchers:    make(map[string]map[*watcher]bool),
 	}
 }
 
-// watch 注册订阅的唤醒端；首次调用启动复制连接，失败则订阅失败
+// close 停止监听：取消生命周期ctx，接收循环随ctx中断、重连循环退出
+func (my *listener) close() { my.cancel() }
+
+// watch 注册订阅的唤醒端；首次调用启动复制连接。
+// 建连失败只返回错误不缓存（不用sync.Once），数据库恢复后的下一次订阅会自动重试
 func (my *listener) watch(tables []string) (*watcher, error) {
-	my.once.Do(func() {
+	my.mu.Lock()
+	if !my.started {
 		conn, err := my.connect()
 		if err != nil {
-			my.err = err
-			return
+			my.mu.Unlock()
+			return nil, fmt.Errorf("CDC监听启动失败（确认 wal_level=logical 与REPLICATION权限）: %w", err)
 		}
+		my.started = true // 启动后run内部自带退避重连，无需再回退标志
 		go my.run(conn)
-	})
-	if my.err != nil {
-		return nil, fmt.Errorf("CDC监听启动失败（确认 wal_level=logical 与REPLICATION权限）: %w", my.err)
 	}
 
 	w := &watcher{tables: make(map[string]bool, len(tables)), wake: make(chan struct{}, 1)}
-	my.mu.Lock()
 	for _, table := range tables {
 		w.tables[table] = true
 		group := my.watchers[table]
@@ -156,7 +163,7 @@ func (my *listener) notify(tables ...string) {
 
 // connect 建立复制连接：确保发布存在、创建临时槽、启动逻辑复制
 func (my *listener) connect() (*pgconn.PgConn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(my.ctx, 15*time.Second)
 	defer cancel()
 
 	conn, err := pgconn.Connect(ctx, replicationDSN(my.dsn))
@@ -194,17 +201,24 @@ func (my *listener) connect() (*pgconn.PgConn, error) {
 	return conn, nil
 }
 
-// run 接收循环：解码WAL消息到表级变更；断线退避重连，重连后广播补偿
+// run 接收循环：解码WAL消息到表级变更；断线退避重连，重连后广播补偿；close后退出
 func (my *listener) run(conn *pgconn.PgConn) {
 	backoff := time.Second
 	for {
 		my.receive(conn)
 		_ = conn.Close(context.Background())
+		if my.ctx.Err() != nil {
+			return
+		}
 
 		// 退避重连
 		for {
 			log.Warn().Dur("backoff", backoff).Msg("CDC复制连接断开，准备重连")
-			time.Sleep(backoff)
+			select {
+			case <-my.ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
 			if backoff < 30*time.Second {
 				backoff *= 2
 			}
@@ -237,11 +251,11 @@ func (my *listener) receive(conn *pgconn.PgConn) {
 			deadline = time.Now().Add(statusInterval)
 		}
 
-		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		ctx, cancel := context.WithDeadline(my.ctx, deadline)
 		raw, err := conn.ReceiveMessage(ctx)
 		cancel()
 		if err != nil {
-			if pgconn.Timeout(err) {
+			if pgconn.Timeout(err) && my.ctx.Err() == nil {
 				continue
 			}
 			return

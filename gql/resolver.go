@@ -85,9 +85,14 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 		if !ok {
 			continue
 		}
-		// 查询根字段类型为XxxResult，变更读回直接是实体类型
-		className := strings.TrimSuffix(f.Definition.Type.Name(), protocol.SUFFIX_RESULT)
-		if class, ok := meta.GetNode(className); ok {
+		// 变更读回直接是实体类型，查询根字段类型为XxxResult包装：
+		// 先按原名匹配（本名以Result结尾的实体如ExamResult不可误剪），miss再剪后缀
+		className := f.Definition.Type.Name()
+		class, ok := meta.GetNode(className)
+		if !ok {
+			class, ok = meta.GetNode(strings.TrimSuffix(className, protocol.SUFFIX_RESULT))
+		}
+		if ok {
 			walk(class, f.SelectionSet, []string{f.Alias})
 		}
 	}

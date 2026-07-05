@@ -86,12 +86,17 @@ func newPager(sc scope, args ast.ArgumentList) (*pager, error) {
 	// 排序键 = 用户sort + 主键兜底（保证全序与游标确定性）
 	tail := make(map[string]bool)
 	for _, child := range sortEntries(args) {
-		direction := ""
-		if child.Value != nil {
-			direction = directions[strings.ToUpper(child.Value.Raw)]
+		// 方向决定SQL比较符，须编译期定值：变量或非法枚举与buildOrderBy一致报错（防静默当ASC）
+		desc := false
+		if child.Value != nil && child.Value.Raw != "" {
+			direction, ok := directions[strings.ToUpper(child.Value.Raw)]
+			if child.Value.Kind == ast.Variable || !ok {
+				return nil, fmt.Errorf("无效的排序方向: %s", child.Value.Raw)
+			}
+			desc = strings.HasPrefix(direction, "DESC")
 		}
 		column := sc.column(child.Name)
-		my.keys = append(my.keys, pageKey{column: column, desc: strings.HasPrefix(direction, "DESC")})
+		my.keys = append(my.keys, pageKey{column: column, desc: desc})
 		tail[column] = true
 	}
 	for _, pk := range sc.class.PrimaryKeys {

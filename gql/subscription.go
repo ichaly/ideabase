@@ -14,8 +14,18 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
+// feed 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查循环，结果扇出。
+// 热点订阅的重查次数与订阅者数解耦：表变更时每份feed只打一条SQL
+type feed struct {
+	subs map[chan gqlReply]bool
+	last gqlReply // 最近一次推送，后来的订阅者立即补发（免重查）
+	live bool     // last是否已有效
+	stop context.CancelFunc
+}
+
 // Subscribe 订阅查询：基于WAL逻辑复制(CDC)的变更推送
-// 订阅涉及的表发生变更时重执行查询，结果指纹变化才推送；
+// 订阅涉及的表发生变更时重执行查询，结果指纹变化才推送最新状态
+// （慢消费者不阻塞其他订阅者，未消费的旧结果被最新结果顶替）；
 // 首次立即推送当前结果；ctx取消后通道关闭
 // 依赖数据库 wal_level=logical 与连接账号的REPLICATION权限
 func (my *Executor) Subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
@@ -27,30 +37,48 @@ func (my *Executor) Subscribe(ctx context.Context, query string, variables map[s
 		return nil, err
 	}
 
-	w, err := my.cdc.watch(plan.tables)
-	if err != nil {
-		return nil, err
-	}
-
+	// 键在plan之后计算：codec入参已还原，等价请求（如shortId与数字ID）归并到同一feed
+	scope := scopeValues(ctx)
+	key := feedKey(query, operationName, variables, scope)
 	events := make(chan gqlReply, 1)
-	go my.stream(ctx, plan, variables, w, events)
+
+	my.feedMu.Lock()
+	f := my.feeds[key]
+	if f == nil {
+		w, err := my.cdc.watch(plan.tables)
+		if err != nil {
+			my.feedMu.Unlock()
+			return nil, err
+		}
+		fctx, stop := context.WithCancel(WithScope(context.Background(), scope))
+		f = &feed{subs: make(map[chan gqlReply]bool), stop: stop}
+		my.feeds[key] = f
+		go my.stream(fctx, plan, variables, w, f)
+	}
+	f.subs[events] = true
+	if f.live {
+		events <- f.last // 补发最近结果：通道新建且容量1，必不阻塞
+	}
+	my.feedMu.Unlock()
+
+	go func() { <-ctx.Done(); my.leave(key, f, events) }()
 	return events, nil
 }
 
-// stream 订阅事件循环：首查推送，之后等待表变更唤醒
-func (my *Executor) stream(ctx context.Context, plan *Plan, variables map[string]interface{}, w *watcher, events chan<- gqlReply) {
-	defer close(events)
+// stream 共享流事件循环：首查推送，之后表变更唤醒重查，变化结果扇出给全部订阅者
+func (my *Executor) stream(ctx context.Context, plan *Plan, variables map[string]interface{}, w *watcher, f *feed) {
 	defer my.cdc.unwatch(w)
 
 	var last uint64
 	digest := fnv.New64a() // stream单goroutine持有，tick内Reset复用免每次分配
 	for {
 		if reply, changed := my.tick(ctx, plan, variables, digest, &last); changed {
-			select {
-			case events <- reply:
-			case <-ctx.Done():
-				return
+			my.feedMu.Lock()
+			f.last, f.live = reply, true
+			for ch := range f.subs {
+				push(ch, reply)
 			}
+			my.feedMu.Unlock()
 		}
 		select {
 		case <-w.wake:
@@ -58,6 +86,42 @@ func (my *Executor) stream(ctx context.Context, plan *Plan, variables map[string
 			return
 		}
 	}
+}
+
+// push 非阻塞推送：通道满则挤掉未消费的旧结果放入最新（订阅语义是最新状态而非事件流）
+func push(ch chan gqlReply, reply gqlReply) {
+	for {
+		select {
+		case ch <- reply:
+			return
+		default:
+			select {
+			case <-ch:
+			default:
+			}
+		}
+	}
+}
+
+// leave 订阅者退出：关闭其通道；最后一个退出时停止共享流并摘除
+func (my *Executor) leave(key string, f *feed, ch chan gqlReply) {
+	my.feedMu.Lock()
+	delete(f.subs, ch)
+	close(ch)
+	if len(f.subs) == 0 {
+		f.stop()
+		if my.feeds[key] == f {
+			delete(my.feeds, key)
+		}
+	}
+	my.feedMu.Unlock()
+}
+
+// feedKey 共享流身份：查询+操作名+变量+作用域（map序列化按键排序，同构请求必得同键）
+func feedKey(query, operation string, variables, scope map[string]any) string {
+	v, _ := json.Marshal(variables)
+	s, _ := json.Marshal(scope)
+	return query + "\x00" + operation + "\x00" + string(v) + "\x00" + string(s)
 }
 
 // tick 表变更唤醒后重查一次：结果指纹无变化时返回false（不推送）
@@ -70,7 +134,7 @@ func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]i
 			return r, false
 		}
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
-		return r, true
+		data = []byte(err.Error()) // 错误同样参与指纹：持续故障只推送一次，恢复或换错才再推
 	}
 
 	digest.Reset()
@@ -80,6 +144,9 @@ func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]i
 		return r, false
 	}
 	*last = sum
+	if r.Errors != nil {
+		return r, true
+	}
 
 	// 订阅是公开API：始终解包为Data供程序化消费（变更推送频率低，非热路径）
 	result, warnings, err := my.unpack(ctx, plan, data)

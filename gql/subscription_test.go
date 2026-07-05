@@ -61,6 +61,63 @@ func TestSubscribe(t *testing.T) {
 	}
 }
 
+// TestSubscribeShared 同构订阅共享一份重查流：两个订阅只建一个feed且各自收到推送；
+// 先退一个feed仍存续，全部退出后feed摘除
+func TestSubscribeShared(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	query := `subscription { users { items { name } total } }`
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+
+	e1, err := executor.Subscribe(ctx1, query, nil, "")
+	require.NoError(t, err)
+	e2, err := executor.Subscribe(ctx2, query, nil, "")
+	require.NoError(t, err)
+
+	executor.feedMu.Lock()
+	require.Len(t, executor.feeds, 1, "同构订阅应共享同一feed")
+	executor.feedMu.Unlock()
+
+	first := func(events <-chan gqlReply, hint string) {
+		select {
+		case reply, ok := <-events:
+			require.True(t, ok, "通道意外关闭: %s", hint)
+			require.Empty(t, reply.Errors, "%s: %v", hint, reply.Errors)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("等待首次推送超时: %s", hint)
+		}
+	}
+	first(e1, "订阅1")
+	first(e2, "订阅2应获最近结果补发")
+
+	// 退出一个：其通道关闭（leave在close前完成），feed因另一订阅存续
+	cancel1()
+	select {
+	case _, ok := <-e1:
+		if ok {
+			_, ok = <-e1
+			require.False(t, ok, "取消后通道应关闭")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("取消后通道未关闭")
+	}
+	executor.feedMu.Lock()
+	require.Len(t, executor.feeds, 1, "仍有订阅者时feed应存续")
+	executor.feedMu.Unlock()
+
+	// 全部退出：feed摘除
+	cancel2()
+	require.Eventually(t, func() bool {
+		executor.feedMu.Lock()
+		defer executor.feedMu.Unlock()
+		return len(executor.feeds) == 0
+	}, 3*time.Second, 50*time.Millisecond, "全部退出后feed应摘除")
+}
+
 // TestSubscribeScope 订阅按作用域隔离：订阅 ctx 的租户决定推送范围。
 // 这是 WebSocket 升级丢 scope 修复的下游验证——证明订阅 fetch 确实用 scopeValues(ctx)
 // 过滤；升级阶段把 HTTP ctx 的 scope 传到连接 ctx 那段为纯管道，由代码审查保证

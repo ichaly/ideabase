@@ -67,7 +67,7 @@ func (my *Executor) RegisterAction(actions ...Action) error {
 	}
 	my.schema = s
 	my.intro = intro.New(s)
-	my.cache = newPlanCache(512)
+	my.cache = newPlanCache(planCacheSize)
 	return nil
 }
 
@@ -77,6 +77,9 @@ func (my *Executor) checkActions(set ast.SelectionSet) (bool, error) {
 	hit, miss := 0, 0
 	for _, s := range set {
 		if f, ok := s.(*ast.Field); ok {
+			if strings.HasPrefix(f.Name, "__") {
+				continue // __typename等内省元字段不计入混排统计（Apollo客户端默认注入）
+			}
 			if _, ok := my.actions[f.Name]; ok {
 				hit++
 			} else {
@@ -93,12 +96,24 @@ func (my *Executor) checkActions(set ast.SelectionSet) (bool, error) {
 	return true, nil
 }
 
-// executeActions 顺序执行操作内的全部Action字段（变更语义按GraphQL规范串行）
+// executeActions 顺序执行操作内的全部Action字段（变更语义按GraphQL规范串行）；
+// 回查产生的非致命警告以GraphQL部分错误语义与data共存返回
 func (my *Executor) executeActions(ctx context.Context, operation *ast.OperationDefinition, variables map[string]interface{}) gqlReply {
+	typename := "Query"
+	if operation.Operation == ast.Mutation {
+		typename = "Mutation"
+	}
+	var warnings gqlerror.List
 	data := make(map[string]interface{}, len(operation.SelectionSet))
 	for _, s := range operation.SelectionSet {
 		f, ok := s.(*ast.Field)
 		if !ok {
+			continue
+		}
+		if strings.HasPrefix(f.Name, "__") {
+			if f.Name == "__typename" {
+				data[f.Alias] = typename // 按操作类型回填根类型名
+			}
 			continue
 		}
 		action := my.actions[f.Name]
@@ -106,56 +121,90 @@ func (my *Executor) executeActions(ctx context.Context, operation *ast.Operation
 		if err != nil {
 			return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
 		}
-		value, err := my.enrich(ctx, f, variables, result)
+		value, warns, err := my.enrich(ctx, operation, f, variables, result)
 		if err != nil {
 			return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
 		}
+		warnings = append(warnings, warns...)
 		data[f.Alias] = value
 	}
-	return gqlReply{Data: data}
+	return gqlReply{Data: data, Errors: warnings}
 }
 
 // enrich 回查补全：Action返回实体id时，以客户端选择集合成实体查询走既有
 // 编译路径读回（计划缓存、字段级resolver、关系全部复用），对齐变更读回语义。
-func (my *Executor) enrich(ctx context.Context, f *ast.Field, variables map[string]interface{}, result interface{}) (interface{}, error) {
+// 第二返回值为回查携带的非致命警告（data与errors共存时），随最终响应errors返回
+func (my *Executor) enrich(ctx context.Context, operation *ast.OperationDefinition, f *ast.Field, variables map[string]interface{}, result interface{}) (interface{}, gqlerror.List, error) {
 	if result == nil || len(f.SelectionSet) == 0 {
-		return result, nil
+		return result, nil, nil
 	}
 	switch result.(type) {
 	case map[string]interface{}, []interface{}:
-		return result, nil
+		return result, nil, nil
 	}
 	className := f.Definition.Type.Name()
 	if _, ok := my.metadata.GetNode(className); !ok {
-		return result, nil
+		return result, nil, nil
 	}
 
-	// 主键经变量通道传入：免字面量拼接的类型变形问题（自定义MarshalJSON等），
-	// 且合成查询文本与id无关，回查计划可按实体+选择集缓存复用
+	// 主键与选择集引用到的原变量均经变量通道传入：不内联字面量（map经json序列化
+	// 会带引号键、枚举会变带引号字符串，均是非法GraphQL），且合成查询文本与实参
+	// 无关，回查计划可按实体+选择集缓存复用
+	used := make(map[string]bool)
+	collectVariables(f.SelectionSet, used)
+	pk := protocol.ID
+	for used[pk] {
+		pk = "_" + pk // 避开客户端同名变量
+	}
+	args := map[string]interface{}{pk: result}
+
+	fieldName := strcase.ToLowerCamel(inflection.Plural(className))
 	var sb strings.Builder
-	sb.WriteString("query ($id: ID!) { ")
-	sb.WriteString(strcase.ToLowerCamel(inflection.Plural(className)))
-	sb.WriteString("(id: $id, limit: 1) { ")
+	sb.WriteString("query ($")
+	sb.WriteString(pk)
+	sb.WriteString(": ID!")
+	for _, vd := range operation.VariableDefinitions {
+		if !used[vd.Variable] {
+			continue
+		}
+		sb.WriteString(", $")
+		sb.WriteString(vd.Variable)
+		sb.WriteString(": ")
+		sb.WriteString(vd.Type.String())
+		if vd.DefaultValue != nil {
+			sb.WriteString(" = ")
+			sb.WriteString(vd.DefaultValue.String())
+		}
+		if v, ok := variables[vd.Variable]; ok {
+			args[vd.Variable] = v
+		}
+	}
+	sb.WriteString(") { ")
+	sb.WriteString(fieldName)
+	sb.WriteString("(id: $")
+	sb.WriteString(pk)
+	sb.WriteString(", limit: 1) { ")
 	sb.WriteString(protocol.ITEMS)
 	sb.WriteString(" ")
-	writeSelectionSet(&sb, f.SelectionSet, variables)
+	writeSelectionSet(&sb, f.SelectionSet)
 	sb.WriteString(" } }")
 
-	reply := my.Execute(ctx, sb.String(), map[string]interface{}{"id": result}, "")
+	reply := my.Execute(ctx, sb.String(), args, "")
 	if reply.Data == nil && len(reply.Errors) > 0 { // 部分错误(如远程警告)与data共存时视为成功
-		return nil, fmt.Errorf("Action回查失败: %w", reply.Errors)
+		return nil, nil, fmt.Errorf("Action回查失败: %w", reply.Errors)
 	}
-	wrapper, _ := reply.Data[strcase.ToLowerCamel(inflection.Plural(className))].(map[string]interface{})
+	wrapper, _ := reply.Data[fieldName].(map[string]interface{})
 	items, _ := wrapper[protocol.ITEMS].([]interface{})
 	if len(items) == 0 {
-		return nil, nil
+		return nil, reply.Errors, nil
 	}
-	return items[0], nil
+	return items[0], reply.Errors, nil
 }
 
 // writeSelectionSet 把客户端选择集序列化回GraphQL文本用于合成回查
-// （fragment已在parse阶段inline展开，只需处理字段/别名/参数/嵌套）
-func writeSelectionSet(sb *strings.Builder, set ast.SelectionSet, variables map[string]interface{}) {
+// （fragment已在parse阶段inline展开，只需处理字段/别名/参数/嵌套）；
+// 参数值直接用ast.Value.String()：变量引用保留$name形态，由合成查询声明后透传
+func writeSelectionSet(sb *strings.Builder, set ast.SelectionSet) {
 	sb.WriteString("{")
 	for _, s := range set {
 		f, ok := s.(*ast.Field)
@@ -176,49 +225,40 @@ func writeSelectionSet(sb *strings.Builder, set ast.SelectionSet, variables map[
 				}
 				sb.WriteString(a.Name)
 				sb.WriteString(": ")
-				writeValue(sb, a.Value, variables)
+				sb.WriteString(a.Value.String())
 			}
 			sb.WriteString(")")
 		}
 		if len(f.SelectionSet) > 0 {
 			sb.WriteString(" ")
-			writeSelectionSet(sb, f.SelectionSet, variables)
+			writeSelectionSet(sb, f.SelectionSet)
 		}
 	}
 	sb.WriteString(" }")
 }
 
-// writeValue 序列化参数值；变量引用就地代入实参（合成查询不声明变量）
-func writeValue(sb *strings.Builder, v *ast.Value, variables map[string]interface{}) {
-	switch v.Kind {
-	case ast.Variable:
-		data, err := json.Marshal(variables[v.Raw])
-		if err != nil {
-			sb.WriteString("null")
+// collectVariables 收集选择集参数中引用到的变量名（含对象/列表嵌套）
+func collectVariables(set ast.SelectionSet, used map[string]bool) {
+	var walk func(v *ast.Value)
+	walk = func(v *ast.Value) {
+		if v == nil {
 			return
 		}
-		sb.Write(data)
-	case ast.ObjectValue:
-		sb.WriteString("{")
-		for i, child := range v.Children {
-			if i > 0 {
-				sb.WriteString(", ")
-			}
-			sb.WriteString(child.Name)
-			sb.WriteString(": ")
-			writeValue(sb, child.Value, variables)
+		if v.Kind == ast.Variable {
+			used[v.Raw] = true
 		}
-		sb.WriteString("}")
-	case ast.ListValue:
-		sb.WriteString("[")
-		for i, child := range v.Children {
-			if i > 0 {
-				sb.WriteString(", ")
-			}
-			writeValue(sb, child.Value, variables)
+		for _, child := range v.Children {
+			walk(child.Value)
 		}
-		sb.WriteString("]")
-	default:
-		sb.WriteString(v.String())
+	}
+	for _, s := range set {
+		f, ok := s.(*ast.Field)
+		if !ok {
+			continue
+		}
+		for _, a := range f.Arguments {
+			walk(a.Value)
+		}
+		collectVariables(f.SelectionSet, used)
 	}
 }

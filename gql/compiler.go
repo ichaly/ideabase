@@ -44,16 +44,21 @@ func (my *Plan) Volatile() bool {
 	return my.volatile
 }
 
-// Args 按变量表解析参数槽位，缺失变量回退到操作定义的默认值；
+// ResolveArgs 按变量表解析参数槽位，变量缺失（而非显式null）时回退操作定义的默认值；
+// 默认值并入变量表统一解析，游标/列表槽位同样经解码与规范化；
 // scope 提供行级作用域值（租户/属主，认证注入），无作用域时传nil
-func (my *Plan) Args(variables, scope map[string]interface{}) []any {
-	args := compiler.ResolveSlots(my.slots, variables, scope)
-	for i, slot := range my.slots {
-		if args[i] == nil && slot.Variable != "" {
-			args[i] = my.defaults[slot.Variable]
+func (my *Plan) ResolveArgs(variables, scope map[string]interface{}) ([]any, error) {
+	if len(my.defaults) > 0 {
+		merged := make(map[string]interface{}, len(variables)+len(my.defaults))
+		for k, v := range my.defaults {
+			merged[k] = v
 		}
+		for k, v := range variables { // 显式传入（含null）覆盖默认值，符合GraphQL规范
+			merged[k] = v
+		}
+		variables = merged
 	}
-	return args
+	return compiler.ResolveSlots(my.slots, variables, scope)
 }
 
 // inline 展开选择集中的fragment（命名与内联），编译器只需处理纯字段
@@ -118,7 +123,11 @@ func (my *Compiler) Build(operation *ast.OperationDefinition, variables map[stri
 	if err != nil {
 		return "", nil, err
 	}
-	return plan.SQL, plan.Args(variables, nil), nil
+	args, err := plan.ResolveArgs(variables, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	return plan.SQL, args, nil
 }
 
 // selectDialect 选择适合当前数据库的SQL方言

@@ -185,6 +185,10 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 			}
 		}
 	}
+	// 所有Loader执行完仍无任何元数据：生产环境直接报错避免带空schema启动，debug模式保留宽松行为便于排查
+	if len(my.Nodes) == 0 && !cfg.IsDebug() {
+		return nil, fmt.Errorf("元数据加载失败：所有加载器执行后无任何实体（请检查数据库连接、metadata.file 或 metadata.classes 配置）")
+	}
 	// 进行驼峰命名和过滤处理
 	my.normalize()
 	// 统一关系处理
@@ -206,7 +210,7 @@ func (my *Metadata) finalize() {
 			continue
 		}
 		for name, field := range class.Fields {
-			if name != field.Name || field.Virtual || my.configured(className, name) {
+			if name != field.Name || field.Virtual || my.configured(class, field) {
 				continue
 			}
 			if field.IsPrimary || field.Relation != nil {
@@ -227,10 +231,23 @@ func (my *Metadata) finalize() {
 }
 
 // configured 字段类型是否被配置显式指定
-func (my *Metadata) configured(className, fieldName string) bool {
-	if class, ok := my.cfg.Metadata.Classes[className]; ok {
-		if field, ok := class.Fields[fieldName]; ok {
-			return field.Type != ""
+// normalize后类名/字段名已规范化，而配置原文键可能是表名/列名等原始名，需多键尝试匹配
+func (my *Metadata) configured(class *protocol.Class, field *protocol.Field) bool {
+	if my.cfg == nil {
+		return false
+	}
+	for _, classKey := range []string{class.Name, class.Table} {
+		classConfig, ok := my.cfg.Metadata.Classes[classKey]
+		if classKey == "" || !ok {
+			continue
+		}
+		for _, fieldKey := range []string{field.Name, field.Column} {
+			if fieldKey == "" {
+				continue
+			}
+			if fieldConfig, ok := classConfig.Fields[fieldKey]; ok && fieldConfig.Type != "" {
+				return true
+			}
 		}
 	}
 	return false
@@ -376,8 +393,14 @@ func (my *Metadata) processRelations() {
 			case protocol.MANY_TO_MANY:
 				pending = append(pending, my.collectManyToMany(class, relation)...)
 			case protocol.ONE_TO_MANY:
-				pending = append(pending, my.listField(class, relation.TargetClass, false,
-					cloneRelation(relation, protocol.ONE_TO_MANY, false)))
+				// 与collectManyToOne登记同一key：db加载器在主键侧挂ONE_TO_MANY、外键侧挂MANY_TO_ONE，
+				// 两条路径生成的是同一个反向列表字段，这里查重避免生成comments1幽灵字段
+				key := class.Name + ":" + relation.TargetClass
+				if !reverseSeen[key] {
+					reverseSeen[key] = true
+					pending = append(pending, my.listField(class, relation.TargetClass, false,
+						cloneRelation(relation, protocol.ONE_TO_MANY, false)))
+				}
 			case protocol.MANY_TO_ONE:
 				pending = append(pending, my.collectManyToOne(class, targetClass, field, relation, reverseSeen)...)
 			case protocol.RECURSIVE:

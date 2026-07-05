@@ -185,39 +185,42 @@ func (my *ConfigLoader) applyFieldConfig(class *protocol.Class, fieldConfigs map
 	fields := class.Fields
 	for _, fieldName := range orderedFields {
 		fieldConfig := fieldConfigs[fieldName]
-		canonName := ConvertFieldName(fieldConfig.Column, config)
 
-		// TODO: 如果字段存在，则尝试使用字段的列名,是否有必要?
+		// 字段已存在时沿用其实际列名；只用局部变量参与后续逻辑，
+		// 绝不回写常驻的fieldConfig（配置对象跨次构建复用，写回会导致二次构建分组判定漂移）
+		canonName := ConvertFieldName(fieldConfig.Column, config)
+		column := fieldConfig.Column
 		if field, ok := fields[fieldName]; ok {
-			fieldConfig.Column = field.Column
+			column = field.Column
 		}
 
 		// 虚拟字段
-		if fieldConfig.Column == "" {
-			fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, fieldConfig, nil)
+		if column == "" {
+			fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, column, fieldConfig, nil)
 			continue
 		}
 
 		// 列字段、标准字段、覆盖字段统一处理
-		if fieldName == fieldConfig.Column || fieldName == canonName || fieldConfig.Override {
-			fields[fieldConfig.Column] = my.buildFieldFromConfig(class.Name, fieldName, fieldConfig, class.Fields[fieldConfig.Column])
+		if fieldName == column || fieldName == canonName || fieldConfig.Override {
+			fields[column] = my.buildFieldFromConfig(class.Name, fieldName, column, fieldConfig, class.Fields[column])
 			continue
 		}
 
 		// 别名字段（必须依赖基础字段）
-		baseField, ok := fields[fieldConfig.Column]
+		baseField, ok := fields[column]
 		if !ok {
-			return fmt.Errorf("别名字段 %s 必须有基础字段 %s", fieldName, fieldConfig.Column)
+			return fmt.Errorf("别名字段 %s 必须有基础字段 %s", fieldName, column)
 		}
 		aliasField := clone.Slowly(baseField).(*protocol.Field)
-		fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, fieldConfig, aliasField)
+		fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, column, fieldConfig, aliasField)
 	}
 	class.Fields = fields
 	return nil
 }
 
 // 字段创建或更新（类似类的处理方式）
-func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config *internal.FieldConfig, baseField *protocol.Field) *protocol.Field {
+// column为本次构建解析出的实际列名（可能来自已存在字段），与config.Column解耦
+func (my *ConfigLoader) buildFieldFromConfig(className, fieldName, column string, config *internal.FieldConfig, baseField *protocol.Field) *protocol.Field {
 	var field *protocol.Field
 	if baseField != nil {
 		field = baseField
@@ -225,8 +228,8 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 		field = &protocol.Field{}
 	}
 	field.Name = fieldName
-	if config.Column != "" || baseField == nil {
-		field.Column = config.Column
+	if column != "" || baseField == nil {
+		field.Column = column
 	}
 	if config.Type != "" || baseField == nil {
 		field.Type = config.Type

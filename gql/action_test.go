@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 自注册PostgreSQL方言
@@ -83,4 +84,65 @@ func TestActionRoundTrip(t *testing.T) {
 	reply = executor.Execute(ctx, `query { ping(msg: "x") users { total } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "混排应报错")
 	require.Contains(t, reply.Errors.Error(), "混排")
+}
+
+// TestActionTypename __typename与Action共存（Apollo客户端默认注入）：
+// 回归——内省元字段曾被计入miss导致误判为「Action与实体字段混排」
+func TestActionTypename(t *testing.T) {
+	executor, db, cleanup := setupActionExecutor(t)
+	defer cleanup()
+	ctx := context.Background()
+	require.NoError(t, executor.RegisterAction(pingAction{}, signUpAction{db: db}))
+
+	// 查询操作回填"Query"
+	reply := executor.Execute(ctx, `query { ping(msg: "hi") __typename }`, nil, "")
+	require.Empty(t, reply.Errors, "__typename不应触发混排拒绝: %v", reply.Errors)
+	require.Equal(t, "pong:hi", reply.Data["ping"])
+	require.Equal(t, "Query", reply.Data["__typename"])
+
+	// 变更操作回填"Mutation"（含别名）
+	reply = executor.Execute(ctx, `mutation ($n: String!, $e: String!) {
+		signUp(name: $n, email: $e) { id } t: __typename
+	}`, map[string]interface{}{"n": "Ty", "e": "ty@x.com"}, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, "Mutation", reply.Data["t"])
+}
+
+// TestActionVariablePassthrough 回查合成查询透传原变量声明：
+// 回归——对象/枚举变量经json内联会产生带引号键、带引号枚举的非法GraphQL字面量，
+// 导致enrich合成回查解析失败
+func TestActionVariablePassthrough(t *testing.T) {
+	executor, db, cleanup := setupActionExecutor(t)
+	defer cleanup()
+	ctx := context.Background()
+	require.NoError(t, executor.RegisterAction(signUpAction{db: db}))
+
+	// 准备：建号并为其创建两篇文章（回查嵌套选择集有数据可过滤/排序）
+	reply := executor.Execute(ctx, `mutation ($n: String!, $e: String!) {
+		signUp(name: $n, email: $e) { id }
+	}`, map[string]interface{}{"n": "Vera", "e": "vera@x.com"}, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	uid := reply.Data["signUp"].(map[string]interface{})["id"]
+	for _, title := range []string{"B2", "A1"} {
+		reply = executor.Execute(ctx, `mutation ($t: String!, $u: ID!) {
+			createPost(input: { title: $t, userId: $u }) { id }
+		}`, map[string]interface{}{"t": title, "u": uid}, "")
+		require.Empty(t, reply.Errors, "%v", reply.Errors)
+	}
+
+	// 嵌套选择集引用对象+枚举变量（$s为[{title: ASC}]，json内联会产生带引号键
+	// 与带引号枚举的非法字面量）与字段级标量变量（$lk），连跑两次覆盖回查计划缓存
+	for i := 0; i < 2; i++ {
+		reply = executor.Execute(ctx, `mutation ($n: String!, $e: String!, $lk: String, $s: [PostSortInput!]) {
+			signUp(name: $n, email: $e) { id name posts(where: { title: { like: $lk } }, sort: $s) { title } }
+		}`, map[string]interface{}{
+			"n": "Bob", "e": fmt.Sprintf("bob%d@x.com", i),
+			"lk": "%",
+			"s":  []interface{}{map[string]interface{}{"title": "ASC"}},
+		}, "")
+		require.Empty(t, reply.Errors, "对象/枚举变量应透传而非内联: %v", reply.Errors)
+		user := reply.Data["signUp"].(map[string]interface{})
+		require.Equal(t, "Bob", user["name"])
+		require.NotNil(t, user["posts"], "回查嵌套选择集应生效")
+	}
 }

@@ -10,14 +10,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/gql/internal/intro"
+	"github.com/ichaly/ideabase/log"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 )
+
+// planCacheSize 执行计划LRU缓存容量（NewExecutor与RegisterAction重建共用）
+const planCacheSize = 512
 
 // 请求和结果类型定义
 type (
@@ -65,12 +71,23 @@ type Executor struct {
 	metadata  *Metadata           // 元数据信息，包含表结构、关系等
 	compiler  *Compiler           // 编译器，将GraphQL查询编译为SQL
 	cache     *planCache          // 执行计划缓存，命中路径零解析零编译
+	flight    singleflight.Group  // 未命中收敛：并发的同一冷查询只解析编译一次
+	feedMu    sync.Mutex          // 保护feeds及各feed的订阅者集合
+	feeds     map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
 	resolvers map[string]Resolver // 自定义字段解析器注册表
 	actions   map[string]Action   // 操作级Action注册表：顶层字段名 -> 实现
 	source    string              // 原始schema文本，RegisterAction合并SDL时重建的基底
 	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
 	remotes   map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
 	cdc       notifier            // CDC唤醒源（按数据库驱动从注册表选取）
+}
+
+// Close 释放后台资源：CDC复制连接与重连循环退出；
+// 存续的共享订阅流不再被唤醒，随各订阅者ctx结束
+func (my *Executor) Close() {
+	if my.cdc != nil {
+		my.cdc.close()
+	}
 }
 
 // Register 注册自定义字段解析器，与元数据中 Field.Resolver 按名绑定
@@ -103,7 +120,8 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		database:  d,
 		metadata:  m,
 		compiler:  c,
-		cache:     newPlanCache(512),
+		cache:     newPlanCache(planCacheSize),
+		feeds:     make(map[string]*feed),
 		resolvers: make(map[string]Resolver),
 		actions:   make(map[string]Action),
 		documents: make(map[string]string),
@@ -140,6 +158,8 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		if factory, ok := notifiers[d.Name()]; ok {
 			if source, err := factory(d, m.cfg.Subscription); err == nil {
 				executor.cdc = source
+			} else {
+				log.Warn().Err(err).Str("driver", d.Name()).Msg("CDC唤醒源初始化失败，订阅将不可用")
 			}
 		}
 	}
@@ -197,7 +217,9 @@ func (my *Executor) loadDocument(content string) error {
 		if hit, _ := my.checkActions(operation.SelectionSet); hit {
 			continue // Action操作无SQL计划，执行期走分发路径
 		}
-		_, _ = my.compile(planKey{operation: operation.Name, query: content}, operation, nil)
+		if _, _, err := my.compile(planKey{operation: operation.Name, query: content}, operation, nil); err != nil {
+			log.Warn().Err(err).Str("operation", operation.Name).Msg("持久化文档预热编译失败，执行期将重试编译")
+		}
 	}
 	return nil
 }
@@ -346,9 +368,12 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 // ID加解密的出参编码挂在此唯一出口：直通响应、resolver解包、订阅推送、
 // Action回查全部经此取数，下游看到的字节里ID已是shortId
 func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, error) {
-	args := plan.Args(variables, scopeValues(ctx)) // 行级作用域值从请求上下文取
+	args, err := plan.ResolveArgs(variables, scopeValues(ctx)) // 行级作用域值从请求上下文取
+	if err != nil {
+		return nil, err
+	}
 	var data []byte
-	err := my.database.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
+	err = my.database.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
 	if err == nil {
 		data = encodeBytes(data, plan.paths) // 空路径树零成本短路
 	}
@@ -402,46 +427,65 @@ type introQuery struct {
 func (my *introQuery) Error() string { return "自省查询不支持此入口" }
 
 // plan 获取执行计划：命中缓存零解析；volatile命中仅重做SQL构建；
-// 未命中则解析一次（fragment就地展开），自省查询经introQuery带出
+// 未命中经singleflight收敛（并发的同一冷查询只解析编译一次），自省查询经introQuery带出
 func (my *Executor) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
 	key := planKey{operation: operationName, query: query}
-	if entry, ok := my.cache.Get(key); ok {
-		// 命中收口：任何消费（Action分发/执行/volatile重编译）前统一还原codec入参
-		decodeVariables(my.schema, entry.operation.VariableDefinitions, variables, my.metadata)
-		if entry.action {
-			return nil, &actionQuery{operation: entry.operation}
-		}
-		if entry.plan != nil {
-			return entry.plan, nil
-		}
-		// volatile：仅重做SQL构建，binding与codec路径树复用缓存（均只依赖AST）
-		plan, err := my.compiler.Compile(entry.operation, variables)
+	entry, ok := my.cache.Get(key)
+	if !ok {
+		var lead *Plan // 仅领跑者闭包置位：变量已解码、编译产物直接执行，无二次开销
+		value, err, _ := my.flight.Do(operationName+"\x00"+query, func() (interface{}, error) {
+			entry, plan, err := my.miss(key, variables)
+			lead = plan
+			return entry, err
+		})
 		if err != nil {
 			return nil, err
 		}
-		plan.resolvers, plan.paths = entry.resolvers, entry.paths
-		return plan, nil
+		if lead != nil {
+			return lead, nil
+		}
+		entry = value.(*planEntry)
 	}
-
-	operation, err := my.parse(query, operationName)
+	// 收口：任何消费（Action分发/执行/volatile重编译）前统一还原codec入参
+	decodeVariables(my.schema, entry.operation.VariableDefinitions, variables, my.metadata)
+	if entry.action {
+		return nil, &actionQuery{operation: entry.operation}
+	}
+	if entry.plan != nil {
+		return entry.plan, nil
+	}
+	// volatile：仅重做SQL构建，binding与codec路径树复用缓存（均只依赖AST）
+	plan, err := my.compiler.Compile(entry.operation, variables)
 	if err != nil {
 		return nil, err
 	}
-	// 未命中收口：volatile编译会消费变量，解码先行
-	decodeVariables(my.schema, operation.VariableDefinitions, variables, my.metadata)
+	plan.resolvers, plan.paths = entry.resolvers, entry.paths
+	return plan, nil
+}
+
+// miss 缓存未命中（singleflight领跑者）：解析一次并落缓存条目，同时带回本次编译的
+// 计划（领跑者直接执行）；跟随者与后续请求经统一命中路径消费；自省不缓存经introQuery带出
+func (my *Executor) miss(key planKey, variables map[string]interface{}) (*planEntry, *Plan, error) {
+	operation, err := my.parse(key.query, key.operation)
+	if err != nil {
+		return nil, nil, err
+	}
 	if hasIntroField(operation.SelectionSet) {
-		return nil, &introQuery{operation: operation}
+		return nil, nil, &introQuery{operation: operation}
 	}
 	if hit, err := my.checkActions(operation.SelectionSet); hit {
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		my.cache.Put(key, &planEntry{operation: operation, action: true})
-		return nil, &actionQuery{operation: operation}
+		entry := &planEntry{operation: operation, action: true}
+		my.cache.Put(key, entry)
+		return entry, nil, nil // Action无计划，领跑者与跟随者同走命中路径分发
 	}
 	if my.compiler == nil || my.database == nil {
-		return nil, fmt.Errorf("执行器未配置数据库或编译器")
+		return nil, nil, fmt.Errorf("执行器未配置数据库或编译器")
 	}
+	// 领跑者在此解码入参并编译（跟随者在命中路径自行解码），两侧各解码一次
+	decodeVariables(my.schema, operation.VariableDefinitions, variables, my.metadata)
 	return my.compile(key, operation, variables)
 }
 
@@ -466,10 +510,10 @@ func (my *Executor) parse(query, operationName string) (*ast.OperationDefinition
 
 // compile 编译并缓存：resolver绑定与codec路径树在此一次性收集（均只依赖AST）；
 // volatile计划SQL不可复用但AST与两类产物可以——缓存供后续请求免解析重收集
-func (my *Executor) compile(key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*Plan, error) {
+func (my *Executor) compile(key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
 	plan, err := my.compiler.Compile(operation, variables)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	plan.resolvers = collectBindings(my.metadata, operation)
 	plan.paths = collectCodecPaths(operation.SelectionSet, my.metadata)
@@ -478,7 +522,7 @@ func (my *Executor) compile(key planKey, operation *ast.OperationDefinition, var
 		entry.plan = plan
 	}
 	my.cache.Put(key, entry)
-	return plan, nil
+	return entry, plan, nil
 }
 
 // hasIntroField 顶层选择集是否含自省字段（fragment已展开）
