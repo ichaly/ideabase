@@ -51,7 +51,7 @@ type (
 func (my gqlReply) MarshalJSON() ([]byte, error) {
 	if my.raw == nil || len(my.Errors) > 0 {
 		type alias gqlReply // 别名擦除方法集，避免递归
-		return json.Marshal(alias(my))
+		return jsonReply.Marshal(alias(my))
 	}
 	data := my.raw
 	if len(data) == 0 {
@@ -346,26 +346,48 @@ func (my *Executor) Handler(c fiber.Ctx) error {
 func (my *Executor) Execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	r := my.execute(ctx, query, variables, operationName)
 	// 公开API契约：Data始终可编程访问（直通字节解包回map）
-	if r.raw != nil {
-		result, err := decodeRoot(r.raw)
-		if err != nil {
-			return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
+	if raw := r.raw; raw != nil {
+		r.Data, r.raw = map[string]interface{}{}, nil
+		if len(raw) > 0 {
+			v, err := decodeValue(raw)
+			if err != nil {
+				return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
+			}
+			r.Data, _ = v.(map[string]interface{})
 		}
-		r.Data, r.raw = result, nil
+	} else if r.Data != nil {
+		materialize(r.Data) // 懒解码残留的原始字节段收敛为map/切片（Data可编程访问契约）
 	}
 	return r
 }
 
-// decodeRoot 解包__root JSON字节为map并收敛数字类型
-func decodeRoot(data []byte) (map[string]interface{}, error) {
-	result := make(map[string]interface{})
-	if len(data) > 0 {
-		if err := jsonNumeric.Unmarshal(data, &result); err != nil {
-			return nil, err
-		}
-		normalizeNumbers(result)
+// decodeValue 全量解码JSON字节为通用形态并收敛数字
+func decodeValue(raw []byte) (interface{}, error) {
+	var v interface{}
+	if err := jsonNumeric.Unmarshal(raw, &v); err != nil {
+		return nil, err
 	}
-	return result, nil
+	return normalizeNumbers(v), nil
+}
+
+// materialize 就地把懒解码保留的RawMessage段解码为通用形态；解码失败原样保留
+func materialize(v interface{}) interface{} {
+	switch val := v.(type) {
+	case stdjson.RawMessage:
+		if out, err := decodeValue(val); err == nil {
+			return out
+		}
+		return val
+	case map[string]interface{}:
+		for k, e := range val {
+			val[k] = materialize(e)
+		}
+	case []interface{}:
+		for i, e := range val {
+			val[i] = materialize(e)
+		}
+	}
+	return v
 }
 
 // execute 执行核心：无resolver的成功结果以直通字节形态返回（raw）
@@ -431,14 +453,115 @@ func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]
 }
 
 // unpack 解包__root JSON为data（顶层key即字段别名）并执行后处理；
+// 只解码resolver绑定路径覆盖的分支（宿主对象全量），路径外分支保留原始字节，
+// 序列化期直通输出——免解码、免数字收敛、免重序列化。
 // 第二返回值为非致命警告（如远程取数失败），随响应errors返回但不影响data
 func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte, variables map[string]interface{}) (map[string]interface{}, gqlerror.List, error) {
-	result, err := decodeRoot(data)
-	if err != nil {
+	var result map[string]interface{}
+	if len(data) == 0 {
+		result = map[string]interface{}{}
+	} else if v, err := splitDecode(data, pathTrie(plan.resolvers)); err != nil {
 		return nil, nil, err
+	} else {
+		result, _ = v.(map[string]interface{})
 	}
 	warnings, err := my.resolve(ctx, plan.resolvers, result, variables)
 	return result, warnings, err
+}
+
+// decodeTrie 绑定路径前缀树：命中键继续下行，nil子节点表示宿主分支须全量解码，
+// 未命中键保留原始字节（RawMessage）直通序列化
+type decodeTrie map[string]decodeTrie
+
+// pathTrie 由绑定路径构建解码前缀树；路径末段为宿主（整对象是resolver的source）
+func pathTrie(bindings []binding) decodeTrie {
+	root := decodeTrie{}
+	for _, b := range bindings {
+		node := root
+		for i, seg := range b.Path {
+			child, ok := node[seg]
+			if ok && child == nil {
+				break // 祖先已是宿主全量解码，天然覆盖
+			}
+			if i == len(b.Path)-1 {
+				node[seg] = nil
+				break
+			}
+			if child == nil {
+				child = decodeTrie{}
+				node[seg] = child
+			}
+			node = child
+		}
+	}
+	return root
+}
+
+// splitDecode 按前缀树混合解码：trie为nil全量解码并收敛数字；对象命中键携子树下行、
+// 未命中键零解析保留原始字节段（零拷贝子切片，序列化期直通）；数组透明展开
+// （元素共享同一trie节点，与hosts语义对齐）；路径中途遇标量（如null）原样保留
+func splitDecode(raw stdjson.RawMessage, trie decodeTrie) (interface{}, error) {
+	if trie == nil {
+		return decodeValue(raw)
+	}
+	s := codecScanner{src: raw}
+	s.space()
+	if !s.peek('{') && !s.peek('[') {
+		return raw, nil
+	}
+	kind, end := s.src[s.pos], byte('}')
+	var obj map[string]interface{}
+	var arr []interface{}
+	if kind == '{' {
+		obj = make(map[string]interface{})
+	} else {
+		end = ']'
+	}
+	var err error
+	s.list(end, func() {
+		var key []byte
+		if kind == '{' {
+			key = s.str()
+			s.space()
+			if !s.peek(':') {
+				s.bad = true
+				return
+			}
+			s.pos++
+		}
+		s.space()
+		stop, ok := rawSpan(s.src, s.pos)
+		if !ok {
+			s.bad = true
+			return
+		}
+		val := s.src[s.pos:stop]
+		s.pos = stop
+		if kind == '[' {
+			var v interface{}
+			if v, err = splitDecode(val, trie); err == nil {
+				arr = append(arr, v)
+			}
+		} else if child, hit := trie[string(key)]; hit { // []byte键查map免分配
+			obj[string(key)], err = splitDecode(val, child)
+		} else {
+			obj[string(key)] = stdjson.RawMessage(val)
+		}
+		if err != nil {
+			s.bad = true // 终止扫描，错误经err外传
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.space()
+	if s.bad || s.pos != len(s.src) {
+		return nil, fmt.Errorf("解包失败：结果字节非合法JSON")
+	}
+	if kind == '[' {
+		return arr, nil
+	}
+	return obj, nil
 }
 
 // normalizeNumbers 就地把json.Number收敛为int64/float64：

@@ -226,6 +226,49 @@ func (my *codecScanner) peek(c byte) bool {
 	return my.pos < len(my.src) && my.src[my.pos] == c
 }
 
+// ---------- 结构切分：懒解包的零拷贝字节段提取 ----------
+
+// rawSpan 快速跳过pos起的一个JSON值，返回终点（exclusive）；
+// 扁平深度计数+字符串状态机，无逐token分派（透传段只付一次线性扫描，
+// 结构合法性依赖数据库来源保证，与直通路径同一信任模型）
+func rawSpan(src []byte, pos int) (int, bool) {
+	depth, quoted := 0, false
+	for i := pos; i < len(src); i++ {
+		c := src[i]
+		if quoted {
+			switch c {
+			case '\\':
+				i++
+			case '"':
+				quoted = false
+				if depth == 0 {
+					return i + 1, true
+				}
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			quoted = true
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth == 0 {
+				return i + 1, true
+			}
+			if depth < 0 { // 标量值终止于所在容器的闭括号
+				return i, i > pos
+			}
+		case ',':
+			if depth == 0 {
+				return i, i > pos
+			}
+		}
+	}
+	return len(src), depth == 0 && !quoted && len(src) > pos
+}
+
 // ---------- 入参：按GraphQL类型声明调用codec还原 ----------
 
 // decodeVariables 依据变量声明类型就地还原变量表（递归进入input对象与列表）

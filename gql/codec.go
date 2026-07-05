@@ -3,6 +3,9 @@ package gql
 import (
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
@@ -50,15 +53,35 @@ func NewIdCodec() Codec { return idCodec{} }
 
 func (idCodec) Name() string { return protocol.SCALAR_ID }
 
+// idTokens ID→shortId令牌记忆化：sqids编码结果恒定但每次约30次分配（字母表复制/洗牌），
+// 热行跨请求重复出现，缓存后重复ID仅一次map读零分配；容量到界整体清空（雪花ID无界防泄漏）
+var idTokens sync.Map // uint64 → []byte（只读共享，patch仅拷贝不改写）
+var idTokenCount atomic.Int64
+
+const idTokenLimit = 1 << 17
+
 // Encode 数字token编码为带引号的shortId（~前缀+sqids字母数字，均无需JSON转义）
 func (idCodec) Encode(token []byte) []byte {
-	id, err := strconv.ParseUint(string(token), 10, 64)
+	if len(token) == 0 {
+		return nil
+	}
+	// ParseUint不逃逸入参，unsafe.String免拷贝（热路径每token一次）
+	id, err := strconv.ParseUint(unsafe.String(&token[0], len(token)), 10, 64)
 	if err != nil || id == 0 {
 		return nil
 	}
+	if v, hit := idTokens.Load(id); hit {
+		return v.([]byte)
+	}
 	short := std.Id(id).Encode()
 	out := make([]byte, 0, len(short)+2)
-	return append(append(append(out, '"'), short...), '"')
+	out = append(append(append(out, '"'), short...), '"')
+	if idTokenCount.Add(1) > idTokenLimit {
+		idTokens.Clear()
+		idTokenCount.Store(1)
+	}
+	idTokens.Store(id, out)
+	return out
 }
 
 // Decode shortId或十进制字符串还原为数字（int64：驱动对数组元素按有符号整型编码，

@@ -1,5 +1,5 @@
 # IdeaBase GraphQL Schema
-# 版本: 20260614005423
+# 版本: 20260705224113
 
 # 自定义标量类型
 scalar Json
@@ -122,13 +122,13 @@ type Comment {
   id: ID!
   # 父Comment对象
   parent: Comment
-  parentId: Int
+  parentId: ID
   # 关联的Post
   post: Post!
-  postId: Int!
+  postId: ID!
   # 关联的User
   user: User!
-  userId: Int!
+  userId: ID!
 }
 
 # 文件对象记录
@@ -216,13 +216,13 @@ type Post {
   createdAt: DateTime!
   id: ID!
   # 关联的PostTag列表
-  postTags(where: PostTagWhereInput, sort: [PostTagSortInput!], limit: Int, offset: Int): [PostTag]!
+  postPostTags(where: PostTagWhereInput, sort: [PostTagSortInput!], limit: Int, offset: Int): [PostTag]!
   # 关联的Tag列表
   tags(where: TagWhereInput, sort: [TagSortInput!], limit: Int, offset: Int): [Tag]!
   title: String!
   # 关联的User
   user: User!
-  userId: Int!
+  userId: ID!
 }
 
 type PostTag {
@@ -407,10 +407,10 @@ type SysUser {
 type Tag {
   id: ID!
   name: String!
-  # 关联的PostTag列表
-  postTags(where: PostTagWhereInput, sort: [PostTagSortInput!], limit: Int, offset: Int): [PostTag]!
   # 关联的Post列表
   posts(where: PostWhereInput, sort: [PostSortInput!], limit: Int, offset: Int): [Post]!
+  # 关联的PostTag列表
+  tagPostTags(where: PostTagWhereInput, sort: [PostTagSortInput!], limit: Int, offset: Int): [PostTag]!
 }
 
 type User {
@@ -423,7 +423,6 @@ type User {
   # 关联的Post列表
   posts(where: PostWhereInput, sort: [PostSortInput!], limit: Int, offset: Int): [Post]!
   profile: Json
-  sign: String
 }
 
 # 游标分页信息
@@ -668,9 +667,6 @@ type CommentStats {
   count: Int!
   content: StringStats
   createdAt: DateTimeStats
-  parentId: NumberStats
-  postId: NumberStats
-  userId: NumberStats
 }
 
 # Commenthaving过滤(分组后按聚合值过滤)
@@ -678,9 +674,6 @@ input CommentHavingInput {
   count: IntWhereInput
   content: StringHaving
   createdAt: DateTimeHaving
-  parentId: NumberHaving
-  postId: NumberHaving
-  userId: NumberHaving
 }
 
 # OssFile统计结果
@@ -774,7 +767,6 @@ type PostStats {
   content: StringStats
   createdAt: DateTimeStats
   title: StringStats
-  userId: NumberStats
 }
 
 # Posthaving过滤(分组后按聚合值过滤)
@@ -783,7 +775,6 @@ input PostHavingInput {
   content: StringHaving
   createdAt: DateTimeHaving
   title: StringHaving
-  userId: NumberHaving
 }
 
 # PostTag统计结果
@@ -1153,9 +1144,9 @@ input CommentWhereInput {
   content: StringWhereInput
   createdAt: DateTimeWhereInput
   id: IDWhereInput
-  parentId: IntWhereInput
-  postId: IntWhereInput
-  userId: IntWhereInput
+  parentId: IDWhereInput
+  postId: IDWhereInput
+  userId: IDWhereInput
   and: [CommentWhereInput!]
   or: [CommentWhereInput!]
   not: CommentWhereInput
@@ -1216,7 +1207,7 @@ input PostWhereInput {
   createdAt: DateTimeWhereInput
   id: IDWhereInput
   title: StringWhereInput
-  userId: IntWhereInput
+  userId: IDWhereInput
   and: [PostWhereInput!]
   or: [PostWhereInput!]
   not: PostWhereInput
@@ -1361,7 +1352,6 @@ input UserWhereInput {
   id: IDWhereInput
   name: StringWhereInput
   profile: JsonWhereInput
-  sign: StringWhereInput
   and: [UserWhereInput!]
   or: [UserWhereInput!]
   not: UserWhereInput
@@ -1417,17 +1407,11 @@ input AppLineageSortInput {
 
 # Comment排序
 input CommentSortInput {
-  ancestors: SortDirection
-  children: SortDirection
   content: SortDirection
   createdAt: SortDirection
-  descendants: SortDirection
   id: SortDirection
-  parent: SortDirection
   parentId: SortDirection
-  post: SortDirection
   postId: SortDirection
-  user: SortDirection
   userId: SortDirection
 }
 
@@ -1476,22 +1460,16 @@ input OssHostSortInput {
 
 # Post排序
 input PostSortInput {
-  comments: SortDirection
   content: SortDirection
   createdAt: SortDirection
   id: SortDirection
-  postTags: SortDirection
-  tags: SortDirection
   title: SortDirection
-  user: SortDirection
   userId: SortDirection
 }
 
 # PostTag排序
 input PostTagSortInput {
-  post: SortDirection
   postId: SortDirection
-  tag: SortDirection
   tagId: SortDirection
 }
 
@@ -1598,20 +1576,15 @@ input SysUserSortInput {
 input TagSortInput {
   id: SortDirection
   name: SortDirection
-  postTags: SortDirection
-  posts: SortDirection
 }
 
 # User排序
 input UserSortInput {
-  comments: SortDirection
   createdAt: SortDirection
   email: SortDirection
   id: SortDirection
   name: SortDirection
-  posts: SortDirection
   profile: SortDirection
-  sign: SortDirection
 }
 
 # AppHistory创建输入
@@ -1701,9 +1674,9 @@ input AppLineageUpdateInput {
 # Comment创建输入
 input CommentCreateInput {
   content: String!
-  parentId: Int
-  postId: Int
-  userId: Int
+  parentId: ID
+  postId: ID
+  userId: ID
   ancestors: CommentRelationInput
   children: CommentRelationInput
   descendants: CommentRelationInput
@@ -1712,9 +1685,9 @@ input CommentCreateInput {
 # Comment更新输入
 input CommentUpdateInput {
   content: String
-  parentId: Int
-  postId: Int
-  userId: Int
+  parentId: ID
+  postId: ID
+  userId: ID
   ancestors: CommentRelationInput
   children: CommentRelationInput
   descendants: CommentRelationInput
@@ -1798,9 +1771,9 @@ input OssHostUpdateInput {
 input PostCreateInput {
   content: String
   title: String!
-  userId: Int
+  userId: ID
   comments: CommentRelationInput
-  postTags: PostTagRelationInput
+  postPostTags: PostTagRelationInput
   tags: TagRelationInput
 }
 
@@ -1808,9 +1781,9 @@ input PostCreateInput {
 input PostUpdateInput {
   content: String
   title: String
-  userId: Int
+  userId: ID
   comments: CommentRelationInput
-  postTags: PostTagRelationInput
+  postPostTags: PostTagRelationInput
   tags: TagRelationInput
 }
 
@@ -1989,15 +1962,15 @@ input SysUserUpdateInput {
 # Tag创建输入
 input TagCreateInput {
   name: String!
-  postTags: PostTagRelationInput
   posts: PostRelationInput
+  tagPostTags: PostTagRelationInput
 }
 
 # Tag更新输入
 input TagUpdateInput {
   name: String
-  postTags: PostTagRelationInput
   posts: PostRelationInput
+  tagPostTags: PostTagRelationInput
 }
 
 # User创建输入

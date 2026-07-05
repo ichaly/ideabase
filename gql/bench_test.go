@@ -58,6 +58,31 @@ func BenchmarkReplyUnpack(b *testing.B) {
 	}
 }
 
+// BenchmarkReplySplit 懒解包：resolver绑定路径外的分支保留原始字节直通序列化
+func BenchmarkReplySplit(b *testing.B) {
+	// 大分支posts(50行)无resolver，小分支profile挂resolver
+	rows := sampleRows(50)
+	data := append(append([]byte{}, rows[:len(rows)-1]...), `,"profile":{"id":1,"name":"me"}}`...)
+	run := func(trie decodeTrie) func(*testing.B) {
+		return func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				result, err := splitDecode(data, trie)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err = json.Marshal(gqlReply{Data: result.(map[string]interface{})}); err != nil { // 经MarshalJSON走jsonReply
+					b.Fatal(err)
+				}
+			}
+		}
+	}
+	// 旁路命中：posts整段直通，仅profile解码
+	b.Run("旁路命中", run(pathTrie([]binding{{Path: []string{"profile"}, Field: "sign"}})))
+	// 对照最坏形态：resolver挂在posts.items（宿主即全部行），懒解包退化为近全量
+	b.Run("全树命中", run(pathTrie([]binding{{Path: []string{"posts", "items"}, Field: "sign"}})))
+}
+
 // sampleTree 构造 width 宽、两层嵌套的结果树：root.items[w].children[w]
 // 模拟列表查询里嵌套一对多关系上挂 resolver 字段的宿主分布
 func sampleTree(width int) map[string]interface{} {
