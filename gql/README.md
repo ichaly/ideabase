@@ -317,6 +317,17 @@ services:
 - `executor.LoadDocuments(dir)` 加载目录下 `.graphql` 操作文档（持久化查询），
   操作按名注册并预热编译缓存；HTTP 请求省略 `query` 仅传 `operationName` 即可执行
 
+## 生产安全开关
+
+- `schema.introspection: false` 关闭自省（`__schema/__type` 拒绝，常规查询不受影响）
+- `schema.persisted-only: true` HTTP 边界只接受持久化操作（原始查询文本 403），
+  程序内 `Execute`/订阅 channel API 不受限（服务端代码可信）
+- `Register`/`LoadDocuments` 仅限启动期：首次执行后注册表冻结，运行期调用明确报错
+  （schema 重建与并发请求不互斥，冻结防静默数据竞争）
+- 订阅 WebSocket 实现 graphql-transport-ws 完整状态机：未 `connection_init` 即
+  subscribe 关 4401，init 超时 4408、重复 init 4429、重复订阅 ID 4409——
+  鉴权握手不可绕过
+
 ## 性能要点
 
 - 任意深度嵌套 = 单条 SQL，无 N+1
