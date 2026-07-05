@@ -181,6 +181,7 @@ func (my *listener) connect() (*pgconn.PgConn, error) {
 		!strings.Contains(err.Error(), "42710") { // duplicate_object
 		return fail(fmt.Errorf("创建发布失败: %w", err))
 	}
+	my.auditPublication(ctx, conn)
 
 	system, err := pglogrepl.IdentifySystem(ctx, conn)
 	if err != nil {
@@ -199,6 +200,29 @@ func (my *listener) connect() (*pgconn.PgConn, error) {
 		return fail(fmt.Errorf("启动逻辑复制失败: %w", err))
 	}
 	return conn, nil
+}
+
+// auditPublication 审计发布覆盖范围：已存在的同名发布可能是DBA预建的窄发布
+// （非FOR ALL TABLES），未覆盖的表变更不进WAL解码、订阅永不唤醒且无任何报错——
+// 此处显式告警实际覆盖表清单（预建窄发布是文档允许的场景，不中断启动）
+func (my *listener) auditPublication(ctx context.Context, conn *pgconn.PgConn) {
+	name := strings.ReplaceAll(my.publication, "'", "''")
+	read := func(sql string) (string, bool) {
+		results, err := conn.Exec(ctx, sql).ReadAll()
+		if err != nil || len(results) == 0 || len(results[0].Rows) == 0 || len(results[0].Rows[0]) == 0 {
+			return "", false
+		}
+		return string(results[0].Rows[0][0]), true
+	}
+	if all, ok := read(fmt.Sprintf(
+		`SELECT puballtables::text FROM pg_publication WHERE pubname = '%s'`, name)); !ok || all == "t" {
+		return
+	}
+	covered, _ := read(fmt.Sprintf(
+		`SELECT COALESCE(string_agg(schemaname||'.'||tablename, ', ' ORDER BY tablename), '<空>')
+		 FROM pg_publication_tables WHERE pubname = '%s'`, name))
+	log.Warn().Str("publication", my.publication).Str("covered", covered).
+		Msg("发布非FOR ALL TABLES，清单外的表订阅不会被唤醒（如非预期请重建发布或调整subscription.publication）")
 }
 
 // run 接收循环：解码WAL消息到表级变更；断线退避重连，重连后广播补偿；close后退出
