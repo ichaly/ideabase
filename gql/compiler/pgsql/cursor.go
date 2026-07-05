@@ -95,6 +95,10 @@ func newPager(sc scope, args ast.ArgumentList) (*pager, error) {
 			}
 			desc = strings.HasPrefix(direction, "DESC")
 		}
+		// keyset边界对NULL恒unknown（NULL行永远翻不到），且游标比较符无法表达NULLS FIRST/LAST
+		if field := sc.class.Fields[child.Name]; field != nil && field.Nullable {
+			return nil, fmt.Errorf("游标分页排序键必须为非空列: %s", child.Name)
+		}
 		column := sc.column(child.Name)
 		my.keys = append(my.keys, pageKey{column: column, desc: desc})
 		tail[column] = true

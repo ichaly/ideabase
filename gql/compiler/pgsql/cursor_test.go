@@ -115,6 +115,7 @@ func (my *_DialectSuite) TestCursorGuards() {
 		"pageInfo需要游标": {`query { users { items { id } pageInfo { hasNext } } }`, "需要配合first/last"},
 		"first字面量须正":   {`query { users(first: 0) { items { id } } }`, "必须是正整数或变量"},
 		"排序方向须字面量":     {`query ($d: SortDirection) { users(first: 2, sort: { name: $d }) { items { id } } }`, "无效的排序方向"},
+		"排序键须非空列":      {`query { users(first: 2, sort: { age: DESC }) { items { id } } }`, "非空列"},
 	} {
 		my.Run(name, func() {
 			doc, gqlErr := gqlparser.LoadQuery(my.schema, c.query)
