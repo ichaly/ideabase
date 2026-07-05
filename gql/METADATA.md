@@ -115,7 +115,6 @@ metadata:
       table: users
       description: "用户信息"
       primary_keys: [id]
-      resolver: "UserResolver"
       fields:
         id:
           column: id
@@ -132,11 +131,10 @@ metadata:
       override: false
 ```
 
-字段级 `remote: { source, key }` 声明远程关系（Remote Join）：字段值来自
-`executor.RegisterRemote` 注册的数据源，目标类型为无表虚拟类；编译期自动补投影
-宿主键、执行期批量取数回填，详见 README「远程关系」一节。
-
-> 详细的 `ClassConfig`、`FieldConfig`、`RelationConfig`、`ThroughConfig`、`RemoteConfig` 字段说明请参考 internal/config.go 或相关文档。
+> 行为侧声明（Resolver/Remote/Action）不在配置里：走注册即声明
+> （`NewResolver`/`NewBatch`/`NewRemote`/`NewAction`，schema 反射自函数签名），
+> 详见 README。配置只描述数据侧（表/列映射、排除、别名、scope、搜索列）。
+> 详细的 `ClassConfig`、`FieldConfig`、`RelationConfig`、`ThroughConfig` 字段说明请参考 internal/config.go。
 
 ## 典型用法
 
@@ -155,21 +153,7 @@ meta, err := gql.NewMetadata(konfig, db,
 )
 ```
 
-### 3. 配置虚拟表/字段/关系
-
-```yaml
-metadata:
-  classes:
-    Statistics:
-      virtual: true
-      description: "统计数据"
-      fields:
-        totalUsers:
-          type: integer
-          resolver: CountUsersResolver
-```
-
-### 4. 字段过滤与别名
+### 3. 字段过滤与别名
 
 ```yaml
 metadata:
@@ -177,13 +161,9 @@ metadata:
     PublicUser:
       table: users
       exclude_fields: ["password", "phone"]
-      fields:
-        email:
-          description: "脱敏邮箱"
-          resolver: MaskedEmailResolver
 ```
 
-### 5. 多对多关系与中间表
+### 4. 多对多关系与中间表
 
 ```yaml
 metadata:

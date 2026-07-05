@@ -149,7 +149,7 @@ func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]i
 	}
 
 	// 订阅是公开API：始终解包为Data供程序化消费（变更推送频率低，非热路径）
-	result, warnings, err := my.unpack(ctx, plan, data)
+	result, warnings, err := my.unpack(ctx, plan, data, variables)
 	if err != nil {
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r, true

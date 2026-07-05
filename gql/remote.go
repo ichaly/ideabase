@@ -9,21 +9,14 @@ import (
 )
 
 // Remote 远程数据源：把外部服务（REST/gRPC/另一个GraphQL）声明为图里的关系字段。
-// 元数据配置 fields.<名>.remote:{source,key} 声明关系，编译期自动把key列补进投影
+// NewRemote 从函数签名反射声明（关系字段+虚拟类型），编译期自动把key列补进投影
 // （内部别名，不受codec转换影响），执行期按去重后的键集合一次批量取数、按键回填——
 // 天然免N+1。超时与重试由实现自行控制（Fetch收到请求ctx）。
 type Remote interface {
-	Name() string // 数据源名，与配置 remote.source 对应
+	Name() string // 数据源注册键
 	// Fetch 批量取数：keys为本批宿主的键集合（已去重、原始数据库值），
 	// 返回 键→字段值 映射；缺失的键对应字段为null
 	Fetch(ctx context.Context, keys []any) (map[any]any, error)
-}
-
-// RegisterRemote 注册远程数据源（与RegisterAction同构；启动期调用）
-func (my *Executor) RegisterRemote(remotes ...Remote) {
-	for _, r := range remotes {
-		my.remotes[r.Name()] = r
-	}
 }
 
 // remoteJob 一条远程绑定的执行单元：fetch阶段各job独立可并发，

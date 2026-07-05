@@ -36,31 +36,29 @@ func TestHostsNestedArrays(t *testing.T) {
 	require.Len(t, seen, width*width, "宿主不得重复或丢失（原地复用会覆写）")
 }
 
-// greetResolver 单对象解析器：拼接问候语
-type greetResolver struct{}
-
-func (my *greetResolver) Name() string { return "greet" }
-func (my *greetResolver) Resolve(_ context.Context, source map[string]interface{}, _ map[string]interface{}) (interface{}, error) {
-	return fmt.Sprintf("Hello, %v!", source["name"]), nil
+// greetResolver 单对象解析器（注册即声明）：拼接问候语，class参数化供不同宿主实体复用
+func greetResolver(class string) Resolver {
+	return NewResolver(class, "greeting", "问候语",
+		func(_ context.Context, source Source, _ struct{}) (string, error) {
+			return fmt.Sprintf("Hello, %v!", source["name"]), nil
+		})
 }
 
-// labelResolver 批量解析器：记录调用次数验证免N+1
-type labelResolver struct{ calls int }
-
-func (my *labelResolver) Name() string { return "label" }
-func (my *labelResolver) Resolve(_ context.Context, source map[string]interface{}, _ map[string]interface{}) (interface{}, error) {
-	return nil, fmt.Errorf("批量解析器不应走单对象路径")
-}
-func (my *labelResolver) ResolveBatch(_ context.Context, sources []map[string]interface{}, _ map[string]interface{}) ([]interface{}, error) {
-	my.calls++
-	values := make([]interface{}, len(sources))
-	for i, source := range sources {
-		values[i] = fmt.Sprintf("#%v", source["id"])
-	}
-	return values, nil
+// labelResolver 批量解析器（注册即声明）：记录调用次数验证免N+1
+func labelResolver(calls *int) Resolver {
+	return NewBatch("Post", "label", "标签",
+		func(_ context.Context, sources []Source, _ struct{}) ([]string, error) {
+			*calls++
+			values := make([]string, len(sources))
+			for i, source := range sources {
+				values[i] = fmt.Sprintf("#%v", source["id"])
+			}
+			return values, nil
+		})
 }
 
-// TestResolver 自定义resolver端到端：虚拟字段不进SQL，执行后填充，批量免N+1
+// TestResolver 自定义resolver端到端：注册即声明挂载虚拟字段，
+// 不进SQL、执行后填充，批量免N+1
 func TestResolver(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
@@ -70,20 +68,9 @@ func TestResolver(t *testing.T) {
 	k.Set("mode", "dev")
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
-	// 配置两个resolver虚拟字段
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
-		"User": {
-			Table: "users",
-			Fields: map[string]*internal.FieldConfig{
-				"greeting": {Type: "String", IsNullable: true, Resolver: "greet"},
-			},
-		},
-		"Post": {
-			Table: "posts",
-			Fields: map[string]*internal.FieldConfig{
-				"label": {Type: "String", IsNullable: true, Resolver: "label"},
-			},
-		},
+		"User": {Table: "users"},
+		"Post": {Table: "posts"},
 	})
 
 	meta, err := NewMetadata(k, db)
@@ -95,8 +82,8 @@ func TestResolver(t *testing.T) {
 	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err, "创建执行器失败")
 
-	label := &labelResolver{}
-	executor.Register(&greetResolver{}, label)
+	var calls int
+	require.NoError(t, executor.Register(greetResolver("User"), labelResolver(&calls)))
 
 	ctx := context.Background()
 
@@ -133,13 +120,52 @@ func TestResolver(t *testing.T) {
 		post := p.(map[string]interface{})
 		require.Equal(t, fmt.Sprintf("#%v", post["id"]), post["label"])
 	}
-	require.Equal(t, 1, label.calls, "批量resolver应一次调用处理整个列表（免N+1）")
+	require.Equal(t, 1, calls, "批量resolver应一次调用处理整个列表（免N+1）")
 
 	// 未注册的resolver报错
-	delete(executor.resolvers, "greet")
+	delete(executor.resolvers, "User.greeting")
 	reply = executor.Execute(ctx, `query { users { items { id greeting } } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "未注册resolver应报错")
 	require.Contains(t, reply.Errors[0].Message, "resolver未注册")
+}
+
+// TestResolverArgs resolver字段参数（注册即声明新增能力）：
+// schema渲染参数签名，执行期按请求变量解出实参并解码进强类型struct、validate校验
+func TestResolverArgs(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	require.NoError(t, executor.Register(NewResolver("User", "hello", "问候",
+		func(_ context.Context, source Source, args struct {
+			Lang string `json:"lang" validate:"omitempty,oneof=zh en"`
+		}) (string, error) {
+			if args.Lang == "zh" {
+				return fmt.Sprintf("你好, %v!", source["name"]), nil
+			}
+			return fmt.Sprintf("Hello, %v!", source["name"]), nil
+		})))
+	ctx := context.Background()
+
+	reply := executor.Execute(ctx, `mutation { createUser(input: { name: "Ann", email: "a@x.com" }) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+
+	// 字面量实参
+	reply = executor.Execute(ctx, `query { users { items { name hello(lang: "zh") } } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	items := reply.Data["users"].(map[string]interface{})["items"].([]interface{})
+	require.Equal(t, "你好, Ann!", items[0].(map[string]interface{})["hello"])
+
+	// 变量实参：连跑两次覆盖计划缓存命中路径的实参解析（绑定AST随计划复用）
+	for i := 0; i < 2; i++ {
+		reply = executor.Execute(ctx, `query ($l: String) { users { items { name hello(lang: $l) } } }`,
+			map[string]interface{}{"l": "en"}, "")
+		require.Empty(t, reply.Errors, "%v", reply.Errors)
+		items = reply.Data["users"].(map[string]interface{})["items"].([]interface{})
+		require.Equal(t, "Hello, Ann!", items[0].(map[string]interface{})["hello"])
+	}
+
+	// validate校验：非法枚举值报错
+	reply = executor.Execute(ctx, `query { users { items { name hello(lang: "xx") } } }`, nil, "")
+	require.NotEmpty(t, reply.Errors, "validate应拦截非法参数")
 }
 
 // TestResolverResultSuffixClass 本名以Result结尾的实体（如ExamResult）：
@@ -148,16 +174,11 @@ func TestResolver(t *testing.T) {
 func TestResolverResultSuffixClass(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) {
 		k.Set("metadata.classes", map[string]*internal.ClassConfig{
-			"ExamResult": {
-				Table: "posts",
-				Fields: map[string]*internal.FieldConfig{
-					"greeting": {Type: "String", IsNullable: true, Resolver: "greet"},
-				},
-			},
+			"ExamResult": {Table: "posts"},
 		})
 	})
 	defer cleanup()
-	executor.Register(&greetResolver{})
+	require.NoError(t, executor.Register(greetResolver("ExamResult")))
 	ctx := context.Background()
 
 	reply := executor.Execute(ctx, `mutation { createUser(input: { name: "E", email: "e@x.com" }) { id } }`, nil, "")

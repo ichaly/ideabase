@@ -88,51 +88,54 @@ executor.Bind(app.Group(executor.Path()))  // fiber v3：POST查询变更 + GET�
 
 ## 自定义 Resolver
 
-SQL 表达不了的字段逻辑用 Resolver 处理。配置声明虚拟字段：
-
-```yaml
-metadata:
-  classes:
-    User:
-      table: users
-      fields:
-        greeting: { type: String, nullable: true, resolver: greet }
-```
-
-实现并注册（实现 `BatchResolver` 时列表整批一次调用，免 N+1）：
+SQL 表达不了的字段逻辑用 Resolver 处理。**注册即声明**：字段挂载进宿主实体、
+参数与字段类型反射自函数签名（与 Action 同一套规则），不写 yaml：
 
 ```go
-type Greet struct{}
-func (Greet) Name() string { return "greet" }
-func (Greet) Resolve(ctx context.Context, source, args map[string]any) (any, error) {
-    return "Hello, " + source["name"].(string), nil // 只能读取查询已选择的字段
-}
-executor.Register(Greet{})
+// source 是该行已查出的字段——只能读取查询已选择的字段（引擎不会偷偷多查）；
+// args 强类型（json定名/validate校验），客户端可传 hello(lang: "zh")
+executor.Register(gql.NewResolver("User", "hello", "问候语",
+    func(ctx context.Context, source gql.Source, args struct {
+        Lang string `json:"lang" validate:"omitempty,oneof=zh en"`
+    }) (string, error) {
+        return greet(args.Lang, source["name"]), nil
+    }))
+
+// 批量版：整结果集一次调用免 N+1，返回值与 sources 等长对位
+executor.Register(gql.NewBatch("User", "level", "等级",
+    func(ctx context.Context, sources []gql.Source, _ struct{}) ([]int, error) { ... }))
 ```
 
-> 列表场景下 `Resolve` 会被**并发调用**（有界并发），实现须线程安全；
-> 有状态或需要共享资源的逻辑请实现 `BatchResolver`（整批单次调用，无并发约束）。
+> `NewResolver` 的函数在列表场景下会被**并发调用**（有界并发），实现须线程安全；
+> 有状态或需要共享资源的逻辑用 `NewBatch`（整批单次调用，无并发约束）。
+> 要完全控制时直接实现 `Resolver`/`BatchResolver` 接口。
 
 ## 操作级 Action
 
 SQL 表达不了的顶层操作（多步事务、跨服务编排）用 Action 接管整个字段，
-与表 CRUD 同 schema 同鉴权：
+与表 CRUD 同 schema 同鉴权。**注册即声明**：schema 形状反射自函数签名
+（启动期一次），不写 SDL，入参解码与校验也由引擎完成——
 
 ```go
-type BotSave struct{ svc *BotService }
-func (my BotSave) Name() string { return "botSave" }
-func (my BotSave) Definition() string {
-    return `extend type Mutation { botSave(nickname: String!): BotProfile }`
+type CreateReq struct {
+    Nickname string      `json:"nickname" validate:"required,max=50" doc:"昵称"` // required→String!
+    Avatar   string      `json:"avatar" validate:"omitempty,max=200"`          // 无required→String
+    Persona  ent.Persona `json:"persona"`                                      // struct/map→Json
 }
-func (my BotSave) Execute(ctx context.Context, args map[string]any) (any, error) {
-    profile, err := my.svc.Create(ctx, args)
-    return profile.Id, err // 返回实体id即触发回查补全：按客户端选择集读回实体
-}
-executor.RegisterAction(BotSave{})
+
+executor.RegisterAction(gql.NewAction("botSave", "注册闭环建号",
+    func(ctx context.Context, req CreateReq) (*ent.Profile, error) {
+        return svc.Create(ctx, req) // 入参已按json标签解码并通过validate校验
+    }, gql.Result("BotProfile"))) // Go类型名(Profile)与实体名不一致时覆盖
 ```
 
-返回约定：声明类型是元数据实体且返回标量 → 视作实体 id，引擎以客户端选择集回查
-（resolver/关系/codec 全部生效）；返回 map/切片/nil → 直接作为字段结果输出。
+- 类型映射：`std.Id`→ID、`time.Time`→DateTime、切片→列表（`[]std.Id`→`[ID!]`）、
+  map/嵌套struct→Json；`validate:"required"` 渲染非空 `!`，`doc` tag 作参数文档
+- 返回类型名匹配元数据实体 → 触发回查补全（返回实体结构体自动取 Id，等价于返回 id）；
+  标量/map/切片 → 直接输出。选项：`gql.Query()` 挂查询根（缺省 Mutation）、
+  `gql.Extra(sdl)` 附加辅助 input/type 声明
+- 回查补全时 resolver/关系/codec 全部生效；要完全控制 schema
+  时直接实现 `Action` 接口（`Define() + Execute()`）
 
 ## 标量编解码器（Codec）
 
@@ -174,39 +177,29 @@ Match 认领为 ID。注册同名 `"ID"` codec 即可整体替换为自定义实
 ## 远程关系（Remote Join）
 
 把外部服务（REST/gRPC/另一个 GraphQL）声明为图里的关系字段，客户端一次查询同时
-拿到数据库数据与远程数据，拼接由引擎完成。配置声明关系（目标是无表虚拟类）：
-
-```yaml
-metadata:
-  classes:
-    Profile:                    # 虚拟类:只有类型定义,不生成查询根/过滤/排序
-      fields:
-        level: { type: String }
-    User:
-      table: users
-      fields:
-        profile:
-          type: Profile
-          remote: { source: profile-api, key: id }  # 数据源名 + 宿主键字段
-```
-
-实现并注册数据源（`Fetch` 一次收到本批**去重后的键集合**，天然免 N+1）：
+拿到数据库数据与远程数据，拼接由引擎完成。**注册即声明**：关系字段与虚拟类型
+全部反射自函数签名（Go 类型名即 GraphQL 类型名，json 标签定字段名），不写 yaml：
 
 ```go
-type ProfileAPI struct{ http *http.Client }
-func (ProfileAPI) Name() string { return "profile-api" }
-func (my ProfileAPI) Fetch(ctx context.Context, keys []any) (map[any]any, error) {
-    // 批量调用外部服务,返回 键→字段值 映射;超时用 ctx 自行控制
+// Profile 虚拟类型：只有类型定义，不生成查询根/过滤/排序
+type Profile struct {
+    Level string `json:"level" doc:"等级"`
 }
-executor.RegisterRemote(ProfileAPI{})
+
+// "id" 为宿主键字段；Fetch 一次收到本批去重后的键集合，天然免 N+1
+executor.RegisterRemote(gql.NewRemote("User", "profile", "用户画像", "id",
+    func(ctx context.Context, keys []any) (map[any]Profile, error) {
+        // 批量调用外部服务，返回 键→值 映射；超时用 ctx 自行控制
+    }))
 ```
 
 执行语义：编译期自动把 key 列以内部别名补进投影（不受 codec 转换影响，回填后
-剥除，响应形状严格等于选择集）；数据源未注册或 Fetch 失败时字段整体置 null
-并记录告警，不中断主查询；键未命中的行该字段为 null。变更读回的选择集同样生效。
+剥除，响应形状严格等于选择集）；Fetch 失败时字段整体置 null 并记录告警，
+不中断主查询；键未命中的行该字段为 null。变更读回的选择集同样生效。
+多个远程共享同一返回类型时，虚拟类型 SDL 按文本去重。
 
-> 诚实边界：远程字段不支持 where/sort 下推（数据不在库里），虚拟类不渲染任何
-> 查询面——schema 里看不到的就是不能用的。
+> 诚实边界：远程字段不支持 where/sort 下推（数据不在库里），虚拟类型不渲染任何
+> 查询面——schema 里看不到的就是不能用的。要完全控制时直接实现 `Remote` 接口。
 
 ## 行级作用域（多租户 / 当前登录人）
 

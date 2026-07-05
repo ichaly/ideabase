@@ -125,14 +125,8 @@ type FieldConfig struct {
 	// 默认值
 	DefaultValue string `mapstructure:"default_value"`
 
-	// 字段级别自定义Resolver
-	Resolver string `mapstructure:"resolver"`
-
 	// 关系配置
 	Relation *RelationConfig `mapstructure:"relation"`
-
-	// 远程关系：字段值来自注册的远程数据源（Remote Join）
-	Remote *RemoteConfig `mapstructure:"remote"`
 
 	// override: true 表示字段别名覆盖主字段指针，false（默认）为附加模式
 	Override bool `mapstructure:"override"`
@@ -161,13 +155,4 @@ type ThroughConfig struct {
 
 	// 中间表中指向目标表的外键
 	TargetKey string `mapstructure:"target_key"`
-}
-
-// RemoteConfig 远程关系配置
-type RemoteConfig struct {
-	// 数据源名（执行期按名分发到注册的Remote实现）
-	Source string `mapstructure:"source"`
-
-	// 宿主键字段名（编译期自动补投影，执行期批量取数）
-	Key string `mapstructure:"key"`
 }

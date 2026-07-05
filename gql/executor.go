@@ -22,7 +22,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// planCacheSize 执行计划LRU缓存容量（NewExecutor与RegisterAction重建共用）
+// planCacheSize 执行计划LRU缓存容量（NewExecutor与Register重建共用）
 const planCacheSize = 512
 
 // 请求和结果类型定义
@@ -76,7 +76,7 @@ type Executor struct {
 	feeds     map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
 	resolvers map[string]Resolver // 自定义字段解析器注册表
 	actions   map[string]Action   // 操作级Action注册表：顶层字段名 -> 实现
-	source    string              // 原始schema文本，RegisterAction合并SDL时重建的基底
+	source    string              // 原始schema文本，Register合并注册声明时重建的基底
 	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
 	remotes   map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
 	cdc       notifier            // CDC唤醒源（按数据库驱动从注册表选取）
@@ -90,11 +90,28 @@ func (my *Executor) Close() {
 	}
 }
 
-// Register 注册自定义字段解析器，与元数据中 Field.Resolver 按名绑定
-func (my *Executor) Register(resolvers ...Resolver) {
-	for _, r := range resolvers {
-		my.resolvers[r.Name()] = r
+// Register 统一注册入口：Action/Resolver/Remote 按实现的接口路由到对应注册表，
+// 字段级声明挂载进宿主实体并重建schema。仅限启动期调用：
+// 重建schema/自省/计划缓存的过程不与并发请求互斥
+func (my *Executor) Register(items ...any) error {
+	for _, item := range items {
+		switch v := item.(type) {
+		case Action:
+			my.actions[v.Define().Name] = v
+		case Resolver:
+			my.resolvers[v.Name()] = v
+		case Remote:
+			my.remotes[v.Name()] = v
+		default:
+			return fmt.Errorf("不支持的注册类型: %T", item)
+		}
+		if m, ok := item.(mounted); ok {
+			if err := my.mount(m); err != nil {
+				return err
+			}
+		}
 	}
+	return my.rebuild()
 }
 
 // 构造函数和初始化方法
@@ -354,7 +371,7 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 		r.raw = data
 		return r
 	}
-	result, warnings, err := my.unpack(ctx, plan, data)
+	result, warnings, err := my.unpack(ctx, plan, data, variables)
 	if err != nil {
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
@@ -382,7 +399,7 @@ func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]
 
 // unpack 解包__root JSON为data（顶层key即字段别名）并执行后处理；
 // 第二返回值为非致命警告（如远程取数失败），随响应errors返回但不影响data
-func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte) (map[string]interface{}, gqlerror.List, error) {
+func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte, variables map[string]interface{}) (map[string]interface{}, gqlerror.List, error) {
 	result := make(map[string]interface{})
 	if len(data) > 0 {
 		if err := jsonNumeric.Unmarshal(data, &result); err != nil {
@@ -390,7 +407,7 @@ func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte) (map[st
 		}
 		normalizeNumbers(result)
 	}
-	warnings, err := my.resolve(ctx, plan.resolvers, result)
+	warnings, err := my.resolve(ctx, plan.resolvers, result, variables)
 	return result, warnings, err
 }
 

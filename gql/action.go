@@ -3,6 +3,7 @@ package gql
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -20,17 +21,114 @@ import (
 // （多步事务、跨服务调用等无法用单条SQL表达的动作）。与字段级Resolver互补：
 // Resolver填充实体上的一个字段，Action接管整个顶层操作。
 //
-// Definition返回完整SDL片段：extend type Mutation/Query 的字段声明与所需的辅助
-// input/type定义，随schema一起加载，自省与校验对Action与表CRUD一视同仁。
-//
 // Execute的返回值约定（回查补全）：
 //   - 声明的返回类型是元数据实体且返回标量 → 视作实体id，引擎以客户端选择集回查
 //     该实体（字段级resolver与关系查询在回查中原样生效）
 //   - 返回map/切片/nil → 直接作为字段结果输出
 type Action interface {
-	Name() string       // 顶层字段名，如 botSave
-	Definition() string // SDL片段：extend type Mutation { ... } 及辅助类型
+	Define() Define // schema声明：SDL由引擎渲染合并，自省与校验同表CRUD一视同仁
 	Execute(ctx context.Context, args map[string]interface{}) (interface{}, error)
+}
+
+// Define 注册即声明的schema形状：Action与字段级Resolver/Remote共用，
+// Class决定挂载点（空=Mutation/Query根，非空=该实体的字段）
+type Define struct {
+	Class  string // 宿主实体名（Resolver/Remote专用），空表示挂根
+	Name   string // 字段名，如 botSave、greeting
+	Doc    string // 字段描述，渲染为SDL文档字符串
+	Args   string // 参数签名原文，如 "nickname: String!, avatar: String"；空=无参
+	Result string // 返回类型，如 BotProfile、Int
+	Query  bool   // 挂载到Query根（缺省Mutation；Class非空时无效）
+	Extra  string // 附加SDL（辅助input/type等声明），重建时按文本去重并入schema
+}
+
+// sdl 渲染声明为extend片段（文档用三引号块，内容含引号也合法；Extra由rebuild单独并入）
+func (my Define) sdl() string {
+	kind, args, doc := "Mutation", "", ""
+	if my.Query {
+		kind = "Query"
+	}
+	if my.Class != "" {
+		kind = my.Class
+	}
+	if my.Args != "" {
+		args = "(" + my.Args + ")"
+	}
+	if my.Doc != "" {
+		doc = `  """` + my.Doc + `"""` + "\n"
+	}
+	return fmt.Sprintf("extend type %s {\n%s  %s%s: %s\n}", kind, doc, my.Name, args, my.Result)
+}
+
+// mounted 注册即声明的字段级实现（NewResolver/NewBatch/NewRemote构造）：
+// Register时把字段挂载进宿主实体元数据并重建schema
+type mounted interface {
+	Define() Define
+	field() *protocol.Field
+}
+
+// mount 挂载声明为宿主实体的虚拟字段：绑定收集与SQL编译跳过据此判定；
+// 与既有字段同名直接报错（不做静默覆盖，启动即失败）
+func (my *Executor) mount(m mounted) error {
+	d := m.Define()
+	class, ok := my.metadata.GetNode(d.Class)
+	if !ok {
+		return fmt.Errorf("宿主实体不存在: %s", d.Class)
+	}
+	if _, ok = class.Fields[d.Name]; ok {
+		return fmt.Errorf("字段已存在: %s.%s", d.Class, d.Name)
+	}
+	field := m.field()
+	field.Name, field.Type, field.Description, field.Virtual = d.Name, d.Result, d.Doc, true
+	class.Fields[d.Name] = field
+	return nil
+}
+
+// rebuild 合并全部注册声明重建schema（Action/Resolver/Remote共用；仅限启动期）：
+// extend片段按注册键排序保证文本稳定，附加SDL按内容去重（多个声明共享同一虚拟类型）
+func (my *Executor) rebuild() error {
+	defines := make(map[string]Define, len(my.actions)+len(my.resolvers)+len(my.remotes))
+	for name, a := range my.actions {
+		defines[name] = a.Define()
+	}
+	for name, r := range my.resolvers {
+		if m, ok := r.(mounted); ok {
+			defines[name] = m.Define()
+		}
+	}
+	for name, r := range my.remotes {
+		if m, ok := r.(mounted); ok {
+			defines[name] = m.Define()
+		}
+	}
+
+	names := make([]string, 0, len(defines))
+	for name := range defines {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var sb strings.Builder
+	sb.WriteString(my.source)
+	extras := make(map[string]bool)
+	for _, name := range names {
+		d := defines[name]
+		sb.WriteString("\n")
+		sb.WriteString(d.sdl())
+		if d.Extra != "" && !extras[d.Extra] {
+			extras[d.Extra] = true
+			sb.WriteString("\n")
+			sb.WriteString(d.Extra)
+		}
+	}
+	s, err := gqlparser.LoadSchema(&ast.Source{Name: "schema.graphql", Input: sb.String()})
+	if err != nil {
+		return fmt.Errorf("合并注册声明失败: %w", err)
+	}
+	my.schema = s
+	my.intro = intro.New(s)
+	my.cache = newPlanCache(planCacheSize)
+	return nil
 }
 
 // actionQuery 解析后发现顶层字段是Action：经error通道带出已解析的operation，
@@ -40,36 +138,6 @@ type actionQuery struct {
 }
 
 func (my *actionQuery) Error() string { return "Action操作不支持此入口" }
-
-// RegisterAction 注册操作级Action并重建schema（SDL合并进模式，自省即时可见）。
-// 仅限启动期调用：重建schema/自省/计划缓存的过程不与并发请求互斥。
-func (my *Executor) RegisterAction(actions ...Action) error {
-	for _, a := range actions {
-		my.actions[a.Name()] = a
-	}
-
-	// 按名排序保证SDL拼接顺序稳定（map遍历随机会导致schema内容抖动）
-	names := make([]string, 0, len(my.actions))
-	for name := range my.actions {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	var sb strings.Builder
-	sb.WriteString(my.source)
-	for _, name := range names {
-		sb.WriteString("\n")
-		sb.WriteString(my.actions[name].Definition())
-	}
-	s, err := gqlparser.LoadSchema(&ast.Source{Name: "schema.graphql", Input: sb.String()})
-	if err != nil {
-		return fmt.Errorf("合并Action定义失败: %w", err)
-	}
-	my.schema = s
-	my.intro = intro.New(s)
-	my.cache = newPlanCache(planCacheSize)
-	return nil
-}
 
 // checkActions 顶层选择集含Action字段时校验并返回true；
 // Action与实体字段语义不同（无SQL计划），不允许同一操作混排。
@@ -145,6 +213,12 @@ func (my *Executor) enrich(ctx context.Context, operation *ast.OperationDefiniti
 	className := f.Definition.Type.Name()
 	if _, ok := my.metadata.GetNode(className); !ok {
 		return result, nil, nil
+	}
+	// 类型化Action（NewAction）返回实体结构体：取Id触发回查，与返回标量id等价
+	if v := reflect.Indirect(reflect.ValueOf(result)); v.Kind() == reflect.Struct {
+		if id := v.FieldByName("Id"); id.IsValid() {
+			result = id.Interface()
+		}
 	}
 
 	// 主键与选择集引用到的原变量均经变量通道传入：不内联字面量（map经json序列化

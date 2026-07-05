@@ -55,7 +55,6 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 			Fields: map[string]*internal.FieldConfig{
 				"name": {
 					Description: "用户昵称",
-					Resolver:    "MaskedNameResolver",
 				},
 			},
 		},
@@ -68,7 +67,6 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 				"role": {
 					Type:        "string",
 					Description: "角色",
-					Resolver:    "RoleResolver",
 				},
 			},
 		},
@@ -79,12 +77,10 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 				"totalUsers": {
 					Type:        "integer",
 					Description: "用户总数",
-					Resolver:    "CountUsersResolver",
 				},
 				"activeUsers": {
 					Type:        "integer",
 					Description: "活跃用户数",
-					Resolver:    "CountActiveUsersResolver",
 				},
 			},
 		},
@@ -97,7 +93,6 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 				"displayName": {
 					Type:        "string",
 					Description: "显示名称",
-					Resolver:    "DisplayNameResolver",
 				},
 			},
 		},
@@ -112,8 +107,8 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		assert.Equal(t, "用户公开信息", class.Description)
 		assert.Equal(t, "users", class.Table)
 		// 字段继承与排除
-		assertField(t, class, "id", "id", "ID", true, false, false, "用户ID", "")
-		assertField(t, class, "name", "name", "string", false, false, false, "用户昵称", "MaskedNameResolver")
+		assertField(t, class, "id", "id", "ID", true, false, false, "用户ID")
+		assertField(t, class, "name", "name", "string", false, false, false, "用户昵称")
 		_, exists = class.Fields["email"]
 		assert.False(t, exists, "email字段应该被排除")
 		_, exists = class.Fields["created_at"]
@@ -127,7 +122,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		require.True(t, exists, "应该存在AdminUser类")
 		assert.Equal(t, "管理员视图", class.Description)
 		assert.Equal(t, "users", class.Table)
-		assertField(t, class, "role", "", "string", false, false, false, "角色", "RoleResolver")
+		assertField(t, class, "role", "", "string", false, false, false, "角色")
 		_, exists = class.Fields["name"]
 		assert.True(t, exists, "name字段应该存在")
 		_, exists = class.Fields["email"]
@@ -147,8 +142,8 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		assert.True(t, class.Virtual)
 		assert.Equal(t, "", class.Table)
 		assert.Equal(t, "统计数据", class.Description)
-		assertField(t, class, "totalUsers", "", "integer", false, false, false, "用户总数", "CountUsersResolver")
-		assertField(t, class, "activeUsers", "", "integer", false, false, false, "活跃用户数", "CountActiveUsersResolver")
+		assertField(t, class, "totalUsers", "", "integer", false, false, false, "用户总数")
+		assertField(t, class, "activeUsers", "", "integer", false, false, false, "活跃用户数")
 	})
 
 	t.Run("MiniUser包含字段类", func(t *testing.T) {
@@ -156,9 +151,9 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 		require.True(t, exists, "应该存在MiniUser类")
 		assert.Equal(t, "users", class.Table)
 		assert.Equal(t, "用户简要信息", class.Description)
-		assertField(t, class, "id", "id", "ID", true, false, false, "用户ID", "")
-		assertField(t, class, "name", "name", "string", false, false, false, "用户名", "")
-		assertField(t, class, "displayName", "", "string", false, false, false, "显示名称", "DisplayNameResolver")
+		assertField(t, class, "id", "id", "ID", true, false, false, "用户ID")
+		assertField(t, class, "name", "name", "string", false, false, false, "用户名")
+		assertField(t, class, "displayName", "", "string", false, false, false, "显示名称")
 		_, exists = class.Fields["email"]
 		assert.False(t, exists, "email字段应该被排除")
 		_, exists = class.Fields["created_at"]
@@ -191,7 +186,7 @@ func TestMetadataLoadFromConfig(t *testing.T) {
 }
 
 // assertField 辅助函数，断言字段多重索引和属性
-func assertField(t *testing.T, class *protocol.Class, name, column, fieldType string, isPrimary, isUnique, nullable bool, description, resolver string) {
+func assertField(t *testing.T, class *protocol.Class, name, column, fieldType string, isPrimary, isUnique, nullable bool, description string) {
 	field, exists := class.Fields[name]
 	require.True(t, exists, "字段 %s 不存在", name)
 	assert.Equal(t, name, field.Name)
@@ -201,7 +196,6 @@ func assertField(t *testing.T, class *protocol.Class, name, column, fieldType st
 	assert.Equal(t, isUnique, field.IsUnique)
 	assert.Equal(t, nullable, field.Nullable)
 	assert.Equal(t, description, field.Description)
-	assert.Equal(t, resolver, field.Resolver)
 	if column != "" {
 		colPtr, colExists := class.Fields[column]
 		assert.True(t, colExists, "列名索引 %s 应该存在", column)

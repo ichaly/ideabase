@@ -30,10 +30,11 @@ type BatchResolver interface {
 // binding 编译期收集的后处理绑定：宿主对象路径 + 目标字段 + 处理器名。
 // Key非空即远程关系绑定（Name为数据源名，Key为补投影的内部键别名），否则为resolver绑定
 type binding struct {
-	Path  []string // data根到宿主对象的字段别名路径（数组层级在执行期透明展开）
-	Field string   // 要填充的字段别名
-	Name  string   // resolver名或远程数据源名
-	Key   string   // 远程绑定的宿主键别名（编译期补投影的内部列）
+	Path  []string   // data根到宿主对象的字段别名路径（数组层级在执行期透明展开）
+	Field string     // 要填充的字段别名
+	Name  string     // resolver名或远程数据源名
+	Key   string     // 远程绑定的宿主键别名（编译期补投影的内部列）
+	node  *ast.Field // resolver字段AST引用：执行期按请求变量解出实参（随计划缓存复用）
 }
 
 // collectBindings 遍历操作选择集，收集所有resolver字段的绑定
@@ -60,6 +61,7 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 					Path:  path,
 					Field: f.Alias,
 					Name:  field.Resolver,
+					node:  f,
 				})
 				continue
 			}
@@ -126,7 +128,7 @@ func hosts(root map[string]interface{}, path []string) []map[string]interface{} 
 // resolve 按绑定填充后处理字段。远程关系绑定先行：网络取数并发（各job独立）、
 // 回填串行（宿主map非并发安全），失败字段置null并以警告随响应errors返回（不中断）；
 // resolver绑定随后：批量解析器整列表一次调用，普通解析器逐宿主并行计算
-func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[string]interface{}) (gqlerror.List, error) {
+func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[string]interface{}, variables map[string]interface{}) (gqlerror.List, error) {
 	var warnings gqlerror.List
 	var jobs []*remoteJob
 	for _, b := range bindings {
@@ -163,16 +165,20 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 		if !ok {
 			return warnings, fmt.Errorf("resolver未注册: %s", b.Name)
 		}
+		var args map[string]interface{}
+		if b.node != nil && len(b.node.Arguments) > 0 {
+			args = b.node.ArgumentMap(variables)
+		}
 
 		var values []interface{}
 		var err error
-		if batch, ok := resolver.(BatchResolver); ok {
-			values, err = batch.ResolveBatch(ctx, sources, nil)
+		if many, ok := resolver.(BatchResolver); ok {
+			values, err = many.ResolveBatch(ctx, sources, args)
 			if err == nil && len(values) != len(sources) {
 				err = fmt.Errorf("返回数量不匹配: 期望%d实际%d", len(sources), len(values))
 			}
 		} else {
-			values, err = resolveEach(ctx, resolver, sources)
+			values, err = resolveEach(ctx, resolver, sources, args)
 		}
 		if err != nil {
 			return warnings, fmt.Errorf("resolver %s 执行失败: %w", b.Name, err)
@@ -185,13 +191,13 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 }
 
 // resolveEach 普通resolver逐宿主有界并发计算，返回与sources对位的结果
-func resolveEach(ctx context.Context, resolver Resolver, sources []map[string]interface{}) ([]interface{}, error) {
+func resolveEach(ctx context.Context, resolver Resolver, sources []map[string]interface{}, args map[string]interface{}) ([]interface{}, error) {
 	values := make([]interface{}, len(sources))
 	group, ctx := errgroup.WithContext(ctx)
 	group.SetLimit(8)
 	for i, source := range sources {
 		group.Go(func() error {
-			value, err := resolver.Resolve(ctx, source, nil)
+			value, err := resolver.Resolve(ctx, source, args)
 			values[i] = value
 			return err
 		})

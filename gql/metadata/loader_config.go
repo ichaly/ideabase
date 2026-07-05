@@ -237,9 +237,6 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName, column string
 	if config.Description != "" || baseField == nil {
 		field.Description = config.Description
 	}
-	if config.Resolver != "" || baseField == nil {
-		field.Resolver = config.Resolver
-	}
 	if baseField == nil || config.IsPrimary {
 		field.IsPrimary = config.IsPrimary
 	}
@@ -248,12 +245,6 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName, column string
 	}
 	if baseField == nil || config.IsNullable {
 		field.Nullable = config.IsNullable
-	}
-	// 远程关系：值来自注册的远程数据源，字段不落SQL（Virtual），
-	// 编译期按Key自动补投影、执行期批量取数回填
-	if config.Remote != nil {
-		field.Virtual = true
-		field.Remote = &protocol.RemoteRef{Source: config.Remote.Source, Key: config.Remote.Key}
 	}
 	// 关系处理
 	if config.Relation != nil {

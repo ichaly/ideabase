@@ -13,27 +13,29 @@ import (
 // pingAction 标量直通型Action：无回查，结果原样输出
 type pingAction struct{}
 
-func (pingAction) Name() string { return "ping" }
-func (pingAction) Definition() string {
-	return `extend type Query { ping(msg: String!): String }`
+func (pingAction) Define() Define {
+	return Define{Name: "ping", Args: "msg: String!", Result: "String", Query: true}
 }
 func (pingAction) Execute(_ context.Context, args map[string]interface{}) (interface{}, error) {
 	return "pong:" + args["msg"].(string), nil
 }
 
-// signUpAction 编排型Action：Go侧建号返回id，验证引擎按选择集回查补全
-type signUpAction struct{ db *gorm.DB }
-
-func (signUpAction) Name() string { return "signUp" }
-func (signUpAction) Definition() string {
-	return `extend type Mutation { signUp(name: String!, email: String!): User }`
+// signUpReq 参数即声明：json定名，validate含required渲染为非空!
+type signUpReq struct {
+	Name  string `json:"name" validate:"required"`
+	Email string `json:"email" validate:"required"`
 }
-func (my signUpAction) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	var id int64
-	err := my.db.WithContext(ctx).
-		Raw("INSERT INTO users(name, email) VALUES(?, ?) RETURNING id", args["name"], args["email"]).
-		Scan(&id).Error
-	return id, err
+
+// newSignUpAction 编排型Action（NewAction反射装配）：建号返回id，引擎按选择集回查补全；
+// 返回类型int64本推导为Int，Result选项覆盖为实体User触发回查
+func newSignUpAction(db *gorm.DB) Action {
+	return NewAction("signUp", "建号并回查主档", func(ctx context.Context, req signUpReq) (int64, error) {
+		var id int64
+		err := db.WithContext(ctx).
+			Raw("INSERT INTO users(name, email) VALUES(?, ?) RETURNING id", req.Name, req.Email).
+			Scan(&id).Error
+		return id, err
+	}, Result("User"))
 }
 
 // setupActionExecutor 与setupTestExecutor同构，但透出db供Action闭包使用
@@ -47,7 +49,7 @@ func TestActionRoundTrip(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	require.NoError(t, executor.RegisterAction(pingAction{}, signUpAction{db: db}))
+	require.NoError(t, executor.Register(pingAction{}, newSignUpAction(db)))
 
 	// 1. 内省可见：自定义字段与表CRUD一视同仁
 	reply := executor.Execute(ctx, `{ __type(name: "Mutation") { fields { name } } }`, nil, "")
@@ -92,7 +94,7 @@ func TestActionTypename(t *testing.T) {
 	executor, db, cleanup := setupActionExecutor(t)
 	defer cleanup()
 	ctx := context.Background()
-	require.NoError(t, executor.RegisterAction(pingAction{}, signUpAction{db: db}))
+	require.NoError(t, executor.Register(pingAction{}, newSignUpAction(db)))
 
 	// 查询操作回填"Query"
 	reply := executor.Execute(ctx, `query { ping(msg: "hi") __typename }`, nil, "")
@@ -115,7 +117,7 @@ func TestActionVariablePassthrough(t *testing.T) {
 	executor, db, cleanup := setupActionExecutor(t)
 	defer cleanup()
 	ctx := context.Background()
-	require.NoError(t, executor.RegisterAction(signUpAction{db: db}))
+	require.NoError(t, executor.Register(newSignUpAction(db)))
 
 	// 准备：建号并为其创建两篇文章（回查嵌套选择集有数据可过滤/排序）
 	reply := executor.Execute(ctx, `mutation ($n: String!, $e: String!) {

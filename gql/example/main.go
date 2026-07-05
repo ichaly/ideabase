@@ -16,28 +16,22 @@ import (
 	"gorm.io/gorm"
 )
 
-// sign 自定义字段解析器示例：为用户生成署名
-// 实现BatchResolver：列表场景一次调用处理整页数据，从机制上避免N+1
-type sign struct{}
-
-func (sign) Name() string { return "sign" }
-
-// Resolve 单对象解析。source是该行已查出的字段——resolver只能读到
+// signResolver 自定义字段解析器示例（注册即声明）：为用户生成署名。
+// NewBatch整页一次调用免N+1；source是该行已查出的字段——resolver只能读到
 // 查询选择了的字段（引擎不会偷偷多查），依赖email时查询需一并选择
-func (sign) Resolve(_ context.Context, source map[string]any, _ map[string]any) (any, error) {
-	if email, ok := source["email"]; ok {
-		return fmt.Sprintf("%v <%v>", source["name"], email), nil
-	}
-	return fmt.Sprint(source["name"]), nil
-}
-
-// ResolveBatch 批量解析：返回值与sources等长一一对应
-func (sign) ResolveBatch(ctx context.Context, sources []map[string]any, args map[string]any) ([]any, error) {
-	values := make([]any, len(sources))
-	for i, source := range sources {
-		values[i], _ = sign{}.Resolve(ctx, source, args)
-	}
-	return values, nil
+func signResolver() gql.Resolver {
+	return gql.NewBatch("User", "sign", "署名",
+		func(_ context.Context, sources []gql.Source, _ struct{}) ([]string, error) {
+			values := make([]string, len(sources))
+			for i, source := range sources {
+				if email, ok := source["email"]; ok {
+					values[i] = fmt.Sprintf("%v <%v>", source["name"], email)
+				} else {
+					values[i] = fmt.Sprint(source["name"])
+				}
+			}
+			return values, nil
+		})
 }
 
 // demoDSN demo数据库连接串（docker compose暴露5433），可用DEMO_DSN覆盖
@@ -48,7 +42,8 @@ func demoDSN() string {
 // buildExecutor 装配完整引擎：配置 -> 元数据 -> 编译器（方言自注册） -> 执行器 + resolver
 // main与性能测试共用，保证基准跑的就是demo实际装配
 func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
-	// 配置：实体增强（搜索列、resolver虚拟字段）——生产中可放config.yml，键名一致
+	// 配置：数据侧声明（搜索列等）——生产中可放config.yml，键名一致；
+	// resolver等行为侧声明走注册（NewResolver/NewBatch），不进配置
 	k, err := std.NewKonfig()
 	if err != nil {
 		return nil, err
@@ -56,14 +51,7 @@ func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
 	k.Set("mode", "dev")
 	k.Set("app.root", ".") // schema.graphql与元数据缓存输出到 ./cfg
 	k.Set("metadata.classes", map[string]*gql.ClassConfig{
-		"User": {
-			Table:  "users",
-			Search: []string{"name"}, // 声明搜索列后获得 search 参数
-			Fields: map[string]*gql.FieldConfig{
-				// 虚拟字段：无列、由resolver在执行后填充
-				"sign": {Type: "String", IsNullable: true, Resolver: "sign"},
-			},
-		},
+		"User": {Table: "users", Search: []string{"name"}}, // 声明搜索列后获得 search 参数
 		"Post": {Table: "posts", Search: []string{"title", "content"}},
 	})
 
@@ -79,7 +67,10 @@ func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
 	if err != nil {
 		return nil, err
 	}
-	executor.Register(sign{}) // 注册自定义resolver
+	// 注册自定义resolver：字段挂载与schema由引擎反射签名完成
+	if err = executor.Register(signResolver()); err != nil {
+		return nil, err
+	}
 	return executor, nil
 }
 
