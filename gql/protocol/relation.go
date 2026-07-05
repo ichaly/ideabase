@@ -1,14 +1,54 @@
 package protocol
 
-// Relation 表示类之间的关系
+import "strings"
+
+// Relation 表示类之间的关系（约束为一等对象：一条外键约束对应一条关系）
+// 单列关系存 SourceField/TargetField；复合外键存 SourceFields/TargetFields（按序对齐），
+// 消费方统一经 SourceColumns/TargetColumns 读取
 type Relation struct {
-	Type        RelationType `json:"type"`              // 关系类型
-	Through     *Through     `json:"through,omitempty"` // 多对多配置
-	SourceClass string       `json:"sourceClass"`       // 源类名
-	SourceField string       `json:"sourceField"`       // 源字段名
-	TargetClass string       `json:"targetClass"`       // 目标类名
-	TargetField string       `json:"targetField"`       // 目标字段名
-	Deep        bool         `json:"deep,omitempty"`    // 深度递归（descendants/ancestors全树遍历）
+	Type         RelationType `json:"type"`                    // 关系类型
+	Name         string       `json:"name,omitempty"`          // 约束名或推导键（关系集合去重的唯一标识）
+	Through      *Through     `json:"through,omitempty"`       // 多对多配置
+	SourceClass  string       `json:"sourceClass"`             // 源类名
+	SourceField  string       `json:"sourceField"`             // 源字段名（单列；复合时为首列）
+	SourceFields []string     `json:"sourceFields,omitempty"`  // 复合外键源列组（len>1时生效）
+	TargetClass  string       `json:"targetClass"`             // 目标类名
+	TargetField  string       `json:"targetField"`             // 目标字段名（单列；复合时为首列）
+	TargetFields []string     `json:"targetFields,omitempty"`  // 复合外键目标列组（与源列组按序对齐）
+	Deep         bool         `json:"deep,omitempty"`          // 深度递归（descendants/ancestors全树遍历）
+}
+
+// SourceColumns 源列组：复合外键返回列组，单列关系返回单元素切片
+func (my *Relation) SourceColumns() []string {
+	if len(my.SourceFields) > 1 {
+		return my.SourceFields
+	}
+	return []string{my.SourceField}
+}
+
+// TargetColumns 目标列组，与SourceColumns按序对齐
+func (my *Relation) TargetColumns() []string {
+	if len(my.TargetFields) > 1 {
+		return my.TargetFields
+	}
+	return []string{my.TargetField}
+}
+
+// Composite 是否复合外键关系（多列联合指向）
+func (my *Relation) Composite() bool { return len(my.SourceFields) > 1 }
+
+// Key 关系身份键：源/目标的类与列组 + 类型 + 中间表，用于关系集合去重
+// （不含Name：db约束名与config推导键描述同一关系时应视为同一条）
+func (my *Relation) Key() string {
+	key := string(my.Type) + "|" + my.SourceClass + "." + strings.Join(my.SourceColumns(), ",") +
+		">" + my.TargetClass + "." + strings.Join(my.TargetColumns(), ",")
+	if my.Through != nil {
+		key += "|" + my.Through.TableName + "." + my.Through.SourceKey + "," + my.Through.TargetKey
+	}
+	if my.Deep {
+		key += "|deep"
+	}
+	return key
 }
 
 // Through 表示多对多关系中的中间表配置

@@ -1072,6 +1072,7 @@ func TestProcessRelationsRecursive(t *testing.T) {
 	}
 
 	meta := build("pid", false)
+	meta.collectRelations()
 	meta.processRelations()
 	class := meta.Nodes["Category"]
 	for _, name := range []string{"parent", "children", "descendants", "ancestors"} {
@@ -1081,12 +1082,13 @@ func TestProcessRelationsRecursive(t *testing.T) {
 
 	// 已知边界：自引用外键本身是复合主键成员（闭包表）时，两侧均为主键，不生成递归字段
 	meta = build("ancestorId", true)
+	meta.collectRelations()
 	meta.processRelations()
 	assert.Nil(t, meta.Nodes["Category"].Fields["parent"], "复合主键自引用不生成递归字段")
 }
 
 // TestProcessRelationsDuplicateTargets 同类上两条指向同一目标的关系：
-// 后缀命名而非静默丢失，且排序遍历保证命名跨启动稳定
+// 按源列词干命名（buyer/seller），语义清晰且跨启动稳定
 func TestProcessRelationsDuplicateTargets(t *testing.T) {
 	user := &protocol.Class{Name: "User", Table: "users", Fields: map[string]*protocol.Field{
 		"id": {Name: "id", Column: "id", IsPrimary: true},
@@ -1101,17 +1103,19 @@ func TestProcessRelationsDuplicateTargets(t *testing.T) {
 		"sellerId": {Name: "sellerId", Column: "seller_id", Relation: relation("sellerId")},
 	}}
 	meta := &Metadata{Nodes: map[string]*protocol.Class{"User": user, "Order": order}}
+	meta.collectRelations()
 	meta.processRelations()
 
 	fields := meta.Nodes["Order"].Fields
-	assert.NotNil(t, fields["user"], "第一条关系字段")
-	assert.NotNil(t, fields["user1"], "第二条同目标关系应后缀命名而非静默丢失")
-	assert.Equal(t, "buyerId", fields["user"].Relation.SourceField, "排序遍历下user恒指向buyerId")
-	assert.Equal(t, "sellerId", fields["user1"].Relation.SourceField)
+	assert.NotNil(t, fields["buyer"], "第一条关系按源列词干命名")
+	assert.NotNil(t, fields["seller"], "第二条同目标关系不丢失且语义命名")
+	assert.Nil(t, fields["user1"], "不再产生顺序后缀幽灵字段")
+	assert.Equal(t, "buyerId", fields["buyer"].Relation.SourceField)
+	assert.Equal(t, "sellerId", fields["seller"].Relation.SourceField)
 }
 
-// TestProcessRelationsReverseDeduplicated db加载器在主键侧挂ONE_TO_MANY、外键侧挂MANY_TO_ONE，
-// 两条路径生成的是同一个反向列表字段：必须共用reverseSeen查重，否则产生comments1幽灵字段
+// TestProcessRelationsReverseDeduplicated 主键侧ONE_TO_MANY与外键侧MANY_TO_ONE合成的反向
+// 是同一条关系：类级集合按身份键去重，只生成一个反向列表字段
 func TestProcessRelationsReverseDeduplicated(t *testing.T) {
 	user := &protocol.Class{Name: "User", Table: "users", Fields: map[string]*protocol.Field{
 		"id": {Name: "id", Column: "id", IsPrimary: true, Relation: &protocol.Relation{
@@ -1127,6 +1131,7 @@ func TestProcessRelationsReverseDeduplicated(t *testing.T) {
 		}},
 	}}
 	meta := &Metadata{Nodes: map[string]*protocol.Class{"User": user, "Comment": comment}}
+	meta.collectRelations()
 	meta.processRelations()
 
 	assert.NotNil(t, user.Fields["comments"], "应生成唯一的反向列表字段")
@@ -1147,6 +1152,7 @@ func TestProcessRelationsStandaloneOneToMany(t *testing.T) {
 		"authorId": {Name: "authorId", Column: "author_id"},
 	}}
 	meta := &Metadata{Nodes: map[string]*protocol.Class{"User": user, "Post": post}}
+	meta.collectRelations()
 	meta.processRelations()
 
 	assert.NotNil(t, user.Fields["posts"], "单独声明的ONE_TO_MANY应正常生成列表字段")

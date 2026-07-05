@@ -62,8 +62,10 @@ type primaryKeyInfo struct {
 }
 
 type foreignKeyInfo struct {
-	SourceTable  string `json:"source_table" gorm:"column:source_table"`
-	SourceColumn string `json:"source_column" gorm:"column:source_column"`
-	TargetTable  string `json:"target_table" gorm:"column:target_table"`
-	TargetColumn string `json:"target_column" gorm:"column:target_column"`
+	SourceTable    string `json:"source_table" gorm:"column:source_table"`
+	SourceColumn   string `json:"source_column" gorm:"column:source_column"`
+	TargetTable    string `json:"target_table" gorm:"column:target_table"`
+	TargetColumn   string `json:"target_column" gorm:"column:target_column"`
+	ConstraintName string `json:"constraint_name" gorm:"column:constraint_name"` // 约束名：复合外键多行同名，按此聚合为一条关系
+	Position       int    `json:"ordinal_position" gorm:"column:ordinal_position"`
 }

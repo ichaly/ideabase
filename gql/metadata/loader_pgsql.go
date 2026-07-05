@@ -99,7 +99,8 @@ SELECT
       'source_table', fk.source_table,
       'source_column', fk.source_column,
       'target_table', fk.target_table,
-      'target_column', fk.target_column
+      'target_column', fk.target_column,
+      'constraint_name', fk.constraint_name
     ) ORDER BY fk.source_table, fk.constraint_name, fk.ord) FROM foreign_keys fk)
   ) as metadata
 `

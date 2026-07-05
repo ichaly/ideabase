@@ -192,6 +192,8 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	}
 	// 进行驼峰命名和过滤处理
 	my.normalize()
+	// 字段级关系声明（config/旧格式文件）收进类级关系集合
+	my.collectRelations()
 	// 统一关系处理
 	my.processRelations()
 	// 类型定型：结构推导 + Codec认领
@@ -338,15 +340,19 @@ type relationField struct {
 // cloneRelation 复制关系元数据，reverse为true时交换源和目标方向
 func cloneRelation(rel *protocol.Relation, relType protocol.RelationType, reverse bool) *protocol.Relation {
 	result := &protocol.Relation{
-		Type:        relType,
-		SourceClass: rel.SourceClass,
-		SourceField: rel.SourceField,
-		TargetClass: rel.TargetClass,
-		TargetField: rel.TargetField,
+		Type:         relType,
+		Name:         rel.Name,
+		SourceClass:  rel.SourceClass,
+		SourceField:  rel.SourceField,
+		SourceFields: rel.SourceFields,
+		TargetClass:  rel.TargetClass,
+		TargetField:  rel.TargetField,
+		TargetFields: rel.TargetFields,
 	}
 	if reverse {
 		result.SourceClass, result.TargetClass = result.TargetClass, result.SourceClass
 		result.SourceField, result.TargetField = result.TargetField, result.SourceField
+		result.SourceFields, result.TargetFields = result.TargetFields, result.SourceFields
 	}
 	if rel.Through != nil {
 		through := *rel.Through
@@ -358,43 +364,69 @@ func cloneRelation(rel *protocol.Relation, relType protocol.RelationType, revers
 	return result
 }
 
-// processRelations 处理实体间关系：先按关系类型收集待建的虚拟字段，再统一挂载到类
+// collectRelations 把字段级关系声明（config通道/旧格式文件的兼容指针）收进类级
+// Relations集合：MANY_TO_ONE同时合成目标类的反向ONE_TO_MANY（与db加载器行为对齐），
+// 递归只收外键侧方向；AddRelation按身份键去重，db已登记的不重复
+func (my *Metadata) collectRelations() {
+	for _, className := range utl.SortKeys(my.Nodes) {
+		class := my.Nodes[className]
+		if className != class.Name {
+			continue
+		}
+		for _, fieldName := range utl.SortKeys(class.Fields) {
+			field := class.Fields[fieldName]
+			if fieldName != field.Name || field.Relation == nil || field.Virtual || field.Column == "" {
+				continue
+			}
+			rel := field.Relation
+			if rel.SourceClass == "" {
+				rel.SourceClass = class.Name
+			}
+			if rel.SourceField == "" {
+				rel.SourceField = field.Name
+			}
+			switch rel.Type {
+			case protocol.MANY_TO_ONE:
+				class.AddRelation(rel)
+				if target := my.Nodes[rel.TargetClass]; target != nil {
+					target.AddRelation(cloneRelation(rel, protocol.ONE_TO_MANY, true))
+				}
+			case protocol.ONE_TO_MANY, protocol.MANY_TO_MANY:
+				class.AddRelation(rel)
+			case protocol.RECURSIVE:
+				if !field.IsPrimary { // 只收外键侧方向，主键侧指针是同一关系的镜像
+					class.AddRelation(rel)
+				}
+			}
+		}
+	}
+}
+
+// processRelations 处理实体间关系：以类级Relations集合为唯一输入，
+// 按关系类型收集待建的虚拟字段（每条关系恰好一个入口，天然无跨源查重），
+// 同名碰撞按源列词干改名，再统一挂载到类
 func (my *Metadata) processRelations() {
 	log.Debug().Msg("处理所有关系信息")
 
 	var pending []relationField
-	reverseSeen := make(map[string]bool) // 同一对类的反向一对多只建一次
 
-	// 排序遍历保证收集顺序确定，冲突字段的后缀命名跨启动稳定
+	// 排序遍历保证收集顺序确定，命名跨启动稳定
 	for _, className := range utl.SortKeys(my.Nodes) {
 		class := my.Nodes[className]
 		// 跳过表名索引，只处理类名索引
 		if className != class.Name {
 			continue
 		}
-		for _, fieldName := range utl.SortKeys(class.Fields) {
-			field := class.Fields[fieldName]
-			if fieldName != field.Name || field.Relation == nil {
-				continue
-			}
-
-			relation := field.Relation
-			if relation.SourceClass == "" {
-				relation.SourceClass = class.Name
-			}
-			if relation.SourceField == "" {
-				relation.SourceField = field.Name
-			}
+		relations := append([]*protocol.Relation(nil), class.Relations...)
+		sort.Slice(relations, func(i, j int) bool { return relations[i].Key() < relations[j].Key() })
+		for _, relation := range relations {
 			targetClass := my.Nodes[relation.TargetClass]
 			if targetClass == nil {
-				log.Warn().Str("class", class.Name).Str("field", field.Name).
-					Str("targetClass", relation.TargetClass).Msg("关系目标类不存在")
+				log.Warn().Str("class", class.Name).Str("relation", relation.Key()).Msg("关系目标类不存在")
 				continue
 			}
-			if targetClass.Fields[relation.TargetField] == nil {
-				log.Warn().Str("class", class.Name).Str("field", field.Name).
-					Str("targetClass", relation.TargetClass).Str("targetField", relation.TargetField).
-					Msg("关系目标字段不存在")
+			if targetClass.Fields[relation.TargetColumns()[0]] == nil {
+				log.Warn().Str("class", class.Name).Str("relation", relation.Key()).Msg("关系目标字段不存在")
 				continue
 			}
 
@@ -402,29 +434,39 @@ func (my *Metadata) processRelations() {
 			case protocol.MANY_TO_MANY:
 				pending = append(pending, my.collectManyToMany(class, relation)...)
 			case protocol.ONE_TO_MANY:
-				// 与collectManyToOne登记同一key：db加载器在主键侧挂ONE_TO_MANY、外键侧挂MANY_TO_ONE，
-				// 两条路径生成的是同一个反向列表字段，这里查重避免生成comments1幽灵字段
-				key := class.Name + ":" + relation.TargetClass
-				if !reverseSeen[key] {
-					reverseSeen[key] = true
-					pending = append(pending, my.listField(class, relation.TargetClass, false,
-						cloneRelation(relation, protocol.ONE_TO_MANY, false)))
-				}
+				pending = append(pending, my.listField(class, relation.TargetClass, false, relation))
 			case protocol.MANY_TO_ONE:
-				pending = append(pending, my.collectManyToOne(class, targetClass, field, relation, reverseSeen)...)
-			case protocol.RECURSIVE:
-				// 自引用外键的正反关系分别挂在外键列与主键列上，只从外键侧生成一组字段
-				if !field.IsPrimary {
-					pending = append(pending, my.collectRecursive(class, relation)...)
+				nullable := false
+				if sf := class.Fields[relation.SourceColumns()[0]]; sf != nil {
+					nullable = sf.Nullable
 				}
+				pending = append(pending, relationField{
+					owner:       class.Name,
+					target:      relation.TargetClass,
+					name:        strcase.ToLowerCamel(relation.TargetClass),
+					nullable:    nullable,
+					description: "关联的" + relation.TargetClass,
+					relation:    relation,
+				})
+			case protocol.RECURSIVE:
+				pending = append(pending, my.collectRecursive(class, relation)...)
 			}
 		}
 	}
+
+	// 同名碰撞（同目标多关系/自引用多对多）按源列词干改名：author_id→author，
+	// 反向列表 authorComments；改名后仍冲突由创建期后缀兜底
+	renameCollisions(pending)
 
 	// 创建期才定名：此时能看到同批已建字段，同名冲突自动后缀（收集期定名会静默丢字段）
 	for _, f := range pending {
 		class := my.Nodes[f.owner]
 		if class == nil {
+			continue
+		}
+		// 旧格式文件已含虚拟字段：同名同关系视为已生成（重载幂等，不再产出comments1幽灵）
+		if exist := class.Fields[f.name]; exist != nil && exist.Virtual &&
+			exist.Relation != nil && exist.Relation.Key() == f.relation.Key() {
 			continue
 		}
 		name := my.uniqueFieldName(class, f.name)
@@ -441,6 +483,59 @@ func (my *Metadata) processRelations() {
 	}
 
 	log.Debug().Msg("关系处理和字段创建完成")
+}
+
+// renameCollisions 同一类下同名的待建字段按关系源列词干改名（单关系场景零改动）
+func renameCollisions(pending []relationField) {
+	byName := make(map[string][]int)
+	for i, f := range pending {
+		key := f.owner + "\x00" + f.name
+		byName[key] = append(byName[key], i)
+	}
+	for _, group := range byName {
+		if len(group) < 2 {
+			continue
+		}
+		for _, i := range group {
+			if name := stemName(&pending[i]); name != "" {
+				pending[i].name = name
+			}
+		}
+	}
+}
+
+// stemName 按关系键列词干派生字段名：author_id→author（正向）、
+// authorComments（反向列表）、friends（多对多经中间表远端键）；无词干返回空串
+func stemName(f *relationField) string {
+	rel := f.relation
+	if rel == nil {
+		return ""
+	}
+	switch rel.Type {
+	case protocol.MANY_TO_ONE:
+		return stem(rel.SourceColumns()[0])
+	case protocol.ONE_TO_MANY:
+		// 反向列表：外键列在目标侧（TargetField），词干+复数目标类
+		if s := stem(rel.TargetColumns()[0]); s != "" {
+			return strcase.ToLowerCamel(s + "_" + inflection.Plural(f.target))
+		}
+	case protocol.MANY_TO_MANY:
+		if rel.Through != nil {
+			if s := stem(rel.Through.TargetKey); s != "" {
+				return strcase.ToLowerCamel(inflection.Plural(s))
+			}
+		}
+	}
+	return ""
+}
+
+// stem 键列词干：去掉 _id/Id 后缀转小驼峰；列名即id等无词干时返回空串
+func stem(column string) string {
+	s := strings.TrimSuffix(strings.TrimSuffix(column, "_id"), "Id")
+	if s == "" || s == column {
+		return ""
+	}
+	return strcase.ToLowerCamel(s)
 }
 
 // listField 指向目标类的列表字段（一对多/多对多共用形态）；name为基础名，创建期唯一化
@@ -470,25 +565,6 @@ func (my *Metadata) collectManyToMany(class *protocol.Class, rel *protocol.Relat
 				TargetField: through.SourceKey,
 			}))
 		}
-	}
-	return fields
-}
-
-// collectManyToOne 多对一单对象字段 + 目标类上的反向一对多列表字段
-func (my *Metadata) collectManyToOne(class, targetClass *protocol.Class, field *protocol.Field,
-	rel *protocol.Relation, seen map[string]bool) []relationField {
-	fields := []relationField{{
-		owner:       class.Name,
-		target:      rel.TargetClass,
-		name:        strcase.ToLowerCamel(rel.TargetClass),
-		nullable:    field.Nullable,
-		description: "关联的" + rel.TargetClass,
-		relation:    cloneRelation(rel, protocol.MANY_TO_ONE, false),
-	}}
-	key := rel.TargetClass + ":" + class.Name
-	if !seen[key] {
-		seen[key] = true
-		fields = append(fields, my.listField(targetClass, class.Name, false, cloneRelation(rel, protocol.ONE_TO_MANY, true)))
 	}
 	return fields
 }
@@ -573,6 +649,7 @@ func (my *Metadata) normalize() error {
 	config := my.cfg.Metadata
 	nodes := make(map[string]*protocol.Class)
 	relations := make([]*protocol.Field, 0)
+	classRelations := make([]*protocol.Relation, 0)
 
 	for classKey, class := range my.Nodes {
 		// 跳过需要忽略的表；白名单非空时未命中即排除，排除规则优先
@@ -601,6 +678,7 @@ func (my *Metadata) normalize() error {
 			}
 		}
 		class.Fields = fields
+		classRelations = append(classRelations, class.Relations...)
 
 		if class.Table == "" {
 			nodes[classKey] = class
@@ -609,14 +687,20 @@ func (my *Metadata) normalize() error {
 		}
 	}
 
-	// 修正关系依赖中的类名
+	// 修正关系依赖中的类名（字段指针与类级集合可能指向同一对象，重命名幂等）
+	rename := func(rel *protocol.Relation) {
+		if node, ok := nodes[rel.SourceClass]; ok {
+			rel.SourceClass = node.Name
+		}
+		if node, ok := nodes[rel.TargetClass]; ok {
+			rel.TargetClass = node.Name
+		}
+	}
 	for _, field := range relations {
-		if node, ok := nodes[field.Relation.SourceClass]; ok {
-			field.Relation.SourceClass = node.Name
-		}
-		if node, ok := nodes[field.Relation.TargetClass]; ok {
-			field.Relation.TargetClass = node.Name
-		}
+		rename(field.Relation)
+	}
+	for _, rel := range classRelations {
+		rename(rel)
 	}
 
 	my.Nodes = nodes

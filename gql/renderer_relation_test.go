@@ -25,7 +25,8 @@ func TestRenderRelation(t *testing.T) {
 		},
 	}
 
-	// 先处理元数据中的关系与类型定型，然后才渲染
+	// 先收集字段级关系进类级集合、处理关系与类型定型，然后才渲染
+	meta.collectRelations()
 	meta.processRelations()
 	meta.finalize()
 
@@ -74,8 +75,9 @@ func TestRenderRelation(t *testing.T) {
 	t.Run("递归关系", func(t *testing.T) {
 		// Comment表中应该有parent字段，指向Comment
 		assert.Contains(t, generatedSchema, "parent: Comment")
-		// Comment表中应该有children字段，是Comment的列表
-		assert.Contains(t, generatedSchema, "children: [Comment]!")
+		// Comment表中应该有children字段，是Comment的列表（关系字段带过滤/排序/分页参数）
+		assert.Contains(t, generatedSchema, "children(where: CommentWhereInput")
+		assert.Contains(t, generatedSchema, "): [Comment]!")
 		// 应该包含注释
 		assert.Contains(t, generatedSchema, "# 父Comment对象")
 		assert.Contains(t, generatedSchema, "# 子Comment列表")
@@ -125,7 +127,7 @@ func TestRenderRelation(t *testing.T) {
 
 		// 列表关系字段提供按目标类的关系操作（挂接/解除/内联创建）
 		assert.Contains(t, inputSchema, "input CommentRelationInput {")
-		assert.Contains(t, inputSchema, "children1: CommentRelationInput")
+		assert.Contains(t, inputSchema, "children: CommentRelationInput")
 		assert.Contains(t, inputSchema, "create: [CommentCreateInput!]")
 
 		// 修改配置隐藏中间表关系
@@ -476,14 +478,6 @@ func createRelationTestMetadata() *Metadata {
 			TargetField: "id",
 			Type:        protocol.RECURSIVE,
 		},
-	}
-	// 可选：children 虚拟字段
-	commentClass.Fields["children"] = &protocol.Field{
-		Name:        "children",
-		Type:        "Comment",
-		Description: "子Comment列表",
-		Virtual:     true,
-		IsList:      true,
 	}
 
 	// 添加所有类到元数据
