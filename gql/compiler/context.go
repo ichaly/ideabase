@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -46,14 +47,27 @@ func (my Slot) Resolve(variables map[string]interface{}) any {
 }
 
 // DecodeCursor 解码游标为排序键值数组
+// UseNumber防止bigint经float64失真（雪花ID>2^53时续页会重复/漏行），
+// 整数还原为int64、小数为float64（驱动可直接编码）
 func DecodeCursor(cursor string) ([]any, error) {
 	data, err := base64.StdEncoding.DecodeString(cursor)
 	if err != nil {
 		return nil, fmt.Errorf("无效的游标: %w", err)
 	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 	var keys []any
-	if err = json.Unmarshal(data, &keys); err != nil {
+	if err = decoder.Decode(&keys); err != nil {
 		return nil, fmt.Errorf("无效的游标内容: %w", err)
+	}
+	for i, key := range keys {
+		if number, ok := key.(json.Number); ok {
+			if v, err := strconv.ParseInt(number.String(), 10, 64); err == nil {
+				keys[i] = v
+			} else if f, err := number.Float64(); err == nil {
+				keys[i] = f
+			}
+		}
 	}
 	return keys, nil
 }

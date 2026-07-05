@@ -36,7 +36,7 @@ func TestPlanResolveArgs(t *testing.T) {
 	}
 	args, err = cursorPlan.ResolveArgs(nil, nil)
 	assert.NoError(t, err)
-	assert.Equal(t, []any{"Bob", float64(2)}, args, "游标默认值须解码后按下标抽取")
+	assert.Equal(t, []any{"Bob", int64(2)}, args, "游标默认值须解码后按下标抽取（整数键经UseNumber精确还原int64）")
 
 	listPlan := &Plan{
 		slots:    []compiler.Slot{{Variable: "ids", Cursor: -1, List: true}},

@@ -63,7 +63,7 @@ func (my *_DialectSuite) TestCursor() {
 			name:      "续页after变量游标",
 			query:     `query ($c: Cursor) { users(first: 2, after: $c, sort: { name: ASC }) { items { id } pageInfo { hasNext hasPrev } } }`,
 			variables: map[string]interface{}{"c": EncodeCursor([]any{"Bob", 2})},
-			args:      []any{EncodeCursor([]any{"Bob", 2}), "Bob", float64(2), EncodeCursor([]any{"Bob", 2})},
+			args:      []any{EncodeCursor([]any{"Bob", 2}), "Bob", int64(2), EncodeCursor([]any{"Bob", 2})}, // 整数键经UseNumber精确还原int64（雪花ID>2^53不失真）
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT JSONB_BUILD_OBJECT(
