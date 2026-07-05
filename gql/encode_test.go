@@ -300,3 +300,30 @@ func BenchmarkEncodeBytes(b *testing.B) {
 		}
 	})
 }
+
+// TestEncodeIdVariableDefault 变量默认值同为字面量,必须与内联字面量一样经codec还原:
+// 不传变量时默认值生效,原始shortId若不解码会以字符串直达SQL(类型不符/查不到行)
+func TestEncodeIdVariableDefault(t *testing.T) {
+	executor, cleanup := setupEncodeExecutor(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	reply := executor.Execute(ctx, `mutation {
+		createUser(input: { name: "Dora", email: "dora@x.com" }) { id }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "创建用户失败: %v", reply.Errors)
+	uid := reply.Data["createUser"].(map[string]interface{})["id"].(string)
+
+	// 不传变量,默认值生效且应已解码
+	reply = executor.Execute(ctx, `query ($id: ID = "`+uid+`") { users(id: $id) { items { name } } }`, nil, "")
+	require.Empty(t, reply.Errors, "变量默认值应经codec解码: %v", reply.Errors)
+	items := reply.Data["users"].(map[string]interface{})["items"].([]interface{})
+	require.Len(t, items, 1, "默认值解码后应命中该用户")
+	require.Equal(t, "Dora", items[0].(map[string]interface{})["name"])
+
+	// 显式传入变量仍覆盖默认值
+	reply = executor.Execute(ctx, `query ($id: ID = "~nonexist") { users(id: $id) { items { name } } }`,
+		map[string]interface{}{"id": uid}, "")
+	require.Empty(t, reply.Errors)
+	require.Len(t, reply.Data["users"].(map[string]interface{})["items"].([]interface{}), 1, "显式变量覆盖默认值")
+}

@@ -520,8 +520,14 @@ func (my *Executor) parse(query, operationName string) (*ast.OperationDefinition
 		operation = doc.Operations[0]
 	}
 	operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
-	// codec标量字面量就地还原：解析仅发生一次，改写随计划缓存复用
+	// codec标量字面量就地还原：解析仅发生一次，改写随计划缓存复用；
+	// 变量默认值同为字面量，一并还原（不传变量时默认值直达SQL，漏解码即类型不符）
 	decodeLiterals(my.schema, operation.SelectionSet, my.metadata)
+	if len(my.metadata.codecs) > 0 {
+		for _, def := range operation.VariableDefinitions {
+			decodeLiteral(my.schema, def.Type, def.DefaultValue, my.metadata)
+		}
+	}
 	return operation, nil
 }
 
