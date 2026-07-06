@@ -1,22 +1,17 @@
 package std
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"maps"
-	"runtime/debug"
-	"strings"
 
 	"github.com/gofiber/fiber/v3"
-
-	"github.com/ichaly/ideabase/log"
 )
 
 // Extension GraphQL扩展信息的统一类型
 type Extension map[string]interface{}
 
-// Result GraphQL风格的统一响应结构
+// Result GraphQL风格的统一响应结构：全站唯一信封，是GraphQL响应的超集
+// （data/errors/extensions 与 GraphQL 一致，另加 code/message 供 REST 消费）
 type Result struct {
 	Code       int          `json:"code"`
 	Data       interface{}  `json:"data,omitempty"`
@@ -108,102 +103,24 @@ func (my *Exception) resolveMessage() {
 // NewException 创建异常实例
 func NewException(statusCode int) *Exception { return &Exception{statusCode: statusCode} }
 
-// ResultSkipper 判断是否跳过统一返回
-type ResultSkipper func(*fiber.Route) bool
-
-type resultMiddlewareConfig struct {
-	skipper ResultSkipper
+// wrapJSON 全站唯一信封点：c.JSON 走此编码器，恰好序列化一次。
+// 已是 *Result（如 GraphQL、ErrorHandler 自产的成品）原样输出；裸 payload 包一层。
+// GraphQL 直通路径走 c.Send 不经此，故大响应零拷贝、不受影响。
+func wrapJSON(v any) ([]byte, error) {
+	switch v.(type) {
+	case *Result, Result:
+		return fiberJSON.Marshal(v)
+	}
+	return fiberJSON.Marshal(&Result{Code: fiber.StatusOK, Data: v})
 }
 
-// ResultMiddlewareOption 中间件配置项
-type ResultMiddlewareOption func(*resultMiddlewareConfig)
-
-// WithResultSkipper 指定跳过统一返回的路由
-func WithResultSkipper(skipper ResultSkipper) ResultMiddlewareOption {
-	return func(cfg *resultMiddlewareConfig) {
-		cfg.skipper = skipper
-	}
-}
-
-// ResultMiddleware 零侵入统一返回中间件
-func ResultMiddleware(options ...ResultMiddlewareOption) fiber.Handler {
-	cfg := resultMiddlewareConfig{}
-	for _, opt := range options {
-		opt(&cfg)
-	}
-
-	return func(c fiber.Ctx) (err error) {
-		if shouldSkip(cfg.skipper, c.Route()) {
-			return c.Next()
-		}
-
-		defer func() {
-			if r := recover(); r != nil {
-				err = respondPanic(c, r)
-			}
-		}()
-
-		if err = c.Next(); err != nil {
-			return respondError(c, err)
-		}
-
-		if shouldSkip(cfg.skipper, c.Route()) {
-			return nil
-		}
-
-		status := c.Response().StatusCode()
-		if status == 0 {
-			status = fiber.StatusOK
-		}
-		if status >= fiber.StatusBadRequest {
-			return nil
-		}
-
-		body := c.Response().Body()
-		if len(body) == 0 || !isJSONResponse(c) {
-			return nil
-		}
-
-		data, wrapped := parsePayload(body)
-		if wrapped || data == nil {
-			return nil
-		}
-
-		c.Response().ResetBody()
-		return respondSuccess(c, status, data)
-	}
-}
-
-func respondError(c fiber.Ctx, err error) error {
+// resultErrorHandler 统一错误出口：任何 handler 返回的 error 在此定型为 Result
+func resultErrorHandler(c fiber.Ctx, err error) error {
 	status, exceptions := normalizeErrors(err)
-	return writeErrors(c, status, exceptions...)
-}
-
-func respondPanic(c fiber.Ctx, r interface{}) error {
-	stack := debug.Stack()
-	log.GetDefault().
-		Error().
-		Str("panic", fmt.Sprintf("%v", r)).
-		Bytes("stack", stack).
-		Msg("fiber panic recovered")
-
-	exception := NewException(fiber.StatusInternalServerError).WithMessage("服务器内部错误")
-	return writeErrors(c, fiber.StatusInternalServerError, exception)
-}
-
-func respondSuccess(c fiber.Ctx, status int, data interface{}) error {
-	if status <= 0 {
-		status = fiber.StatusOK
-	}
-	return c.Status(status).JSON(Result{Code: status, Message: "", Data: data})
-}
-
-func writeErrors(c fiber.Ctx, status int, exceptions ...*Exception) error {
 	if status <= 0 {
 		status = fiber.StatusInternalServerError
 	}
-	msg := pickMessage(exceptions)
-	return c.Status(status).JSON(Result{Code: status, Message: msg, Errors: exceptions})
+	return c.Status(status).JSON(&Result{Code: status, Message: pickMessage(exceptions), Errors: exceptions})
 }
 
 func pickMessage(exceptions []*Exception) string {
@@ -240,48 +157,4 @@ func normalizeStatus(status, fallback int) int {
 		return fallback
 	}
 	return status
-}
-
-func shouldSkip(skipper ResultSkipper, route *fiber.Route) bool {
-	if skipper == nil || route == nil {
-		return false
-	}
-	return skipper(route)
-}
-
-func isJSONResponse(c fiber.Ctx) bool {
-	contentType := strings.ToLower(string(c.Response().Header.ContentType()))
-	if contentType == "" {
-		return true
-	}
-	return strings.Contains(contentType, fiber.MIMEApplicationJSON)
-}
-
-func parsePayload(body []byte) (interface{}, bool) {
-	var payload interface{}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, false
-	}
-
-	obj, ok := payload.(map[string]interface{})
-	if !ok {
-		return payload, false
-	}
-
-	wrapped, hasCode := true, false
-	for key := range obj {
-		switch key {
-		case "code":
-			hasCode = true
-		case "message", "data", "errors", "extensions":
-		default:
-			wrapped = false
-			break
-		}
-	}
-
-	if wrapped && hasCode {
-		return nil, true
-	}
-	return obj, false
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/ichaly/ideabase/log"
+	"github.com/ichaly/ideabase/std"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -301,28 +302,65 @@ func (my *Executor) Handler(c fiber.Ctx) error {
 	// 解析请求
 	var req gqlQuery
 	if err := c.Bind().Body(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"errors": []gqlerror.Error{*gqlerror.Wrap(err)},
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(
+			toResult(fiber.StatusBadRequest, gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}))
 	}
 
 	// persisted-only：HTTP边界只接受持久化操作，原始查询文本一律拒绝
 	if my.options().PersistedOnly && strings.TrimSpace(req.Query) != "" {
-		return c.Status(fiber.StatusForbidden).JSON(gqlReply{Errors: gqlerror.List{
-			gqlerror.Errorf("仅接受持久化操作（省略query，以operationName执行已注册文档）")}})
+		return c.Status(fiber.StatusForbidden).JSON(toResult(fiber.StatusForbidden, gqlReply{Errors: gqlerror.List{
+			gqlerror.Errorf("仅接受持久化操作（省略query，以operationName执行已注册文档）")}}))
 	}
 
 	// 空查询且携带操作名时按持久化查询执行
 	if strings.TrimSpace(req.Query) == "" && req.OperationName != "" {
 		query, ok := my.documents[req.OperationName]
 		if !ok {
-			return c.JSON(gqlReply{Errors: gqlerror.List{gqlerror.Errorf("未找到名为'%s'的持久化操作", req.OperationName)}})
+			return c.JSON(toResult(fiber.StatusOK, gqlReply{Errors: gqlerror.List{gqlerror.Errorf("未找到名为'%s'的持久化操作", req.OperationName)}}))
 		}
 		req.Query = query
 	}
 
-	// 返回结果（无resolver路径经MarshalJSON直通输出）
-	return c.JSON(my.execute(c.Context(), req.Query, req.Variables, req.OperationName))
+	reply := my.execute(c.Context(), req.Query, req.Variables, req.OperationName)
+	// 直通：无resolver的成功响应，零拷贝拼装统一信封 {"code":200,"data":<__root>}，绕过编码器
+	if reply.raw != nil {
+		root := reply.raw
+		if len(root) == 0 {
+			root = []byte("{}")
+		}
+		buf := make([]byte, 0, len(root)+20)
+		buf = append(buf, `{"code":200,"data":`...)
+		buf = append(buf, root...)
+		return c.Type("json").Send(append(buf, '}'))
+	}
+	// resolver/自省/错误：构造统一Result交编码器原样输出（单层data，不二次包装）
+	return c.JSON(toResult(fiber.StatusOK, reply))
+}
+
+// toResult 把GraphQL响应装进全站统一信封std.Result：data直挂、错误转为std.Exception
+// （gqlerror与Exception同构：message/locations/path/extensions一一对应）
+func toResult(status int, r gqlReply) *std.Result {
+	out := &std.Result{Code: status, Data: r.Data}
+	for _, e := range r.Errors {
+		if e == nil {
+			continue
+		}
+		ex := &std.Exception{Message: e.Message}
+		for _, l := range e.Locations {
+			ex.Locations = append(ex.Locations, std.Location{Line: l.Line, Column: l.Column})
+		}
+		for _, p := range e.Path {
+			ex.Path = append(ex.Path, p)
+		}
+		if len(e.Extensions) > 0 {
+			ex.Extensions = std.Extension(e.Extensions)
+		}
+		out.Errors = append(out.Errors, ex)
+	}
+	if out.Message == "" && len(out.Errors) > 0 {
+		out.Message = out.Errors[0].Message
+	}
+	return out
 }
 
 // 主要公开方法

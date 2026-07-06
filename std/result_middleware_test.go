@@ -10,10 +10,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResultMiddlewareSuccess(t *testing.T) {
-	app := fiber.New()
-	app.Use(ResultMiddleware())
+// newEnvelopeApp 复刻 NewFiber 的信封机制（编码器包装 + 统一错误 + panic恢复），单测用
+func newEnvelopeApp() *fiber.App {
+	app := fiber.New(fiber.Config{
+		JSONEncoder:  wrapJSON,
+		JSONDecoder:  fiberJSON.Unmarshal,
+		ErrorHandler: resultErrorHandler,
+	})
+	app.Use(recoverMiddleware)
+	return app
+}
 
+func TestEnvelopeSuccess(t *testing.T) {
+	app := newEnvelopeApp()
 	app.Get("/ok", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"message": "ok"})
 	})
@@ -25,6 +34,7 @@ func TestResultMiddlewareSuccess(t *testing.T) {
 
 	var result Result
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, fiber.StatusOK, result.Code)
 	require.Equal(t, "", result.Message)
 
 	data, ok := result.Data.(map[string]interface{})
@@ -33,10 +43,28 @@ func TestResultMiddlewareSuccess(t *testing.T) {
 	require.Nil(t, result.Errors)
 }
 
-func TestResultMiddlewareError(t *testing.T) {
-	app := fiber.New()
-	app.Use(ResultMiddleware())
+// TestEnvelopePassthrough *Result 原样输出，不再被二次包装（GraphQL 走此路径）
+func TestEnvelopePassthrough(t *testing.T) {
+	app := newEnvelopeApp()
+	app.Get("/gql", func(c fiber.Ctx) error {
+		return c.JSON(&Result{Code: fiber.StatusOK, Data: json.RawMessage(`{"botProfiles":{"total":5}}`)})
+	})
 
+	resp := perform(app, http.MethodGet, "/gql")
+	defer resp.Body.Close()
+
+	var result Result
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, fiber.StatusOK, result.Code)
+	// 单层 data：data 直接是 GraphQL 内容，没有 data.data 嵌套
+	data, ok := result.Data.(map[string]interface{})
+	require.True(t, ok)
+	require.Contains(t, data, "botProfiles")
+	require.NotContains(t, data, "data")
+}
+
+func TestEnvelopeError(t *testing.T) {
+	app := newEnvelopeApp()
 	app.Get("/bad", func(c fiber.Ctx) error {
 		return NewException(fiber.StatusBadRequest).WithMessage("bad request")
 	})
@@ -48,36 +76,15 @@ func TestResultMiddlewareError(t *testing.T) {
 
 	var result Result
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, fiber.StatusBadRequest, result.Code)
 	require.Equal(t, "bad request", result.Message)
 	require.Nil(t, result.Data)
 	require.Len(t, result.Errors, 1)
 	require.Equal(t, "bad request", result.Errors[0].Message)
 }
 
-func TestResultMiddlewareSkip(t *testing.T) {
-	app := fiber.New()
-	app.Use(ResultMiddleware(WithResultSkipper(func(route *fiber.Route) bool {
-		return route != nil && route.Path == "/raw"
-	})))
-
-	app.Get("/raw", func(c fiber.Ctx) error {
-		return c.JSON(fiber.Map{"status": "raw"})
-	})
-
-	resp := perform(app, http.MethodGet, "/raw")
-	defer resp.Body.Close()
-
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var content map[string]interface{}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&content))
-	require.Equal(t, "raw", content["status"])
-}
-
-func TestResultMiddlewarePanic(t *testing.T) {
-	app := fiber.New()
-	app.Use(ResultMiddleware())
-
+func TestEnvelopePanic(t *testing.T) {
+	app := newEnvelopeApp()
 	app.Get("/panic", func(c fiber.Ctx) error {
 		panic("boom")
 	})
