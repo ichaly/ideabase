@@ -22,7 +22,7 @@ func TestRegisterFrozenAfterServing(t *testing.T) {
 	require.NoError(t, executor.Register(NewResolver("User", "early", "启动期注册",
 		func(_ context.Context, _ Source, _ struct{}) (string, error) { return "ok", nil })))
 
-	reply := executor.Execute(ctx, `query { users { total } }`, nil, "")
+	reply := executor.run(ctx, `query { users { total } }`, nil, "")
 	require.Empty(t, reply.Errors)
 
 	err := executor.Register(NewResolver("User", "late", "运行期注册",
@@ -36,12 +36,12 @@ func TestIntrospectionDisabled(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.introspection", false) })
 	defer cleanup()
 
-	reply := executor.Execute(context.Background(), `query { __schema { queryType { name } } }`, nil, "")
+	reply := executor.run(context.Background(), `query { __schema { queryType { name } } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "自省关闭后__schema应拒绝")
 	assert.Contains(t, reply.Errors[0].Message, "自省")
 
 	// 常规查询不受影响
-	reply = executor.Execute(context.Background(), `query { users { total } }`, nil, "")
+	reply = executor.run(context.Background(), `query { users { total } }`, nil, "")
 	require.Empty(t, reply.Errors)
 }
 

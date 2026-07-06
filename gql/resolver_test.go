@@ -88,7 +88,7 @@ func TestResolver(t *testing.T) {
 	ctx := context.Background()
 
 	// 准备数据：1个用户2篇文章（变更读回也应执行resolver）
-	reply := executor.Execute(ctx, `mutation {
+	reply := executor.run(ctx, `mutation {
 		createUser(input: { name: "Alice", email: "alice@x.com" }) { id name greeting }
 	}`, nil, "")
 	require.Empty(t, reply.Errors, "创建用户失败: %v", reply.Errors)
@@ -97,14 +97,14 @@ func TestResolver(t *testing.T) {
 	userId := created["id"]
 
 	for _, title := range []string{"A", "B"} {
-		reply = executor.Execute(ctx, `mutation ($t: String!, $u: ID!) {
+		reply = executor.run(ctx, `mutation ($t: String!, $u: ID!) {
 			createPost(input: { title: $t, userId: $u }) { id }
 		}`, map[string]interface{}{"t": title, "u": userId}, "")
 		require.Empty(t, reply.Errors, "创建文章失败: %v", reply.Errors)
 	}
 
 	// 嵌套列表上的批量resolver：2个宿主对象一次调用
-	reply = executor.Execute(ctx, `query {
+	reply = executor.run(ctx, `query {
 		users { items { id name greeting posts { id label } } }
 	}`, nil, "")
 	require.Empty(t, reply.Errors, "查询失败: %v", reply.Errors)
@@ -124,7 +124,7 @@ func TestResolver(t *testing.T) {
 
 	// 未注册的resolver报错
 	delete(executor.resolvers, "User.greeting")
-	reply = executor.Execute(ctx, `query { users { items { id greeting } } }`, nil, "")
+	reply = executor.run(ctx, `query { users { items { id greeting } } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "未注册resolver应报错")
 	require.Contains(t, reply.Errors[0].Message, "resolver未注册")
 }
@@ -145,18 +145,18 @@ func TestResolverArgs(t *testing.T) {
 		})))
 	ctx := context.Background()
 
-	reply := executor.Execute(ctx, `mutation { createUser(input: { name: "Ann", email: "a@x.com" }) { id } }`, nil, "")
+	reply := executor.run(ctx, `mutation { createUser(input: { name: "Ann", email: "a@x.com" }) { id } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 
 	// 字面量实参
-	reply = executor.Execute(ctx, `query { users { items { name hello(lang: "zh") } } }`, nil, "")
+	reply = executor.run(ctx, `query { users { items { name hello(lang: "zh") } } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	items := reply.Data["users"].(map[string]interface{})["items"].([]interface{})
 	require.Equal(t, "你好, Ann!", items[0].(map[string]interface{})["hello"])
 
 	// 变量实参：连跑两次覆盖计划缓存命中路径的实参解析（绑定AST随计划复用）
 	for i := 0; i < 2; i++ {
-		reply = executor.Execute(ctx, `query ($l: String) { users { items { name hello(lang: $l) } } }`,
+		reply = executor.run(ctx, `query ($l: String) { users { items { name hello(lang: $l) } } }`,
 			map[string]interface{}{"l": "en"}, "")
 		require.Empty(t, reply.Errors, "%v", reply.Errors)
 		items = reply.Data["users"].(map[string]interface{})["items"].([]interface{})
@@ -164,7 +164,7 @@ func TestResolverArgs(t *testing.T) {
 	}
 
 	// validate校验：非法枚举值报错
-	reply = executor.Execute(ctx, `query { users { items { name hello(lang: "xx") } } }`, nil, "")
+	reply = executor.run(ctx, `query { users { items { name hello(lang: "xx") } } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "validate应拦截非法参数")
 }
 
@@ -181,12 +181,12 @@ func TestResolverResultSuffixClass(t *testing.T) {
 	require.NoError(t, executor.Register(greetResolver("ExamResult")))
 	ctx := context.Background()
 
-	reply := executor.Execute(ctx, `mutation { createUser(input: { name: "E", email: "e@x.com" }) { id } }`, nil, "")
+	reply := executor.run(ctx, `mutation { createUser(input: { name: "E", email: "e@x.com" }) { id } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	uid := reply.Data["createUser"].(map[string]interface{})["id"]
 
 	// 变更读回：根字段类型名即实体本名ExamResult，按原名命中，不得剪成Exam
-	reply = executor.Execute(ctx, `mutation ($u: ID!) {
+	reply = executor.run(ctx, `mutation ($u: ID!) {
 		createExamResult(input: { title: "T", userId: $u }) { id title greeting }
 	}`, map[string]interface{}{"u": uid}, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
@@ -194,7 +194,7 @@ func TestResolverResultSuffixClass(t *testing.T) {
 	require.NotNil(t, created["greeting"], "变更读回应执行resolver（Result后缀不得误剪）")
 
 	// 查询根：包装类型ExamResultResult原名miss后剪一次后缀应命中
-	reply = executor.Execute(ctx, `query { examResults { items { id greeting } } }`, nil, "")
+	reply = executor.run(ctx, `query { examResults { items { id greeting } } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	items := reply.Data["examResults"].(map[string]interface{})["items"].([]interface{})
 	require.NotEmpty(t, items)

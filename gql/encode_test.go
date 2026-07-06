@@ -162,7 +162,7 @@ func TestCustomCodec(t *testing.T) {
 	require.Contains(t, executor.source, "email: Masked", "email字段应被认领为Masked")
 	require.Contains(t, executor.source, "input MaskedWhereInput", "过滤器应借用底层标量操作符集")
 
-	reply := executor.Execute(ctx, `mutation {
+	reply := executor.run(ctx, `mutation {
 		createUser(input: { name: "Bob", email: "bob@fish.ai" }) { id name email }
 	}`, nil, "")
 	require.Empty(t, reply.Errors, "创建失败: %v", reply.Errors)
@@ -179,7 +179,7 @@ func TestEncodeIdRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. 创建用户：出参id应为shortId字符串
-	reply := executor.Execute(ctx, `mutation {
+	reply := executor.run(ctx, `mutation {
 		createUser(input: { name: "Alice", email: "alice@x.com" }) { id name }
 	}`, nil, "")
 	require.Empty(t, reply.Errors, "创建用户失败: %v", reply.Errors)
@@ -189,7 +189,7 @@ func TestEncodeIdRoundTrip(t *testing.T) {
 	require.True(t, strings.HasPrefix(uid, "~"), "id应带shortId前缀: %s", uid)
 
 	// 2. shortId作为ID变量入参：创建文章（外键userId在schema中即ID标量）
-	reply = executor.Execute(ctx, `mutation ($title: String!, $uid: ID!) {
+	reply = executor.run(ctx, `mutation ($title: String!, $uid: ID!) {
 		createPost(input: { title: $title, userId: $uid }) { id title userId user { id name } }
 	}`, map[string]interface{}{"title": "Hello", "uid": uid}, "")
 	require.Empty(t, reply.Errors, "创建文章失败: %v", reply.Errors)
@@ -199,20 +199,20 @@ func TestEncodeIdRoundTrip(t *testing.T) {
 	require.Equal(t, uid, post["user"].(map[string]interface{})["id"], "嵌套关系id应编码")
 
 	// 3. shortId作为字面量入参（AST改写路径）
-	reply = executor.Execute(ctx, `query { users(id: "`+uid+`") { items { id name } } }`, nil, "")
+	reply = executor.run(ctx, `query { users(id: "`+uid+`") { items { id name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "字面量入参查询失败: %v", reply.Errors)
 	items := reply.Data["users"].(map[string]interface{})["items"].([]interface{})
 	require.Len(t, items, 1)
 	require.Equal(t, "Alice", items[0].(map[string]interface{})["name"])
 
 	// 4. where过滤中的shortId（input对象递归解码）与字面量列表
-	reply = executor.Execute(ctx, `query ($id: ID!) {
+	reply = executor.run(ctx, `query ($id: ID!) {
 		users(where: { id: { eq: $id } }) { items { id } total }
 	}`, map[string]interface{}{"id": uid}, "")
 	require.Empty(t, reply.Errors, "where过滤查询失败: %v", reply.Errors)
 	require.EqualValues(t, 1, reply.Data["users"].(map[string]interface{})["total"])
 
-	reply = executor.Execute(ctx, `query {
+	reply = executor.run(ctx, `query {
 		users(where: { id: { in: ["`+uid+`"] } }) { items { id } total }
 	}`, nil, "")
 	require.Empty(t, reply.Errors, "in列表字面量失败: %v", reply.Errors)
@@ -221,16 +221,16 @@ func TestEncodeIdRoundTrip(t *testing.T) {
 	// 5. 兼容历史入参：数字与shortId等价
 	var id std.Id
 	require.NoError(t, id.Decode(uid))
-	reply = executor.Execute(ctx, `query ($id: ID!) { users(id: $id) { items { name } } }`,
+	reply = executor.run(ctx, `query ($id: ID!) { users(id: $id) { items { name } } }`,
 		map[string]interface{}{"id": uid}, "")
 	require.Empty(t, reply.Errors)
-	reply2 := executor.Execute(ctx, `query ($id: ID!) { users(id: $id) { items { name } } }`,
+	reply2 := executor.run(ctx, `query ($id: ID!) { users(id: $id) { items { name } } }`,
 		map[string]interface{}{"id": int64(id)}, "")
 	require.Empty(t, reply2.Errors, "数字入参应兼容: %v", reply2.Errors)
 	require.Equal(t, reply.Data, reply2.Data)
 
 	// 6. 计划缓存复用后出入参转换仍生效（同查询第二次走缓存路径）
-	reply = executor.Execute(ctx, `query ($id: ID!) {
+	reply = executor.run(ctx, `query ($id: ID!) {
 		users(where: { id: { eq: $id } }) { items { id } total }
 	}`, map[string]interface{}{"id": uid}, "")
 	require.Empty(t, reply.Errors, "缓存命中路径失败: %v", reply.Errors)
@@ -248,7 +248,7 @@ func TestEncodeIdListVariable(t *testing.T) {
 
 	var ids []interface{}
 	for _, name := range []string{"u1", "u2"} {
-		reply := executor.Execute(ctx, `mutation ($n: String!, $e: String!) {
+		reply := executor.run(ctx, `mutation ($n: String!, $e: String!) {
 			createUser(input: { name: $n, email: $e }) { id }
 		}`, map[string]interface{}{"n": name, "e": name + "@x.com"}, "")
 		require.Empty(t, reply.Errors)
@@ -256,17 +256,17 @@ func TestEncodeIdListVariable(t *testing.T) {
 	}
 
 	query := `query ($ids: [ID!]) { users(where: { id: { in: $ids } }) { items { id } total } }`
-	reply := executor.Execute(ctx, query, map[string]interface{}{"ids": ids}, "")
+	reply := executor.run(ctx, query, map[string]interface{}{"ids": ids}, "")
 	require.Empty(t, reply.Errors, "ID列表变量过滤失败: %v", reply.Errors)
 	require.EqualValues(t, 2, reply.Data["users"].(map[string]interface{})["total"])
 
 	// 空列表恒不匹配且SQL合法
-	reply = executor.Execute(ctx, query, map[string]interface{}{"ids": []interface{}{}}, "")
+	reply = executor.run(ctx, query, map[string]interface{}{"ids": []interface{}{}}, "")
 	require.Empty(t, reply.Errors, "空列表应合法: %v", reply.Errors)
 	require.EqualValues(t, 0, reply.Data["users"].(map[string]interface{})["total"])
 
 	// 第二次执行走volatile缓存分支（AST复用重编译）
-	reply = executor.Execute(ctx, query, map[string]interface{}{"ids": ids[:1]}, "")
+	reply = executor.run(ctx, query, map[string]interface{}{"ids": ids[:1]}, "")
 	require.Empty(t, reply.Errors, "volatile缓存路径失败: %v", reply.Errors)
 	require.EqualValues(t, 1, reply.Data["users"].(map[string]interface{})["total"])
 }
@@ -308,21 +308,21 @@ func TestEncodeIdVariableDefault(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	reply := executor.Execute(ctx, `mutation {
+	reply := executor.run(ctx, `mutation {
 		createUser(input: { name: "Dora", email: "dora@x.com" }) { id }
 	}`, nil, "")
 	require.Empty(t, reply.Errors, "创建用户失败: %v", reply.Errors)
 	uid := reply.Data["createUser"].(map[string]interface{})["id"].(string)
 
 	// 不传变量,默认值生效且应已解码
-	reply = executor.Execute(ctx, `query ($id: ID = "`+uid+`") { users(id: $id) { items { name } } }`, nil, "")
+	reply = executor.run(ctx, `query ($id: ID = "`+uid+`") { users(id: $id) { items { name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "变量默认值应经codec解码: %v", reply.Errors)
 	items := reply.Data["users"].(map[string]interface{})["items"].([]interface{})
 	require.Len(t, items, 1, "默认值解码后应命中该用户")
 	require.Equal(t, "Dora", items[0].(map[string]interface{})["name"])
 
 	// 显式传入变量仍覆盖默认值
-	reply = executor.Execute(ctx, `query ($id: ID = "~nonexist") { users(id: $id) { items { name } } }`,
+	reply = executor.run(ctx, `query ($id: ID = "~nonexist") { users(id: $id) { items { name } } }`,
 		map[string]interface{}{"id": uid}, "")
 	require.Empty(t, reply.Errors)
 	require.Len(t, reply.Data["users"].(map[string]interface{})["items"].([]interface{}), 1, "显式变量覆盖默认值")

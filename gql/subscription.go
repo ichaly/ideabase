@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/fasthttp/websocket"
-	"github.com/gofiber/fiber/v3"
 	"github.com/valyala/fasthttp"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -24,12 +23,12 @@ type feed struct {
 	stop context.CancelFunc
 }
 
-// Subscribe 订阅查询：基于WAL逻辑复制(CDC)的变更推送
+// subscribe 订阅查询：基于WAL逻辑复制(CDC)的变更推送
 // 订阅涉及的表发生变更时重执行查询，结果指纹变化才推送最新状态
 // （慢消费者不阻塞其他订阅者，未消费的旧结果被最新结果顶替）；
 // 首次立即推送当前结果；ctx取消后通道关闭
 // 依赖数据库 wal_level=logical 与连接账号的REPLICATION权限
-func (my *Executor) Subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
+func (my *Executor) subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
 	if my.cdc == nil {
 		return nil, fmt.Errorf("订阅不可用：当前数据库没有注册CDC唤醒源或DSN不可用")
 	}
@@ -149,7 +148,7 @@ func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]i
 		return r, true
 	}
 
-	// 订阅是公开API：始终解包为Data供程序化消费（变更推送频率低，非热路径），
+	// 订阅始终解包为Data供程序化消费（变更推送频率低，非热路径），
 	// 懒解包残留的原始字节段就地物化，维持Data全map契约
 	result, warnings, err := my.unpack(ctx, plan, data, variables)
 	if err != nil {
@@ -196,11 +195,11 @@ var upgrader = websocket.FastHTTPUpgrader{
 	WriteBufferSize: 4096,
 }
 
-// SubscribeHandler 处理GraphQL订阅的WebSocket升级（graphql-transport-ws子协议）
-func (my *Executor) SubscribeHandler(c fiber.Ctx) error {
-	// 升级前提取行级作用域：WebSocket升级后fiber请求ctx不可用，否则订阅丢失隔离
-	scope := scopeValues(c.Context())
-	return upgrader.Upgrade(c.RequestCtx(), func(conn *websocket.Conn) {
+// Upgrade 框架无关的订阅入口：将连接升级为 graphql-transport-ws WebSocket。
+// scope 为升级前提取的行级作用域（升级后请求ctx不可用，否则订阅丢失隔离）。
+// 仅依赖 fasthttp（fiber 亦跑在 fasthttp 上，WS 无法退回 net/http）；fiber 绑定见 fiber.go。
+func (my *Executor) Upgrade(rc *fasthttp.RequestCtx, scope map[string]any) error {
+	return upgrader.Upgrade(rc, func(conn *websocket.Conn) {
 		my.serveSocket(conn, scope)
 	})
 }
@@ -330,7 +329,7 @@ func (my *Executor) startSubscription(ctx context.Context, session *socketSessio
 	}
 
 	subCtx, stop := context.WithCancel(ctx)
-	events, err := my.Subscribe(subCtx, req.Query, req.Variables, req.OperationName)
+	events, err := my.subscribe(subCtx, req.Query, req.Variables, req.OperationName)
 	if err != nil {
 		stop()
 		release()

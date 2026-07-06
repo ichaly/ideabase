@@ -18,7 +18,39 @@ func newEnvelopeApp() *fiber.App {
 		ErrorHandler: resultErrorHandler,
 	})
 	app.Use(recoverMiddleware)
+	app.Use(envelopeResponse)
 	return app
+}
+
+// TestEnvelopeRawSend handler 用 c.Send 直发的 GraphQL 标准体被兜底中间件自动套 code 信封
+func TestEnvelopeRawSend(t *testing.T) {
+	app := newEnvelopeApp()
+	app.Get("/gql", func(c fiber.Ctx) error {
+		return c.Type("json").Send([]byte(`{"data":{"users":{"total":5}},"errors":[{"message":"warn"}]}`))
+	})
+	app.Get("/empty", func(c fiber.Ctx) error {
+		return c.Type("json").Send([]byte(`{}`))
+	})
+
+	resp := perform(app, http.MethodGet, "/gql")
+	defer resp.Body.Close()
+	var result Result
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, fiber.StatusOK, result.Code) // 自动补上的信封 code
+	data, ok := result.Data.(map[string]interface{})
+	require.True(t, ok)
+	require.Contains(t, data, "users")   // data 单层，无 data.data 嵌套
+	require.NotContains(t, data, "data")
+	require.Len(t, result.Errors, 1)
+	require.Equal(t, "warn", result.Errors[0].Message)
+
+	// 空对象体只补信封、不产生非法尾逗号
+	respEmpty := perform(app, http.MethodGet, "/empty")
+	defer respEmpty.Body.Close()
+	var empty Result
+	require.NoError(t, json.NewDecoder(respEmpty.Body).Decode(&empty))
+	require.Equal(t, fiber.StatusOK, empty.Code)
+	require.Nil(t, empty.Data)
 }
 
 func TestEnvelopeSuccess(t *testing.T) {

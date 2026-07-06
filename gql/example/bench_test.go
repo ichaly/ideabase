@@ -4,9 +4,12 @@
 package main
 
 import (
-	"context"
+	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/gql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -28,20 +31,25 @@ func benchExecutor(b *testing.B) *gql.Executor {
 	return executor
 }
 
-// runQuery 跑一条查询并校验无错（计划缓存在首次后命中，基准测稳态吞吐）
+// runQuery 经公开 HTTP 入口端到端跑一条查询并校验无错（计划缓存首次后命中，测稳态吞吐）
 func runQuery(b *testing.B, query string) {
 	executor := benchExecutor(b)
-	ctx := context.Background()
-	if reply := executor.Execute(ctx, query, nil, ""); len(reply.Errors) > 0 {
-		b.Fatalf("查询出错: %v", reply.Errors)
+	app := fiber.New()
+	executor.Bind(app.Group(executor.Path()))
+	body := `{"query":` + strconv.Quote(query) + `}`
+	do := func() {
+		req := httptest.NewRequest("POST", executor.Path(), strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := app.Test(req)
+		if err != nil || resp.StatusCode != 200 {
+			b.Fatalf("查询出错: err=%v status=%v", err, resp)
+		}
 	}
+	do() // 预热编译缓存
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		reply := executor.Execute(ctx, query, nil, "")
-		if len(reply.Errors) > 0 {
-			b.Fatalf("查询出错: %v", reply.Errors)
-		}
+		do()
 	}
 }
 

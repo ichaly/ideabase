@@ -1,8 +1,10 @@
 package std
 
 import (
+	"bytes"
 	"errors"
 	"maps"
+	"strconv"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -104,14 +106,43 @@ func (my *Exception) resolveMessage() {
 func NewException(statusCode int) *Exception { return &Exception{statusCode: statusCode} }
 
 // wrapJSON 全站唯一信封点：c.JSON 走此编码器，恰好序列化一次。
-// 已是 *Result（如 GraphQL、ErrorHandler 自产的成品）原样输出；裸 payload 包一层。
-// GraphQL 直通路径走 c.Send 不经此，故大响应零拷贝、不受影响。
+// 已是 *Result（如 ErrorHandler 自产的成品）原样输出；裸 payload 包一层。
 func wrapJSON(v any) ([]byte, error) {
 	switch v.(type) {
 	case *Result, Result:
 		return fiberJSON.Marshal(v)
 	}
 	return fiberJSON.Marshal(&Result{Code: fiber.StatusOK, Data: v})
+}
+
+// envelopeResponse 兜底信封中间件：handler 用 c.Send 直发的 JSON 对象体（如 GraphQL 引擎的
+// {data,errors}）在此自动套上 {code,...} 信封，故这类 handler 无需感知 Result。
+// c.JSON 响应已是 Result（以 {"code" 起头）故跳过；错误经 c.Next 抛出交 ErrorHandler 定型。
+// 注册在中间件最内层，早于 compress/etag 的 body 后处理运行。
+func envelopeResponse(c fiber.Ctx) error {
+	if err := c.Next(); err != nil {
+		return err
+	}
+	resp := c.Response()
+	if !bytes.HasPrefix(resp.Header.ContentType(), []byte(fiber.MIMEApplicationJSON)) {
+		return nil
+	}
+	body := resp.Body()
+	if len(body) == 0 || body[0] != '{' || bytes.HasPrefix(body, []byte(`{"code"`)) {
+		return nil
+	}
+	resp.SetBody(envelope(resp.StatusCode(), body))
+	return nil
+}
+
+// envelope 零解析地把 "code":C 拼进一个 JSON 对象体首部，产出与 Result 同形的
+// {"code":C,...}。body 须是 JSON 对象（如 GraphQL 标准体 {data,errors}），避免二次序列化。
+func envelope(code int, body []byte) []byte {
+	head := strconv.AppendInt([]byte(`{"code":`), int64(code), 10)
+	if len(body) <= 2 { // {} 或空体：仅信封
+		return append(head, '}')
+	}
+	return append(append(head, ','), body[1:]...) // {"code":C, + data..}
 }
 
 // resultErrorHandler 统一错误出口：任何 handler 返回的 error 在此定型为 Result

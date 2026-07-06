@@ -91,7 +91,7 @@ func TestIntrospection(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("标准IntrospectionQuery", func(t *testing.T) {
-		result := executor.Execute(ctx, standardIntrospectionQuery, nil, "IntrospectionQuery")
+		result := executor.run(ctx, standardIntrospectionQuery, nil, "IntrospectionQuery")
 		assert.Empty(t, result.Errors, "标准自省查询失败: %v", result.Errors)
 
 		schema := result.Data["__schema"].(map[string]interface{})
@@ -144,7 +144,7 @@ func TestIntrospection(t *testing.T) {
 	})
 
 	t.Run("Type Introspection", func(t *testing.T) {
-		result := executor.Execute(ctx, `{ __type(name: "User") { name kind fields { name type { name kind } } } }`, nil, "")
+		result := executor.run(ctx, `{ __type(name: "User") { name kind fields { name type { name kind } } } }`, nil, "")
 		assert.Empty(t, result.Errors)
 
 		typeData := result.Data["__type"].(map[string]interface{})
@@ -154,14 +154,14 @@ func TestIntrospection(t *testing.T) {
 	})
 
 	t.Run("变量传name", func(t *testing.T) {
-		result := executor.Execute(ctx, `query ($n: String!) { __type(name: $n) { name } }`,
+		result := executor.run(ctx, `query ($n: String!) { __type(name: $n) { name } }`,
 			map[string]interface{}{"n": "Post"}, "")
 		assert.Empty(t, result.Errors)
 		assert.Equal(t, "Post", result.Data["__type"].(map[string]interface{})["name"])
 	})
 
 	t.Run("未知类型返回null", func(t *testing.T) {
-		result := executor.Execute(ctx, `{ __type(name: "Nope") { name } }`, nil, "")
+		result := executor.run(ctx, `{ __type(name: "Nope") { name } }`, nil, "")
 		assert.Empty(t, result.Errors)
 		assert.Nil(t, result.Data["__type"])
 	})

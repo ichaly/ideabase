@@ -18,7 +18,7 @@ func TestSubscribe(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	events, err := executor.Subscribe(ctx, `subscription {
+	events, err := executor.subscribe(ctx, `subscription {
 		users { items { name } total }
 	}`, nil, "")
 	require.NoError(t, err, "建立订阅失败")
@@ -40,7 +40,7 @@ func TestSubscribe(t *testing.T) {
 	require.EqualValues(t, 0, reply.Data["users"].(map[string]interface{})["total"])
 
 	// 数据变化触发推送
-	w := executor.Execute(ctx, `mutation { createUser(input: { name: "Eve", email: "e@x.com" }) { id } }`, nil, "")
+	w := executor.run(ctx, `mutation { createUser(input: { name: "Eve", email: "e@x.com" }) { id } }`, nil, "")
 	require.Empty(t, w.Errors, "创建用户失败: %v", w.Errors)
 
 	reply = next("变化推送")
@@ -73,9 +73,9 @@ func TestSubscribeShared(t *testing.T) {
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 
-	e1, err := executor.Subscribe(ctx1, query, nil, "")
+	e1, err := executor.subscribe(ctx1, query, nil, "")
 	require.NoError(t, err)
-	e2, err := executor.Subscribe(ctx2, query, nil, "")
+	e2, err := executor.subscribe(ctx2, query, nil, "")
 	require.NoError(t, err)
 
 	executor.feedMu.Lock()
@@ -147,7 +147,7 @@ func TestSubscribeScope(t *testing.T) {
 	ctx, cancel := context.WithTimeout(WithScope(context.Background(), map[string]any{"tenant": 1}), 15*time.Second)
 	defer cancel()
 
-	events, err := executor.Subscribe(ctx, `subscription { users { items { name } total } }`, nil, "")
+	events, err := executor.subscribe(ctx, `subscription { users { items { name } total } }`, nil, "")
 	require.NoError(t, err, "建立订阅失败")
 
 	next := func(hint string) gqlReply {
@@ -167,7 +167,7 @@ func TestSubscribeScope(t *testing.T) {
 	require.EqualValues(t, 0, reply.Data["users"].(map[string]interface{})["total"], "订阅按作用域隔离，租户1 看不到租户2")
 
 	// 租户1 新增（作用域写入也是租户1）→ 推送包含它
-	w := executor.Execute(ctx, `mutation { createUser(input: { name: "t1u", email: "t1u@x.com" }) { id } }`, nil, "")
+	w := executor.run(ctx, `mutation { createUser(input: { name: "t1u", email: "t1u@x.com" }) { id } }`, nil, "")
 	require.Empty(t, w.Errors, "创建失败: %v", w.Errors)
 	reply = next("租户1新增")
 	users := reply.Data["users"].(map[string]interface{})

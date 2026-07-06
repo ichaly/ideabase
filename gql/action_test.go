@@ -52,7 +52,7 @@ func TestActionRoundTrip(t *testing.T) {
 	require.NoError(t, executor.Register(pingAction{}, newSignUpAction(db)))
 
 	// 1. 内省可见：自定义字段与表CRUD一视同仁
-	reply := executor.Execute(ctx, `{ __type(name: "Mutation") { fields { name } } }`, nil, "")
+	reply := executor.run(ctx, `{ __type(name: "Mutation") { fields { name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "自省失败: %v", reply.Errors)
 	fields := reply.Data["__type"].(map[string]interface{})["fields"].([]interface{})
 	var names []string
@@ -63,13 +63,13 @@ func TestActionRoundTrip(t *testing.T) {
 
 	// 2. 标量直通：结果原样输出（连跑两次覆盖计划缓存命中路径）
 	for i := 0; i < 2; i++ {
-		reply = executor.Execute(ctx, `query { ping(msg: "hi") }`, nil, "")
+		reply = executor.run(ctx, `query { ping(msg: "hi") }`, nil, "")
 		require.Empty(t, reply.Errors, "ping执行失败: %v", reply.Errors)
 		require.Equal(t, "pong:hi", reply.Data["ping"])
 	}
 
 	// 3. 回查补全：Action返回id，引擎按客户端选择集（含别名与关系）读回实体
-	reply = executor.Execute(ctx, `mutation ($n: String!, $e: String!) {
+	reply = executor.run(ctx, `mutation ($n: String!, $e: String!) {
 		u: signUp(name: $n, email: $e) { id name posts { title } }
 	}`, map[string]interface{}{"n": "Alice", "e": "alice@x.com"}, "")
 	require.Empty(t, reply.Errors, "signUp执行失败: %v", reply.Errors)
@@ -79,11 +79,11 @@ func TestActionRoundTrip(t *testing.T) {
 	require.NotNil(t, user["posts"], "关系字段应随回查补全")
 
 	// 4. 变量校验：未注册字段仍被schema校验拦截
-	reply = executor.Execute(ctx, `mutation { nosuch(x: 1) }`, nil, "")
+	reply = executor.run(ctx, `mutation { nosuch(x: 1) }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "未定义字段应报错")
 
 	// 5. 混排拒绝：Action与实体字段不可同请求
-	reply = executor.Execute(ctx, `query { ping(msg: "x") users { total } }`, nil, "")
+	reply = executor.run(ctx, `query { ping(msg: "x") users { total } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "混排应报错")
 	require.Contains(t, reply.Errors.Error(), "混排")
 }
@@ -97,13 +97,13 @@ func TestActionTypename(t *testing.T) {
 	require.NoError(t, executor.Register(pingAction{}, newSignUpAction(db)))
 
 	// 查询操作回填"Query"
-	reply := executor.Execute(ctx, `query { ping(msg: "hi") __typename }`, nil, "")
+	reply := executor.run(ctx, `query { ping(msg: "hi") __typename }`, nil, "")
 	require.Empty(t, reply.Errors, "__typename不应触发混排拒绝: %v", reply.Errors)
 	require.Equal(t, "pong:hi", reply.Data["ping"])
 	require.Equal(t, "Query", reply.Data["__typename"])
 
 	// 变更操作回填"Mutation"（含别名）
-	reply = executor.Execute(ctx, `mutation ($n: String!, $e: String!) {
+	reply = executor.run(ctx, `mutation ($n: String!, $e: String!) {
 		signUp(name: $n, email: $e) { id } t: __typename
 	}`, map[string]interface{}{"n": "Ty", "e": "ty@x.com"}, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
@@ -120,13 +120,13 @@ func TestActionVariablePassthrough(t *testing.T) {
 	require.NoError(t, executor.Register(newSignUpAction(db)))
 
 	// 准备：建号并为其创建两篇文章（回查嵌套选择集有数据可过滤/排序）
-	reply := executor.Execute(ctx, `mutation ($n: String!, $e: String!) {
+	reply := executor.run(ctx, `mutation ($n: String!, $e: String!) {
 		signUp(name: $n, email: $e) { id }
 	}`, map[string]interface{}{"n": "Vera", "e": "vera@x.com"}, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	uid := reply.Data["signUp"].(map[string]interface{})["id"]
 	for _, title := range []string{"B2", "A1"} {
-		reply = executor.Execute(ctx, `mutation ($t: String!, $u: ID!) {
+		reply = executor.run(ctx, `mutation ($t: String!, $u: ID!) {
 			createPost(input: { title: $t, userId: $u }) { id }
 		}`, map[string]interface{}{"t": title, "u": uid}, "")
 		require.Empty(t, reply.Errors, "%v", reply.Errors)
@@ -135,7 +135,7 @@ func TestActionVariablePassthrough(t *testing.T) {
 	// 嵌套选择集引用对象+枚举变量（$s为[{title: ASC}]，json内联会产生带引号键
 	// 与带引号枚举的非法字面量）与字段级标量变量（$lk），连跑两次覆盖回查计划缓存
 	for i := 0; i < 2; i++ {
-		reply = executor.Execute(ctx, `mutation ($n: String!, $e: String!, $lk: String, $s: [PostSortInput!]) {
+		reply = executor.run(ctx, `mutation ($n: String!, $e: String!, $lk: String, $s: [PostSortInput!]) {
 			signUp(name: $n, email: $e) { id name posts(where: { title: { like: $lk } }, sort: $s) { title } }
 		}`, map[string]interface{}{
 			"n": "Bob", "e": fmt.Sprintf("bob%d@x.com", i),

@@ -13,11 +13,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/ichaly/ideabase/log"
-	"github.com/ichaly/ideabase/std"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -214,7 +212,7 @@ func loadSchema(m *Metadata, r *Renderer) (string, error) {
 }
 
 // LoadDocuments 从目录加载.graphql操作文档（持久化查询）
-// 操作按名注册，可通过ExecuteOperation按名执行；编译缓存尽力预热
+// 操作按名注册，可通过 runOperation 按名执行；编译缓存尽力预热
 // 目录是可选的：不存在则跳过（无持久化查询不影响服务启动）
 func (my *Executor) LoadDocuments(dir string) error {
 	if my.frozen.Load() {
@@ -259,13 +257,13 @@ func (my *Executor) loadDocument(content string) error {
 	return nil
 }
 
-// ExecuteOperation 按操作名执行已加载文档中的持久化查询
-func (my *Executor) ExecuteOperation(ctx context.Context, operationName string, variables map[string]interface{}) gqlReply {
+// runOperation 按操作名执行已加载文档中的持久化查询
+func (my *Executor) runOperation(ctx context.Context, operationName string, variables map[string]interface{}) gqlReply {
 	query, ok := my.documents[operationName]
 	if !ok {
 		return gqlReply{Errors: gqlerror.List{gqlerror.Errorf("未找到名为'%s'的持久化操作", operationName)}}
 	}
-	return my.Execute(ctx, query, variables, operationName)
+	return my.run(ctx, query, variables, operationName)
 }
 
 // 接口实现方法
@@ -277,95 +275,9 @@ func (my *Executor) Path() string {
 	return "/graphql"
 }
 
-// 绑定插件路由
-// Bind 实现Plugin接口的Bind方法，注册GraphQL HTTP处理路由
-// 参数:
-//   - r: Fiber路由器，用于注册路由
-func (my *Executor) Bind(r fiber.Router) {
-	// 注册GraphQL请求处理路由；GET用于订阅WebSocket升级
-	r.Post("/", my.Handler)
-	r.Get("/", my.SubscribeHandler)
-}
-
-// Handler 处理GraphQL HTTP请求
-// 作为Fiber中间件函数，解析请求体中的GraphQL查询并执行
-// 参数:
-//   - c: Fiber上下文，包含HTTP请求和响应信息
-//
-// 返回:
-//   - 可能的错误信息
-//
-// 使用示例:
-//
-//	app.Post("/graphql", executor.Handler)
-func (my *Executor) Handler(c fiber.Ctx) error {
-	// 解析请求
-	var req gqlQuery
-	if err := c.Bind().Body(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(
-			toResult(fiber.StatusBadRequest, gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}))
-	}
-
-	// persisted-only：HTTP边界只接受持久化操作，原始查询文本一律拒绝
-	if my.options().PersistedOnly && strings.TrimSpace(req.Query) != "" {
-		return c.Status(fiber.StatusForbidden).JSON(toResult(fiber.StatusForbidden, gqlReply{Errors: gqlerror.List{
-			gqlerror.Errorf("仅接受持久化操作（省略query，以operationName执行已注册文档）")}}))
-	}
-
-	// 空查询且携带操作名时按持久化查询执行
-	if strings.TrimSpace(req.Query) == "" && req.OperationName != "" {
-		query, ok := my.documents[req.OperationName]
-		if !ok {
-			return c.JSON(toResult(fiber.StatusOK, gqlReply{Errors: gqlerror.List{gqlerror.Errorf("未找到名为'%s'的持久化操作", req.OperationName)}}))
-		}
-		req.Query = query
-	}
-
-	reply := my.execute(c.Context(), req.Query, req.Variables, req.OperationName)
-	// 直通：无resolver的成功响应，零拷贝拼装统一信封 {"code":200,"data":<__root>}，绕过编码器
-	if reply.raw != nil {
-		root := reply.raw
-		if len(root) == 0 {
-			root = []byte("{}")
-		}
-		buf := make([]byte, 0, len(root)+20)
-		buf = append(buf, `{"code":200,"data":`...)
-		buf = append(buf, root...)
-		return c.Type("json").Send(append(buf, '}'))
-	}
-	// resolver/自省/错误：构造统一Result交编码器原样输出（单层data，不二次包装）
-	return c.JSON(toResult(fiber.StatusOK, reply))
-}
-
-// toResult 把GraphQL响应装进全站统一信封std.Result：data直挂、错误转为std.Exception
-// （gqlerror与Exception同构：message/locations/path/extensions一一对应）
-func toResult(status int, r gqlReply) *std.Result {
-	out := &std.Result{Code: status, Data: r.Data}
-	for _, e := range r.Errors {
-		if e == nil {
-			continue
-		}
-		ex := &std.Exception{Message: e.Message}
-		for _, l := range e.Locations {
-			ex.Locations = append(ex.Locations, std.Location{Line: l.Line, Column: l.Column})
-		}
-		for _, p := range e.Path {
-			ex.Path = append(ex.Path, p)
-		}
-		if len(e.Extensions) > 0 {
-			ex.Extensions = std.Extension(e.Extensions)
-		}
-		out.Errors = append(out.Errors, ex)
-	}
-	if out.Message == "" && len(out.Errors) > 0 {
-		out.Message = out.Errors[0].Message
-	}
-	return out
-}
-
 // 主要公开方法
 
-// Execute 执行GraphQL查询并返回结果
+// run 执行GraphQL查询并返回结果
 // 支持标准GraphQL查询、变量和操作名，自动处理自省查询
 // 参数:
 //   - ctx: 上下文对象，可用于取消操作或传递请求信息
@@ -378,10 +290,10 @@ func toResult(status int, r gqlReply) *std.Result {
 //
 // 使用示例:
 //
-//	result := executor.Execute(context.Background(),
+//	result := executor.run(context.Background(),
 //	    "query { user(id: 1) { name email } }",
 //	    nil, "")
-func (my *Executor) Execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
+func (my *Executor) run(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	r := my.execute(ctx, query, variables, operationName)
 	// 公开API契约：Data始终可编程访问（直通字节解包回map）
 	if raw := r.raw; raw != nil {
@@ -627,7 +539,7 @@ func normalizeNumbers(v interface{}) interface{} {
 }
 
 // introQuery 解析后发现是自省查询：经error通道带出已解析的operation，
-// 调用方（Execute）路由到自省投影，其余入口（订阅/持久化预热）按错误处理
+// 调用方（run）路由到自省投影，其余入口（订阅/持久化预热）按错误处理
 type introQuery struct {
 	operation *ast.OperationDefinition
 }

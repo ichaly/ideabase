@@ -42,7 +42,7 @@ func TestRemoteJoin(t *testing.T) {
 
 	var ids []int64
 	for _, name := range []string{"u1", "u2"} {
-		reply := executor.Execute(ctx, `mutation ($n: String!, $e: String!) {
+		reply := executor.run(ctx, `mutation ($n: String!, $e: String!) {
 			createUser(input: { name: $n, email: $e }) { id }
 		}`, map[string]interface{}{"n": name, "e": name + "@x.com"}, "")
 		require.Empty(t, reply.Errors)
@@ -50,7 +50,7 @@ func TestRemoteJoin(t *testing.T) {
 	}
 	data[ids[0]] = Profile{Level: "gold"} // u2故意缺失验证键未命中置null
 
-	reply := executor.Execute(ctx, `query { users(sort: [{ id: ASC }]) { items { name profile { level } } } }`, nil, "")
+	reply := executor.run(ctx, `query { users(sort: [{ id: ASC }]) { items { name profile { level } } } }`, nil, "")
 	require.Empty(t, reply.Errors, "远程回填失败: %v", reply.Errors)
 	items := reply.Data["users"].(map[string]interface{})["items"].([]interface{})
 	require.Len(t, items, 2)
@@ -89,10 +89,10 @@ func TestRemoteSharedKey(t *testing.T) {
 		NewRemote("User", "profileB", "画像B", "id", fetch("silver")),
 	))
 
-	reply := executor.Execute(ctx, `mutation { createUser(input: { name: "S", email: "s@x.com" }) { id } }`, nil, "")
+	reply := executor.run(ctx, `mutation { createUser(input: { name: "S", email: "s@x.com" }) { id } }`, nil, "")
 	require.Empty(t, reply.Errors)
 
-	reply = executor.Execute(ctx, `query { users { items { name profileA { level } profileB { level } } } }`, nil, "")
+	reply = executor.run(ctx, `query { users { items { name profileA { level } profileB { level } } } }`, nil, "")
 	require.Empty(t, reply.Errors, "共享键双远程失败: %v", reply.Errors)
 	item := reply.Data["users"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})
 	require.NotNil(t, item["profileA"], "第一个远程字段应回填")

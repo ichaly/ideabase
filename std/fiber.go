@@ -205,6 +205,9 @@ func NewFiber(c *Config, v *Validator, opts ...FiberOption) *fiber.App {
 		})
 	}
 
+	// 兜底信封：最内层中间件，把 handler 用 c.Send 直发的 JSON 对象体自动套 {code,...}
+	app.Use(envelopeResponse)
+
 	return app
 }
 

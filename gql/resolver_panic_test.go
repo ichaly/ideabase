@@ -23,21 +23,21 @@ func TestResolverPanicIsolation(t *testing.T) {
 			func(_ context.Context, keys []any) (map[any]Profile, error) { panic("remote炸了") }),
 	))
 
-	reply := executor.Execute(ctx, `mutation { createUser(input: { name: "P", email: "p@x.com" }) { id } }`, nil, "")
+	reply := executor.run(ctx, `mutation { createUser(input: { name: "P", email: "p@x.com" }) { id } }`, nil, "")
 	require.Empty(t, reply.Errors, "种数据失败: %v", reply.Errors)
 
 	// 普通resolver(有界并发goroutine)panic → 请求级错误
-	reply = executor.Execute(ctx, `query { users { items { id boom } } }`, nil, "")
+	reply = executor.run(ctx, `query { users { items { id boom } } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "resolver panic应转为错误")
 	require.Contains(t, reply.Errors[0].Message, "panic")
 
 	// 批量resolver panic → 请求级错误
-	reply = executor.Execute(ctx, `query { users { items { id batchBoom } } }`, nil, "")
+	reply = executor.run(ctx, `query { users { items { id batchBoom } } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "batch resolver panic应转为错误")
 	require.Contains(t, reply.Errors[0].Message, "panic")
 
 	// remote panic → 容错语义:字段置null,警告随errors返回,数据不丢
-	reply = executor.Execute(ctx, `query { users { items { name extra { level } } } }`, nil, "")
+	reply = executor.run(ctx, `query { users { items { name extra { level } } } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "remote panic应作为警告返回")
 	items := reply.Data["users"].(map[string]interface{})["items"].([]interface{})
 	require.NotEmpty(t, items, "remote容错不中断主查询")

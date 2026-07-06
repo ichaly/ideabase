@@ -261,7 +261,7 @@ func (my *Executor) enrich(ctx context.Context, operation *ast.OperationDefiniti
 	writeSelectionSet(&sb, f.SelectionSet)
 	sb.WriteString(" } }")
 
-	reply := my.Execute(ctx, sb.String(), args, "")
+	reply := my.run(ctx, sb.String(), args, "")
 	if reply.Data == nil && len(reply.Errors) > 0 { // 部分错误(如远程警告)与data共存时视为成功
 		return nil, nil, fmt.Errorf("Action回查失败: %w", reply.Errors)
 	}
