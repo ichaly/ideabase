@@ -66,8 +66,7 @@ func (my *Exception) WithError(err error) *Exception {
 		return my
 	}
 	if ex := unwrapException(err); ex != nil {
-		ex.cause = ex
-		ex.resolveMessage()
+		// err 已携带 Exception：原样复用（其 Message 在创建时已定型，无需再解析）
 		return ex
 	}
 	if carrier, ok := err.(interface{ Extensions() Extension }); ok {
@@ -140,7 +139,9 @@ func envelopeResponse(c fiber.Ctx) error {
 // {"code":C,...}。body 须是 JSON 对象（如 GraphQL 标准体 {data,errors}），避免二次序列化。
 func envelope(code int, body []byte) []byte {
 	head := strconv.AppendInt([]byte(`{"code":`), int64(code), 10)
-	if len(body) <= 2 { // {} 或空体：仅信封
+	// 防御 body[1:] 的隐含契约：空对象/空体或非对象（非 '{' 开头）时仅回信封，
+	// 避免拼出非法 JSON（尾逗号，或 code 与数组/标量体并置）
+	if len(body) <= 2 || body[0] != '{' {
 		return append(head, '}')
 	}
 	return append(append(head, ','), body[1:]...) // {"code":C, + data..}

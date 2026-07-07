@@ -205,7 +205,9 @@ func NewFiber(c *Config, v *Validator, opts ...FiberOption) *fiber.App {
 		})
 	}
 
-	// 兜底信封：最内层中间件，把 handler 用 c.Send 直发的 JSON 对象体自动套 {code,...}
+	// 兜底信封：必须最后注册（洋葱最内层），使其 body 改写在 compress/etag 之前发生。
+	// 若挪到 compress 之后，会改写已压缩的字节、产出损坏响应——调整中间件顺序时勿动此约束。
+	// 作用：把 handler 用 c.Send 直发的 GraphQL 标准体自动套 {code,...} 信封。
 	app.Use(envelopeResponse)
 
 	return app

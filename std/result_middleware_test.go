@@ -57,6 +57,16 @@ func TestEnvelopeRawSend(t *testing.T) {
 	require.Nil(t, empty.Data)
 }
 
+// TestEnvelopeNonObject body 非 JSON 对象（非 '{' 开头）或空对象时仅回信封，不拼出非法 JSON
+func TestEnvelopeNonObject(t *testing.T) {
+	require.Equal(t, `{"code":200}`, string(envelope(200, []byte(`[1,2]`))))  // 数组体：只回信封
+	require.Equal(t, `{"code":200}`, string(envelope(200, []byte(`"x"`))))    // 标量体：只回信封
+	require.Equal(t, `{"code":200}`, string(envelope(200, nil)))              // 空体：只回信封
+	require.Equal(t, `{"code":500}`, string(envelope(500, []byte(`{}`))))     // 空对象：只回信封
+	require.JSONEq(t, `{"code":200,"data":{"x":1}}`,
+		string(envelope(200, []byte(`{"data":{"x":1}}`)))) // 正常对象体：拼入 code
+}
+
 func TestEnvelopeSuccess(t *testing.T) {
 	app := newEnvelopeApp()
 	app.Get("/ok", func(c fiber.Ctx) error {
