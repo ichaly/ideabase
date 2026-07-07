@@ -115,23 +115,24 @@ func wrapJSON(v any) ([]byte, error) {
 	return fiberJSON.Marshal(&Result{Code: fiber.StatusOK, Data: v})
 }
 
-// envelopeResponse 兜底信封中间件：handler 用 c.Send 直发的 JSON 对象体（如 GraphQL 引擎的
-// {data,errors}）在此自动套上 {code,...} 信封，故这类 handler 无需感知 Result。
-// c.JSON 响应已是 Result（以 {"code" 起头）故跳过；错误经 c.Next 抛出交 ErrorHandler 定型。
-// 注册在中间件最内层，早于 compress/etag 的 body 后处理运行。
+// mimeGraphQLResponse GraphQL-over-HTTP 规范的响应媒体类型；handler 以此声明"我是 GraphQL
+// 响应"，兜底中间件据此精确识别并套信封——无需嗅探响应体字节。
+const mimeGraphQLResponse = "application/graphql-response+json"
+
+// envelopeResponse 兜底信封中间件：凡声明为 GraphQL 响应（mimeGraphQLResponse）的 handler
+// 输出（预序列化的 {data,errors}），在此自动套上 {code,...} 信封并归一 Content-Type，
+// 故这类 handler 无需感知 Result。c.JSON 走编码器自成 Result、Content-Type 不同故不触及；
+// 错误经 c.Next 抛出交 ErrorHandler 定型。注册在最内层，早于 compress/etag 的 body 后处理。
 func envelopeResponse(c fiber.Ctx) error {
 	if err := c.Next(); err != nil {
 		return err
 	}
 	resp := c.Response()
-	if !bytes.HasPrefix(resp.Header.ContentType(), []byte(fiber.MIMEApplicationJSON)) {
+	if !bytes.HasPrefix(resp.Header.ContentType(), []byte(mimeGraphQLResponse)) {
 		return nil
 	}
-	body := resp.Body()
-	if len(body) == 0 || body[0] != '{' || bytes.HasPrefix(body, []byte(`{"code"`)) {
-		return nil
-	}
-	resp.SetBody(envelope(resp.StatusCode(), body))
+	resp.Header.SetContentType(fiber.MIMEApplicationJSON)
+	resp.SetBody(envelope(resp.StatusCode(), resp.Body()))
 	return nil
 }
 

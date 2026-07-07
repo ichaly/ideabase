@@ -22,18 +22,22 @@ func newEnvelopeApp() *fiber.App {
 	return app
 }
 
-// TestEnvelopeRawSend handler 用 c.Send 直发的 GraphQL 标准体被兜底中间件自动套 code 信封
+// TestEnvelopeRawSend 声明为 GraphQL 响应的 c.Send 直发体被兜底中间件自动套 code 信封
 func TestEnvelopeRawSend(t *testing.T) {
+	gqlType := func(c fiber.Ctx) { c.Set(fiber.HeaderContentType, mimeGraphQLResponse) }
 	app := newEnvelopeApp()
 	app.Get("/gql", func(c fiber.Ctx) error {
-		return c.Type("json").Send([]byte(`{"data":{"users":{"total":5}},"errors":[{"message":"warn"}]}`))
+		gqlType(c)
+		return c.Send([]byte(`{"data":{"users":{"total":5}},"errors":[{"message":"warn"}]}`))
 	})
 	app.Get("/empty", func(c fiber.Ctx) error {
-		return c.Type("json").Send([]byte(`{}`))
+		gqlType(c)
+		return c.Send([]byte(`{}`))
 	})
 
 	resp := perform(app, http.MethodGet, "/gql")
 	defer resp.Body.Close()
+	require.Equal(t, fiber.MIMEApplicationJSON, resp.Header.Get("Content-Type")) // 已归一
 	var result Result
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.Equal(t, fiber.StatusOK, result.Code) // 自动补上的信封 code

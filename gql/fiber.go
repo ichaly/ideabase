@@ -44,7 +44,9 @@ func (my *Executor) Handler(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.Type("json").Send(out)
+	// 声明为 GraphQL 响应（GraphQL-over-HTTP 规范媒体类型）：std 兜底中间件据此套 {code,...} 信封
+	c.Set(fiber.HeaderContentType, "application/graphql-response+json")
+	return c.Send(out)
 }
 
 // SubscribeHandler 处理 GraphQL 订阅的 WebSocket 升级（graphql-transport-ws 子协议）。
