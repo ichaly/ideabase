@@ -16,6 +16,7 @@ CREATE TABLE posts (
     title TEXT NOT NULL,
     content TEXT,
     user_id INTEGER NOT NULL REFERENCES users(id),
+    tenant_id INTEGER NOT NULL DEFAULT 1, -- gql.WithScope 自动过滤/填充
     created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
@@ -52,11 +53,11 @@ INSERT INTO users (name, email, profile) VALUES
   ('李四', 'li@demo.dev', '{"vip": false, "city": "上海"}'),
   ('王五', 'wang@demo.dev', NULL);
 
-INSERT INTO posts (title, content, user_id) VALUES
-  ('PostgreSQL数据库引擎选型', '对比各类全文检索方案的优劣', 1),
-  ('Go语言工程实践', '数据库连接池与并发调优', 1),
-  ('GraphQL接口设计', '单条SQL消除N+1的编译思路', 2),
-  ('前端构建提速', '与后端无关的内容', 3);
+INSERT INTO posts (title, content, user_id, tenant_id) VALUES
+  ('PostgreSQL数据库引擎选型', '对比各类全文检索方案的优劣', 1, 1),
+  ('Go语言工程实践', '数据库连接池与并发调优', 1, 1),
+  ('GraphQL接口设计', '单条SQL消除N+1的编译思路', 2, 1),
+  ('前端构建提速', '与后端无关的内容', 3, 2);
 
 INSERT INTO tags (name) VALUES ('数据库'), ('Go'), ('GraphQL'), ('性能');
 

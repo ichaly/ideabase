@@ -361,7 +361,7 @@ services:
   0 分配、~460MB/s 直接返回原字节（不启用 codec 的查询零开销）；命中时成本集中在
   sqids 编码本身，与 REST 通道单 id 编码成本一致。
 
-- **端到端基准**（`gql/example/bench_test.go`，需 demo 库在运行）：复用 demo 实际装配，
+- **端到端基准**（`gql/examples/bench_test.go`，需 demo 库在运行）：复用 demo 实际装配，
   打真实 PostgreSQL，覆盖平铺查询、嵌套关系（单条 SQL 零 N+1）、batch resolver。
   `cd example && go test -bench=. -benchmem -run=^$`。
 

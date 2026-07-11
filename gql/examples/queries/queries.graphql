@@ -1,0 +1,60 @@
+fragment PostCard on Post {
+  id
+  title
+  user { id name }
+  tags { id name }
+}
+
+query FilterSortOffset($limit: Int = 10, $offset: Int = 0) {
+  posts(
+    where: {
+      and: [{ title: { iLike: "%数据库%" } }, { id: { gt: 0, in: [1, 2, 3] } }]
+      or: [{ content: { is: NULL } }, { content: { regex: "SQL|Go" } }]
+      not: { title: { eq: "隐藏" } }
+    }
+    sort: [{ createdAt: DESC_NULLS_LAST }, { id: ASC }]
+    limit: $limit
+    offset: $offset
+  ) {
+    items { ...PostCard }
+    total
+  }
+}
+
+query ForwardCursorPage($first: Int = 2, $after: Cursor) {
+  posts(first: $first, after: $after, sort: { id: ASC }) {
+    items { id title }
+    pageInfo { hasNext hasPrev start end }
+  }
+}
+
+query BackwardCursorPage($last: Int = 2, $before: Cursor) {
+  posts(last: $last, before: $before, sort: { id: ASC }) {
+    items { id title }
+    pageInfo { hasNext hasPrev start end }
+  }
+}
+
+query JsonDistinctRelations {
+  users(where: { profile: { contains: { vip: true }, hasKey: "city" } }) {
+    items { id name profile posts { id title comments { id content } } }
+  }
+  posts(distinct: ["userId"]) { items { userId } }
+}
+
+query AggregateHaving {
+  postStats(groupBy: ["userId"], having: { count: { gt: 0 } }, limit: 20) {
+    key
+    count
+    title { min max countDistinct }
+  }
+}
+
+query RecursiveComments {
+  comments(id: 1) { items { id content descendants(depth: 5) { id content } } }
+  ancestors: comments(id: 3) { items { id content ancestors(depth: 5) { id content } } }
+}
+
+query TenantScopedPosts {
+  posts { items { id title } total }
+}

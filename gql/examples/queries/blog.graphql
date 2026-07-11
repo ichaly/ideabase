@@ -6,6 +6,6 @@ query PostList($kw: String) {
   }
 }
 
-mutation AddTag($name: String!) {
+mutation AddTag($name: Upper!) {
   createTag(input: { name: $name }) { id name }
 }
