@@ -309,7 +309,7 @@ func (my *Executor) runOperation(ctx context.Context, operationName string, vari
 	if !ok {
 		return gqlReply{Errors: gqlerror.List{gqlerror.Errorf("未找到名为'%s'的持久化操作", operationName)}}
 	}
-	return my.run(ctx, query, variables, operationName)
+	return my.queryData(ctx, query, variables, operationName)
 }
 
 // 接口实现方法
@@ -334,25 +334,9 @@ func (my *Executor) executeBytes(ctx context.Context, query string, variables ma
 	return my.execute(ctx, query, variables, operationName).MarshalJSON()
 }
 
-// run 执行GraphQL查询并返回结果
-// 支持标准GraphQL查询、变量和操作名，自动处理自省查询
-// 参数:
-//   - ctx: 上下文对象，可用于取消操作或传递请求信息
-//   - query: GraphQL查询文本
-//   - variables: 查询变量(可选)
-//   - operationName: 要执行的操作名称(多操作查询时必须)
-//
-// 返回:
-//   - 包含查询结果或错误信息的GraphQL响应
-//
-// 使用示例:
-//
-//	result := executor.run(context.Background(),
-//	    "query { user(id: 1) { name email } }",
-//	    nil, "")
-func (my *Executor) run(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
+// queryData 仅供根Resolver回查和持久化操作内部消费；普通调用统一走Execute字节响应。
+func (my *Executor) queryData(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	r := my.execute(ctx, query, variables, operationName)
-	// 公开API契约：Data始终可编程访问（直通字节解包回map）
 	if raw := r.raw; raw != nil {
 		r.Data, r.raw = map[string]interface{}{}, nil
 		if len(raw) > 0 {

@@ -336,6 +336,8 @@ services:
 - 整体 `input` 变量的变更依赖变量内容，自动跳过缓存（volatile）
 - 响应直通：无 resolver 时 DB 返回的 `__root` 字节经 `MarshalJSON` 直接拼入响应，
   跳过「解包成 map 再序列化」往返
+- `Execute` 直接返回标准 GraphQL JSON 字节；调用方确需对象树时自行按目标结构解码，
+  不让所有请求承担通用 `map[string]any` 的分配成本
 - resolver 宿主拍平单遍直收、无 `interface{}` 装箱中间层
 
 ### 性能基准
@@ -347,11 +349,13 @@ services:
 
   | 基准 | ns/op | allocs/op |
   |------|-------|-----------|
-  | `BenchmarkReplyDirect`（直通拼接） | ~3.5K | 3 |
-  | `BenchmarkReplyUnpack`（解包重序列化） | ~149K | 3243 |
+  | `BenchmarkReplyBytes`（实际 `Execute` 字节出口） | ~1.6K | 1 |
+  | `BenchmarkReplyUnpack`（解包重序列化） | ~165K | 3243 |
+  | `BenchmarkReplySplit/旁路命中`（局部 Resolver） | ~19K | 41 |
   | `BenchmarkHosts`（64 宿主拍平） | ~0.6K | 11 |
 
-  直通相对解包约 **40×**、分配降三个数量级——无 resolver 的查询（多数流量）走此路径。
+  实际字节出口相对完整解包约 **100×**、分配从 3243 次降到 1 次；局部 Resolver
+  也只解包命中分支，未命中分支保持原始 JSON 字节。
 
   codec 流式转换基准（`BenchmarkEncodeBytes`，100 行×2 个 ID 字段）：路径**无命中**时
   0 分配、~460MB/s 直接返回原字节（不启用 codec 的查询零开销）；命中时成本集中在

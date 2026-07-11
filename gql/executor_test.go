@@ -10,6 +10,7 @@ import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"gorm.io/gorm"
 )
 
@@ -44,6 +45,20 @@ func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOpti
 func setupTestExecutor(t *testing.T) (*Executor, func()) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	return executor, cleanup
+}
+
+// run 是测试侧的对象化辅助：生产API只返回字节，需要断言Data时由测试自行解码。
+func (my *Executor) run(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
+	body, err := my.executeBytes(ctx, query, variables, operationName)
+	if err != nil {
+		return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
+	}
+	var reply gqlReply
+	if err = jsonNumeric.Unmarshal(body, &reply); err != nil {
+		return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
+	}
+	normalizeNumbers(reply.Data)
+	return reply
 }
 
 func TestExecuteReturnsGraphQLBytes(t *testing.T) {
