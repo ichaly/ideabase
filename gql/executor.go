@@ -76,7 +76,6 @@ type Executor struct {
 	feedMu    sync.Mutex          // 保护feeds及各feed的订阅者集合
 	feeds     map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
 	resolvers map[string]Resolver // 自定义字段解析器注册表
-	actions   map[string]Action   // 操作级Action注册表：顶层字段名 -> 实现
 	source    string              // 原始schema文本，Register合并注册声明时重建的基底
 	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
 	remotes   map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
@@ -100,18 +99,22 @@ func (my *Executor) Close() {
 	}
 }
 
-// Register 统一注册入口：Action/Resolver/Remote 按实现的接口路由到对应注册表，
+// Register 统一注册入口：Resolver/Remote 按实现的接口路由到对应注册表，
 // 字段级声明挂载进宿主实体并重建schema。仅限启动期调用：
 // 重建schema/自省/计划缓存的过程不与并发请求互斥，首次执行后冻结报错
 func (my *Executor) Register(items ...any) error {
-	if my.frozen.Load() {
-		return fmt.Errorf("注册表已冻结：Register仅限启动期调用（首次执行后schema重建与并发请求不互斥）")
+	if err := my.mutable("Register"); err != nil {
+		return err
 	}
 	for _, item := range items {
 		switch v := item.(type) {
-		case Action:
-			my.actions[v.Define().Name] = v
 		case Resolver:
+			if v.Define().Existing {
+				return fmt.Errorf("resolver %s绑定已有字段，请使用Replace显式覆盖", v.Name())
+			}
+			if _, exists := my.resolvers[v.Name()]; exists {
+				return fmt.Errorf("resolver已注册: %s", v.Name())
+			}
 			my.resolvers[v.Name()] = v
 		case Remote:
 			my.remotes[v.Name()] = v
@@ -125,6 +128,53 @@ func (my *Executor) Register(items ...any) error {
 		}
 	}
 	return my.rebuild()
+}
+
+// Replace 显式替换schema已有字段的默认实现。默认数据库CRUD仍保持零代码快路径，
+// 只有被替换的coordinate才进入Resolver分发。
+func (my *Executor) Replace(resolver Resolver) error {
+	if err := my.mutable("Replace"); err != nil {
+		return err
+	}
+	d := resolver.Define()
+	if !d.Existing {
+		return fmt.Errorf("resolver %s必须使用Existing选项声明覆盖已有字段", resolver.Name())
+	}
+	if d.Class == "Query" || d.Class == "Mutation" {
+		kind := my.schema.Types[d.Class]
+		if kind == nil || kind.Fields.ForName(d.Name) == nil {
+			return fmt.Errorf("schema字段不存在: %s.%s", d.Class, d.Name)
+		}
+	} else {
+		class, ok := my.metadata.GetNode(d.Class)
+		if !ok || class.Fields[d.Name] == nil {
+			return fmt.Errorf("实体字段不存在: %s.%s", d.Class, d.Name)
+		}
+		class.Fields[d.Name].Resolver = resolver.Name()
+	}
+	my.resolvers[resolver.Name()] = resolver
+	return my.rebuild()
+}
+
+// Wrap 用强类型中间件增强已注册Resolver，先注册的包装位于内层；仅限启动期。
+func (my *Executor) Wrap(coordinate string, middleware ResolverMiddleware) error {
+	if err := my.mutable("Wrap"); err != nil {
+		return err
+	}
+	resolver, ok := my.resolvers[coordinate]
+	if !ok {
+		return fmt.Errorf("resolver未注册: %s", coordinate)
+	}
+	my.resolvers[coordinate] = middleware(resolver)
+	my.cache = newPlanCache(planCacheSize)
+	return nil
+}
+
+func (my *Executor) mutable(operation string) error {
+	if my.frozen.Load() {
+		return fmt.Errorf("注册表已冻结：%s仅限启动期调用", operation)
+	}
+	return nil
 }
 
 // 构造函数和初始化方法
@@ -153,7 +203,6 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		cache:     newPlanCache(planCacheSize),
 		feeds:     make(map[string]*feed),
 		resolvers: make(map[string]Resolver),
-		actions:   make(map[string]Action),
 		documents: make(map[string]string),
 		remotes:   make(map[string]Remote),
 	}
@@ -247,9 +296,6 @@ func (my *Executor) loadDocument(content string) error {
 		// 复用已解析的AST预热编译缓存（不再重复解析文档）；
 		// 依赖变量内容的操作（volatile）缓存AST，执行期免解析重编译
 		operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
-		if hit, _ := my.checkActions(operation.SelectionSet); hit {
-			continue // Action操作无SQL计划，执行期走分发路径
-		}
 		if _, _, err := my.compile(planKey{operation: operation.Name, query: content}, operation, nil); err != nil {
 			log.Warn().Err(err).Str("operation", operation.Name).Msg("持久化文档预热编译失败，执行期将重试编译")
 		}
@@ -276,6 +322,17 @@ func (my *Executor) Path() string {
 }
 
 // 主要公开方法
+
+// Execute 执行单个GraphQL操作并返回可直接写入HTTP响应的标准GraphQL JSON。
+// 数据库生成的JSON在无Resolver时原样直通，不构造map/slice对象树；GraphQL字段错误
+// 编码在响应体的errors中，返回的error仅表示响应序列化失败。
+func (my *Executor) Execute(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
+	return my.executeBytes(ctx, query, variables, "")
+}
+
+func (my *Executor) executeBytes(ctx context.Context, query string, variables map[string]interface{}, operationName string) ([]byte, error) {
+	return my.execute(ctx, query, variables, operationName).MarshalJSON()
+}
 
 // run 执行GraphQL查询并返回结果
 // 支持标准GraphQL查询、变量和操作名，自动处理自省查询
@@ -358,8 +415,8 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 			}
 			return r
 		}
-		if actionErr, ok := err.(*actionQuery); ok {
-			return my.executeActions(ctx, actionErr.operation, variables)
+		if rootErr, ok := err.(*rootResolverQuery); ok {
+			return my.executeRootResolvers(ctx, rootErr.operation, variables)
 		}
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
@@ -388,7 +445,7 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 
 // fetch 执行计划：单条SQL返回单行单列的__root JSON原始字节。
 // ID加解密的出参编码挂在此唯一出口：直通响应、resolver解包、订阅推送、
-// Action回查全部经此取数，下游看到的字节里ID已是shortId
+// 根Resolver回查全部经此取数，下游看到的字节里ID已是shortId
 func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, error) {
 	args, err := plan.ResolveArgs(variables, scopeValues(ctx)) // 行级作用域值从请求上下文取
 	if err != nil {
@@ -566,10 +623,10 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 		}
 		entry = value.(*planEntry)
 	}
-	// 收口：任何消费（Action分发/执行/volatile重编译）前统一还原codec入参
+	// 收口：任何消费（Resolver分发/执行/volatile重编译）前统一还原codec入参
 	decodeVariables(my.schema, entry.operation.VariableDefinitions, variables, my.metadata)
-	if entry.action {
-		return nil, &actionQuery{operation: entry.operation}
+	if entry.rootResolver {
+		return nil, &rootResolverQuery{operation: entry.operation}
 	}
 	if entry.plan != nil {
 		return entry.plan, nil
@@ -596,13 +653,10 @@ func (my *Executor) miss(key planKey, variables map[string]interface{}) (*planEn
 		}
 		return nil, nil, &introQuery{operation: operation}
 	}
-	if hit, err := my.checkActions(operation.SelectionSet); hit {
-		if err != nil {
-			return nil, nil, err
-		}
-		entry := &planEntry{operation: operation, action: true}
+	if my.hasRootResolver(operation.SelectionSet) {
+		entry := &planEntry{operation: operation, rootResolver: true}
 		my.cache.Put(key, entry)
-		return entry, nil, nil // Action无计划，领跑者与跟随者同走命中路径分发
+		return entry, nil, nil
 	}
 	if my.compiler == nil || my.database == nil {
 		return nil, nil, fmt.Errorf("执行器未配置数据库或编译器")

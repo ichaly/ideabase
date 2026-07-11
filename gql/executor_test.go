@@ -46,6 +46,15 @@ func setupTestExecutor(t *testing.T) (*Executor, func()) {
 	return executor, cleanup
 }
 
+func TestExecuteReturnsGraphQLBytes(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+
+	out, err := executor.Execute(context.Background(), `query { users { total } }`, nil)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":{"users":{"total":0}}}`, string(out))
+}
+
 // TestExecutorRoundTrip 端到端冒烟：增删改查 + 关系查询 + 计划缓存
 func TestExecutorRoundTrip(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)

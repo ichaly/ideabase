@@ -14,9 +14,9 @@ GraphQL 请求
   → Dialect(策略模式) 编译 → Plan{SQL, 参数槽位, resolver绑定}
   → 槽位填充变量（codec标量入参已按类型还原） → 单条 SQL 执行
   → codec出参转换（对__root字节流式改写，无codec零开销）
-  → __root JSON 解包为 data（顶层 key = 字段别名）
-  → Resolver 后处理（自定义字段，批量接口免 N+1）
-  → 响应
+  → 无 Resolver：__root JSON 字节直接返回
+  → 有 Resolver：仅解包命中分支并执行后处理（批量接口免 N+1）
+  → GraphQL JSON 字节响应
 ```
 
 | 组件 | 职责 |
@@ -26,7 +26,7 @@ GraphQL 请求
 | `renderer` | 从元数据生成 GraphQL schema（Result/WhereInput/SortInput/CreateInput/UpdateInput） |
 | `compiler` | 编译上下文（对象池、参数槽位、全局别名计数）与 Dialect 接口 |
 | `compiler/pgsql` | PostgreSQL 方言：SELECT 单元化编译 + 变更 CTE |
-| `executor` | HTTP 入口、计划 LRU 缓存、执行与结果组织、resolver/Action/Remote 分发、codec 出入参转换、持久化查询 |
+| `executor` | HTTP 入口、计划 LRU 缓存、执行与结果组织、Resolver/Remote 分发、codec 出入参转换、持久化查询 |
 
 ## 快速开始
 
@@ -39,6 +39,9 @@ compile, _ := gql.NewCompiler(meta, nil)   // nil：按驱动名从注册表自�
 executor, _ := gql.NewExecutor(db, gql.NewRenderer(meta), meta, compile)
 
 executor.Bind(app.Group(executor.Path()))  // fiber v3：POST查询变更 + GET订阅WebSocket升级
+
+// 非HTTP场景使用同一字节快路径；GraphQL字段错误位于响应体errors中
+body, err := executor.Execute(ctx, `query { users { items { id name } } }`, nil)
 ```
 
 ## 查询能力
@@ -90,7 +93,7 @@ executor.Bind(app.Group(executor.Path()))  // fiber v3：POST查询变更 + GET�
 ## 自定义 Resolver
 
 SQL 表达不了的字段逻辑用 Resolver 处理。**注册即声明**：字段挂载进宿主实体、
-参数与字段类型反射自函数签名（与 Action 同一套规则），不写 yaml：
+参数与字段类型反射自函数签名，不写 yaml：
 
 ```go
 // source 是该行已查出的字段——只能读取查询已选择的字段（引擎不会偷偷多查）；
@@ -111,32 +114,28 @@ executor.Register(gql.NewBatch("User", "level", "等级",
 > 有状态或需要共享资源的逻辑用 `NewBatch`（整批单次调用，无并发约束）。
 > 要完全控制时直接实现 `Resolver`/`BatchResolver` 接口。
 
-## 操作级 Action
+## 自定义根字段 Resolver
 
-SQL 表达不了的顶层操作（多步事务、跨服务编排）用 Action 接管整个字段，
-与表 CRUD 同 schema 同鉴权。**注册即声明**：schema 形状反射自函数签名
-（启动期一次），不写 SDL，入参解码与校验也由引擎完成——
+查询、突变和实体字段使用同一个泛型 Resolver 抽象。数据库元数据生成的 CRUD
+仍直接编译为单 SQL；只有复杂业务字段进入 Resolver 分发：
 
 ```go
-type CreateReq struct {
-    Nickname string      `json:"nickname" validate:"required,max=50" doc:"昵称"` // required→String!
-    Avatar   string      `json:"avatar" validate:"omitempty,max=200"`          // 无required→String
-    Persona  ent.Persona `json:"persona"`                                      // struct/map→Json
-}
-
-executor.RegisterAction(gql.NewAction("botSave", "注册闭环建号",
-    func(ctx context.Context, req CreateReq) (*ent.Profile, error) {
-        return svc.Create(ctx, req) // 入参已按json标签解码并通过validate校验
-    }, gql.Result("BotProfile"))) // Go类型名(Profile)与实体名不一致时覆盖
+executor.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
+    func(ctx context.Context, _ gql.Root, req CreateReq) (*ent.Profile, error) {
+        return svc.Create(ctx, req)
+    }, gql.Result("BotProfile")))
 ```
+
+`Register` 新增字段；构造时传 `gql.Existing()` 后用 `Replace` 显式覆盖 schema 已有字段；
+`Wrap` 用强类型中间件增强已注册 Resolver。自定义根字段可与默认数据库字段混排；
+纯默认 CRUD 请求保持原整份 operation 单 SQL 快路径。
 
 - 类型映射：`std.Id`→ID、`time.Time`→DateTime、切片→列表（`[]std.Id`→`[ID!]`）、
   map/嵌套struct→Json；`validate:"required"` 渲染非空 `!`，`doc` tag 作参数文档
 - 返回类型名匹配元数据实体 → 触发回查补全（返回实体结构体自动取 Id，等价于返回 id）；
-  标量/map/切片 → 直接输出。选项：`gql.Query()` 挂查询根（缺省 Mutation）、
-  `gql.Extra(sdl)` 附加辅助 input/type 声明
+  标量/map/切片 → 直接输出；`gql.Extra(sdl)` 可附加辅助 input/type 声明
 - 回查补全时 resolver/关系/codec 全部生效；要完全控制 schema
-  时直接实现 `Action` 接口（`Define() + Execute()`）
+  时直接实现 `Resolver` 接口
 
 ## 标量编解码器（Codec）
 

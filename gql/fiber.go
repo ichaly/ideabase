@@ -39,8 +39,7 @@ func (my *Executor) Handler(c fiber.Ctx) error {
 		req.Query = query
 	}
 
-	reply := my.execute(c.Context(), req.Query, req.Variables, req.OperationName)
-	out, err := reply.MarshalJSON()
+	out, err := my.executeBytes(c.Context(), req.Query, req.Variables, req.OperationName)
 	if err != nil {
 		return err
 	}

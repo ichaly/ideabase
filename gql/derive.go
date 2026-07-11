@@ -1,4 +1,4 @@
-// 注册即声明：Action的schema形状从Go函数签名反射推导（启动期一次），
+// 注册即声明：Resolver的schema形状从Go函数签名反射推导（启动期一次），
 // 执行期入参按json标签解码进强类型struct并校验validate标签，
 // 业务侧不写SDL/yaml、不写解码校验样板
 package gql
@@ -16,53 +16,17 @@ import (
 	"github.com/ichaly/ideabase/std"
 )
 
-// NewAction 从fn签名构造Action：I的字段→参数（json定名/doc作描述/validate含
-// required则非空!），O→结果类型。缺省挂Mutation根，Option按需覆盖。
-// 无参Action的I用struct{}；I非struct在注册期直接panic（启动即失败）
-func NewAction[I, O any](name, doc string, fn func(context.Context, I) (O, error), opts ...Option) Action {
-	define := Define{
-		Name:   name,
-		Doc:    doc,
-		Args:   deriveArgs(reflect.TypeFor[I]()),
-		Result: deriveResult(reflect.TypeFor[O]()),
-	}
-	for _, opt := range opts {
-		opt(&define)
-	}
-	return &derived[I, O]{define: define, fn: fn}
-}
-
 // Option 微调反射推导的声明
 type Option func(*Define)
 
 // Result 覆盖结果类型：Go类型名与元数据实体名不一致时用（如 ent.Profile → BotProfile）
 func Result(name string) Option { return func(my *Define) { my.Result = name } }
 
-// Query 挂载到Query根（缺省Mutation：Action多为变更编排）
-func Query() Option { return func(my *Define) { my.Query = true } }
-
 // Extra 附加SDL（辅助input/type声明），原样并入schema
 func Extra(sdl string) Option { return func(my *Define) { my.Extra = sdl } }
 
-// derived 反射装配的Action实现
-type derived[I, O any] struct {
-	define Define
-	fn     func(context.Context, I) (O, error)
-}
-
-func (my *derived[I, O]) Define() Define { return my.define }
-
-func (my *derived[I, O]) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	in, err := decode[I](args)
-	if err != nil {
-		return nil, err
-	}
-	out, err := my.fn(ctx, in)
-	if err != nil {
-		return nil, err
-	}
-	return erase(out), nil
-}
+// Existing 声明Resolver绑定schema已有字段，只能通过Executor.Replace显式注册。
+func Existing() Option { return func(my *Define) { my.Existing = true } }
 
 // decode 入参json往返解码进强类型struct并校验validate标签
 func decode[I any](args map[string]interface{}) (I, error) {
@@ -88,10 +52,49 @@ func erase(out any) any {
 // Source 宿主行：SQL查出的已选字段（形状由客户端选择集决定，故保持map）
 type Source = map[string]interface{}
 
-// NewResolver 注册即声明的字段级解析器：挂载为class实体的虚拟字段，
-// args反射自I（同NewAction规则），字段类型反射自O；注册键为 class.name
-func NewResolver[I, O any](class, name, doc string, fn func(context.Context, Source, I) (O, error)) Resolver {
-	return &single[I, O]{define: defineField[I, O](class, name, doc), fn: fn}
+// Root 是Query/Mutation根字段的零大小强类型source。
+type Root struct{}
+
+// NewResolver 为任意GraphQL字段创建同一种泛型Resolver。parent可为
+// Query、Mutation或实体类型；类型擦除仅发生在引擎注册边界，业务函数全程强类型。
+func NewResolver[S, I, O any](parent, name, doc string,
+	fn func(context.Context, S, I) (O, error), opts ...Option,
+) Resolver {
+	define := defineField[I, O](parent, name, doc)
+	for _, opt := range opts {
+		opt(&define)
+	}
+	return &fieldResolver[S, I, O]{define: define, fn: fn}
+}
+
+type fieldResolver[S, I, O any] struct {
+	define Define
+	fn     func(context.Context, S, I) (O, error)
+}
+
+func (my *fieldResolver[S, I, O]) Name() string   { return my.define.Class + "." + my.define.Name }
+func (my *fieldResolver[S, I, O]) Define() Define { return my.define }
+func (my *fieldResolver[S, I, O]) field() *protocol.Field {
+	return &protocol.Field{Resolver: my.Name()}
+}
+func (my *fieldResolver[S, I, O]) Resolve(ctx context.Context, source any, args map[string]interface{}) (interface{}, error) {
+	typed, ok := source.(S)
+	if !ok {
+		return nil, fmt.Errorf("resolver %s source类型不匹配: %T", my.Name(), source)
+	}
+	in, err := decode[I](args)
+	if err != nil {
+		return nil, err
+	}
+	out, err := my.resolveTyped(ctx, typed, in)
+	if err != nil {
+		return nil, err
+	}
+	return erase(out), nil
+}
+
+func (my *fieldResolver[S, I, O]) resolveTyped(ctx context.Context, source S, input I) (O, error) {
+	return my.fn(ctx, source, input)
 }
 
 // NewBatch 批量版NewResolver：整结果集一次调用免N+1，返回值须与sources等长对位
@@ -110,28 +113,6 @@ func defineField[I, O any](class, name, doc string) Define {
 	}
 }
 
-// single 单对象解析器（NewResolver反射装配）
-type single[I, O any] struct {
-	define Define
-	fn     func(context.Context, Source, I) (O, error)
-}
-
-func (my *single[I, O]) Name() string           { return my.define.Class + "." + my.define.Name }
-func (my *single[I, O]) Define() Define         { return my.define }
-func (my *single[I, O]) field() *protocol.Field { return &protocol.Field{Resolver: my.Name()} }
-
-func (my *single[I, O]) Resolve(ctx context.Context, source, args map[string]interface{}) (interface{}, error) {
-	in, err := decode[I](args)
-	if err != nil {
-		return nil, err
-	}
-	out, err := my.fn(ctx, source, in)
-	if err != nil {
-		return nil, err
-	}
-	return erase(out), nil
-}
-
 // batch 批量解析器（NewBatch反射装配）
 type batch[I, O any] struct {
 	define Define
@@ -142,7 +123,7 @@ func (my *batch[I, O]) Name() string           { return my.define.Class + "." + 
 func (my *batch[I, O]) Define() Define         { return my.define }
 func (my *batch[I, O]) field() *protocol.Field { return &protocol.Field{Resolver: my.Name()} }
 
-func (my *batch[I, O]) Resolve(context.Context, map[string]interface{}, map[string]interface{}) (interface{}, error) {
+func (my *batch[I, O]) Resolve(context.Context, any, map[string]interface{}) (interface{}, error) {
 	return nil, fmt.Errorf("批量解析器不支持单对象路径")
 }
 
@@ -268,7 +249,7 @@ func check(v any) error {
 func deriveArgs(t reflect.Type) string {
 	t = deref(t)
 	if t.Kind() != reflect.Struct {
-		panic(fmt.Sprintf("Action入参必须是struct（无参用struct{}），收到 %s", t))
+		panic(fmt.Sprintf("Resolver入参必须是struct（无参用struct{}），收到 %s", t))
 	}
 	var parts []string
 	eachField(t, func(f reflect.StructField, name, doc string) {

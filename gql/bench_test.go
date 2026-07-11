@@ -42,6 +42,19 @@ func BenchmarkReplyDirect(b *testing.B) {
 	}
 }
 
+// BenchmarkReplyBytes 对应 Execute/HTTP 的实际出口：直接生成标准GraphQL响应字节。
+func BenchmarkReplyBytes(b *testing.B) {
+	data := sampleRows(50)
+	reply := gqlReply{raw: data}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := reply.MarshalJSON(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // BenchmarkReplyUnpack 对照：解包为 map 再序列化（resolver 路径与公开 Execute 走此路）
 func BenchmarkReplyUnpack(b *testing.B) {
 	data := sampleRows(50)
