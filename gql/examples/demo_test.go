@@ -65,6 +65,11 @@ func TestCompleteDemoDocuments(t *testing.T) {
 	checks := []string{
 		`{ users { items { id name email greeting sign reputation { level title } } } }`,
 		`mutation { echo(message: "hello") }`,
+		`mutation {
+			uuid: createUuidRecord(input: { name: "UUID" }) { id }
+			snowflake: createSnowflakeRecord(input: { name: "雪花" }) { id }
+			custom: createVirtualRecord(input: { name: "虚化" }) { id }
+		}`,
 		`{ __schema { queryType { name } } __type(name: "User") { name kind } }`,
 	}
 	for _, query := range checks {

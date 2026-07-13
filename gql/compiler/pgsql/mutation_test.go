@@ -3,8 +3,60 @@ package pgsql
 import (
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
+	"github.com/ichaly/ideabase/std"
 	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
+
+func (my *_DialectSuite) TestGeneratedPrimaryKeys() {
+	var next int64 = 100
+	k, err := std.NewKonfig()
+	my.Require().NoError(err)
+	k.Set("mode", "dev")
+	k.Set("app.root", my.T().TempDir())
+	k.Set("metadata.classes", map[string]*gql.ClassConfig{
+		"User": {
+			Table: "users", IDGenerator: "custom",
+			Fields: map[string]*gql.FieldConfig{
+				"id":   {Type: "ID", Column: "id", IsPrimary: true},
+				"name": {Type: "String", Column: "name"},
+			},
+		},
+	})
+	meta, err := gql.NewMetadata(k, nil, gql.WithIDGenerator("custom", func() (any, error) {
+		next++
+		return next, nil
+	}))
+	my.Require().NoError(err)
+	schemaText, err := gql.NewRenderer(meta).Generate()
+	my.Require().NoError(err)
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "generated-id.graphql", Input: schemaText})
+	my.Require().NoError(err)
+	doc, gqlErr := gqlparser.LoadQuery(schema, `mutation {
+		createUsers(input: [{name: "A"}, {name: "B"}]) { id name }
+	}`)
+	my.Require().Empty(gqlErr)
+
+	compile, err := gql.NewCompiler(meta, []compiler.Dialect{my.dialect})
+	my.Require().NoError(err)
+	plan, err := compile.Compile(doc.Operations[0], nil)
+	my.Require().NoError(err)
+	my.Contains(plan.SQL, `("name", "id") VALUES ($1, $2), ($3, $4)`)
+
+	first, err := plan.ResolveArgs(nil, nil)
+	my.Require().NoError(err)
+	second, err := plan.ResolveArgs(nil, nil)
+	my.Require().NoError(err)
+	my.Equal([]any{"A", int64(101), "B", int64(102)}, first)
+	my.Equal([]any{"A", int64(103), "B", int64(104)}, second, "缓存计划每次执行必须生成新ID")
+
+	class, ok := meta.GetNode("User")
+	my.Require().True(ok)
+	class.IDGenerator = "missing"
+	class.Generate = nil
+	_, err = compile.Compile(doc.Operations[0], nil)
+	my.ErrorContains(err, "未注册主键生成器: missing")
+}
 
 func (my *_DialectSuite) TestMutation() {
 	cases := []Case{

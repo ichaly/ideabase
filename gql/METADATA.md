@@ -120,6 +120,7 @@ metadata:
       table: users
       description: "用户信息"
       primary_keys: [id]
+      id-generator: snowflake # database(缺省,含自增/数据库UUID)/snowflake/自定义注册名
       fields:
         id:
           column: id
@@ -138,7 +139,7 @@ metadata:
 
 > 行为侧声明（Resolver/Remote）不在配置里：走注册即声明
 > （`NewResolver`/`NewBatch`/`NewRemote`，schema 反射自函数签名），
-> 详见 README。配置只描述数据侧（表/列映射、排除、别名、scope、搜索列）。
+> 详见 README。配置只描述数据侧（表/列映射、排除、别名、scope、搜索列、主键策略）。
 > 详细的 `ClassConfig`、`FieldConfig`、`RelationConfig`、`ThroughConfig` 字段说明请参考 internal/config.go。
 
 ## 典型用法

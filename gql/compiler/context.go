@@ -31,11 +31,12 @@ type Context struct {
 // Slot 表示SQL参数槽位：字面量值或变量引用
 // 变量引用在执行期解析，使编译产物可按查询文本缓存复用
 type Slot struct {
-	Value    any    // 字面量值
-	Variable string // 变量名，非空时优先生效
-	Cursor   int    // >=0时变量为base64游标，解码JSON数组后取第Cursor个键值
-	Context  string // 非空时从执行期scope表取值（行级作用域：租户/属主，认证注入）
-	List     bool   // 列表槽位（如 = ANY($n)）：执行期规范化为驱动可编码的具体类型数组
+	Value    any                  // 字面量值
+	Variable string               // 变量名，非空时优先生效
+	Cursor   int                  // >=0时变量为base64游标，解码JSON数组后取第Cursor个键值
+	Context  string               // 非空时从执行期scope表取值（行级作用域：租户/属主，认证注入）
+	List     bool                 // 列表槽位（如 = ANY($n)）：执行期规范化为驱动可编码的具体类型数组
+	Generate protocol.IDGenerator // 非空时每次解析计划生成一个新值
 }
 
 // Resolve 解析槽位的实际参数值（游标槽位由ResolveSlots统一memoize解码）
@@ -205,6 +206,14 @@ func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) ([]any,
 	var cursors map[string][]any // 惰性：仅游标槽位存在时分配
 	args := make([]any, len(slots))
 	for i, slot := range slots {
+		if slot.Generate != nil {
+			value, err := slot.Generate()
+			if err != nil {
+				return nil, fmt.Errorf("生成主键失败: %w", err)
+			}
+			args[i] = value
+			continue
+		}
 		if slot.Context != "" { // 行级作用域：从请求上下文取值（认证注入，缺失则nil=匹配不到行）
 			args[i] = scope[slot.Context]
 			continue
@@ -309,6 +318,12 @@ func (my *Context) AddContextSlot(key string) int {
 	}
 	my.contexts[key] = idx
 	return idx
+}
+
+// AddGenerated 添加执行期生成值槽位；生成器函数直接固化进缓存计划。
+func (my *Context) AddGenerated(generate protocol.IDGenerator) int {
+	my.slots = append(my.slots, Slot{Cursor: -1, Generate: generate})
+	return len(my.slots)
 }
 
 // AddCursor 添加游标键值参数：执行期解码变量游标取第index个键值

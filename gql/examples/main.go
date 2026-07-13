@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/gql"
@@ -127,7 +128,10 @@ func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
 	}
 	k.Set("mode", "dev")
 	k.Set("app.root", ".") // schema.graphql与元数据缓存输出到 ./cfg
-	k.Set("metadata.include-tables", []string{"users", "posts", "tags", "post_tags", "comments"})
+	k.Set("metadata.include-tables", []string{
+		"users", "posts", "tags", "post_tags", "comments",
+		"uuid_records", "snowflake_records", "virtual_records",
+	})
 	k.Set("metadata.classes", map[string]any{
 		"User": map[string]any{"table": "users", "search": []string{"name"}},
 		"Post": map[string]any{
@@ -135,9 +139,17 @@ func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
 			"search": []string{"title", "content"},
 			"scope":  []map[string]string{{"column": "tenant_id", "context": "tenant"}},
 		},
+		"UuidRecord":      map[string]any{"table": "uuid_records", "id-generator": "database"},
+		"SnowflakeRecord": map[string]any{"table": "snowflake_records", "id-generator": "snowflake"},
+		"VirtualRecord":   map[string]any{"table": "virtual_records", "id-generator": "virtual"},
 	})
 
-	meta, err := gql.NewMetadata(k, db, gql.WithCodecs(gql.NewIdCodec(), UpperCodec{}))
+	meta, err := gql.NewMetadata(k, db,
+		gql.WithCodecs(gql.NewIdCodec(), UpperCodec{}),
+		gql.WithIDGenerator("virtual", func() (any, error) {
+			return "v_" + strconv.FormatInt(time.Now().UnixNano(), 36), nil
+		}),
+	)
 	if err != nil {
 		return nil, err
 	}

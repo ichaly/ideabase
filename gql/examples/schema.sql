@@ -40,6 +40,11 @@ CREATE TABLE comments (
     created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
+-- 四种主键策略：users的SERIAL走database；以下分别走uuid、snowflake和命名自定义生成器。
+CREATE TABLE uuid_records (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL);
+CREATE TABLE snowflake_records (id BIGINT PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE virtual_records (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+
 -- 性能索引：搜索列trigram、外键、递归父链
 CREATE INDEX idx_posts_title_trgm ON posts USING gin (title gin_trgm_ops);
 CREATE INDEX idx_posts_content_trgm ON posts USING gin (content gin_trgm_ops);

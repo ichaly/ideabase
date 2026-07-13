@@ -17,7 +17,7 @@ func TestExamplesCoverDocumentedCapabilities(t *testing.T) {
 		"crud", "batch-upsert", "nested-write", "filters", "sorting", "offset-pagination",
 		"cursor-pagination", "aggregates", "search", "relations", "recursive", "distinct-json",
 		"variables-fragments", "field-resolver", "batch-resolver", "root-resolver", "resolver-wrap",
-		"codec", "remote", "scope", "persisted", "subscription", "introspection", "safety", "bytes",
+		"codec", "id-generation", "remote", "scope", "persisted", "subscription", "introspection", "safety", "bytes",
 	}
 
 	raw, err := os.ReadFile(filepath.Join("examples", "coverage.json"))

@@ -17,6 +17,7 @@
   {"id":"root-resolver","artifacts":["main.go","operations/extensions.graphql"]},
   {"id":"resolver-wrap","artifacts":["main.go","operations/extensions.graphql"]},
   {"id":"codec","artifacts":["main.go","operations/extensions.graphql"]},
+  {"id":"id-generation","artifacts":["main.go","schema.sql","queries/mutations.graphql"]},
   {"id":"remote","artifacts":["main.go","operations/extensions.graphql"]},
   {"id":"scope","artifacts":["main.go","schema.sql","queries/queries.graphql"]},
   {"id":"persisted","artifacts":["main.go","queries/blog.graphql"]},

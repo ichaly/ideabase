@@ -35,3 +35,10 @@ mutation NestedCreate {
 mutation NestedConnectDisconnect {
   updatePost(id: 1, input: { tags: { connect: [2], disconnect: [1] } }) { id }
 }
+
+mutation GeneratedPrimaryKeys {
+  database: createUser(input: { name: "自增", email: "database-id@demo.dev" }) { id }
+  uuid: createUuidRecord(input: { name: "UUID" }) { id }
+  snowflake: createSnowflakeRecord(input: { name: "雪花" }) { id }
+  custom: createVirtualRecord(input: { name: "虚化" }) { id }
+}

@@ -80,6 +80,9 @@ body, err := executor.Execute(ctx, `query { users { items { id name } } }`, nil)
   `contains/containedIn`（jsonb @>/<@，可配 GIN 索引）
 - 变更：`createX(input)` / `updateX(input, id|where)` / `deleteX(id|where)`，
   变更 CTE + 读回单条 SQL 原子完成；update/delete 强制要求条件
+- 主键策略：实体 `id-generator` 支持 `database`（缺省，数据库自增/UUID default）、
+  `snowflake` 与 `WithIDGenerator` 注册的自定义策略；生成发生在缓存计划执行期，
+  批量和嵌套创建逐行生成且不重复
 - 批量与 upsert：`createUsers(input: [..!]!)` 多行单条 INSERT（约束：参数总数
   受 PG 协议 65535 上限，万行级请分批）；`upsertUsers(input, on: ["email"])`（`on` 兼容单值写法 `on: "email"`）
   ON CONFLICT DO UPDATE，on 缺省主键
@@ -89,6 +92,20 @@ body, err := executor.Execute(ctx, `query { users { items { id name } } }`, nil)
   更新必须按 id 定位。注意 PG 快照语义：同请求读回看不到关系变更，
   需后续查询确认（写入本身原子生效）
 - GraphQL 变量：编译为参数槽位，同一查询文本的计划可缓存复用
+
+```go
+meta, err := gql.NewMetadata(k, db,
+    gql.WithIDGenerator("virtual", func() (any, error) { return nextVirtualID(), nil }),
+)
+```
+
+```yaml
+metadata:
+  classes:
+    Order: { table: orders, id-generator: snowflake }
+    Token: { table: tokens, id-generator: database } # UUID列使用DEFAULT gen_random_uuid()
+    User:  { table: users, id-generator: database }
+```
 
 ## 自定义 Resolver
 

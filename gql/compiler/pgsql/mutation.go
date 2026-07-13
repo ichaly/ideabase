@@ -186,7 +186,7 @@ func (my *Dialect) buildInsert(ctx *compiler.Context, m *mutation) ([]relationOp
 	}
 
 	my.applyScope(m.class, rows) // 强制作用域列=上下文值（防越租户创建）
-	if _, err = my.writeInsertValues(ctx, m.class.Table, rows); err != nil {
+	if _, err = my.writeInsertValues(ctx, m.class, rows); err != nil {
 		return nil, err
 	}
 	ctx.Write(` RETURNING *`)
@@ -220,7 +220,7 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 	}
 
 	my.applyScope(m.class, rows) // 强制作用域列=上下文值（防越租户创建）
-	columns, err := my.writeInsertValues(ctx, m.class.Table, rows)
+	columns, err := my.writeInsertValues(ctx, m.class, rows)
 	if err != nil {
 		return err
 	}
@@ -265,9 +265,12 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 
 // writeInsertValues 写INSERT INTO ... VALUES主体，返回并集列；
 // 列集合取各行并集（首现顺序），行内缺失列填DEFAULT
-func (my *Dialect) writeInsertValues(ctx *compiler.Context, table string, rows []inputRow) ([]string, error) {
+func (my *Dialect) writeInsertValues(ctx *compiler.Context, class *protocol.Class, rows []inputRow) ([]string, error) {
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("input不能为空")
+	}
+	if err := my.applyGeneratedID(class, rows); err != nil {
+		return nil, err
 	}
 
 	columns := make([]string, 0, len(rows[0].columns))
@@ -285,7 +288,7 @@ func (my *Dialect) writeInsertValues(ctx *compiler.Context, table string, rows [
 	}
 
 	ctx.Write(`INSERT INTO `)
-	tableRef(ctx, table)
+	tableRef(ctx, class.Table)
 	ctx.Write(` (`)
 	writeColumns(ctx, "", columns)
 	ctx.Write(`) VALUES `)
@@ -310,6 +313,36 @@ func (my *Dialect) writeInsertValues(ctx *compiler.Context, table string, rows [
 		ctx.Write(`)`)
 	}
 	return columns, nil
+}
+
+// applyGeneratedID 为每行补一个执行期生成槽位；database/空策略保持数据库默认零开销。
+func (my *Dialect) applyGeneratedID(class *protocol.Class, rows []inputRow) error {
+	strategy := class.IDGenerator
+	if strategy == "" || strategy == "database" {
+		return nil
+	}
+	if class.Generate == nil {
+		return fmt.Errorf("未注册主键生成器: %s", strategy)
+	}
+	if len(class.PrimaryKeys) != 1 {
+		return fmt.Errorf("主键生成策略仅支持单主键实体: %s", class.Name)
+	}
+	field, ok := class.Fields[class.PrimaryKeys[0]]
+	if !ok || field.Column == "" {
+		return fmt.Errorf("主键字段不存在: %s.%s", class.Name, class.PrimaryKeys[0])
+	}
+	for i := range rows {
+		row := &rows[i]
+		if _, exists := row.values[field.Column]; exists {
+			continue
+		}
+		row.columns = append(row.columns, field.Column)
+		row.values[field.Column] = func(ctx *compiler.Context) error {
+			ctx.Write(my.Placeholder(ctx.AddGenerated(class.Generate)))
+			return nil
+		}
+	}
+	return nil
 }
 
 // buildUpdate 构建UPDATE语句，必须携带id或where条件
@@ -749,7 +782,7 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 				made := ctx.NextIndex()
 				ctx.Write(`, `).Quote(`__c_`, made).Write(` AS (`)
 				my.applyScope(target, op.create) // 嵌套创建的子行也填作用域
-				if _, err := my.writeInsertValues(ctx, target.Table, op.create); err != nil {
+				if _, err := my.writeInsertValues(ctx, target, op.create); err != nil {
 					return err
 				}
 				ctx.Write(` RETURNING `).Quote(pk).Write(`)`)
@@ -808,7 +841,7 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			}
 			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (`)
 			my.applyScope(target, op.create) // 嵌套创建的子行也填作用域
-			if _, err := my.writeInsertValues(ctx, target.Table, op.create); err != nil {
+			if _, err := my.writeInsertValues(ctx, target, op.create); err != nil {
 				return err
 			}
 			ctx.Write(`)`)

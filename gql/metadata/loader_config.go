@@ -115,6 +115,9 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	if len(classConfig.PrimaryKeys) > 0 {
 		newClass.PrimaryKeys = classConfig.PrimaryKeys
 	}
+	if classConfig.IDGenerator != "" {
+		newClass.IDGenerator = classConfig.IDGenerator
+	}
 	if len(classConfig.Search) > 0 {
 		newClass.Search = classConfig.Search
 	}

@@ -2,7 +2,6 @@ package gql
 
 import (
 	"fmt"
-	"github.com/ichaly/ideabase/gql/internal"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/iancoleman/strcase"
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
@@ -18,6 +18,7 @@ import (
 	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/samber/lo"
+	"github.com/sony/sonyflake"
 	"gorm.io/gorm"
 )
 
@@ -50,6 +51,8 @@ type Metadata struct {
 	index  map[string]Codec
 }
 
+var defaultSnowflake = sonyflake.NewSonyflake(sonyflake.Settings{})
+
 // findCodec 按标量名查编解码器（同名后注册者生效，由map覆盖语义天然保证）
 func (my *Metadata) findCodec(name string) Codec {
 	return my.index[name]
@@ -68,8 +71,18 @@ func (my *Metadata) setCodecs(codecs []Codec) {
 type MetadataOption func(*metadataOptions)
 
 type metadataOptions struct {
-	loaders []protocol.Loader
-	codecs  []Codec
+	loaders    []protocol.Loader
+	codecs     []Codec
+	generators map[string]protocol.IDGenerator
+}
+
+// WithIDGenerator 注册命名主键生成器；同名可覆盖内置snowflake。
+func WithIDGenerator(name string, generate protocol.IDGenerator) MetadataOption {
+	return func(opts *metadataOptions) {
+		if name != "" && generate != nil {
+			opts.generators[name] = generate
+		}
+	}
 }
 
 // WithLoader 添加或替换Loader
@@ -165,7 +178,15 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 		metadata.NewFileLoader(cfg),
 		metadata.NewConfigLoader(cfg),
 	}
-	options := &metadataOptions{loaders: defaultLoaders}
+	options := &metadataOptions{
+		loaders: defaultLoaders,
+		generators: map[string]protocol.IDGenerator{
+			"snowflake": func() (any, error) {
+				id, err := defaultSnowflake.NextID()
+				return int64(id), err
+			},
+		},
+	}
 	// 应用自定义选项
 	for _, opt := range opts {
 		opt(options)
@@ -189,6 +210,18 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	}
 	// 进行驼峰命名和过滤处理
 	my.normalize()
+	// 启动期把命名策略绑定为函数；database/空策略完全不进入生成路径。
+	for _, name := range utl.SortKeys(my.Nodes) {
+		class := my.Nodes[name]
+		if name != class.Name || class.IDGenerator == "" || class.IDGenerator == "database" {
+			continue
+		}
+		generate, ok := options.generators[class.IDGenerator]
+		if !ok {
+			return nil, fmt.Errorf("未注册主键生成器: %s", class.IDGenerator)
+		}
+		class.Generate = generate
+	}
 	// codec标量名与实体类名冲突在构建期拦截（scalar与type同名，起服务时schema必然加载失败）
 	for _, codec := range my.codecs {
 		if class, ok := my.Nodes[codec.Name()]; ok && class.Name == codec.Name() {

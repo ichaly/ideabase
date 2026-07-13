@@ -92,6 +92,9 @@ type ClassConfig struct {
 	// 主键列表
 	PrimaryKeys []string `mapstructure:"primary_keys"`
 
+	// 主键生成策略：database（数据库自增/UUID默认值）、snowflake或WithIDGenerator注册名
+	IDGenerator string `mapstructure:"id-generator"`
+
 	// 字段定义 (使用字段名作为键)
 	Fields map[string]*FieldConfig `mapstructure:"fields"`
 

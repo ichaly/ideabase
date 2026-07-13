@@ -17,6 +17,7 @@ require (
 	github.com/json-iterator/go v1.1.12
 	github.com/rs/zerolog v1.34.0
 	github.com/samber/lo v1.52.0
+	github.com/sony/sonyflake v1.3.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.38.0
 	github.com/valyala/fasthttp v1.69.0
@@ -108,7 +109,6 @@ require (
 	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.25.5 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/sony/sonyflake v1.3.0 // indirect
 	github.com/sqids/sqids-go v0.4.1 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/tinylib/msgp v1.6.3 // indirect

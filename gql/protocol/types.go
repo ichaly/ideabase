@@ -1,5 +1,8 @@
 package protocol
 
+// IDGenerator 在执行期为一行生成主键；函数必须并发安全。
+type IDGenerator func() (any, error)
+
 // Hoster 定义元数据承载者接口
 type Hoster interface {
 	// PutNode 添加或者合并一个类节点

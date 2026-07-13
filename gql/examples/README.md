@@ -50,6 +50,7 @@ GQL '{"query":"mutation { echo(message: \"hello\") }"}'
 | Query/Mutation 根 Resolver | `serverInfo/echo` | `main.go`, `extensions.graphql` |
 | Resolver middleware | `User.greeting` 的 `[wrapped]` 前缀 | `main.go` |
 | ID 与自定义 Codec、Matcher、Baser | `id`、所有 `name` 字段 | `UpperCodec`, `buildExecutor` |
+| 自增、UUID、雪花、自定义主键 | `GeneratedPrimaryKeys` | `main.go`, `schema.sql` |
 | Remote Join | `User.reputation` | `main.go`, `ResolverAndRemote` |
 | 行级作用域 | `Post.tenant_id ↔ tenant` | `main.go`, `TenantScopedPosts` |
 | 持久化查询与缓存预热 | 所有命名 operation | `queries/*.graphql` |
@@ -91,6 +92,7 @@ GQL '{"operationName":"BatchCreate"}'
 GQL '{"operationName":"UpsertByUnique"}'
 GQL '{"operationName":"NestedCreate"}'
 GQL '{"operationName":"NestedConnectDisconnect"}'
+GQL '{"operationName":"GeneratedPrimaryKeys"}'
 ```
 
 `update/delete` 没有 `id` 或 `where` 会在编译期拒绝。嵌套写入使用同一条 SQL 原子提交；
@@ -109,6 +111,10 @@ GQL '{"operationName":"NestedConnectDisconnect"}'
 `NewIdCodec()` 同时演示 ID 入参还原与出参编码；`UpperCodec` 演示自定义标量、字段
 认领、过滤器复用和双向边界转换，数据库仍保存原始值。未选择 Resolver
 字段时不会触发解包；选择 `greeting/sign/reputation` 时只解包命中分支。
+
+主键策略通过实体的 `id-generator` 声明：省略或 `database` 使用数据库自增/default
+（UUID列用 `DEFAULT gen_random_uuid()`），`snowflake` 是内置生成器，其他名称由
+`WithIDGenerator` 一次注册后复用。
 
 ## 多租户作用域
 
