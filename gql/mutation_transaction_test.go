@@ -5,13 +5,26 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
+type mutationCountDialect struct {
+	compiler.Dialect
+	mutations int
+}
+
+func (my *mutationCountDialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) error {
+	my.mutations++
+	return my.Dialect.BuildMutation(ctx, set)
+}
+
 func TestMutationRootFieldsExecuteSerially(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
+	dialect := &mutationCountDialect{Dialect: executor.compiler.dialect}
+	executor.compiler.dialect = dialect
 
 	operation := `mutation SerialMutation($email: String!) {
 		created: createUser(input: { name: "Alice", email: $email }) { id }
@@ -22,6 +35,27 @@ func TestMutationRootFieldsExecuteSerially(t *testing.T) {
 		require.Empty(t, reply.Errors, "%v", reply.Errors)
 		require.Equal(t, "Bob", reply.Data["updated"].(map[string]any)["name"])
 	}
+	require.Equal(t, 2, dialect.mutations, "非volatile子计划在热请求中不得重复编译")
+}
+
+func TestMutationRootPlansOnlyCacheNonVolatileFields(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	dialect := &mutationCountDialect{Dialect: executor.compiler.dialect}
+	executor.compiler.dialect = dialect
+
+	operation := `mutation VolatileMutation($input: UserCreateInput!, $email: String!) {
+		createUser(input: $input) { id }
+		updateUser(input: { name: "Updated" }, where: { email: { eq: $email } }) { name }
+	}`
+	for _, email := range []string{"volatile-1@x.com", "volatile-2@x.com"} {
+		reply := executor.run(context.Background(), operation, map[string]any{
+			"input": map[string]any{"name": "Volatile", "email": email},
+			"email": email,
+		}, "")
+		require.Empty(t, reply.Errors, "%v", reply.Errors)
+	}
+	require.Equal(t, 3, dialect.mutations, "volatile字段必须重编译，普通字段应复用缓存")
 }
 
 func TestRootExecutionKeepsDefaultFastPaths(t *testing.T) {
@@ -103,7 +137,7 @@ func TestMutationResolverWithoutDatabase(t *testing.T) {
 		}},
 	}
 
-	reply := executor.executeRootResolvers(context.Background(), operation, nil)
+	reply := executor.executeRootResolvers(context.Background(), &planEntry{operation: operation}, nil)
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	require.Equal(t, "pong", reply.Data["pingMutation"])
 }

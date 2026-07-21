@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -401,8 +402,8 @@ func Tx(ctx context.Context) *gorm.DB {
 	return tx
 }
 
-// rootResolverQuery 携带包含自定义根字段Resolver的已解析operation。
-type rootResolverQuery struct{ operation *ast.OperationDefinition }
+// rootResolverQuery 携带需要逐根字段协调执行的缓存条目。
+type rootResolverQuery struct{ entry *planEntry }
 
 func (my *rootResolverQuery) Error() string { return "根字段Resolver不支持此入口" }
 
@@ -432,7 +433,8 @@ func (my *Executor) needsRootExecution(operation *ast.OperationDefinition) bool 
 	return false
 }
 
-func (my *Executor) executeRootResolvers(ctx context.Context, operation *ast.OperationDefinition, variables map[string]interface{}) gqlReply {
+func (my *Executor) executeRootResolvers(ctx context.Context, entry *planEntry, variables map[string]interface{}) gqlReply {
+	operation, plans := entry.operation, &entry.rootPlans
 	typename := "Query"
 	if operation.Operation == ast.Mutation {
 		typename = "Mutation"
@@ -449,7 +451,7 @@ func (my *Executor) executeRootResolvers(ctx context.Context, operation *ast.Ope
 				data[f.Alias] = typename
 				continue
 			}
-			value, warns, err := my.resolveRootField(ctx, operation, f, variables, typename)
+			value, warns, err := my.resolveRootField(ctx, operation, f, variables, typename, plans)
 			if err != nil {
 				return err
 			}
@@ -472,10 +474,10 @@ func (my *Executor) executeRootResolvers(ctx context.Context, operation *ast.Ope
 	return gqlReply{Data: data, Errors: warnings}
 }
 
-func (my *Executor) resolveRootField(ctx context.Context, operation *ast.OperationDefinition, field *ast.Field, variables map[string]interface{}, parent string) (interface{}, gqlerror.List, error) {
+func (my *Executor) resolveRootField(ctx context.Context, operation *ast.OperationDefinition, field *ast.Field, variables map[string]interface{}, parent string, plans *sync.Map) (interface{}, gqlerror.List, error) {
 	resolver := my.resolvers[parent+"."+field.Name]
 	if resolver == nil {
-		return my.executeDefaultRootField(ctx, operation, field, variables)
+		return my.executeDefaultRootField(ctx, operation, field, variables, plans)
 	}
 	var result interface{}
 	err := safely(func() (err error) {
@@ -490,18 +492,27 @@ func (my *Executor) resolveRootField(ctx context.Context, operation *ast.Operati
 
 // executeDefaultRootField 在自定义根Resolver与默认数据库字段混排时逐字段复用原
 // SQL编译/执行链；默认-only操作仍走整份operation单SQL快路径，零额外开销。
-func (my *Executor) executeDefaultRootField(ctx context.Context, operation *ast.OperationDefinition, field *ast.Field, variables map[string]interface{}) (interface{}, gqlerror.List, error) {
+func (my *Executor) executeDefaultRootField(ctx context.Context, operation *ast.OperationDefinition, field *ast.Field, variables map[string]interface{}, plans *sync.Map) (interface{}, gqlerror.List, error) {
 	if my.compiler == nil || my.database == nil {
 		return nil, nil, fmt.Errorf("执行器未配置数据库或编译器")
 	}
-	sub := *operation
-	sub.SelectionSet = ast.SelectionSet{field}
-	plan, err := my.compiler.Compile(&sub, variables)
-	if err != nil {
-		return nil, nil, err
+	var plan *Plan
+	if cached, ok := plans.Load(field); ok {
+		plan = cached.(*Plan)
+	} else {
+		sub := *operation
+		sub.SelectionSet = ast.SelectionSet{field}
+		var err error
+		if plan, err = my.compiler.Compile(&sub, variables); err != nil {
+			return nil, nil, err
+		}
+		plan.resolvers = collectBindings(my.metadata, &sub)
+		plan.paths = collectCodecPaths(sub.SelectionSet, my.metadata)
+		if !plan.Volatile() {
+			actual, _ := plans.LoadOrStore(field, plan)
+			plan = actual.(*Plan)
+		}
 	}
-	plan.resolvers = collectBindings(my.metadata, &sub)
-	plan.paths = collectCodecPaths(sub.SelectionSet, my.metadata)
 	raw, err := my.fetch(ctx, plan, variables)
 	if err != nil {
 		return nil, nil, err

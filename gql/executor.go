@@ -405,7 +405,7 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 			return r
 		}
 		if rootErr, ok := err.(*rootResolverQuery); ok {
-			return my.executeRootResolvers(ctx, rootErr.operation, variables)
+			return my.executeRootResolvers(ctx, rootErr.entry, variables)
 		}
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
@@ -619,7 +619,7 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 	// 收口：任何消费（Resolver分发/执行/volatile重编译）前统一还原codec入参
 	decodeVariables(my.schema, entry.operation.VariableDefinitions, variables, my.metadata)
 	if entry.rootResolver {
-		return nil, &rootResolverQuery{operation: entry.operation}
+		return nil, &rootResolverQuery{entry: entry}
 	}
 	if entry.plan != nil {
 		return entry.plan, nil

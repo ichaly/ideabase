@@ -21,6 +21,7 @@ type planEntry struct {
 	resolvers    []binding                // resolver绑定只依赖AST，volatile重编译复用（非volatile时plan内已含，恒存仅为构造统一）
 	paths        codecPaths               // codec路径树只依赖AST，volatile重编译复用（同上）
 	rootResolver bool                     // 自定义Query/Mutation根字段Resolver
+	rootPlans    sync.Map                 // 多根执行中按字段缓存非volatile子计划（key: *ast.Field）
 }
 
 // planCache 执行计划LRU缓存：命中路径零解析；非volatile零编译
