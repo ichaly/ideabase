@@ -14,6 +14,7 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"golang.org/x/sync/errgroup"
+	"gorm.io/gorm"
 )
 
 // Resolver 自定义字段解析器：处理无法用SQL表达的字段逻辑
@@ -388,13 +389,28 @@ func (my *Executor) rebuild() error {
 	return nil
 }
 
+type transactionKey struct{}
+
+// Tx 返回当前mutation共享的事务连接；Query或无数据库执行器返回nil。
+// 根Resolver中的数据库写入必须使用此连接，才能与默认CRUD共同提交或回滚。
+func Tx(ctx context.Context) *gorm.DB {
+	if ctx == nil {
+		return nil
+	}
+	tx, _ := ctx.Value(transactionKey{}).(*gorm.DB)
+	return tx
+}
+
 // rootResolverQuery 携带包含自定义根字段Resolver的已解析operation。
 type rootResolverQuery struct{ operation *ast.OperationDefinition }
 
 func (my *rootResolverQuery) Error() string { return "根字段Resolver不支持此入口" }
 
-func (my *Executor) hasRootResolver(set ast.SelectionSet) bool {
-	for _, s := range set {
+// needsRootExecution 判断操作是否需要逐根字段协调：根Resolver和多根mutation
+// 进入协调路径；单个默认CRUD仍保留原单SQL原子快路径。
+func (my *Executor) needsRootExecution(operation *ast.OperationDefinition) bool {
+	fields := 0
+	for _, s := range operation.SelectionSet {
 		f, ok := s.(*ast.Field)
 		if !ok || strings.HasPrefix(f.Name, "__") {
 			continue
@@ -405,6 +421,12 @@ func (my *Executor) hasRootResolver(set ast.SelectionSet) bool {
 		}
 		if _, ok = my.resolvers[parent+"."+f.Name]; ok {
 			return true
+		}
+		if operation.Operation == ast.Mutation {
+			fields++
+			if fields > 1 {
+				return true
+			}
 		}
 	}
 	return false
@@ -417,21 +439,35 @@ func (my *Executor) executeRootResolvers(ctx context.Context, operation *ast.Ope
 	}
 	data := make(map[string]interface{}, len(operation.SelectionSet))
 	var warnings gqlerror.List
-	for _, s := range operation.SelectionSet {
-		f, ok := s.(*ast.Field)
-		if !ok {
-			continue
+	execute := func(ctx context.Context) error {
+		for _, s := range operation.SelectionSet {
+			f, ok := s.(*ast.Field)
+			if !ok {
+				continue
+			}
+			if f.Name == "__typename" {
+				data[f.Alias] = typename
+				continue
+			}
+			value, warns, err := my.resolveRootField(ctx, operation, f, variables, typename)
+			if err != nil {
+				return err
+			}
+			warnings = append(warnings, warns...)
+			data[f.Alias] = value
 		}
-		if f.Name == "__typename" {
-			data[f.Alias] = typename
-			continue
-		}
-		value, warns, err := my.resolveRootField(ctx, operation, f, variables, typename)
-		if err != nil {
-			return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
-		}
-		warnings = append(warnings, warns...)
-		data[f.Alias] = value
+		return nil
+	}
+	var err error
+	if operation.Operation == ast.Mutation && my.database != nil && Tx(ctx) == nil {
+		err = my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			return execute(context.WithValue(ctx, transactionKey{}, tx))
+		})
+	} else {
+		err = execute(ctx)
+	}
+	if err != nil {
+		return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
 	}
 	return gqlReply{Data: data, Errors: warnings}
 }

@@ -284,7 +284,7 @@ func (my *Executor) LoadDocuments(dir string) error {
 
 // loadDocument 解析并注册文档中的命名操作
 func (my *Executor) loadDocument(content string) error {
-	doc, errs := gqlparser.LoadQuery(my.schema, content)
+	doc, errs := gqlparser.LoadQueryWithRules(my.schema, content, nil)
 	if len(errs) > 0 {
 		return errs
 	}
@@ -296,7 +296,12 @@ func (my *Executor) loadDocument(content string) error {
 		// 复用已解析的AST预热编译缓存（不再重复解析文档）；
 		// 依赖变量内容的操作（volatile）缓存AST，执行期免解析重编译
 		operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
-		if _, _, err := my.compile(planKey{operation: operation.Name, query: content}, operation, nil); err != nil {
+		key := planKey{operation: operation.Name, query: content}
+		if my.needsRootExecution(operation) {
+			my.cache.Put(key, &planEntry{operation: operation, rootResolver: true})
+			continue
+		}
+		if _, _, err := my.compile(key, operation, nil); err != nil {
 			log.Warn().Err(err).Str("operation", operation.Name).Msg("持久化文档预热编译失败，执行期将重试编译")
 		}
 	}
@@ -435,8 +440,12 @@ func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]
 	if err != nil {
 		return nil, err
 	}
+	database := my.database
+	if tx := Tx(ctx); tx != nil {
+		database = tx
+	}
 	var data []byte
-	err = my.database.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
+	err = database.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
 	if err == nil {
 		data = encodeBytes(data, plan.paths) // 空路径树零成本短路
 	}
@@ -637,7 +646,7 @@ func (my *Executor) miss(key planKey, variables map[string]interface{}) (*planEn
 		}
 		return nil, nil, &introQuery{operation: operation}
 	}
-	if my.hasRootResolver(operation.SelectionSet) {
+	if my.needsRootExecution(operation) {
 		entry := &planEntry{operation: operation, rootResolver: true}
 		my.cache.Put(key, entry)
 		return entry, nil, nil
@@ -652,7 +661,7 @@ func (my *Executor) miss(key planKey, variables map[string]interface{}) (*planEn
 
 // parse 解析校验查询并选定操作，fragment就地展开为纯字段选择集
 func (my *Executor) parse(query, operationName string) (*ast.OperationDefinition, error) {
-	doc, errs := gqlparser.LoadQuery(my.schema, query)
+	doc, errs := gqlparser.LoadQueryWithRules(my.schema, query, nil)
 	if len(errs) > 0 {
 		return nil, errs
 	}

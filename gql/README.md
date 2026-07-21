@@ -143,9 +143,13 @@ executor.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
     }, gql.Result("BotProfile")))
 ```
 
+Mutation 根 Resolver 会在引擎事务中执行，数据库写入应从 `gql.Tx(ctx)` 取得连接；
+Query、无数据库执行器或事务外调用返回 `nil`。直接捕获全局 `*gorm.DB` 的旧写法无法
+自动加入引擎事务，需要把事务连接继续传给 service/repository。
+
 `Register` 新增字段；构造时传 `gql.Existing()` 后用 `Replace` 显式覆盖 schema 已有字段；
 `Wrap` 用强类型中间件增强已注册 Resolver。自定义根字段可与默认数据库字段混排；
-纯默认 CRUD 请求保持原整份 operation 单 SQL 快路径。
+单根默认 CRUD 保持原单 SQL 快路径，多根 Mutation 按文本顺序在同一事务中执行。
 
 - 类型映射：`std.Id`→ID、`time.Time`→DateTime、切片→列表（`[]std.Id`→`[ID!]`）、
   map/嵌套struct→Json；`validate:"required"` 渲染非空 `!`，`doc` tag 作参数文档
