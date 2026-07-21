@@ -1,0 +1,44 @@
+mutation CrudCreate($name: Upper!, $email: String!) {
+  createUser(input: { name: $name, email: $email }) { id name email }
+}
+
+mutation CrudUpdate($id: ID!, $name: Upper!) {
+  updateUser(id: $id, input: { name: $name }) { id name }
+}
+
+mutation CrudDelete($id: ID!) {
+  deleteUser(id: $id)
+}
+
+mutation BatchCreate {
+  createUsers(input: [
+    { name: "批量甲", email: "batch-a@demo.dev" },
+    { name: "批量乙", email: "batch-b@demo.dev" }
+  ]) { id name }
+}
+
+mutation UpsertByUnique {
+  upsertUsers(
+    input: [{ name: "张三更新", email: "zhang@demo.dev" }]
+    on: ["email"]
+  ) { id name email }
+}
+
+mutation NestedCreate {
+  createUser(input: {
+    name: "嵌套用户"
+    email: "nested@demo.dev"
+    posts: { create: [{ title: "嵌套文章", content: "原子写入" }] }
+  }) { id }
+}
+
+mutation NestedConnectDisconnect {
+  updatePost(id: 1, input: { tags: { connect: [2], disconnect: [1] } }) { id }
+}
+
+mutation GeneratedPrimaryKeys {
+  database: createUser(input: { name: "自增", email: "database-id@demo.dev" }) { id }
+  uuid: createUuidRecord(input: { name: "UUID" }) { id }
+  snowflake: createSnowflakeRecord(input: { name: "雪花" }) { id }
+  custom: createVirtualRecord(input: { name: "虚化" }) { id }
+}

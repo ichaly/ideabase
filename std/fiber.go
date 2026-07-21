@@ -2,7 +2,9 @@ package std
 
 import (
 	"encoding/base64"
+	"fmt"
 	"reflect"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -16,10 +18,8 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/etag"
 	"github.com/gofiber/fiber/v3/middleware/idempotency"
 	"github.com/gofiber/fiber/v3/middleware/limiter"
-	"github.com/gofiber/fiber/v3/middleware/recover"
 	"github.com/gofiber/fiber/v3/middleware/requestid"
 	"github.com/rs/zerolog"
-	"github.com/samber/lo"
 
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/utl"
@@ -97,8 +97,9 @@ func NewFiber(c *Config, v *Validator, opts ...FiberOption) *fiber.App {
 		TrustProxyConfig:   fiberConf.TrustProxyConfig,
 		EnableIPValidation: fiberConf.EnableIPValidation,
 		StructValidator:    v,
-		JSONEncoder:        fiberJSON.Marshal,
+		JSONEncoder:        wrapJSON, // 全站唯一信封点：裸payload包成Result，*Result原样输出
 		JSONDecoder:        fiberJSON.Unmarshal,
+		ErrorHandler:       resultErrorHandler, // 统一错误出口（opts可覆盖）
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -108,10 +109,10 @@ func NewFiber(c *Config, v *Validator, opts ...FiberOption) *fiber.App {
 	app := fiber.New(conf)
 
 	// 注册基础中间件
-	app.Use(requestid.New()) // 请求ID中间件
-	app.Use(recover.New())   // 异常恢复中间件
-	app.Use(cors.New())      // 跨域请求支持
-	app.Use(etag.New())      // ETag中间件 - 优化缓存控制
+	app.Use(requestid.New())   // 请求ID中间件
+	app.Use(recoverMiddleware) // 异常恢复：屏蔽panic细节，转为统一500错误交ErrorHandler
+	app.Use(cors.New())        // 跨域请求支持
+	app.Use(etag.New())        // ETag中间件 - 优化缓存控制
 
 	// Cookie加密中间件
 	if c.EncryptKey != "" {
@@ -168,26 +169,10 @@ func NewFiber(c *Config, v *Validator, opts ...FiberOption) *fiber.App {
 			return c.IP() // 基于IP的限制
 		},
 		LimitReached: func(c fiber.Ctx) error {
-			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
-				"status":  "error",
-				"message": "请求过于频繁，请稍后再试",
-			})
+			// 交统一ErrorHandler定型为Result信封
+			return fiber.NewError(fiber.StatusTooManyRequests, "请求过于频繁，请稍后再试")
 		},
 	}))
-
-	// 统一响应格式中间件
-	skips := lo.FilterMap(fiberConf.ResultSkipRoutes, func(item string, _ int) (string, bool) {
-		trimmed := strings.TrimSpace(item)
-		return trimmed, trimmed != ""
-	})
-	options := lo.Ternary(len(skips) > 0, []ResultMiddlewareOption{
-		WithResultSkipper(func(route *fiber.Route) bool {
-			return route != nil && lo.ContainsBy(skips, func(prefix string) bool {
-				return strings.HasPrefix(route.Path, prefix)
-			})
-		}),
-	}, []ResultMiddlewareOption(nil))
-	app.Use(ResultMiddleware(options...))
 
 	// 调试模式下添加日志
 	if c.IsDebug() {
@@ -220,7 +205,26 @@ func NewFiber(c *Config, v *Validator, opts ...FiberOption) *fiber.App {
 		})
 	}
 
+	// 兜底信封：必须最后注册（洋葱最内层），使其 body 改写在 compress/etag 之前发生。
+	// 若挪到 compress 之后，会改写已压缩的字节、产出损坏响应——调整中间件顺序时勿动此约束。
+	// 作用：把 handler 用 c.Send 直发的 GraphQL 标准体自动套 {code,...} 信封。
+	app.Use(envelopeResponse)
+
 	return app
+}
+
+// recoverMiddleware 拦截handler的panic：记录堆栈，转为屏蔽细节的500错误交ErrorHandler定型
+func recoverMiddleware(c fiber.Ctx) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.GetDefault().Error().
+				Str("panic", fmt.Sprintf("%v", r)).
+				Bytes("stack", debug.Stack()).
+				Msg("fiber panic recovered")
+			err = NewException(fiber.StatusInternalServerError).WithMessage("服务器内部错误")
+		}
+	}()
+	return c.Next()
 }
 
 func buildCSRFExtractor(expr, cookieName string) extractors.Extractor {

@@ -56,13 +56,6 @@ func WithComment(comment string) Option {
 	}
 }
 
-// WithIndent 设置缩进级别
-func WithIndent(spaces int) Option {
-	return func(f *Field) {
-		f.Indent = spaces
-	}
-}
-
 // WithArgs 添加参数
 func WithArgs(args ...Argument) Option {
 	return func(f *Field) {
@@ -75,17 +68,4 @@ func WithMultilineArgs() Option {
 	return func(f *Field) {
 		f.Multiline = true
 	}
-}
-
-// New 创建新字段
-func New(name string, typeName string, options ...Option) *Field {
-	f := getFromPool()
-	f.Name = name
-	f.Type.Name = typeName
-
-	for _, opt := range options {
-		opt(f)
-	}
-
-	return f
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/huandu/go-clone"
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 )
 
@@ -69,22 +70,12 @@ func (my *ConfigLoader) Load(h protocol.Hoster) error {
 
 		// 主类/标准类/覆盖类统一处理
 		if className == classConfig.Table || className == canonName || classConfig.Override {
-			baseClass, ok := h.GetNode(classConfig.Table)
-			if ok {
-				// 合并配置
-				// 这里只做简单覆盖，实际可用updateClass合并
-				class, err := my.buildClassFromConfig(className, classConfig, baseClass)
-				if err != nil {
-					return err
-				}
-				h.PutNode(classConfig.Table, class)
-			} else {
-				class, err := my.buildClassFromConfig(className, classConfig, nil)
-				if err != nil {
-					return err
-				}
-				h.PutNode(classConfig.Table, class)
+			baseClass, _ := h.GetNode(classConfig.Table) // 未命中时为nil，按新建处理
+			class, err := my.buildClassFromConfig(className, classConfig, baseClass)
+			if err != nil {
+				return err
 			}
+			h.PutNode(classConfig.Table, class)
 			continue
 		}
 
@@ -121,15 +112,29 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	if classConfig.Description != "" {
 		newClass.Description = classConfig.Description
 	}
-	if classConfig.Resolver != "" {
-		newClass.Resolver = classConfig.Resolver
-	}
 	if len(classConfig.PrimaryKeys) > 0 {
 		newClass.PrimaryKeys = classConfig.PrimaryKeys
+	}
+	if classConfig.IDGenerator != "" {
+		newClass.IDGenerator = classConfig.IDGenerator
+	}
+	if len(classConfig.Search) > 0 {
+		newClass.Search = classConfig.Search
+	}
+	for _, s := range classConfig.Scope {
+		newClass.Scope = append(newClass.Scope, protocol.ScopeRule(s)) // 字段同构，直接转换
 	}
 	my.applyFieldFilter(newClass, classConfig)
 	if err := my.applyFieldConfig(newClass, classConfig.Fields); err != nil {
 		return nil, err
+	}
+	// 主键列表缺省时从IsPrimary字段推导（与db加载器行为对齐）
+	if len(newClass.PrimaryKeys) == 0 {
+		for _, name := range utl.SortKeys(newClass.Fields) {
+			if field := newClass.Fields[name]; name == field.Name && field.IsPrimary {
+				newClass.PrimaryKeys = append(newClass.PrimaryKeys, name)
+			}
+		}
 	}
 	return newClass, nil
 }
@@ -183,39 +188,41 @@ func (my *ConfigLoader) applyFieldConfig(class *protocol.Class, fieldConfigs map
 	fields := class.Fields
 	for _, fieldName := range orderedFields {
 		fieldConfig := fieldConfigs[fieldName]
-		canonName := ConvertFieldName(fieldConfig.Column, config)
 
-		// TODO: 如果字段存在，则尝试使用字段的列名,是否有必要?
+		// 字段已存在时沿用其实际列名；只用局部变量参与后续逻辑，
+		// 绝不回写常驻的fieldConfig（配置对象跨次构建复用，写回会导致二次构建分组判定漂移）
+		canonName := ConvertFieldName(fieldConfig.Column, config)
+		column := fieldConfig.Column
 		if field, ok := fields[fieldName]; ok {
-			fieldConfig.Column = field.Column
+			column = field.Column
 		}
 
 		// 虚拟字段
-		if fieldConfig.Column == "" {
-			fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, fieldConfig, nil)
+		if column == "" {
+			fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, column, fieldConfig, nil)
 			continue
 		}
 
 		// 列字段、标准字段、覆盖字段统一处理
-		if fieldName == fieldConfig.Column || fieldName == canonName || fieldConfig.Override {
-			fields[fieldConfig.Column] = my.buildFieldFromConfig(class.Name, fieldName, fieldConfig, class.Fields[fieldConfig.Column])
+		if fieldName == column || fieldName == canonName || fieldConfig.Override {
+			fields[column] = my.buildFieldFromConfig(class.Name, fieldName, column, fieldConfig, class.Fields[column])
 			continue
 		}
 
 		// 别名字段（必须依赖基础字段）
-		baseField, ok := fields[fieldConfig.Column]
+		baseField, ok := fields[column]
 		if !ok {
-			return fmt.Errorf("别名字段 %s 必须有基础字段 %s", fieldName, fieldConfig.Column)
+			return fmt.Errorf("别名字段 %s 必须有基础字段 %s", fieldName, column)
 		}
 		aliasField := clone.Slowly(baseField).(*protocol.Field)
-		fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, fieldConfig, aliasField)
+		fields[fieldName] = my.buildFieldFromConfig(class.Name, fieldName, column, fieldConfig, aliasField)
 	}
-	class.Fields = fields
 	return nil
 }
 
 // 字段创建或更新（类似类的处理方式）
-func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config *internal.FieldConfig, baseField *protocol.Field) *protocol.Field {
+// column为本次构建解析出的实际列名（可能来自已存在字段），与config.Column解耦
+func (my *ConfigLoader) buildFieldFromConfig(className, fieldName, column string, config *internal.FieldConfig, baseField *protocol.Field) *protocol.Field {
 	var field *protocol.Field
 	if baseField != nil {
 		field = baseField
@@ -223,17 +230,14 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 		field = &protocol.Field{}
 	}
 	field.Name = fieldName
-	if config.Column != "" || baseField == nil {
-		field.Column = config.Column
+	if column != "" || baseField == nil {
+		field.Column = column
 	}
 	if config.Type != "" || baseField == nil {
 		field.Type = config.Type
 	}
 	if config.Description != "" || baseField == nil {
 		field.Description = config.Description
-	}
-	if config.Resolver != "" || baseField == nil {
-		field.Resolver = config.Resolver
 	}
 	if baseField == nil || config.IsPrimary {
 		field.IsPrimary = config.IsPrimary
@@ -249,7 +253,7 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 		if field.Relation == nil {
 			field.Relation = &protocol.Relation{
 				SourceClass: className,
-				SourceFiled: fieldName,
+				SourceField: fieldName,
 			}
 		}
 		rel := field.Relation
@@ -258,7 +262,11 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName string, config
 			rel.TargetClass = relConfig.TargetClass
 		}
 		if relConfig.TargetField != "" {
-			rel.TargetFiled = relConfig.TargetField
+			rel.TargetField = relConfig.TargetField
+		}
+		if len(relConfig.SourceFields) > 1 { // 复合外键列组（首列冗余进单列字段，消费方统一经SourceColumns读取）
+			rel.SourceFields, rel.SourceField = relConfig.SourceFields, relConfig.SourceFields[0]
+			rel.TargetFields, rel.TargetField = relConfig.TargetFields, relConfig.TargetFields[0]
 		}
 		if relConfig.Type != "" {
 			rel.Type = protocol.RelationType(relConfig.Type)

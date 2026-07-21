@@ -1,13 +1,15 @@
 package compiler
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ichaly/ideabase/gql/protocol"
-
-	"sync"
 )
 
 // Context 负责SQL编译过程中的上下文状态，包括SQL拼接、参数、变量、方言等
@@ -17,9 +19,58 @@ import (
 type Context struct {
 	buf       *strings.Builder
 	quote     string
-	params    []any
+	slots     []Slot
+	counter   int
+	volatile  bool
 	hoster    protocol.Hoster
 	variables map[string]interface{}
+	tables    []string       // 涉及的表（去重slice，表数极少；省去map与Keys分配）
+	contexts  map[string]int // 行级作用域槽位dedup：同上下文键复用一个$N（批量场景免槽位膨胀）
+}
+
+// Slot 表示SQL参数槽位：字面量值或变量引用
+// 变量引用在执行期解析，使编译产物可按查询文本缓存复用
+type Slot struct {
+	Value    any                  // 字面量值
+	Variable string               // 变量名，非空时优先生效
+	Cursor   int                  // >=0时变量为base64游标，解码JSON数组后取第Cursor个键值
+	Context  string               // 非空时从执行期scope表取值（行级作用域：租户/属主，认证注入）
+	List     bool                 // 列表槽位（如 = ANY($n)）：执行期规范化为驱动可编码的具体类型数组
+	Generate protocol.IDGenerator // 非空时每次解析计划生成一个新值
+}
+
+// Resolve 解析槽位的实际参数值（游标槽位由ResolveSlots统一memoize解码）
+func (my Slot) Resolve(variables map[string]interface{}) any {
+	if my.Variable == "" {
+		return my.Value
+	}
+	return variables[my.Variable]
+}
+
+// DecodeCursor 解码游标为排序键值数组
+// UseNumber防止bigint经float64失真（雪花ID>2^53时续页会重复/漏行），
+// 整数还原为int64、小数为float64（驱动可直接编码）
+func DecodeCursor(cursor string) ([]any, error) {
+	data, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("无效的游标: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var keys []any
+	if err = decoder.Decode(&keys); err != nil {
+		return nil, fmt.Errorf("无效的游标内容: %w", err)
+	}
+	for i, key := range keys {
+		if number, ok := key.(json.Number); ok {
+			if v, err := strconv.ParseInt(number.String(), 10, 64); err == nil {
+				keys[i] = v
+			} else if f, err := number.Float64(); err == nil {
+				keys[i] = f
+			}
+		}
+	}
+	return keys, nil
 }
 
 // contextPool 用于Context对象池管理，减少GC压力
@@ -29,9 +80,8 @@ var contextPool = sync.Pool{
 		sb := &strings.Builder{}
 		sb.Grow(1024) // 预分配1KB初始容量
 		return &Context{
-			variables: make(map[string]interface{}),
-			params:    make([]any, 0, 8),
-			buf:       sb,
+			slots: make([]Slot, 0, 8),
+			buf:   sb,
 		}
 	},
 }
@@ -49,44 +99,237 @@ func NewContext(h protocol.Hoster, q string, v map[string]interface{}) *Context 
 func (my *Context) Release() {
 	my.buf.Reset()
 	my.quote = ""
+	my.counter = 0
+	my.volatile = false
 	my.hoster = nil
 	my.variables = nil
-	my.params = my.params[:0]
+	my.tables = nil
+	my.contexts = nil
+	my.slots = my.slots[:0]
 	contextPool.Put(my)
 }
 
-func (my *Context) FindField(className, fieldName string) (*protocol.Field, bool) {
+// Variable 返回变量值
+func (my *Context) Variable(name string) (interface{}, bool) {
+	value, ok := my.variables[name]
+	return value, ok
+}
+
+// MarkTable 记录本次编译涉及的表，订阅按表变更唤醒
+func (my *Context) MarkTable(name string) {
+	for _, t := range my.tables { // 表数极少，线性去重免map
+		if t == name {
+			return
+		}
+	}
+	my.tables = append(my.tables, name)
+}
+
+// Tables 返回本次编译涉及的表集合
+// 返回内部slice：Release将其置nil（不复用底层数组），故Plan.tables独立安全
+func (my *Context) Tables() []string {
+	return my.tables
+}
+
+// MarkVolatile 标记编译产物依赖变量内容（如整体input变量），不可按查询文本缓存
+func (my *Context) MarkVolatile() {
+	my.volatile = true
+}
+
+// Volatile 编译产物是否依赖变量内容
+func (my *Context) Volatile() bool {
+	return my.volatile
+}
+
+// NextIndex 返回全局自增索引，用于生成不冲突的子查询别名
+func (my *Context) NextIndex() int {
+	index := my.counter
+	my.counter++
+	return index
+}
+
+// Searcher 元数据承载者的可选能力：全文搜索模式（启动探测或配置指定）
+type Searcher interface {
+	SearchMode() (mode, config string)
+}
+
+// SearchMode 返回全文搜索模式与分词配置；元数据未实现Searcher时为空
+func (my *Context) SearchMode() (string, string) {
+	if searcher, ok := my.hoster.(Searcher); ok {
+		return searcher.SearchMode()
+	}
+	return "", ""
+}
+
+// Limiter 元数据承载者的可选能力：列表查询缺省LIMIT（防无界全表扫描）
+type Limiter interface {
+	DefaultLimit() int
+}
+
+// DefaultLimit 返回列表查询缺省LIMIT；未实现Limiter或未配置时为0（不注入）
+func (my *Context) DefaultLimit() int {
+	if limiter, ok := my.hoster.(Limiter); ok {
+		return limiter.DefaultLimit()
+	}
+	return 0
+}
+
+// Schemer 元数据承载者的可选能力：数据库schema名（基表引用限定，防search_path歧义）
+type Schemer interface {
+	SchemaName() string
+}
+
+// SchemaName 返回数据库schema名；未实现Schemer或未配置时为空（不限定）
+func (my *Context) SchemaName() string {
+	if schemer, ok := my.hoster.(Schemer); ok {
+		return schemer.SchemaName()
+	}
+	return ""
+}
+
+// GetClass 按类名（或表名索引）获取类定义
+func (my *Context) GetClass(className string) (*protocol.Class, bool) {
 	if my.hoster == nil {
 		return nil, false
 	}
-	class, ok := my.hoster.GetNode(className)
+	return my.hoster.GetNode(className)
+}
+
+// Args 返回参数列表（按当前变量表解析所有槽位）
+func (my *Context) Args() ([]any, error) {
+	return ResolveSlots(my.slots, my.variables, nil)
+}
+
+// ResolveSlots 解析槽位为参数列表；同一游标变量只解码一次（K个排序键共享）；
+// 游标解码失败返回错误（静默空页会掩盖坏游标）
+func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) ([]any, error) {
+	var cursors map[string][]any // 惰性：仅游标槽位存在时分配
+	args := make([]any, len(slots))
+	for i, slot := range slots {
+		if slot.Generate != nil {
+			value, err := slot.Generate()
+			if err != nil {
+				return nil, fmt.Errorf("生成主键失败: %w", err)
+			}
+			args[i] = value
+			continue
+		}
+		if slot.Context != "" { // 行级作用域：从请求上下文取值（认证注入，缺失则nil=匹配不到行）
+			args[i] = scope[slot.Context]
+			continue
+		}
+		if slot.Variable != "" && slot.Cursor >= 0 {
+			if cursors == nil {
+				cursors = make(map[string][]any, 1)
+			}
+			keys, ok := cursors[slot.Variable]
+			if !ok {
+				if text, isText := variables[slot.Variable].(string); isText {
+					var err error
+					if keys, err = DecodeCursor(text); err != nil {
+						return nil, err
+					}
+				}
+				cursors[slot.Variable] = keys
+			}
+			if slot.Cursor < len(keys) {
+				args[i] = keys[slot.Cursor]
+			}
+			continue
+		}
+		args[i] = slot.Resolve(variables)
+		if slot.List {
+			args[i] = listArg(args[i])
+		}
+	}
+	return args, nil
+}
+
+// listArg 列表槽位规范化：单值按GraphQL规范强转单元素列表，
+// 同质元素收敛为具体类型切片（驱动无法编码 []any 数组）
+func listArg(value any) any {
+	list, ok := value.([]any)
 	if !ok {
-		return nil, false
+		if value == nil {
+			return []any{}
+		}
+		list = []any{value}
 	}
-	field, ok := class.Fields[fieldName]
-	return field, ok
+	if len(list) == 0 {
+		return list
+	}
+	switch list[0].(type) {
+	case int64:
+		return typedList[int64](list)
+	case float64:
+		return typedList[float64](list)
+	case string:
+		return typedList[string](list)
+	}
+	return list
 }
 
-func (my *Context) TableName(className string) (string, bool) {
-	if my.hoster == nil {
-		return "", false
+// typedList 尽力收敛为T切片，遇到异质元素回退原列表
+func typedList[T any](list []any) any {
+	out := make([]T, len(list))
+	for i, e := range list {
+		v, ok := e.(T)
+		if !ok {
+			return list
+		}
+		out[i] = v
 	}
-	class, ok := my.hoster.GetNode(className)
-	if !ok || class.Table == "" {
-		return "", false
-	}
-	return class.Table, true
+	return out
 }
 
-// Args 返回参数列表
-func (my *Context) Args() []any {
-	return my.params
+// Slots 返回参数槽位列表（拷贝），供编译计划缓存复用
+func (my *Context) Slots() []Slot {
+	return append([]Slot(nil), my.slots...)
 }
 
-// AddParam 添加参数并返回参数索引
+// AddParam 添加字面量参数并返回参数序号（从1开始）
 func (my *Context) AddParam(value any) int {
-	my.params = append(my.params, value)
-	return len(my.params)
+	my.slots = append(my.slots, Slot{Value: value, Cursor: -1})
+	return len(my.slots)
+}
+
+// AddVariable 添加变量引用参数并返回参数序号（从1开始）
+func (my *Context) AddVariable(name string) int {
+	my.slots = append(my.slots, Slot{Variable: name, Cursor: -1})
+	return len(my.slots)
+}
+
+// AddListVariable 添加列表变量参数（如 = ANY($n)），执行期规范化为具体类型数组
+func (my *Context) AddListVariable(name string) int {
+	my.slots = append(my.slots, Slot{Variable: name, Cursor: -1, List: true})
+	return len(my.slots)
+}
+
+// AddContextSlot 添加上下文参数槽位：执行期从scope表按key取值（行级作用域）。
+// 同一key复用一个槽位（值全局相同）——批量写入每行同列共享$N，免槽位膨胀
+func (my *Context) AddContextSlot(key string) int {
+	if idx, ok := my.contexts[key]; ok {
+		return idx
+	}
+	my.slots = append(my.slots, Slot{Context: key})
+	idx := len(my.slots)
+	if my.contexts == nil {
+		my.contexts = make(map[string]int)
+	}
+	my.contexts[key] = idx
+	return idx
+}
+
+// AddGenerated 添加执行期生成值槽位；生成器函数直接固化进缓存计划。
+func (my *Context) AddGenerated(generate protocol.IDGenerator) int {
+	my.slots = append(my.slots, Slot{Cursor: -1, Generate: generate})
+	return len(my.slots)
+}
+
+// AddCursor 添加游标键值参数：执行期解码变量游标取第index个键值
+func (my *Context) AddCursor(name string, index int) int {
+	my.slots = append(my.slots, Slot{Variable: name, Cursor: index})
+	return len(my.slots)
 }
 
 // String 获取当前SQL字符串
@@ -125,10 +368,17 @@ func (my *Context) Write(args ...any) *Context {
 
 // Wrap 包装内容
 func (my *Context) Wrap(with string, list ...any) *Context {
-	my.Write(with)
+	my.buf.WriteString(with) // 直写避免字面量装箱进[]any
 	my.Write(list...)
-	my.Write(with)
+	my.buf.WriteString(with)
 	return my
+}
+
+// writeQuoted 写带引号标识符 "s"，零分配（不经可变参数）
+func (my *Context) writeQuoted(s string) {
+	my.buf.WriteString(my.quote)
+	my.buf.WriteString(s)
+	my.buf.WriteString(my.quote)
 }
 
 // Space 添加空格并写入内容(可选)
@@ -157,6 +407,17 @@ func (my *Context) SpaceAfter(content ...any) *Context {
 // Quote 添加引号
 func (my *Context) Quote(list ...any) *Context {
 	return my.Wrap(my.quote, list...)
+}
+
+// Column 写入（可选限定符的）带引号列引用："限定符"."列"
+// 列名为string直写buf，零分配（编译热路径，列引用占编译期分配大头）
+func (my *Context) Column(qualifier string, column string) *Context {
+	if qualifier != "" {
+		my.writeQuoted(qualifier)
+		my.buf.WriteString(".")
+	}
+	my.writeQuoted(column)
+	return my
 }
 
 // QuotedWithSpace 添加引号和空格

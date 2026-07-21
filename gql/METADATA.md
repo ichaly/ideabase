@@ -52,9 +52,14 @@ Loader 通过优先级排序，依次执行，后加载的可覆盖前者。Load
 
 ### 关系自动推导
 
-- 自动识别一对多、多对一、多对多、自关联等关系。
-- 多对多关系自动识别中间表，支持通过配置自定义中间表结构。
-- 关系字段自动生成，支持正反向导航。
+- 关系是**类级集合**（`Class.Relations`，约束为一等对象）：db 按外键约束聚合、
+  config 字段级声明自动收编，同表多外键、复合外键、自引用多对多互不覆盖。
+- 自动识别一对多、多对一、多对多、自关联等关系；复合（多列）外键收敛为
+  一条关系，JOIN 按列组逐列 AND（config 经 `source_fields/target_fields` 声明）。
+- 多对多关系自动识别中间表（恰好两条单列外键约束），支持配置自定义中间表结构。
+- 关系字段自动生成，支持正反向导航；同名碰撞按键列词干命名
+  （`author_id`→`author`，反向 `authorComments`），单关系命名与旧版一致。
+- 虚拟关系字段不入元数据文件，加载时从 Relations 确定性再生（重载幂等）。
 
 ### 并发与性能
 
@@ -95,6 +100,7 @@ schema:
 | use-singular   | bool                     | true   | 是否使用单数类名                 |
 | show-through   | bool                     | true   | 是否显示多对多中间表             |
 | table-prefix   | []string                 | 空     | 需要去除的表名前缀               |
+| include-tables | []string                 | 空     | 仅包含的表（白名单，尾部\*通配；排除规则优先） |
 | exclude-tables | []string                 | 空     | 需要排除的表名                   |
 | exclude-fields | []string                 | 空     | 需要排除的字段名                 |
 
@@ -114,7 +120,7 @@ metadata:
       table: users
       description: "用户信息"
       primary_keys: [id]
-      resolver: "UserResolver"
+      id-generator: snowflake # database(缺省,含自增/数据库UUID)/snowflake/自定义注册名
       fields:
         id:
           column: id
@@ -131,7 +137,10 @@ metadata:
       override: false
 ```
 
-> 详细的 `ClassConfig`、`FieldConfig`、`RelationConfig`、`ThroughConfig` 字段说明请参考 internal/config.go 或相关文档。
+> 行为侧声明（Resolver/Remote）不在配置里：走注册即声明
+> （`NewResolver`/`NewBatch`/`NewRemote`，schema 反射自函数签名），
+> 详见 README。配置只描述数据侧（表/列映射、排除、别名、scope、搜索列、主键策略）。
+> 详细的 `ClassConfig`、`FieldConfig`、`RelationConfig`、`ThroughConfig` 字段说明请参考 internal/config.go。
 
 ## 典型用法
 
@@ -150,21 +159,7 @@ meta, err := gql.NewMetadata(konfig, db,
 )
 ```
 
-### 3. 配置虚拟表/字段/关系
-
-```yaml
-metadata:
-  classes:
-    Statistics:
-      virtual: true
-      description: "统计数据"
-      fields:
-        totalUsers:
-          type: integer
-          resolver: CountUsersResolver
-```
-
-### 4. 字段过滤与别名
+### 3. 字段过滤与别名
 
 ```yaml
 metadata:
@@ -172,13 +167,9 @@ metadata:
     PublicUser:
       table: users
       exclude_fields: ["password", "phone"]
-      fields:
-        email:
-          description: "脱敏邮箱"
-          resolver: MaskedEmailResolver
 ```
 
-### 5. 多对多关系与中间表
+### 4. 多对多关系与中间表
 
 ```yaml
 metadata:

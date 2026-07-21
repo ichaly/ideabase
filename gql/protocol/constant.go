@@ -1,0 +1,252 @@
+package protocol
+
+import "github.com/samber/lo"
+
+// Operator 表示过滤操作符
+type Operator struct {
+	Name        string
+	Value       string
+	Description string
+}
+
+// 类型常量
+const (
+	// GraphQL类型名称
+	TYPE_SORT_DIRECTION   = "SortDirection"
+	TYPE_PAGE_INFO        = "PageInfo"
+	TYPE_NUMBER_STATS     = "NumberStats"
+	TYPE_STRING_STATS     = "StringStats"
+	TYPE_DATE_TIME_STATS  = "DateTimeStats"
+	TYPE_NUMBER_HAVING    = "NumberHaving"   // 数值聚合的having过滤（镜像NumberStats）
+	TYPE_STRING_HAVING    = "StringHaving"   // 字符串聚合的having过滤
+	TYPE_DATE_TIME_HAVING = "DateTimeHaving" // 日期聚合的having过滤
+
+	// GraphQL入参名称后缀
+	SUFFIX_STATS        = "Stats"
+	SUFFIX_RESULT       = "Result"
+	SUFFIX_SORT_INPUT   = "SortInput"
+	SUFFIX_WHERE_INPUT  = "WhereInput"
+	SUFFIX_HAVING_INPUT = "HavingInput" // 每实体的having入参类型后缀
+	SUFFIX_CREATE_INPUT = "CreateInput"
+	SUFFIX_UPDATE_INPUT = "UpdateInput"
+)
+
+// 参数名称
+const (
+	ID         = "id"
+	INPUT      = "input"
+	DISTINCT   = "distinct"
+	LIMIT      = "limit"
+	OFFSET     = "offset"
+	FIRST      = "first"
+	LAST       = "last"
+	AFTER      = "after"
+	BEFORE     = "before"
+	SORT       = "sort"
+	WHERE      = "where"
+	CREATE     = "create"
+	UPSERT     = "upsert"
+	UPDATE     = "update"
+	DELETE     = "delete"
+	CONNECT    = "connect"
+	DISCONNECT = "disconnect"
+	GROUP_BY   = "groupBy"
+	HAVING     = "having"
+	SEARCH     = "search"
+	DEPTH      = "depth"
+)
+
+const (
+	TOTAL     = "total"
+	ITEMS     = "items"
+	PAGE_INFO = "pageInfo"
+	ON        = "on" // upsert冲突列参数
+
+	// PageInfo子字段（renderer渲染与编译器投影两侧共用）
+	HAS_NEXT = "hasNext"
+	HAS_PREV = "hasPrev"
+	START    = "start"
+	END      = "end"
+)
+
+// 聚合函数字段名常量
+const (
+	FUNCTION_SUM            = "sum"
+	FUNCTION_AVG            = "avg"
+	FUNCTION_MIN            = "min"
+	FUNCTION_MAX            = "max"
+	FUNCTION_KEY            = "key"
+	FUNCTION_COUNT          = "count"
+	FUNCTION_COUNT_DISTINCT = "countDistinct"
+)
+
+// 内置枚举类型
+const (
+	ENUM_IS_INPUT = "IsInput"
+)
+
+// 内置标量类型
+const (
+	SCALAR_ID        = "ID"
+	SCALAR_INT       = "Int"
+	SCALAR_JSON      = "Json"
+	SCALAR_FLOAT     = "Float"
+	SCALAR_STRING    = "String"
+	SCALAR_CURSOR    = "Cursor"
+	SCALAR_BOOLEAN   = "Boolean"
+	SCALAR_DATE_TIME = "DateTime"
+)
+
+// 过滤操作符号描述
+const (
+	descIn                 = "Is in list of values"
+	descIs                 = "Is value null (true) or not null (false)"
+	descEqual              = "Equals value"
+	descNotEqual           = "Does not equal value"
+	descGreaterThan        = "Is greater than value"
+	descGreaterThanOrEqual = "Is greater than or equal to value"
+	descLessThan           = "Is less than value"
+	descLessThanOrEqual    = "Is less than or equal to value"
+	descLike               = "Value matching pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values having 'r' in second position"
+	descILike              = "Value matching (case-insensitive) pattern where '%' represents zero or more characters and '_' represents a single character. Eg. '_r%' finds values not having 'r' in second position"
+	descRegex              = "Value matching regular pattern"
+	descIRegex             = "Value matching (case-insensitive) regex pattern"
+	descContains           = "JSON value contains the given JSON (jsonb @>, GIN-indexable)"
+	descContainedIn        = "JSON value is contained in the given JSON (jsonb <@)"
+	descHasKey             = "Value is a JSON object with the specified key"
+)
+
+// 逻辑关系操作符常量
+const (
+	NOT = "not"
+	AND = "and"
+	OR  = "or"
+)
+
+const (
+	IS           = "is"
+	EQ           = "eq"
+	IN           = "in"
+	GT           = "gt"
+	GE           = "ge"
+	LT           = "lt"
+	LE           = "le"
+	NE           = "ne"
+	LIKE         = "like"
+	I_LIKE       = "iLike"
+	REGEX        = "regex"
+	I_REGEX      = "iRegex"
+	CONTAINS     = "contains"
+	CONTAINED_IN = "containedIn"
+	HAS_KEY      = "hasKey"
+)
+
+// DataTypes 内置的数据库到GraphQL的类型映射
+var DataTypes = map[string]string{
+	// PostgreSQL 类型
+	"timestamp with time zone":    SCALAR_DATE_TIME,
+	"timestamp without time zone": SCALAR_DATE_TIME,
+	"character varying":           SCALAR_STRING,
+	"character":                   SCALAR_STRING,
+	"char":                        SCALAR_STRING,
+	"text":                        SCALAR_STRING,
+	"varchar":                     SCALAR_STRING,
+	"smallint":                    SCALAR_INT,
+	"integer":                     SCALAR_INT,
+	"int":                         SCALAR_INT,
+	"int2":                        SCALAR_INT,
+	"int4":                        SCALAR_INT,
+	"int8":                        SCALAR_INT,
+	"bigint":                      SCALAR_INT,
+	"smallserial":                 SCALAR_INT,
+	"serial":                      SCALAR_INT,
+	"bigserial":                   SCALAR_INT,
+	"decimal":                     SCALAR_FLOAT,
+	"numeric":                     SCALAR_FLOAT,
+	"real":                        SCALAR_FLOAT,
+	"float":                       SCALAR_FLOAT,
+	"float4":                      SCALAR_FLOAT,
+	"float8":                      SCALAR_FLOAT,
+	"double precision":            SCALAR_FLOAT,
+	"money":                       SCALAR_FLOAT,
+	"boolean":                     SCALAR_BOOLEAN,
+	"bool":                        SCALAR_BOOLEAN,
+	"uuid":                        SCALAR_ID,
+	"date":                        SCALAR_DATE_TIME,
+	"timestamp":                   SCALAR_DATE_TIME,
+	"timestamptz":                 SCALAR_DATE_TIME,
+	"json":                        SCALAR_JSON,
+	"jsonb":                       SCALAR_JSON,
+	"serialid":                    SCALAR_ID,
+	"bigserialid":                 SCALAR_ID,
+
+	// MySQL 类型
+	"tinyint":    SCALAR_INT,
+	"tinyint(1)": SCALAR_BOOLEAN,
+	"mediumint":  SCALAR_INT,
+	"tinytext":   SCALAR_STRING,
+	"mediumtext": SCALAR_STRING,
+	"longtext":   SCALAR_STRING,
+	"enum":       SCALAR_STRING,
+	"set":        SCALAR_STRING,
+	"datetime":   SCALAR_DATE_TIME,
+	"time":       SCALAR_STRING,
+	"year":       SCALAR_INT,
+	"binary":     SCALAR_STRING,
+	"varbinary":  SCALAR_STRING,
+	"blob":       SCALAR_STRING,
+	"tinyblob":   SCALAR_STRING,
+	"mediumblob": SCALAR_STRING,
+	"longblob":   SCALAR_STRING,
+}
+
+// Operators 全部操作符；Value为最终SQL文本（编译期零转换）
+// jsonb系（contains/containedIn/hasKey）由方言渲染为函数形式，Value仅作标注
+var Operators = []*Operator{
+	{Name: IS, Value: "IS", Description: descIs},
+	{Name: EQ, Value: "=", Description: descEqual},
+	{Name: IN, Value: "IN", Description: descIn},
+	{Name: GT, Value: ">", Description: descGreaterThan},
+	{Name: GE, Value: ">=", Description: descGreaterThanOrEqual},
+	{Name: LT, Value: "<", Description: descLessThan},
+	{Name: LE, Value: "<=", Description: descLessThanOrEqual},
+	{Name: NE, Value: "!=", Description: descNotEqual},
+	{Name: LIKE, Value: "LIKE", Description: descLike},
+	{Name: I_LIKE, Value: "ILIKE", Description: descILike},
+	{Name: REGEX, Value: "~", Description: descRegex},
+	{Name: I_REGEX, Value: "~*", Description: descIRegex},
+	{Name: CONTAINS, Value: "jsonb_contains", Description: descContains},
+	{Name: CONTAINED_IN, Value: "jsonb_contained", Description: descContainedIn},
+	{Name: HAS_KEY, Value: "jsonb_exists", Description: descHasKey},
+}
+
+// pick 按名取操作符（声明式分组，杜绝下标切片的顺序耦合）
+func pick(names ...string) []*Operator {
+	operators := make([]*Operator, 0, len(names))
+	for _, name := range names {
+		operators = append(operators, dictionary[name])
+	}
+	return operators
+}
+
+// Grouping 内置标量可用的操作符集合
+var Grouping = map[string][]*Operator{
+	SCALAR_ID:        pick(EQ, IN, GT, GE, LT, LE),
+	SCALAR_INT:       pick(IS, EQ, IN, GT, GE, LT, LE, NE),
+	SCALAR_FLOAT:     pick(IS, EQ, IN, GT, GE, LT, LE, NE),
+	SCALAR_DATE_TIME: pick(IS, EQ, IN, GT, GE, LT, LE, NE),
+	SCALAR_STRING:    pick(IS, EQ, IN, GT, GE, LT, LE, NE, LIKE, I_LIKE, REGEX, I_REGEX),
+	SCALAR_BOOLEAN:   pick(EQ, IN),
+	SCALAR_JSON:      pick(IS, EQ, IN, CONTAINS, CONTAINED_IN, HAS_KEY),
+}
+
+// 运算符按照名字索引字典
+var dictionary = lo.KeyBy(Operators, func(op *Operator) string {
+	return op.Name
+})
+
+// GetOperator 根据名称获取操作符信息
+func GetOperator(name string) (*Operator, bool) {
+	op, exists := dictionary[name]
+	return op, exists
+}

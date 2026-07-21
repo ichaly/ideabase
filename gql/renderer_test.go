@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/std"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +29,7 @@ func getTestMetadata(t *testing.T) (*Metadata, error) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.use-camel", true)
 	k.Set("metadata.show-through", true)
@@ -50,8 +49,9 @@ func getTestMetadata(t *testing.T) (*Metadata, error) {
 func createMockMetadata(t *testing.T) *Metadata {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
+	root := t.TempDir() // 使用临时目录作为根目录
 	k.Set("mode", "dev")
-	k.Set("app.root", t.TempDir()) // 使用临时目录作为根目录
+	k.Set("app.root", root)
 
 	// 定义类型映射
 	typeMapping := map[string]string{
@@ -92,6 +92,7 @@ func createMockMetadata(t *testing.T) *Metadata {
 			},
 		},
 	}
+	meta.cfg.Root = root // 避免 Generate() 把 schema 写到包目录的相对路径 cfg/ 下
 
 	// 添加模拟的User类
 	userClass := &protocol.Class{
@@ -176,9 +177,9 @@ func createMockMetadata(t *testing.T) *Metadata {
 	// 创建关系
 	userIdField.Relation = &protocol.Relation{
 		SourceClass: "Post",
-		SourceFiled: "userId",
+		SourceField: "userId",
 		TargetClass: "User",
-		TargetFiled: "id",
+		TargetField: "id",
 		Type:        protocol.MANY_TO_ONE,
 	}
 
@@ -188,6 +189,8 @@ func createMockMetadata(t *testing.T) *Metadata {
 	meta.Nodes["User"] = userClass
 	meta.Nodes["Post"] = postClass
 
+	// 与真实构建流程对齐：类型定型（主外键→ID等）在元数据层完成
+	meta.finalize()
 	return meta
 }
 
@@ -263,7 +266,6 @@ func TestRenderer_WithMockData(t *testing.T) {
 	for _, fn := range []func() error{
 		renderer.renderScalars,
 		renderer.renderEnums,
-		renderer.renderCommon,
 		renderer.renderTypes,
 		renderer.renderPaging,
 		renderer.renderFilter,
@@ -365,11 +367,8 @@ func TestRenderer_RenderPaging(t *testing.T) {
 	schema := &strings.Builder{}
 	renderer.sb = schema
 
-	// 渲染通用类型和分页类型
-	err := renderer.renderCommon()
-	assert.NoError(t, err, "渲染通用类型失败")
-
-	err = renderer.renderTypes()
+	// 渲染实体类型和分页类型
+	err := renderer.renderTypes()
 	assert.NoError(t, err, "渲染实体类型失败")
 
 	err = renderer.renderPaging()
@@ -378,16 +377,12 @@ func TestRenderer_RenderPaging(t *testing.T) {
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
 
-	// 验证分页类型
-	assert.Contains(t, generatedSchema, "type PageInfo {")
-	assert.Contains(t, generatedSchema, "hasNext")
-	assert.Contains(t, generatedSchema, "hasPrev")
-
 	// 验证连接类型
-	assert.Contains(t, generatedSchema, "type UserPage {")
-	assert.Contains(t, generatedSchema, "type PostPage {")
+	assert.Contains(t, generatedSchema, "type UserResult {")
+	assert.Contains(t, generatedSchema, "type PostResult {")
 	assert.Contains(t, generatedSchema, "items: [User")
-	assert.Contains(t, generatedSchema, "pageInfo: PageInfo!")
+	assert.Contains(t, generatedSchema, "pageInfo: PageInfo")
+	assert.Contains(t, generatedSchema, "type PageInfo {")
 }
 
 // 测试渲染过滤器类型
@@ -410,9 +405,9 @@ func TestRenderer_RenderFilter(t *testing.T) {
 	generatedSchema := schema.String()
 
 	// 验证通用过滤器类型
-	assert.Contains(t, generatedSchema, "input StringFilter {")
-	assert.Contains(t, generatedSchema, "input IntFilter {")
-	assert.Contains(t, generatedSchema, "input DateTimeFilter {")
+	assert.Contains(t, generatedSchema, "input StringWhereInput {")
+	assert.Contains(t, generatedSchema, "input IntWhereInput {")
+	assert.Contains(t, generatedSchema, "input DateTimeWhereInput {")
 }
 
 // 测试渲染排序类型
@@ -438,8 +433,8 @@ func TestRenderer_RenderSort(t *testing.T) {
 	generatedSchema := schema.String()
 
 	// 验证排序类型
-	assert.Contains(t, generatedSchema, "input UserSort {")
-	assert.Contains(t, generatedSchema, "input PostSort {")
+	assert.Contains(t, generatedSchema, "input UserSortInput {")
+	assert.Contains(t, generatedSchema, "input PostSortInput {")
 }
 
 // 测试渲染查询根类型
@@ -470,13 +465,11 @@ func TestRenderer_RenderQuery(t *testing.T) {
 	// 验证查询根类型
 	assert.Contains(t, generatedSchema, "type Query {")
 
-	// 验证单个实体查询
-	assert.Contains(t, generatedSchema, "user(")
-	assert.Contains(t, generatedSchema, "post(")
-
-	// 验证实体列表查询
+	// 验证实体查询（统一列表查询，支持 id 参数查询单条）
 	assert.Contains(t, generatedSchema, "users(")
 	assert.Contains(t, generatedSchema, "posts(")
+	assert.Contains(t, generatedSchema, "): UserResult!")
+	assert.Contains(t, generatedSchema, "): PostResult!")
 }
 
 // 测试渲染变更根类型
@@ -570,7 +563,6 @@ func TestRenderer_SaveToFile(t *testing.T) {
 	for _, fn := range []func() error{
 		renderer.renderScalars,
 		renderer.renderEnums,
-		renderer.renderCommon,
 		renderer.renderTypes,
 	} {
 		err := fn()
@@ -668,51 +660,6 @@ func TestRenderer_DataTypeMapping(t *testing.T) {
 	}
 }
 
-// 测试渲染数据统计类型
-func TestRenderer_RenderStats(t *testing.T) {
-	// 创建模拟元数据
-	meta := createMockMetadata(t)
-
-	// 创建渲染器
-	renderer := NewRenderer(meta)
-
-	// 绕过文件保存部分直接获取schema
-	schema := &strings.Builder{}
-	renderer.sb = schema
-
-	// 先渲染必要的基础类型
-	err := renderer.renderScalars()
-	assert.NoError(t, err, "渲染标量类型失败")
-
-	err = renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
-
-	// 渲染统计类型
-	err = renderer.renderStats()
-	assert.NoError(t, err, "渲染统计类型失败")
-
-	// 获取生成的schema文本
-	generatedSchema := schema.String()
-
-	// 验证生成成功 - 通用统计类型
-	assert.Contains(t, generatedSchema, "type NumberStats {")
-	assert.Contains(t, generatedSchema, "type StringStats {")
-	assert.Contains(t, generatedSchema, "type DateTimeStats {")
-
-	// 验证实体统计类型
-	assert.Contains(t, generatedSchema, "type UserStats {")
-	assert.Contains(t, generatedSchema, "type PostStats {")
-
-	// 验证特定统计字段
-	assert.Contains(t, generatedSchema, "count: Int!")
-	assert.Contains(t, generatedSchema, "countDistinct: Int!")
-	assert.Contains(t, generatedSchema, "avg: Float")
-	assert.Contains(t, generatedSchema, "sum: Float")
-	assert.Contains(t, generatedSchema, "min:")
-	assert.Contains(t, generatedSchema, "max:")
-}
-
-// 测试渲染关系
 func TestRenderer_RenderRelation(t *testing.T) {
 	// 创建模拟元数据
 	meta := createMockMetadata(t)
@@ -732,7 +679,7 @@ func TestRenderer_RenderRelation(t *testing.T) {
 	generatedSchema := schema.String()
 
 	// 验证Posts类包含userId字段
-	assert.Contains(t, generatedSchema, "userId: Int!")
+	assert.Contains(t, generatedSchema, "userId: ID!")
 
 	// 注：在此测试中，由于mockMetadata中的设计，可能不会生成关系字段
 	// 实际项目中应确保mockMetadata包含关系字段以验证renderRelation方法
@@ -827,7 +774,7 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("metadata.table-prefix", []string{"sys_"})
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
 		"User": {
@@ -903,6 +850,7 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 	assert.Contains(t, schema, "age: Int!")
 	assert.Contains(t, schema, "title: String!")
 	assert.Contains(t, schema, "content: String!")
+	// 配置显式指定 Type: Int，定型期豁免结构推导——配置是最终裁决
 	assert.Contains(t, schema, "userId: Int!")
 	// 验证注释
 	assert.Contains(t, schema, "# 用户名")

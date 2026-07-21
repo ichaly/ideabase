@@ -608,3 +608,9 @@ cython_debug/
 
 # Git worktrees
 .worktrees/
+
+# demo编译产物
+/gql/example/example
+
+# gql 运行时生成产物（dev模式元数据快照与schema落盘,root误指包目录时防再次误提交）
+gql/cfg/

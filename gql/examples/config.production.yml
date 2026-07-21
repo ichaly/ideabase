@@ -1,0 +1,8 @@
+schema:
+  file: ./cfg/schema.graphql
+  introspection: false
+  persisted-only: true
+  default-limit: 50
+  max-depth: 12
+subscription:
+  publication: ideabase_cdc

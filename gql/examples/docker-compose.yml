@@ -1,0 +1,12 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    command: ["postgres", "-c", "wal_level=logical"] # 订阅(CDC)唯一部署要求
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: demo
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro

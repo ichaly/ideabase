@@ -25,8 +25,10 @@ func TestRenderRelation(t *testing.T) {
 		},
 	}
 
-	// 先处理元数据中的关系，然后才渲染
+	// 先收集字段级关系进类级集合、处理关系与类型定型，然后才渲染
+	meta.collectRelations()
 	meta.processRelations()
+	meta.finalize()
 
 	// 创建渲染器
 	renderer := NewRenderer(meta)
@@ -73,8 +75,9 @@ func TestRenderRelation(t *testing.T) {
 	t.Run("递归关系", func(t *testing.T) {
 		// Comment表中应该有parent字段，指向Comment
 		assert.Contains(t, generatedSchema, "parent: Comment")
-		// Comment表中应该有children字段，是Comment的列表
-		assert.Contains(t, generatedSchema, "children: [Comment]!")
+		// Comment表中应该有children字段，是Comment的列表（关系字段带过滤/排序/分页参数）
+		assert.Contains(t, generatedSchema, "children(where: CommentWhereInput")
+		assert.Contains(t, generatedSchema, "): [Comment]!")
 		// 应该包含注释
 		assert.Contains(t, generatedSchema, "# 父Comment对象")
 		assert.Contains(t, generatedSchema, "# 子Comment列表")
@@ -122,9 +125,10 @@ func TestRenderRelation(t *testing.T) {
 		// 获取schema文本
 		inputSchema := schema.String()
 
-		// 检查是否包含标准关系字段
-		assert.Contains(t, inputSchema, "# 关系操作")
-		assert.Contains(t, inputSchema, "relation: RelationInput")
+		// 列表关系字段提供按目标类的关系操作（挂接/解除/内联创建）
+		assert.Contains(t, inputSchema, "input CommentRelationInput {")
+		assert.Contains(t, inputSchema, "children: CommentRelationInput")
+		assert.Contains(t, inputSchema, "create: [CommentCreateInput!]")
 
 		// 修改配置隐藏中间表关系
 		meta.cfg.Metadata.ShowThrough = false
@@ -163,9 +167,9 @@ func TestRenderRelation(t *testing.T) {
 		filterSchema := schema.String()
 
 		// 检查是否包含标准过滤器字段
-		assert.Contains(t, filterSchema, "and: [PostFilter!]")
-		assert.Contains(t, filterSchema, "or: [PostFilter!]")
-		assert.Contains(t, filterSchema, "not: PostFilter")
+		assert.Contains(t, filterSchema, "and: [PostWhereInput!]")
+		assert.Contains(t, filterSchema, "or: [PostWhereInput!]")
+		assert.Contains(t, filterSchema, "not: PostWhereInput")
 
 		// 修改配置隐藏中间表关系
 		meta.cfg.Metadata.ShowThrough = false
@@ -186,100 +190,22 @@ func TestRenderRelation(t *testing.T) {
 		assert.NotContains(t, filterSchemaWithoutThrough, "postTags")
 	})
 
-	// 验证中间表关系在排序中的显示
-	t.Run("中间表关系在排序中的显示", func(t *testing.T) {
-		// 设置ShowThrough为true
+	// 验证虚拟关系字段不进排序：关系载体无物理列，排序编译即SQL错误，
+	// 无论ShowThrough与否都不渲染（契约：schema展示的必须可用）
+	t.Run("虚拟关系字段不进排序", func(t *testing.T) {
 		meta.cfg.Metadata.ShowThrough = true
 
-		// 创建新的渲染器
 		renderer = NewRenderer(meta)
 		schema = &strings.Builder{}
 		renderer.sb = schema
+		require.NoError(t, renderer.renderSort(), "渲染排序失败")
 
-		// 渲染排序
-		err = renderer.renderSort()
-		require.NoError(t, err, "渲染排序失败")
-
-		// 获取schema文本
 		sortSchema := schema.String()
-
-		// 应该包含中间表关系字段
-		assert.Contains(t, sortSchema, "postTags: SortDirection")
-
-		// 修改配置隐藏中间表关系
-		meta.cfg.Metadata.ShowThrough = false
-
-		// 重新创建渲染器
-		renderer = NewRenderer(meta)
-		schema = &strings.Builder{}
-		renderer.sb = schema
-
-		// 重新渲染排序
-		err = renderer.renderSort()
-		require.NoError(t, err, "渲染排序失败")
-
-		// 获取新的schema文本
-		sortSchemaWithoutThrough := schema.String()
-
-		// 应该不包含中间表关系字段
-		assert.NotContains(t, sortSchemaWithoutThrough, "postTags: SortDirection")
+		assert.NotContains(t, sortSchema, "postTags: SortDirection", "中间表载体不可排序")
+		assert.NotContains(t, sortSchema, "parent: SortDirection", "关系载体不可排序")
+		assert.Contains(t, sortSchema, "parentId: SortDirection", "外键实列可排序")
 	})
 
-	// 验证中间表关系在统计中的显示
-	t.Run("中间表关系在统计中的显示", func(t *testing.T) {
-		// 设置ShowThrough为true
-		meta.cfg.Metadata.ShowThrough = true
-
-		// 创建新的渲染器
-		renderer = NewRenderer(meta)
-		schema = &strings.Builder{}
-		renderer.sb = schema
-
-		// 渲染统计
-		err = renderer.renderStats()
-		require.NoError(t, err, "渲染统计失败")
-
-		// 获取schema文本
-		statsSchema := schema.String()
-
-		// 确认中间表字段在统计中可见
-		postTagsStatsType := "type PostTagsStats {"
-		assert.Contains(t, statsSchema, postTagsStatsType)
-
-		// 修改配置隐藏中间表关系
-		meta.cfg.Metadata.ShowThrough = false
-
-		// 创建一个新的元数据对象，确保中间表关系字段被正确标记
-		newMeta := createRelationTestMetadata()
-		newMeta.cfg = &internal.Config{
-			Schema: internal.SchemaConfig{
-				TypeMapping: map[string]string{},
-			},
-			Metadata: internal.MetadataConfig{
-				ShowThrough: false,
-			},
-		}
-
-		// 处理关系
-		newMeta.processRelations()
-
-		// 重新创建渲染器，使用新的元数据
-		renderer = NewRenderer(newMeta)
-		schema = &strings.Builder{}
-		renderer.sb = schema
-
-		// 重新渲染统计
-		err = renderer.renderStats()
-		require.NoError(t, err, "渲染统计失败")
-
-		// 获取新的schema文本
-		statsSchemaWithoutThrough := schema.String()
-
-		// 确保中间表相关字段在统计中不可见
-		// 由于测试数据的限制，我们只能测试在ShowThrough=false时，中间表字段被正确处理
-		// 而不需关注具体渲染的内容
-		assert.NotContains(t, statsSchemaWithoutThrough, "postTags:")
-	})
 }
 
 // createRelationTestMetadata 创建用于测试关系的元数据
@@ -547,19 +473,11 @@ func createRelationTestMetadata() *Metadata {
 		Type:   "integer",
 		Relation: &protocol.Relation{
 			SourceClass: "Comment",
-			SourceFiled: "parentId",
+			SourceField: "parentId",
 			TargetClass: "Comment",
-			TargetFiled: "id",
+			TargetField: "id",
 			Type:        protocol.RECURSIVE,
 		},
-	}
-	// 可选：children 虚拟字段
-	commentClass.Fields["children"] = &protocol.Field{
-		Name:        "children",
-		Type:        "Comment",
-		Description: "子Comment列表",
-		Virtual:     true,
-		IsList:      true,
 	}
 
 	// 添加所有类到元数据

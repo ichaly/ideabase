@@ -1,0 +1,25 @@
+query ResolverAndRemote($lang: String = "zh") {
+  users {
+    items {
+      id
+      name
+      email
+      greeting(lang: $lang)
+      sign
+      reputation { level title }
+    }
+  }
+}
+
+query CustomRootQuery {
+  serverInfo { name version }
+}
+
+mutation CustomRootMutation($message: String!) {
+  echo(message: $message)
+}
+
+query StandardIntrospection {
+  __schema { queryType { name } mutationType { name } }
+  __type(name: "User") { name kind fields { name } }
+}

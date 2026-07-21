@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/std"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +17,7 @@ func TestMetadataLoad_DatabaseAndConfig(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
 		"UserAlias": {
@@ -60,7 +59,7 @@ func TestMetadataLoad_FileAndConfig(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 
 	_, err = NewMetadata(k, db)
 	require.NoError(t, err)
@@ -103,7 +102,7 @@ func TestMetadataLoad_ConfigOnly(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
 	k.Set("mode", "test")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
 		"A": {
 			Table:       "a_table",

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/std"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +16,7 @@ func TestMetadataLoadFromDatabase_CamelCase(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.use-camel", true)
 
@@ -78,7 +77,7 @@ func TestMetadataLoadFromDatabase_NoCamelCase(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.use-camel", false)
 	k.Set("metadata.use-singular", false)

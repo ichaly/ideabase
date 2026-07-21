@@ -12,7 +12,6 @@ import (
 
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,6 +28,71 @@ func init() {
 	}
 }
 
+// testSchemaSQL 测试库表结构：覆盖引擎需验证的全部关系形态——
+// 主外键(users/posts)、自引用递归(comments.parent_id)、复合主键多对多中间表(post_tags)、
+// 表与列注释透传
+const testSchemaSQL = `
+-- PostgreSQL版本的建表SQL
+
+-- 创建业务表
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE posts (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    content TEXT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE tags (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE comments (
+    id SERIAL PRIMARY KEY,
+    content TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    post_id INTEGER NOT NULL REFERENCES posts(id),
+    parent_id INTEGER REFERENCES comments(id),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE post_tags (
+    post_id INTEGER NOT NULL REFERENCES posts(id),
+    tag_id INTEGER NOT NULL REFERENCES tags(id),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (post_id, tag_id)
+);
+
+-- 设置表注释
+COMMENT ON TABLE users IS '用户表';
+COMMENT ON TABLE posts IS '文章表';
+COMMENT ON TABLE tags IS '标签表';
+COMMENT ON TABLE comments IS '评论表';
+COMMENT ON TABLE post_tags IS '文章标签关联表';
+-- 设置字段注释
+COMMENT ON COLUMN users.name IS '用户名';
+COMMENT ON COLUMN users.email IS '邮箱';
+COMMENT ON COLUMN posts.title IS '标题';
+COMMENT ON COLUMN posts.content IS '内容';
+COMMENT ON COLUMN posts.user_id IS '作者ID';
+COMMENT ON COLUMN tags.name IS '标签名称';
+COMMENT ON COLUMN comments.content IS '评论内容';
+COMMENT ON COLUMN comments.user_id IS '评论者';
+COMMENT ON COLUMN comments.post_id IS '评论文章';
+COMMENT ON COLUMN comments.parent_id IS '父评论ID';
+COMMENT ON COLUMN post_tags.post_id IS '文章ID';
+COMMENT ON COLUMN post_tags.tag_id IS '标签ID';`
+
 // setupTestDatabase 初始化测试数据库
 func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 	ctx := context.Background()
@@ -37,6 +101,8 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 	req := testcontainers.ContainerRequest{
 		Image:        "postgres:15-alpine",
 		ExposedPorts: []string{"5432/tcp"},
+		// CDC订阅依赖逻辑复制（生产部署同样只需此启动参数，pgoutput为内置插件）
+		Cmd: []string{"postgres", "-c", "wal_level=logical"},
 		Env: map[string]string{
 			"POSTGRES_DB":       "test",
 			"POSTGRES_USER":     "test",
@@ -72,13 +138,7 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 	require.NoError(t, err, "连接数据库失败")
 
 	// 创建测试表结构
-	// 读取PostgreSQL建表SQL文件
-	sqlBytes, err := os.ReadFile(filepath.Join(utl.Root(), "gql/assets/sql/pgsql.sql"))
-	require.NoError(t, err, "读取SQL文件失败")
-
-	// 执行建表SQL
-	err = db.Exec(string(sqlBytes)).Error
-	require.NoError(t, err, "创建测试表结构失败")
+	require.NoError(t, db.Exec(testSchemaSQL).Error, "创建测试表结构失败")
 
 	// 返回清理函数
 	cleanup := func() {
@@ -105,7 +165,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 		k, err := std.NewKonfig()
 		require.NoError(t, err, "创建配置失败")
 		k.Set("mode", "dev")
-		k.Set("app.root", utl.Root())
+		k.Set("app.root", t.TempDir())
 		k.Set("schema.schema", "public")
 		k.Set("schema.enable-camel-case", true)
 
@@ -171,7 +231,7 @@ func TestMetadataLoadingModes(t *testing.T) {
 				assert.NotNil(t, parentId.Relation, "parentId应该有关系定义")
 				assert.Equal(t, protocol.RECURSIVE, parentId.Relation.Type, "应该是recursive关系")
 				assert.Equal(t, "Comment", parentId.Relation.TargetClass, "关系目标类应该是Comment")
-				assert.Equal(t, "id", parentId.Relation.TargetFiled, "关系目标字段应该是id")
+				assert.Equal(t, "id", parentId.Relation.TargetField, "关系目标字段应该是id")
 			}
 		}
 	})
@@ -183,10 +243,11 @@ func TestMetadataLoadingModes(t *testing.T) {
 		require.NoError(t, err, "创建配置失败")
 		k.Set("mode", "dev")
 
-		k.Set("app.root", "../")
+		root := t.TempDir()
+		k.Set("app.root", root)
 		loader1, err := NewMetadata(k, db)
 		require.NoError(t, err, "从数据库创建元数据加载器失败")
-		err = loader1.saveToFile("../cfg/metadata.test.json")
+		err = loader1.saveToFile(filepath.Join(root, "cfg", "metadata.test.json"))
 		require.NoError(t, err, "保存元数据到文件失败")
 
 		// 从test.json加载
@@ -344,7 +405,7 @@ func TestLoadMetadataFromDatabase(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.use-camel", true)
 
@@ -363,7 +424,8 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 	defer cleanup()
 
 	// 创建临时配置文件
-	configFile := filepath.Join(utl.Root(), "cfg", "metadata.config.json")
+	root := t.TempDir()
+	configFile := filepath.Join(root, "cfg", "metadata.config.json")
 	configData := map[string]interface{}{
 		"nodes": map[string]interface{}{
 			"User": map[string]interface{}{
@@ -399,7 +461,7 @@ func TestLoadMetadataFromConfig(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "config")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", root)
 	k.Set("metadata.file", "cfg/metadata.config.json") // 路径加上cfg/
 
 	// 创建元数据加载器
@@ -453,7 +515,7 @@ func TestNameConversion(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("metadata.use-camel", true)
 	k.Set("metadata.use-singular", false)
 	k.Set("metadata.table-prefix", []string{"tbl_"})
@@ -509,7 +571,7 @@ func TestTableAndFieldFiltering(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("metadata.exclude-tables", []string{"posts"})
 	k.Set("metadata.exclude-fields", []string{"password"})
 
@@ -551,6 +613,34 @@ func TestTableAndFieldFiltering(t *testing.T) {
 	assert.False(t, ok, "posts表应该被过滤掉")
 }
 
+// 测试include-tables白名单（含尾部*通配，排除优先）
+func TestIncludeTablesWhitelist(t *testing.T) {
+	k, err := std.NewKonfig()
+	require.NoError(t, err, "创建配置失败")
+	k.Set("mode", "dev")
+	k.Set("app.root", t.TempDir())
+	k.Set("metadata.include-tables", []string{"bot_*", "users"})
+	k.Set("metadata.exclude-tables", []string{"bot_action"})
+	k.Set("metadata.classes", map[string]map[string]interface{}{
+		"User":       {"table": "users", "fields": map[string]map[string]interface{}{"id": {"column": "id", "type": "integer", "primary": true}}},
+		"Post":       {"table": "posts", "fields": map[string]map[string]interface{}{"id": {"column": "id", "type": "integer", "primary": true}}},
+		"BotProfile": {"table": "bot_profile", "fields": map[string]map[string]interface{}{"id": {"column": "id", "type": "integer", "primary": true}}},
+		"BotAction":  {"table": "bot_action", "fields": map[string]map[string]interface{}{"id": {"column": "id", "type": "integer", "primary": true}}},
+	})
+
+	meta, err := NewMetadata(k, nil)
+	require.NoError(t, err, "创建元数据加载器失败")
+
+	_, ok := meta.Nodes["User"]
+	assert.True(t, ok, "users命中白名单应保留")
+	_, ok = meta.Nodes["BotProfile"]
+	assert.True(t, ok, "bot_profile命中bot_*通配应保留")
+	_, ok = meta.Nodes["Post"]
+	assert.False(t, ok, "posts未命中白名单应被过滤")
+	_, ok = meta.Nodes["BotAction"]
+	assert.False(t, ok, "bot_action命中排除规则应优先被过滤")
+}
+
 // 测试从文件加载元数据
 func TestLoadMetadataFromFile(t *testing.T) {
 	// 初始化测试数据库
@@ -561,7 +651,7 @@ func TestLoadMetadataFromFile(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 
 	// 创建元数据加载器
 	meta, err := NewMetadata(k, db)
@@ -597,7 +687,7 @@ func TestRelationNameConversion(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.use-camel", true)
 	k.Set("metadata.use-singular", false)
@@ -637,9 +727,9 @@ func TestRelationNameConversion(t *testing.T) {
 
 		// 验证关系中的名称是否转换正确
 		assert.Equal(t, "UserProfiles", userId.Relation.SourceClass, "源类名应该是转换后的UserProfiles")
-		assert.Equal(t, "userId", userId.Relation.SourceFiled, "源字段名应该是转换后的userId")
+		assert.Equal(t, "userId", userId.Relation.SourceField, "源字段名应该是转换后的userId")
 		assert.Equal(t, "Users", userId.Relation.TargetClass, "目标类名应该是转换后的Users")
-		assert.Equal(t, "id", userId.Relation.TargetFiled, "目标字段名应该是id")
+		assert.Equal(t, "id", userId.Relation.TargetField, "目标字段名应该是id")
 	})
 
 	// 验证多对多关系名称转换
@@ -682,7 +772,7 @@ func TestNewMetadataFeatures(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("schema.enable-camel-case", true)
 
@@ -800,9 +890,6 @@ func TestNewMetadataFeatures(t *testing.T) {
 		assert.True(t, exists, "应该存在User类")
 		assert.Equal(t, "users", user.Table, "表名应该是users")
 
-		// 检查类级别Resolver (跳过具体值检查)
-		t.Logf("User类Resolver: %s", user.Resolver)
-
 		// 检查字段是否存在
 		_, hasPassword := user.Fields["password"]
 		t.Logf("password字段存在: %v", hasPassword)
@@ -871,7 +958,7 @@ func TestMetadataIndexPointers(t *testing.T) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
-	k.Set("app.root", utl.Root())
+	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("schema.enable-camel-case", true)
 
@@ -961,4 +1048,147 @@ func TestMetadataIndexPointers(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestProcessRelationsRecursive 递归字段的生成判据是"非主键侧"而非外键命名：
+// 外键列不叫 xxxId 同样生成 parent/children/descendants/ancestors，
+// 反向关系挂在主键字段上被跳过（防重复生成）
+func TestProcessRelationsRecursive(t *testing.T) {
+	build := func(fk string, fkPrimary bool) *Metadata {
+		class := &protocol.Class{
+			Name: "Category", Table: "categories", PrimaryKeys: []string{"id"},
+			Fields: map[string]*protocol.Field{
+				"id": {Name: "id", Column: "id", IsPrimary: true, Relation: &protocol.Relation{
+					Type: protocol.RECURSIVE, SourceClass: "Category", SourceField: "id",
+					TargetClass: "Category", TargetField: fk,
+				}},
+				fk: {Name: fk, Column: fk, IsPrimary: fkPrimary, Relation: &protocol.Relation{
+					Type: protocol.RECURSIVE, SourceClass: "Category", SourceField: fk,
+					TargetClass: "Category", TargetField: "id",
+				}},
+			},
+		}
+		return &Metadata{Nodes: map[string]*protocol.Class{"Category": class}}
+	}
+
+	meta := build("pid", false)
+	meta.collectRelations()
+	meta.processRelations()
+	class := meta.Nodes["Category"]
+	for _, name := range []string{"parent", "children", "descendants", "ancestors"} {
+		assert.NotNilf(t, class.Fields[name], "外键列pid应生成%s字段", name)
+	}
+	assert.Nil(t, class.Fields["parent1"], "主键侧反向关系不应重复生成")
+
+	// 已知边界：自引用外键本身是复合主键成员（闭包表）时，两侧均为主键，不生成递归字段
+	meta = build("ancestorId", true)
+	meta.collectRelations()
+	meta.processRelations()
+	assert.Nil(t, meta.Nodes["Category"].Fields["parent"], "复合主键自引用不生成递归字段")
+}
+
+// TestProcessRelationsDuplicateTargets 同类上两条指向同一目标的关系：
+// 按源列词干命名（buyer/seller），语义清晰且跨启动稳定
+func TestProcessRelationsDuplicateTargets(t *testing.T) {
+	user := &protocol.Class{Name: "User", Table: "users", Fields: map[string]*protocol.Field{
+		"id": {Name: "id", Column: "id", IsPrimary: true},
+	}}
+	relation := func(source string) *protocol.Relation {
+		return &protocol.Relation{Type: protocol.MANY_TO_ONE, SourceClass: "Order",
+			SourceField: source, TargetClass: "User", TargetField: "id"}
+	}
+	order := &protocol.Class{Name: "Order", Table: "orders", Fields: map[string]*protocol.Field{
+		"id":       {Name: "id", Column: "id", IsPrimary: true},
+		"buyerId":  {Name: "buyerId", Column: "buyer_id", Relation: relation("buyerId")},
+		"sellerId": {Name: "sellerId", Column: "seller_id", Relation: relation("sellerId")},
+	}}
+	meta := &Metadata{Nodes: map[string]*protocol.Class{"User": user, "Order": order}}
+	meta.collectRelations()
+	meta.processRelations()
+
+	fields := meta.Nodes["Order"].Fields
+	assert.NotNil(t, fields["buyer"], "第一条关系按源列词干命名")
+	assert.NotNil(t, fields["seller"], "第二条同目标关系不丢失且语义命名")
+	assert.Nil(t, fields["user1"], "不再产生顺序后缀幽灵字段")
+	assert.Equal(t, "buyerId", fields["buyer"].Relation.SourceField)
+	assert.Equal(t, "sellerId", fields["seller"].Relation.SourceField)
+}
+
+// TestProcessRelationsReverseDeduplicated 主键侧ONE_TO_MANY与外键侧MANY_TO_ONE合成的反向
+// 是同一条关系：类级集合按身份键去重，只生成一个反向列表字段
+func TestProcessRelationsReverseDeduplicated(t *testing.T) {
+	user := &protocol.Class{Name: "User", Table: "users", Fields: map[string]*protocol.Field{
+		"id": {Name: "id", Column: "id", IsPrimary: true, Relation: &protocol.Relation{
+			Type: protocol.ONE_TO_MANY, SourceClass: "User", SourceField: "id",
+			TargetClass: "Comment", TargetField: "userId",
+		}},
+	}}
+	comment := &protocol.Class{Name: "Comment", Table: "comments", Fields: map[string]*protocol.Field{
+		"id": {Name: "id", Column: "id", IsPrimary: true},
+		"userId": {Name: "userId", Column: "user_id", Relation: &protocol.Relation{
+			Type: protocol.MANY_TO_ONE, SourceClass: "Comment", SourceField: "userId",
+			TargetClass: "User", TargetField: "id",
+		}},
+	}}
+	meta := &Metadata{Nodes: map[string]*protocol.Class{"User": user, "Comment": comment}}
+	meta.collectRelations()
+	meta.processRelations()
+
+	assert.NotNil(t, user.Fields["comments"], "应生成唯一的反向列表字段")
+	assert.Nil(t, user.Fields["comments1"], "双路径不应重复生成幽灵字段")
+	assert.NotNil(t, comment.Fields["user"], "正向多对一字段应生成")
+}
+
+// TestProcessRelationsStandaloneOneToMany 配置显式声明的ONE_TO_MANY（无MANY_TO_ONE反面）仍应生成字段
+func TestProcessRelationsStandaloneOneToMany(t *testing.T) {
+	user := &protocol.Class{Name: "User", Table: "users", Fields: map[string]*protocol.Field{
+		"id": {Name: "id", Column: "id", IsPrimary: true, Relation: &protocol.Relation{
+			Type: protocol.ONE_TO_MANY, SourceClass: "User", SourceField: "id",
+			TargetClass: "Post", TargetField: "authorId",
+		}},
+	}}
+	post := &protocol.Class{Name: "Post", Table: "posts", Fields: map[string]*protocol.Field{
+		"id":       {Name: "id", Column: "id", IsPrimary: true},
+		"authorId": {Name: "authorId", Column: "author_id"},
+	}}
+	meta := &Metadata{Nodes: map[string]*protocol.Class{"User": user, "Post": post}}
+	meta.collectRelations()
+	meta.processRelations()
+
+	assert.NotNil(t, user.Fields["posts"], "单独声明的ONE_TO_MANY应正常生成列表字段")
+}
+
+// TestFinalizeConfiguredRawKeys 配置原文键是表名/列名时，finalize也应识别为"已显式配置"，
+// 不得用SCALAR_ID覆盖用户指定的字段类型
+func TestFinalizeConfiguredRawKeys(t *testing.T) {
+	cfg := &internal.Config{Metadata: internal.MetadataConfig{Classes: map[string]*internal.ClassConfig{
+		"users": {Table: "users", Fields: map[string]*internal.FieldConfig{
+			"user_id": {Column: "user_id", Type: "Custom"},
+		}},
+	}}}
+	class := &protocol.Class{Name: "User", Table: "users", Fields: map[string]*protocol.Field{
+		"userId": {Name: "userId", Column: "user_id", Type: "Custom", IsPrimary: true},
+		"id":     {Name: "id", Column: "id", Type: "integer", IsPrimary: true},
+	}}
+	meta := &Metadata{cfg: cfg, Nodes: map[string]*protocol.Class{"User": class}}
+	meta.finalize()
+
+	assert.Equal(t, "Custom", class.Fields["userId"].Type, "配置原文键(表名/列名)显式指定的类型不应被finalize覆盖")
+	assert.Equal(t, protocol.SCALAR_ID, class.Fields["id"].Type, "未配置的主键仍应定型为ID")
+}
+
+// TestNewMetadataEmptyNodesError 所有加载器执行后无任何实体：
+// 非debug模式应返回明确错误，debug模式保留宽松行为
+func TestNewMetadataEmptyNodesError(t *testing.T) {
+	build := func(mode string) error {
+		k, err := std.NewKonfig()
+		require.NoError(t, err, "创建配置失败")
+		k.Set("mode", mode)
+		k.Set("app.root", t.TempDir())
+		_, err = NewMetadata(k, nil)
+		return err
+	}
+
+	assert.Error(t, build("test"), "非debug模式下空元数据应报错")
+	assert.NoError(t, build("dev"), "debug模式保留宽松行为")
 }

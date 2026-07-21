@@ -62,13 +62,6 @@ func TestMakeField(t *testing.T) {
 			},
 			expected: "  comments(\n    filter: CommentFilter\n    sort: [CommentSort!]\n    limit: Int\n    offset: Int\n  ): [Comment!]",
 		},
-		{
-			name:      "自定义缩进",
-			fieldName: "title",
-			typeName:  "String",
-			options:   []Option{WithIndent(4), NonNull()},
-			expected:  "    title: String!",
-		},
 	}
 
 	for _, tt := range tests {

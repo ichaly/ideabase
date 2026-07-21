@@ -62,8 +62,10 @@ WITH
       k.table_name as source_table,
       k.column_name as source_column,
       k.referenced_table_name as target_table,
-      k.referenced_column_name as target_column
-    FROM 
+      k.referenced_column_name as target_column,
+      k.constraint_name,
+      k.ordinal_position
+    FROM
       information_schema.key_column_usage k
     JOIN 
       tables t1 ON k.table_name = t1.table_name
@@ -97,7 +99,9 @@ SELECT
       'source_table', fk.source_table,
       'source_column', fk.source_column,
       'target_table', fk.target_table,
-      'target_column', fk.target_column
+      'target_column', fk.target_column,
+      'constraint_name', fk.constraint_name,
+      'ordinal_position', fk.ordinal_position
     )) FROM foreign_keys fk), JSON_ARRAY())
   ) as metadata
 `

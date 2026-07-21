@@ -5,385 +5,341 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
-// buildWhere 构建WHERE子句 - 使用完善的WHERE处理
-func (my *Dialect) buildWhere(ctx *compiler.Context, args ast.ArgumentList) error {
-	return my.buildWhereWithAlias(ctx, args, "")
+// scope 描述当前条件所处的实体与SQL限定符（表名或别名）
+type scope struct {
+	class     *protocol.Class
+	qualifier string
 }
 
-// buildWhereWithAlias 构建WHERE子句，支持表别名和id参数转换
-func (my *Dialect) buildWhereWithAlias(ctx *compiler.Context, args ast.ArgumentList, alias string) error {
-	conditions := my.collectConditions(args)
-	if len(conditions) == 0 {
+// column 将GraphQL字段名映射为列名，未知字段原样返回
+func (my scope) column(fieldName string) string {
+	if my.class != nil {
+		if field, ok := my.class.Fields[fieldName]; ok && field.Column != "" {
+			return field.Column
+		}
+	}
+	return fieldName
+}
+
+// buildWhere 构建WHERE子句；conjuncts为前置合取条件（关联/搜索/keyset），与用户条件AND组合
+func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.ArgumentList, conjuncts ...func() error) error {
+	conditions, err := my.collectConditions(args)
+	if err != nil {
+		return err
+	}
+	if len(conjuncts) == 0 && len(conditions) == 0 {
 		return nil
 	}
 
 	ctx.Space("WHERE")
-	return my.buildCombinedConditions(ctx, conditions, alias)
+	for i, conjunct := range conjuncts {
+		if i > 0 {
+			ctx.Space("AND")
+		}
+		if err := conjunct(); err != nil {
+			return err
+		}
+	}
+	if len(conditions) == 0 {
+		return nil
+	}
+	if len(conjuncts) > 0 {
+		ctx.Space("AND")
+	}
+	return my.buildConditionList(ctx, sc, conditions, "AND", len(conditions) > 1)
 }
 
-// collectConditions 收集所有WHERE条件（包括id转换）
-func (my *Dialect) collectConditions(args ast.ArgumentList) []*ast.Value {
+// collectConditions 收集可渲染的WHERE条件（id参数转换为主键等值条件；空对象剪枝）
+func (my *Dialect) collectConditions(args ast.ArgumentList) ([]*ast.Value, error) {
 	var conditions []*ast.Value
 
-	// 1. 处理id参数，转换为where条件
-	if idArg := args.ForName(gql.ID); idArg != nil && idArg.Value != nil {
-		idCondition := &ast.Value{
+	if idArg := args.ForName(protocol.ID); idArg != nil && idArg.Value != nil {
+		conditions = append(conditions, &ast.Value{
 			Kind: ast.ObjectValue,
-			Children: []*ast.ChildValue{
-				{
-					Name: gql.ID,
-					Value: &ast.Value{
-						Kind: ast.ObjectValue,
-						Children: []*ast.ChildValue{
-							{
-								Name:  gql.EQ,
-								Value: idArg.Value,
-							},
-						},
-					},
+			Children: []*ast.ChildValue{{
+				Name: protocol.ID,
+				Value: &ast.Value{
+					Kind:     ast.ObjectValue,
+					Children: []*ast.ChildValue{{Name: protocol.EQ, Value: idArg.Value}},
 				},
-			},
+			}},
+		})
+	}
+
+	if whereArg := args.ForName(protocol.WHERE); whereArg != nil && whereArg.Value != nil {
+		if whereArg.Value.Kind == ast.Variable {
+			return nil, fmt.Errorf("where暂不支持整体变量，请内联条件或使用字段级变量")
 		}
-		conditions = append(conditions, idCondition)
-	}
-
-	// 2. 处理where参数
-	if whereArg := args.ForName(gql.WHERE); whereArg != nil && whereArg.Value != nil {
-		conditions = append(conditions, whereArg.Value)
-	}
-
-	return conditions
-}
-
-// buildCombinedConditions 构建组合条件
-func (my *Dialect) buildCombinedConditions(ctx *compiler.Context, conditions []*ast.Value, alias string) error {
-	if len(conditions) == 1 {
-		return my.buildWhereValueWithAlias(ctx, conditions[0], alias)
-	}
-
-	// 多个条件用AND连接
-	ctx.Write("(")
-	for i, condition := range conditions {
-		if i > 0 {
-			ctx.Space("AND")
-		}
-		if err := my.buildWhereValueWithAlias(ctx, condition, alias); err != nil {
-			return err
+		if renderable(whereArg.Value) {
+			conditions = append(conditions, whereArg.Value)
 		}
 	}
-	ctx.Write(")")
-	return nil
+
+	return conditions, nil
 }
 
-// buildWhereValue 构建WHERE条件值（向后兼容）
-func (my *Dialect) buildWhereValue(ctx *compiler.Context, value *ast.Value) error {
-	return my.buildWhereValueWithAlias(ctx, value, "")
-}
-
-// buildWhereValueWithAlias 构建WHERE条件值，支持表别名
-func (my *Dialect) buildWhereValueWithAlias(ctx *compiler.Context, value *ast.Value, alias string) error {
+// renderable 条件值是否会产出SQL片段；空对象语义为无条件恒真，整体剪枝
+func renderable(value *ast.Value) bool {
 	if value == nil {
-		return nil
+		return false
 	}
-
-	// 处理原始值（字面量）
-	if value.Raw != "" {
-		return my.buildRawValue(ctx, value)
-	}
-
-	// 处理复合条件
-	if len(value.Children) == 0 {
-		return nil
-	}
-
-	// 如果只有一个子条件，不需要额外的括号
-	if len(value.Children) == 1 {
-		return my.buildChildValueWithAlias(ctx, value.Children[0], alias)
-	}
-
-	// 多个子条件，使用AND连接
-	ctx.Write("(")
-	for i, child := range value.Children {
-		if i > 0 {
-			ctx.Space("AND")
-		}
-		if err := my.buildChildValueWithAlias(ctx, child, alias); err != nil {
-			return err
+	for _, child := range value.Children {
+		if renderableChild(child) {
+			return true
 		}
 	}
-	ctx.Write(")")
-
-	return nil
+	return false
 }
 
-// buildRawValue 构建原始值
-func (my *Dialect) buildRawValue(ctx *compiler.Context, value *ast.Value) error {
-	switch value.Kind {
-	case ast.EnumValue:
-		// 枚举值处理（如排序方向）
-		ctx.Write(strings.ReplaceAll(value.Raw, "_", " "))
-	case ast.BlockValue:
-		// 块值直接写入（如原始SQL片段）
-		ctx.Write(value.Raw)
-	default:
-		// 其他值作为参数处理
-		return my.buildParam(ctx, value)
-	}
-	return nil
-}
-
-// buildChildValue 构建子条件（向后兼容）
-func (my *Dialect) buildChildValue(ctx *compiler.Context, child *ast.ChildValue) error {
-	return my.buildChildValueWithAlias(ctx, child, "")
-}
-
-// buildChildValueWithAlias 构建子条件，支持表别名
-func (my *Dialect) buildChildValueWithAlias(ctx *compiler.Context, child *ast.ChildValue, alias string) error {
-	if child == nil || child.Name == "" {
-		return fmt.Errorf("invalid child value: empty name")
-	}
-
+// renderableChild 子条件是否会产出SQL片段（逻辑操作符递归剪枝，字段条件恒渲染）
+func renderableChild(child *ast.ChildValue) bool {
 	switch child.Name {
-	case gql.AND:
-		return my.buildLogicalOperatorWithAlias(ctx, child, "AND", alias)
-	case gql.OR:
-		return my.buildLogicalOperatorWithAlias(ctx, child, "OR", alias)
-	case gql.NOT:
-		return my.buildNotOperatorWithAlias(ctx, child, alias)
+	case protocol.AND, protocol.OR:
+		if child.Value == nil {
+			return false
+		}
+		for _, sub := range child.Value.Children {
+			if renderable(sub.Value) {
+				return true
+			}
+		}
+		return false
+	case protocol.NOT:
+		return renderable(child.Value)
 	default:
-		return my.buildFieldConditionWithAlias(ctx, child, alias)
+		return true
 	}
 }
 
-// buildLogicalOperator 构建逻辑操作符（向后兼容）
-func (my *Dialect) buildLogicalOperator(ctx *compiler.Context, child *ast.ChildValue, operator string) error {
-	return my.buildLogicalOperatorWithAlias(ctx, child, operator, "")
-}
-
-// buildLogicalOperatorWithAlias 构建逻辑操作符，支持表别名
-func (my *Dialect) buildLogicalOperatorWithAlias(ctx *compiler.Context, child *ast.ChildValue, operator string, alias string) error {
-	if child.Value == nil || len(child.Value.Children) == 0 {
-		return fmt.Errorf("logical operator %s requires at least one condition", operator)
+// buildConditionList 用指定逻辑操作符连接条件列表，wrap控制是否加括号
+func (my *Dialect) buildConditionList(ctx *compiler.Context, sc scope, conditions []*ast.Value, operator string, wrap bool) error {
+	if wrap {
+		ctx.Write("(")
 	}
-
-	ctx.Write("(")
-	for i, subChild := range child.Value.Children {
+	for i, condition := range conditions {
 		if i > 0 {
 			ctx.Space(operator)
 		}
-		if err := my.buildWhereValueWithAlias(ctx, subChild.Value, alias); err != nil {
+		if err := my.buildCondition(ctx, sc, condition); err != nil {
 			return err
 		}
 	}
-	ctx.Write(")")
-
+	if wrap {
+		ctx.Write(")")
+	}
 	return nil
 }
 
-// buildNotOperator 构建NOT操作符（向后兼容）
-func (my *Dialect) buildNotOperator(ctx *compiler.Context, child *ast.ChildValue) error {
-	return my.buildNotOperatorWithAlias(ctx, child, "")
-}
-
-// buildNotOperatorWithAlias 构建NOT操作符，支持表别名
-func (my *Dialect) buildNotOperatorWithAlias(ctx *compiler.Context, child *ast.ChildValue, alias string) error {
-	if child.Value == nil {
-		return fmt.Errorf("NOT operator requires a condition")
+// buildCondition 构建单个条件值（对象条件的子项以AND连接；不可渲染的子项剪枝）
+func (my *Dialect) buildCondition(ctx *compiler.Context, sc scope, value *ast.Value) error {
+	if value == nil {
+		return nil
+	}
+	children := make([]*ast.ChildValue, 0, len(value.Children))
+	for _, child := range value.Children {
+		if renderableChild(child) {
+			children = append(children, child)
+		}
 	}
 
-	ctx.Write("NOT (")
-	err := my.buildWhereValueWithAlias(ctx, child.Value, alias)
-	ctx.Write(")")
-
-	return err
+	if len(children) > 1 {
+		ctx.Write("(")
+	}
+	for i, child := range children {
+		if i > 0 {
+			ctx.Space("AND")
+		}
+		if err := my.buildChild(ctx, sc, child); err != nil {
+			return err
+		}
+	}
+	if len(children) > 1 {
+		ctx.Write(")")
+	}
+	return nil
 }
 
-// buildFieldCondition 构建字段条件（向后兼容）
-func (my *Dialect) buildFieldCondition(ctx *compiler.Context, child *ast.ChildValue) error {
-	return my.buildFieldConditionWithAlias(ctx, child, "")
-}
-
-// buildFieldConditionWithAlias 构建字段条件，支持表别名
-func (my *Dialect) buildFieldConditionWithAlias(ctx *compiler.Context, child *ast.ChildValue, alias string) error {
-	fieldName := child.Name
-	if child.Value == nil || len(child.Value.Children) == 0 {
-		return fmt.Errorf("field condition %s requires operator and value", fieldName)
+// buildChild 分发子条件：逻辑操作符或字段条件
+func (my *Dialect) buildChild(ctx *compiler.Context, sc scope, child *ast.ChildValue) error {
+	if child == nil || child.Name == "" {
+		return fmt.Errorf("无效的条件：名称为空")
 	}
 
-	// 构建字段引用
-	if err := my.buildFieldReferenceWithAlias(ctx, fieldName, child.Value, alias); err != nil {
+	switch child.Name {
+	case protocol.AND, protocol.OR:
+		if child.Value == nil || len(child.Value.Children) == 0 {
+			return fmt.Errorf("逻辑操作符 %s 至少需要一个条件", child.Name)
+		}
+		values := make([]*ast.Value, 0, len(child.Value.Children))
+		for _, sub := range child.Value.Children { // 空对象元素剪枝，剩余项才参与连接
+			if renderable(sub.Value) {
+				values = append(values, sub.Value)
+			}
+		}
+		return my.buildConditionList(ctx, sc, values, strings.ToUpper(child.Name), true)
+	case protocol.NOT:
+		if child.Value == nil {
+			return fmt.Errorf("NOT操作符需要一个条件")
+		}
+		ctx.Write("NOT (")
+		err := my.buildCondition(ctx, sc, child.Value)
+		ctx.Write(")")
 		return err
+	default:
+		return my.buildFieldCondition(ctx, sc, child)
+	}
+}
+
+// buildFieldCondition 构建字段条件：字段引用 + 操作符 + 值
+func (my *Dialect) buildFieldCondition(ctx *compiler.Context, sc scope, child *ast.ChildValue) error {
+	if child.Value == nil || len(child.Value.Children) == 0 {
+		return fmt.Errorf("字段条件 %s 缺少操作符和值", child.Name)
 	}
 
-	// 处理字段的操作符条件
-	for _, opChild := range child.Value.Children {
-		if err := my.buildOperatorCondition(ctx, opChild); err != nil {
+	column := sc.column(child.Name)
+	lhs := func() { ctx.Column(sc.qualifier, column) } // 左值为列引用
+	for i, opChild := range child.Value.Children {
+		if i > 0 {
+			ctx.Space("AND")
+		}
+		if err := my.buildOperator(ctx, lhs, opChild); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
-// buildFieldReference 构建字段引用（向后兼容）
-func (my *Dialect) buildFieldReference(ctx *compiler.Context, fieldName string, value *ast.Value) error {
-	return my.buildFieldReferenceWithAlias(ctx, fieldName, value, "")
+// jsonbFunctions 以函数形式渲染的操作符（函数名即protocol.Operator.Value）
+var jsonbFunctions = map[string]bool{
+	protocol.CONTAINS:     true,
+	protocol.CONTAINED_IN: true,
+	protocol.HAS_KEY:      true,
 }
 
-// buildFieldReferenceWithAlias 构建字段引用，优先使用表别名
-func (my *Dialect) buildFieldReferenceWithAlias(ctx *compiler.Context, fieldName string, value *ast.Value, alias string) error {
-	// 如果提供了表别名，优先使用
-	if alias != "" {
-		ctx.Quote(alias).Write(".").Quote(fieldName)
+// buildOperator 构建单个条件表达式：lhs写左值（列引用或聚合表达式），op + 参数。
+// 左值抽象使where（列）与having（聚合）共享同一操作符引擎
+func (my *Dialect) buildOperator(ctx *compiler.Context, lhs func(), opChild *ast.ChildValue) error {
+	op, ok := protocol.GetOperator(opChild.Name)
+	if !ok {
+		return fmt.Errorf("不支持的操作符: %s", opChild.Name)
+	}
+	value := opChild.Value
+	if value == nil {
+		return fmt.Errorf("操作符 %s 缺少值", opChild.Name)
+	}
+
+	// jsonb函数式操作符：jsonb_contains(列, $n::jsonb) / jsonb_exists(列, $n)
+	// （gorm会劫持@>/<@/?符号形态，函数形式语义与索引利用一致）
+	if jsonbFunctions[opChild.Name] {
+		ctx.Write(op.Value, `(`)
+		lhs()
+		ctx.Write(`, `)
+		if err := my.buildParam(ctx, value); err != nil {
+			return err
+		}
+		if opChild.Name != protocol.HAS_KEY {
+			ctx.Write(`::jsonb`)
+		}
+		ctx.Write(`)`)
 		return nil
 	}
 
-	// 尝试从Definition获取表和列信息
-	if value.Definition != nil {
-		typeName := strings.TrimSuffix(value.Definition.Name, gql.SUFFIX_WHERE_INPUT)
-		if table, ok := ctx.TableName(typeName); ok {
-			if field, ok := ctx.FindField(typeName, fieldName); ok {
-				ctx.Quote(table).Write(".").Quote(field.Column)
-				return nil
+	// 字面量空列表恒不匹配：编译为FALSE（IN ()非法SQL，与变量路径= ANY('{}')语义对齐）
+	if opChild.Name == protocol.IN && value.Kind == ast.ListValue && len(value.Children) == 0 {
+		ctx.Write("FALSE")
+		return nil
+	}
+
+	// IN变量走数组单槽位绑定（= ANY($n)）：SQL不依赖元素个数，计划保持可缓存；
+	// 空数组恒不匹配，单值由列表槽位在执行期按规范强转
+	if opChild.Name == protocol.IN && value.Kind == ast.Variable {
+		lhs()
+		ctx.Write(` = ANY(`, my.Placeholder(ctx.AddListVariable(value.Raw)), `)`)
+		return nil
+	}
+
+	lhs()
+	ctx.Space(op.Value)
+
+	switch opChild.Name {
+	case protocol.IN:
+		ctx.Write("(")
+		if value.Kind == ast.ListValue {
+			for i, child := range value.Children {
+				if i > 0 {
+					ctx.Write(", ")
+				}
+				if err := my.buildParam(ctx, child.Value); err != nil {
+					return err
+				}
 			}
+		} else if err := my.buildParam(ctx, value); err != nil {
+			return err
 		}
-	}
-
-	// 回退到直接使用字段名
-	ctx.Quote(fieldName)
-	return nil
-}
-
-// buildOperatorCondition 构建操作符条件
-func (my *Dialect) buildOperatorCondition(ctx *compiler.Context, opChild *ast.ChildValue) error {
-	operator := opChild.Name
-	if operator == "" {
-		return fmt.Errorf("empty operator name")
-	}
-
-	// 获取操作符的SQL表示
-	sqlOp, err := my.getSQLOperator(operator)
-	if err != nil {
-		return err
-	}
-
-	ctx.Space(sqlOp)
-
-	// 处理操作符的值
-	return my.buildOperatorValue(ctx, operator, opChild.Value)
-}
-
-// getSQLOperator 获取操作符的SQL表示
-func (my *Dialect) getSQLOperator(operator string) (string, error) {
-	// 从全局字典获取操作符信息
-	if op, ok := gql.GetOperator(operator); ok {
-		return strings.ToUpper(op.Value), nil
-	}
-
-	// 处理特殊操作符
-	switch operator {
-	case gql.IS:
-		return "IS", nil
-	case gql.IN:
-		return "IN", nil
-	case gql.EQ:
-		return "=", nil
-	case gql.NE:
-		return "!=", nil
-	case gql.GT:
-		return ">", nil
-	case gql.GE:
-		return ">=", nil
-	case gql.LT:
-		return "<", nil
-	case gql.LE:
-		return "<=", nil
-	case gql.LIKE:
-		return "LIKE", nil
-	case gql.I_LIKE:
-		return "ILIKE", nil
-	case gql.REGEX:
-		return "~", nil
-	case gql.I_REGEX:
-		return "~*", nil
-	default:
-		return "", fmt.Errorf("unsupported operator: %s", operator)
-	}
-}
-
-// buildOperatorValue 构建操作符的值
-func (my *Dialect) buildOperatorValue(ctx *compiler.Context, operator string, value *ast.Value) error {
-	if value == nil {
-		return fmt.Errorf("operator %s requires a value", operator)
-	}
-
-	switch operator {
-	case gql.IN:
-		return my.buildInValue(ctx, value)
-	case gql.IS:
-		return my.buildIsValue(ctx, value)
+		ctx.Write(")")
+		return nil
+	case protocol.IS:
+		// IsInput枚举：NULL / NOT_NULL
+		switch value.Raw {
+		case "NULL":
+			ctx.Write("NULL")
+		case "NOT_NULL":
+			ctx.Write("NOT NULL")
+		default:
+			return fmt.Errorf("IS操作符需要NULL或NOT_NULL，得到 %s", value.Raw)
+		}
+		return nil
 	default:
 		return my.buildParam(ctx, value)
 	}
 }
 
-// buildInValue 构建IN操作符的值
-func (my *Dialect) buildInValue(ctx *compiler.Context, value *ast.Value) error {
-	if value.Kind == ast.ListValue {
-		ctx.Write("(")
-		for i, child := range value.Children {
-			if i > 0 {
-				ctx.Write(", ")
-			}
-			if err := my.buildParam(ctx, child.Value); err != nil {
-				return err
-			}
-		}
-		ctx.Write(")")
-		return nil
-	}
-
-	// 单个值的情况
-	ctx.Write("(")
-	err := my.buildParam(ctx, value)
-	ctx.Write(")")
-	return err
-}
-
-// buildIsValue 构建IS操作符的值（NULL检查）
-func (my *Dialect) buildIsValue(ctx *compiler.Context, value *ast.Value) error {
-	val, err := value.Value(nil)
-	if err != nil {
-		return err
-	}
-
-	if boolVal, ok := val.(bool); ok {
-		if boolVal {
-			ctx.Write("NULL")
-		} else {
-			ctx.Write("NOT NULL")
-		}
-		return nil
-	}
-
-	return fmt.Errorf("IS operator requires a boolean value, got %T", val)
-}
-
-// buildParam 构建参数值
+// buildParam 构建参数：变量记录为槽位引用，字面量直接取值
 func (my *Dialect) buildParam(ctx *compiler.Context, value *ast.Value) error {
-	val, err := value.Value(nil)
-	if err != nil {
-		return fmt.Errorf("failed to get parameter value: %w", err)
+	if value == nil {
+		return fmt.Errorf("参数值为空")
 	}
 
-	placeholder := my.Placeholder(len(ctx.Args()) + 1)
-	ctx.Write(placeholder)
-	ctx.AddParam(val)
+	if value.Kind == ast.Variable {
+		ctx.Write(my.Placeholder(ctx.AddVariable(value.Raw)))
+		return nil
+	}
 
+	val, err := value.Value(nil)
+	if err != nil {
+		return fmt.Errorf("获取参数值失败: %w", err)
+	}
+	ctx.Write(my.Placeholder(ctx.AddParam(normalizeArg(val))))
 	return nil
+}
+
+// scopeCondition 写一条行级作用域过滤："限定符"."列" = $ctx（值执行期从请求上下文取）
+func (my *Dialect) scopeCondition(ctx *compiler.Context, qualifier string, rule protocol.ScopeRule) {
+	ctx.Column(qualifier, rule.Column).Write(` = `)
+	ctx.Write(my.Placeholder(ctx.AddContextSlot(rule.Context)))
+}
+
+// scopeConjuncts 实体行级作用域的合取条件（每条 列=上下文值），查询/变更WHERE注入共用
+func (my *Dialect) scopeConjuncts(ctx *compiler.Context, qualifier string, class *protocol.Class) []func() error {
+	conjuncts := make([]func() error, len(class.Scope))
+	for i, rule := range class.Scope {
+		conjuncts[i] = func() error {
+			my.scopeCondition(ctx, qualifier, rule)
+			return nil
+		}
+	}
+	return conjuncts
+}
+
+// appendScope 在已有WHERE后追加 AND 作用域条件（递归CTE层、关系操作目标行校验）
+func (my *Dialect) appendScope(ctx *compiler.Context, table string, rules []protocol.ScopeRule) {
+	for _, rule := range rules {
+		ctx.Space(`AND`)
+		my.scopeCondition(ctx, table, rule)
+	}
 }

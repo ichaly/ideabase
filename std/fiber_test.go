@@ -34,8 +34,7 @@ func TestNewFiber_BindShortId(t *testing.T) {
 	assert.NoError(t, err)
 	app := NewFiber(cfg, validator)
 
-	encoded, err := shortId.Encode([]uint64{123})
-	assert.NoError(t, err)
+	encoded := Id(123).Encode()
 
 	var captured Id
 	app.Get("/bind-id", func(c fiber.Ctx) error {
@@ -62,8 +61,7 @@ func TestNewFiber_BindShortIdFromParam(t *testing.T) {
 	assert.NoError(t, err)
 	app := NewFiber(cfg, validator)
 
-	encoded, err := shortId.Encode([]uint64{456})
-	assert.NoError(t, err)
+	encoded := Id(456).Encode()
 
 	var captured Id
 	app.Get("/bind-id/:id", func(c fiber.Ctx) error {
@@ -88,8 +86,7 @@ func TestNewFiber_JSONEncoderShortId(t *testing.T) {
 	cfg := mockConfig("TestApp", "development", "8080")
 	app := NewFiber(cfg, nil)
 
-	encoded, err := shortId.Encode([]uint64{123})
-	assert.NoError(t, err)
+	encoded := Id(123).Encode()
 
 	app.Get("/json-id", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"id": Id(123)})
@@ -102,7 +99,7 @@ func TestNewFiber_JSONEncoderShortId(t *testing.T) {
 
 	b, err := io.ReadAll(resp.Body)
 	assert.NoError(t, err)
-	assert.Contains(t, string(b), "\"id\":\""+idTokenPrefix+encoded+"\"")
+	assert.Contains(t, string(b), "\"id\":\""+encoded+"\"")
 }
 
 func TestParseIdToken_PreferSqidsThenNumber(t *testing.T) {
