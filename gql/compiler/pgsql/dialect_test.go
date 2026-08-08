@@ -50,7 +50,7 @@ func (my *_DialectSuite) SetupSuite() {
 			Fields: map[string]*internal.FieldConfig{
 				"id":       {Type: "ID", Column: "id", IsPrimary: true},
 				"name":     {Type: "String", Column: "name"},
-				"email":    {Type: "String", Column: "email"},
+				"email":    {Type: "String", Column: "email", IsUnique: true},
 				"age":      {Type: "Int", Column: "age", IsNullable: true},
 				"metadata": {Type: "Json", Column: "metadata", IsNullable: true},
 			},

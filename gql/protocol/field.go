@@ -18,4 +18,5 @@ type Field struct {
 	ReadOnly     bool         `json:"readOnly,omitempty"`
 	InsertPreset *ValueSource `json:"insertPreset,omitempty"`
 	UpdatePreset *ValueSource `json:"updatePreset,omitempty"`
+	Catalog      *Column      `json:"catalog,omitempty"`
 }

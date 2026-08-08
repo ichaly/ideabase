@@ -3,6 +3,7 @@ package metadata
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/huandu/go-clone"
@@ -132,6 +133,9 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	if err := my.applyGovernance(newClass, classConfig); err != nil {
 		return nil, err
 	}
+	if err := validateCatalogOverrides(baseClass, newClass, classConfig); err != nil {
+		return nil, err
+	}
 	// 主键列表缺省时从IsPrimary字段推导（与db加载器行为对齐）
 	if len(newClass.PrimaryKeys) == 0 {
 		for _, name := range utl.SortKeys(newClass.Fields) {
@@ -141,6 +145,59 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 		}
 	}
 	return newClass, nil
+}
+
+func validateCatalogOverrides(base, class *protocol.Class, config *internal.ClassConfig) error {
+	if base == nil || (len(base.Constraints) == 0 && len(base.Indexes) == 0) {
+		return nil
+	}
+	columns := func(names []string) ([]string, error) {
+		result := make([]string, len(names))
+		for i, name := range names {
+			field := class.Fields[name]
+			if field == nil || field.Column == "" {
+				return nil, fmt.Errorf("catalog覆盖引用未知字段 %s.%s", class.Name, name)
+			}
+			result[i] = field.Column
+		}
+		return result, nil
+	}
+	if len(config.PrimaryKeys) > 0 {
+		configured, err := columns(config.PrimaryKeys)
+		if err != nil {
+			return err
+		}
+		var catalog []string
+		for _, constraint := range base.Constraints {
+			if constraint != nil && constraint.Kind == protocol.ConstraintPrimary {
+				catalog = constraint.Columns
+				break
+			}
+		}
+		if !slices.Equal(configured, catalog) {
+			return fmt.Errorf("catalog主键覆盖冲突 %s: 数据库=%v 配置=%v", class.Name, catalog, configured)
+		}
+	}
+	for name, fieldConfig := range config.Fields {
+		if fieldConfig == nil || !fieldConfig.IsUnique {
+			continue
+		}
+		field := class.Fields[name]
+		if field == nil {
+			return fmt.Errorf("catalog unique覆盖引用未知字段 %s.%s", class.Name, name)
+		}
+		backed := false
+		for _, key := range base.ConflictTargets() {
+			if len(key.Columns) == 1 && key.Columns[0] == field.Column {
+				backed = true
+				break
+			}
+		}
+		if !backed {
+			return fmt.Errorf("catalog unique覆盖冲突 %s.%s: 数据库无可用唯一约束", class.Name, name)
+		}
+	}
+	return nil
 }
 
 // 应用字段过滤
@@ -270,6 +327,12 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName, column string
 	}
 	if baseField == nil || config.ReadOnly {
 		field.ReadOnly = config.ReadOnly
+	}
+	if config.DefaultValue != "" {
+		if field.Catalog == nil {
+			field.Catalog = &protocol.Column{}
+		}
+		field.Catalog.Default = &protocol.ColumnDefault{Expression: config.DefaultValue}
 	}
 	if config.InsertPreset != nil {
 		field.InsertPreset = &protocol.ValueSource{Context: config.InsertPreset.Context, Value: config.InsertPreset.Value}

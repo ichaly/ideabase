@@ -29,6 +29,7 @@ const (
 	SUFFIX_HAVING_INPUT    = "HavingInput" // 每实体的having入参类型后缀
 	SUFFIX_CREATE_INPUT    = "CreateInput"
 	SUFFIX_UPDATE_INPUT    = "UpdateInput"
+	SUFFIX_KEY_INPUT       = "KeyInput"
 	SUFFIX_MUTATION_RESULT = "MutationResult"
 	SUFFIX_BY_PK           = "ByPk"
 	SUFFIX_MANY            = "Many"
@@ -47,6 +48,7 @@ const (
 // 参数名称
 const (
 	ID         = "id"
+	KEY        = "key"
 	INPUT      = "input"
 	DISTINCT   = "distinct"
 	LIMIT      = "limit"

@@ -20,8 +20,9 @@ type Field struct {
 
 // Argument 表示字段参数
 type Argument struct {
-	Name string
-	Type string
+	Name    string
+	Type    string
+	Default string
 }
 
 // Option 配置字段的函数选项

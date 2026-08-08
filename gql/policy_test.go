@@ -7,7 +7,7 @@ import (
 )
 
 func TestClassForMutationScalarResolvesTarget(t *testing.T) {
-	m := &Metadata{Nodes: map[string]*protocol.Class{"User": {Name: "User", Table: "users", Fields: map[string]*protocol.Field{}}}}
+	m := &Metadata{Nodes: map[string]*protocol.Class{"User": {Name: "User", Table: "users", PrimaryKeys: []string{"id"}, Fields: map[string]*protocol.Field{"id": {Name: "id", Column: "id", IsPrimary: true}}}}}
 	m.operations = buildOperationCatalog(m)
 	f := &ast.Field{Name: "deleteUserByPk", Definition: &ast.FieldDefinition{Type: ast.NamedType("Int", nil)}}
 	c, action := classForField(m, f)

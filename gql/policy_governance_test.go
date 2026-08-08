@@ -192,6 +192,7 @@ func TestPolicyUpsertRequiresUpdatePermissionAndColumns(t *testing.T) {
 		"writer":  {Insert: []string{"name"}, Update: []string{"name"}},
 	}}
 	c.AddField(&protocol.Field{Name: "name", Column: "name"})
+	c.Constraints = []*protocol.Constraint{{Name: "item_name", Kind: protocol.ConstraintUnique, Columns: []string{"name"}}}
 	executor := &Executor{metadata: policyMetadata(c)}
 	root := policyField("upsertItems", "Item", variableInput("input"), nil)
 	op := &ast.OperationDefinition{Operation: ast.Mutation, SelectionSet: ast.SelectionSet{root}}
@@ -217,13 +218,14 @@ func TestPolicyMutationFilterAndConflictColumnsUseSelectWhitelist(t *testing.T) 
 	c := &protocol.Class{Name: "Item", Fields: map[string]*protocol.Field{}}
 	c.AddField(&protocol.Field{Name: "name", Column: "name"})
 	c.AddField(&protocol.Field{Name: "secret", Column: "secret"})
+	c.Constraints = []*protocol.Constraint{{Name: "secret_key", Kind: protocol.ConstraintUnique, Columns: []string{"secret"}}}
 	p := &protocol.Permission{Select: []string{"name"}, Insert: []string{"name", "secret"}, Update: []string{"name", "secret"}}
 	where := policyField("updateItems", "ItemMutationResult", ast.ArgumentList{{
 		Name: protocol.WHERE, Value: &ast.Value{Kind: ast.ObjectValue, Children: []*ast.ChildValue{{Name: "secret", Value: &ast.Value{Kind: ast.ObjectValue}}}},
 	}}, nil)
 	require.ErrorContains(t, authorizeArgs(c, where, p, protocol.OP_UPDATE, nil), "secret")
 	on := policyField("upsertItems", "Item", ast.ArgumentList{{
-		Name: protocol.ON, Value: &ast.Value{Kind: ast.ListValue, Children: []*ast.ChildValue{{Value: &ast.Value{Kind: ast.StringValue, Raw: "secret"}}}},
+		Name: protocol.ON, Value: &ast.Value{Kind: ast.EnumValue, Raw: "UNIQUE_1"},
 	}}, nil)
 	require.ErrorContains(t, authorizeArgs(c, on, p, protocol.OP_INSERT, nil), "secret")
 }

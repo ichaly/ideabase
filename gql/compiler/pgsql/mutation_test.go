@@ -163,7 +163,7 @@ func (my *_DialectSuite) TestMutationGuards() {
 			my.Require().NoError(err, "创建编译器失败")
 
 			_, _, err = compile.Build(doc.Operations[0], nil)
-			my.Assert().ErrorContains(err, "需要id或where条件")
+			my.Assert().ErrorContains(err, "需要主键或where条件")
 		})
 	}
 }
@@ -210,7 +210,7 @@ func (my *_DialectSuite) TestRelationOps() {
 func (my *_DialectSuite) TestRelationOpGuards() {
 	for name, c := range map[string]struct{ query, wants string }{
 		"创建不支持disconnect": {`mutation { createUser(input: { name: "x", email: "e", posts: { disconnect: [1] } }) { id } }`, "不支持disconnect"},
-		"关系操作必须按id":       {`mutation { updateUser(input: { posts: { connect: [1] } }, where: { name: { eq: "x" } }) { id } }`, "必须用id定位"},
+		"关系操作必须按主键":       {`mutation { updateUser(input: { posts: { connect: [1] } }, where: { name: { eq: "x" } }) { id } }`, "必须用主键定位"},
 	} {
 		my.Run(name, func() {
 			doc, gqlErr := gqlparser.LoadQuery(my.schema, c.query)
@@ -242,7 +242,7 @@ func (my *_DialectSuite) TestBulkMutations() {
 		},
 		{
 			name:  "upsert按邮箱冲突",
-			query: `mutation { upsertUsers(input: [{ name: "A", email: "a@x" }], on: ["email"]) { id } }`,
+			query: `mutation { upsertUsers(input: [{ name: "A", email: "a@x" }], on: UNIQUE_1) { id } }`,
 			args:  []any{"A", "a@x"},
 			expected: `WITH "sys_user" AS (INSERT INTO "public"."sys_user" ("name", "email") VALUES ($1, $2)
 					ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name" RETURNING *)

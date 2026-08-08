@@ -247,8 +247,8 @@ func authorizeArgs(c *protocol.Class, f *ast.Field, p *protocol.Permission, acti
 	for _, arg := range f.Arguments {
 		queryAction := action == protocol.OP_SELECT || action == protocol.OP_AGGREGATE
 		mutationAction := action == protocol.OP_INSERT || action == protocol.OP_UPDATE || action == protocol.OP_DELETE || action == protocol.OP_RESTORE
-		if (!queryAction || (arg.Name != protocol.WHERE && arg.Name != protocol.SORT && arg.Name != protocol.DISTINCT && arg.Name != protocol.GROUP_BY && arg.Name != protocol.HAVING && arg.Name != protocol.SEARCH)) &&
-			(!mutationAction || (arg.Name != protocol.WHERE && arg.Name != protocol.ON)) {
+		if (!queryAction || (arg.Name != protocol.WHERE && arg.Name != protocol.KEY && arg.Name != protocol.SORT && arg.Name != protocol.DISTINCT && arg.Name != protocol.GROUP_BY && arg.Name != protocol.HAVING && arg.Name != protocol.SEARCH)) &&
+			(!mutationAction || (arg.Name != protocol.WHERE && arg.Name != protocol.KEY && arg.Name != protocol.ON)) {
 			continue
 		}
 		if arg.Name == protocol.SEARCH {
@@ -271,7 +271,23 @@ func authorizeArgs(c *protocol.Class, f *ast.Field, p *protocol.Permission, acti
 				}
 			}
 		}
-		if arg.Name == protocol.DISTINCT || arg.Name == protocol.GROUP_BY || arg.Name == protocol.ON {
+		if arg.Name == protocol.KEY {
+			for _, name := range c.PrimaryKeys {
+				check(name)
+			}
+		} else if arg.Name == protocol.ON {
+			label, ok := value.(string)
+			if !ok {
+				return policyError(c, action, protocol.ON)
+			}
+			key, ok := c.ConflictTarget(label)
+			if !ok {
+				return policyError(c, action, protocol.ON)
+			}
+			for _, column := range key.Columns {
+				check(column)
+			}
+		} else if arg.Name == protocol.DISTINCT || arg.Name == protocol.GROUP_BY {
 			walkResolvedStrings(value, check)
 		} else {
 			walkResolvedAny(value, check)

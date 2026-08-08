@@ -1,9 +1,11 @@
 package gql
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,8 +42,9 @@ type Metadata struct {
 	cfg *internal.Config
 
 	// 统一索引: 支持类名、表名、原始表名查找
-	Nodes   map[string]*protocol.Class `json:"nodes"`
-	Version string                     `json:"version"`
+	Nodes    map[string]*protocol.Class   `json:"nodes"`
+	Routines map[string]*protocol.Routine `json:"routines,omitempty"`
+	Version  string                       `json:"version"`
 
 	// 全文搜索能力（启动探测或配置指定）
 	searchMode    string
@@ -211,8 +214,9 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 
 	my := &Metadata{
 		k: k, db: d, cfg: cfg,
-		Nodes:   make(map[string]*protocol.Class),
-		Version: time.Now().Format("20060102150405"),
+		Nodes:    make(map[string]*protocol.Class),
+		Routines: make(map[string]*protocol.Routine),
+		Version:  time.Now().Format("20060102150405"),
 		// 配置显式指定的搜索模式立即生效；为空时由NewExecutor启动探测补全
 		searchMode:   cfg.Search.Mode,
 		searchConfig: cfg.Search.Config,
@@ -282,7 +286,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	}
 	// Loaders are allowed to retain and reuse their construction-time objects,
 	// but the runtime metadata must be immutable with respect to those owners.
-	my.cloneNodes()
+	my.cloneCatalog()
 	// 所有Loader执行完仍无任何元数据：生产环境直接报错避免带空schema启动，debug模式保留宽松行为便于排查
 	if len(my.Nodes) == 0 && !cfg.IsDebug() {
 		return nil, fmt.Errorf("元数据加载失败：所有加载器执行后无任何实体（请检查数据库连接、metadata.file 或 metadata.classes 配置）")
@@ -317,7 +321,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	return my, nil
 }
 
-func (my *Metadata) cloneNodes() {
+func (my *Metadata) cloneCatalog() {
 	clones := make(map[*protocol.Class]*protocol.Class, len(my.Nodes))
 	for key, class := range my.Nodes {
 		if class == nil {
@@ -329,6 +333,11 @@ func (my *Metadata) cloneNodes() {
 			clones[class] = cloned
 		}
 		my.Nodes[key] = cloned
+	}
+	for key, routine := range my.Routines {
+		if routine != nil {
+			my.Routines[key] = clone.Slowly(routine).(*protocol.Routine)
+		}
 	}
 }
 
@@ -342,18 +351,19 @@ func (my *Metadata) eachClass(fn func(class *protocol.Class)) {
 }
 
 // finalize 元数据定型，field.Type自此成为schema类型的唯一真相：
-//  1. 结构推导：主键与外键实列固定为ID标量（关系载体是Virtual字段不受影响），
-//     使加解密与精度处理覆盖全部主外键；
+//  1. 结构推导：单列主键与单列外键固定为ID标量；复合键保留各列原生类型，
+//     供typed KeyInput无损表达；
 //  2. Codec认领：实现了Matcher的codec把命中字段改写为对应标量。
 //
 // 字段级配置显式指定类型时保留配置（配置是最终裁决的例外通道）
 func (my *Metadata) finalize() {
 	my.eachClass(func(class *protocol.Class) {
+		primaryKeys := class.PrimaryKeyFields()
 		for name, field := range class.Fields {
 			if name != field.Name || field.Virtual || my.configured(class, field) {
 				continue
 			}
-			if field.IsPrimary || field.Relation != nil {
+			if (field.IsPrimary && len(primaryKeys) == 1) || (field.Relation != nil && !field.Relation.Composite()) {
 				field.Type = protocol.SCALAR_ID
 				continue
 			}
@@ -399,6 +409,191 @@ func (my *Metadata) PutNode(className string, node *protocol.Class) error {
 	}
 	my.Nodes[className] = node
 	return nil
+}
+
+func (my *Metadata) PutRoutine(key string, routine *protocol.Routine) error {
+	if err := routine.Validate(); err != nil {
+		return err
+	}
+	want := routine.Schema + "." + routine.Name + "(" + routine.Identity + ")"
+	if key != want {
+		return fmt.Errorf("routine key不一致: want=%s got=%s", want, key)
+	}
+	if my.Routines == nil {
+		my.Routines = make(map[string]*protocol.Routine)
+	}
+	if existing, exists := my.Routines[key]; exists {
+		if reflect.DeepEqual(existing, routine) {
+			return nil
+		}
+		return fmt.Errorf("routine冲突: %s", key)
+	}
+	my.Routines[key] = routine
+	return nil
+}
+
+func (my *Metadata) GetRoutine(key string) (*protocol.Routine, bool) {
+	routine, ok := my.Routines[key]
+	return routine, ok
+}
+
+// CatalogFingerprint identifies database shape while deliberately excluding
+// the trusted tenant schema identifier. Compatible schema-per-tenant catalogs
+// may share GraphQL/logical plans; SQL templates still key on SchemaName.
+func (my *Metadata) CatalogFingerprint() (string, error) {
+	type fieldShape struct {
+		Name, Column, Type  string
+		Nullable, ReadOnly  bool
+		IsPrimary, IsUnique bool
+		Catalog             *protocol.Column
+	}
+	type classShape struct {
+		Name, Table string
+		Kind        protocol.TableKind
+		ReadOnly    bool
+		PrimaryKeys []string
+		Fields      []fieldShape
+		Constraints []*protocol.Constraint
+		Indexes     []*protocol.Index
+	}
+	normalizeType := func(ref protocol.TypeRef) protocol.TypeRef {
+		ref.Schema = ""
+		if ref.Element != nil {
+			element := *ref.Element
+			element.Schema = ""
+			ref.Element = &element
+		}
+		return ref
+	}
+	classes := make([]classShape, 0)
+	for _, name := range sortedNodeNames(my) {
+		class := my.Nodes[name]
+		if class == nil || name != class.Name {
+			continue
+		}
+		fields := make([]fieldShape, 0)
+		for _, fieldName := range utl.SortKeys(class.Fields) {
+			if field := class.Fields[fieldName]; field != nil && fieldName == field.Name && !field.Virtual {
+				var catalog *protocol.Column
+				if field.Catalog != nil {
+					copy := *field.Catalog
+					copy.Type = normalizeType(copy.Type)
+					if copy.Default != nil {
+						value := *copy.Default
+						value.Expression = unqualifyCatalog(value.Expression, class.Schema)
+						copy.Default = &value
+					}
+					if copy.Generation != nil {
+						value := *copy.Generation
+						value.Expression = unqualifyCatalog(value.Expression, class.Schema)
+						copy.Generation = &value
+					}
+					catalog = &copy
+				}
+				fields = append(fields, fieldShape{field.Name, field.Column, field.Type, field.Nullable, field.ReadOnly, field.IsPrimary, field.IsUnique, catalog})
+			}
+		}
+		constraints := make([]*protocol.Constraint, len(class.Constraints))
+		for i, constraint := range class.Constraints {
+			if constraint != nil {
+				copy := *constraint
+				copy.Expression = unqualifyCatalog(copy.Expression, class.Schema)
+				constraints[i] = &copy
+			}
+		}
+		indexes := make([]*protocol.Index, len(class.Indexes))
+		for i, index := range class.Indexes {
+			if index != nil {
+				copy := *index
+				copy.Predicate = unqualifyCatalog(copy.Predicate, class.Schema)
+				copy.Keys = append([]protocol.IndexKey(nil), copy.Keys...)
+				for n := range copy.Keys {
+					copy.Keys[n].Expression = unqualifyCatalog(copy.Keys[n].Expression, class.Schema)
+				}
+				indexes[i] = &copy
+			}
+		}
+		classes = append(classes, classShape{class.Name, class.Table, class.TableKind, class.ReadOnly, class.PrimaryKeys, fields, constraints, indexes})
+	}
+	routines := make([]protocol.Routine, 0, len(my.Routines))
+	for _, key := range utl.SortKeys(my.Routines) {
+		if routine := my.Routines[key]; routine != nil {
+			shape := *routine
+			schema := shape.Schema
+			shape.Schema = ""
+			shape.Identity = unqualifyCatalog(shape.Identity, schema)
+			shape.ReturnType = unqualifyCatalog(shape.ReturnType, schema)
+			shape.Arguments = append([]protocol.RoutineArgument(nil), shape.Arguments...)
+			for i := range shape.Arguments {
+				shape.Arguments[i].Type = unqualifyCatalog(shape.Arguments[i].Type, schema)
+			}
+			routines = append(routines, shape)
+		}
+	}
+	contract, err := json.Marshal(struct {
+		Classes  []classShape
+		Routines []protocol.Routine
+	}{classes, routines})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(contract)), nil
+}
+
+func unqualifyCatalog(value, schema string) string {
+	var result strings.Builder
+	for start := 0; start < len(value); {
+		quote := strings.IndexByte(value[start:], '\'')
+		if quote < 0 {
+			result.WriteString(stripCatalogQualifier(value[start:], schema))
+			break
+		}
+		quote += start
+		result.WriteString(stripCatalogQualifier(value[start:quote], schema))
+		end := quote + 1
+		for end < len(value) {
+			if value[end] != '\'' {
+				end++
+				continue
+			}
+			end++
+			if end >= len(value) || value[end] != '\'' {
+				break
+			}
+			end++
+		}
+		literal := value[quote:end]
+		rest := strings.TrimLeft(value[end:], " \t\r\n")
+		if strings.HasPrefix(rest, "::regclass") || strings.HasPrefix(rest, "::regtype") {
+			literal = stripCatalogQualifier(literal, schema)
+		}
+		result.WriteString(literal)
+		start = end
+	}
+	return result.String()
+}
+
+func stripCatalogQualifier(value, schema string) string {
+	quoted := `"` + strings.ReplaceAll(schema, `"`, `""`) + `".`
+	plain := schema + "."
+	var result strings.Builder
+	for i := 0; i < len(value); {
+		if strings.HasPrefix(value[i:], quoted) {
+			i += len(quoted)
+			continue
+		}
+		if strings.HasPrefix(value[i:], plain) && (i == 0 || !catalogIdentifierByte(value[i-1])) {
+			i += len(plain)
+			continue
+		}
+		result.WriteByte(value[i])
+		i++
+	}
+	return result.String()
+}
+
+func catalogIdentifierByte(value byte) bool {
+	return value == '_' || value == '$' || value >= '0' && value <= '9' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
 }
 
 // 配置类型公开别名：实体/字段的代码内配置（k.Set("metadata.classes", ...)）
@@ -476,8 +671,9 @@ func (my *Metadata) MarshalJSON() ([]byte, error) {
 		}
 	}
 	return json.Marshal(Metadata{
-		Nodes:   nodes,
-		Version: my.Version,
+		Nodes:    nodes,
+		Routines: my.Routines,
+		Version:  my.Version,
 	})
 }
 

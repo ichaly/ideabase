@@ -33,6 +33,13 @@ func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.Argument
 	if err != nil {
 		return err
 	}
+	key, err := my.keyConjunct(ctx, sc, args.ForName(protocol.KEY))
+	if err != nil {
+		return err
+	}
+	if key != nil {
+		conjuncts = append([]func() error{key}, conjuncts...)
+	}
 	if len(conjuncts) == 0 && len(conditions) == 0 {
 		return nil
 	}
@@ -53,6 +60,82 @@ func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.Argument
 		ctx.Space("AND")
 	}
 	return my.buildConditionList(ctx, sc, conditions, "AND", len(conditions) > 1)
+}
+
+// keyConjunct compiles a typed composite primary key. Whole-object variables
+// are volatile because compiler slots address top-level variables, not nested
+// members; recompiling preserves correct values without adding a second slot model.
+func (my *Dialect) keyConjunct(ctx *compiler.Context, sc scope, arg *ast.Argument) (func() error, error) {
+	if arg == nil || arg.Value == nil {
+		return nil, nil
+	}
+	if arg.Value.Kind == ast.NullValue {
+		return nil, fmt.Errorf("key不能为null")
+	}
+	if sc.class == nil || len(sc.class.PrimaryKeys) < 2 {
+		return nil, fmt.Errorf("key仅适用于复合主键实体")
+	}
+	fields := make([]*protocol.Field, len(sc.class.PrimaryKeys))
+	for i, name := range sc.class.PrimaryKeys {
+		field := sc.class.Fields[name]
+		if field == nil || field.Column == "" {
+			return nil, fmt.Errorf("复合主键字段不存在: %s.%s", sc.class.Name, name)
+		}
+		fields[i] = field
+	}
+
+	if arg.Value.Kind == ast.Variable {
+		raw, ok := ctx.Variable(arg.Value.Raw)
+		values, valid := raw.(map[string]interface{})
+		if !ok || !valid {
+			return nil, fmt.Errorf("key变量 %s 缺失或不是对象", arg.Value.Raw)
+		}
+		params := make([]interface{}, len(fields))
+		for i, field := range fields {
+			value, exists := values[field.Name]
+			if !exists || value == nil {
+				return nil, fmt.Errorf("key变量缺少字段: %s", field.Name)
+			}
+			params[i] = normalizeArg(value)
+		}
+		ctx.MarkVolatile()
+		return func() error {
+			return writeKeyEquals(ctx, sc, fields, func(i int) error {
+				ctx.Write(my.Placeholder(ctx.AddParam(params[i])))
+				return nil
+			})
+		}, nil
+	}
+
+	values := make(map[string]*ast.Value, len(arg.Value.Children))
+	for _, child := range arg.Value.Children {
+		if child != nil {
+			values[child.Name] = child.Value
+		}
+	}
+	for _, field := range fields {
+		if values[field.Name] == nil {
+			return nil, fmt.Errorf("key缺少字段: %s", field.Name)
+		}
+	}
+	return func() error {
+		return writeKeyEquals(ctx, sc, fields, func(i int) error { return my.buildParam(ctx, values[fields[i].Name]) })
+	}, nil
+}
+
+func writeKeyEquals(ctx *compiler.Context, sc scope, fields []*protocol.Field, value func(int) error) error {
+	ctx.Write("(")
+	for i, field := range fields {
+		if i > 0 {
+			ctx.Space("AND")
+		}
+		ctx.Column(sc.qualifier, field.Column).Write(" = ")
+		if err := value(i); err != nil {
+			return err
+		}
+	}
+	ctx.Write(")")
+	return nil
 }
 
 // collectConditions 收集可渲染的WHERE条件（id参数转换为主键等值条件；空对象剪枝）

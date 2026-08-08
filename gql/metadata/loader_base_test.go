@@ -61,3 +61,23 @@ func TestGroupByConstraintComposite(t *testing.T) {
 	assert.Equal(t, "tenant_id", groups[0][1].SourceColumn, "列序保持约束内位置")
 	assert.Len(t, groups[1], 1)
 }
+
+func TestCatalogReferencesFailClosed(t *testing.T) {
+	validTable := tableInfo{TableName: "accounts", TableKind: string(protocol.TableBase)}
+	validColumn := columnInfo{TableName: "accounts", ColumnName: "id", DataType: "int8", TypeName: "int8", TypeKind: string(protocol.TypeBase)}
+	tests := []struct {
+		name    string
+		catalog catalogData
+		want    string
+	}{
+		{"column table", catalogData{Columns: []columnInfo{validColumn}}, "missing table"},
+		{"constraint column", catalogData{Tables: []tableInfo{validTable}, Constraints: []constraintInfo{{TableName: "accounts", Name: "account_pk", Kind: string(protocol.ConstraintPrimary), Columns: []string{"missing"}}}}, "missing column"},
+		{"index include", catalogData{Tables: []tableInfo{validTable}, Columns: []columnInfo{validColumn}, Indexes: []indexInfo{{TableName: "accounts", Name: "account_idx", Include: []string{"missing"}}}}, "includes missing column"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (&baseLoader{}).loadCatalog(newFakeHoster(), tt.catalog)
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+}

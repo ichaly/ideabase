@@ -262,19 +262,35 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 	}
 	my.applyPreset(m.class, rows, protocol.OP_INSERT)
 
-	// 冲突列：on参数（字段名），缺省主键
+	// 冲突目标只能是catalog已证明的全局unique/primary key；
+	// GraphQL enum标签由protocol与Renderer共用，不接受任意列名。
 	sc := scope{class: m.class}
-	names, err := fieldNames(sc, m.field.Arguments, protocol.ON)
-	if err != nil {
-		return err
+	primary, hasPrimary := m.class.PrimaryConflictTarget()
+	label := primary.Name
+	if arg := m.field.Arguments.ForName(protocol.ON); arg != nil && arg.Value != nil {
+		label = arg.Value.Raw
+		if arg.Value.Kind == ast.Variable {
+			value, ok := ctx.Variable(arg.Value.Raw)
+			if !ok || value == nil {
+				if !hasPrimary {
+					return fmt.Errorf("upsert缺少冲突目标")
+				}
+				value = primary.Name
+			}
+			var valid bool
+			label, valid = value.(string)
+			if !valid {
+				return fmt.Errorf("upsert冲突目标必须是enum")
+			}
+		}
+	} else if !hasPrimary {
+		return fmt.Errorf("upsert缺少冲突目标")
 	}
-	if len(names) == 0 {
-		names = m.class.PrimaryKeys
+	key, ok := m.class.ConflictTarget(label)
+	if !ok {
+		return fmt.Errorf("upsert冲突目标无效: %s", label)
 	}
-	conflicts := columnsOf(sc, names)
-	if len(conflicts) == 0 {
-		return fmt.Errorf("upsert需要冲突列（on参数或实体主键）")
-	}
+	conflicts := columnsOf(sc, key.Columns)
 
 	my.applyScope(m.class, rows) // 强制作用域列=上下文值（防越租户创建）
 	columns, err := my.writeInsertValues(ctx, m.class, rows)
@@ -448,8 +464,8 @@ func (my *Dialect) buildUpdate(ctx *compiler.Context, m *mutation) ([]relationOp
 		return nil, fmt.Errorf("%s的input必须是单个对象", m.field.Name)
 	}
 	row := rows[0]
-	if len(row.ops) > 0 && (m.bulk || m.field.Arguments.ForName(protocol.ID) == nil) {
-		return nil, fmt.Errorf("携带关系操作的更新必须用id定位单行")
+	if len(row.ops) > 0 && (m.bulk || !hasKeyArgument(m.field.Arguments)) {
+		return nil, fmt.Errorf("携带关系操作的更新必须用主键定位单行")
 	}
 
 	my.applyPreset(m.class, rows, protocol.OP_UPDATE)
@@ -526,13 +542,22 @@ func (my *Dialect) buildMutationWhere(ctx *compiler.Context, class *protocol.Cla
 	if err != nil {
 		return err
 	}
-	if len(conditions) == 0 {
-		return fmt.Errorf("%s需要id或where条件", field.Name)
+	if len(conditions) == 0 && !hasKeyArgument(field.Arguments) {
+		return fmt.Errorf("%s需要主键或where条件", field.Name)
 	}
 	// 行级作用域：update/delete 强制 AND 作用域，只能改本租户/属主的行
 	conjuncts := my.scopeConjuncts(ctx, sc.qualifier, class)
 	conjuncts = append(conjuncts, my.fixedWhereConjuncts(ctx, sc.qualifier, class, operation, skipColumn)...)
 	return my.buildWhere(ctx, sc, field.Arguments, conjuncts...)
+}
+
+func hasKeyArgument(args ast.ArgumentList) bool {
+	for _, name := range []string{protocol.ID, protocol.KEY} {
+		if arg := args.ForName(name); arg != nil && arg.Value != nil && arg.Value.Kind != ast.NullValue {
+			return true
+		}
+	}
+	return false
 }
 
 // applyScope 给每行填充作用域列=上下文值（客户端值已被writableColumn拒绝，此处直接填）
@@ -717,7 +742,7 @@ func (my *Dialect) literalRow(ctx *compiler.Context, class *protocol.Class, valu
 			return row, err
 		}
 		row.columns = append(row.columns, column)
-		row.values[column] = my.astWriter(child.Value)
+		row.values[column] = my.fieldWriter(class.Fields[child.Name], child.Value)
 	}
 	return row, nil
 }
@@ -739,7 +764,7 @@ func (my *Dialect) rawRow(ctx *compiler.Context, class *protocol.Class, object m
 			return row, err
 		}
 		row.columns = append(row.columns, column)
-		row.values[column] = my.valWriter(normalizeArg(object[name]))
+		row.values[column] = my.valWriter(normalizeFieldArg(class.Fields[name], object[name]))
 	}
 	return row, nil
 }
@@ -866,6 +891,24 @@ func (my *Dialect) idWriters(ctx *compiler.Context, value *ast.Value) ([]paramWr
 // astWriter 字面量/变量AST值的参数写入器
 func (my *Dialect) astWriter(value *ast.Value) paramWriter {
 	return func(c *compiler.Context) error { return my.buildParam(c, value) }
+}
+
+func (my *Dialect) fieldWriter(field *protocol.Field, value *ast.Value) paramWriter {
+	if !isArrayField(field) {
+		return my.astWriter(value)
+	}
+	return func(ctx *compiler.Context) error {
+		if value.Kind == ast.Variable {
+			ctx.Write(my.Placeholder(ctx.AddListVariable(value.Raw)))
+			return nil
+		}
+		raw, err := value.Value(nil)
+		if err != nil {
+			return err
+		}
+		ctx.Write(my.Placeholder(ctx.AddParam(compiler.ListArg(raw))))
+		return nil
+	}
 }
 
 // valWriter 运行期值的参数写入器
@@ -1107,4 +1150,15 @@ func normalizeArg(value interface{}) interface{} {
 		return string(data)
 	}
 	return value
+}
+
+func normalizeFieldArg(field *protocol.Field, value interface{}) interface{} {
+	if isArrayField(field) {
+		return compiler.ListArg(value)
+	}
+	return normalizeArg(value)
+}
+
+func isArrayField(field *protocol.Field) bool {
+	return field != nil && field.Catalog != nil && field.Catalog.Type.Kind == protocol.TypeArray
 }

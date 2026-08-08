@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -178,6 +179,58 @@ func (my *Renderer) renderEnums() error {
 	my.writeLine("}")
 	my.writeLine()
 
+	// Database enums are emitted only when labels are losslessly representable
+	// by GraphQL. Unsafe labels fail schema build instead of being silently
+	// rewritten to values that PostgreSQL would not accept.
+	enums := make(map[string][]string)
+	var enumErr error
+	my.eachTableClass(func(_ string, class *protocol.Class) {
+		my.eachField(class, func(_ string, field *protocol.Field) {
+			if ref := my.catalogType(field); ref != nil {
+				if ref.Kind == protocol.TypeArray {
+					ref = ref.Element
+				}
+				if ref != nil && ref.Kind == protocol.TypeEnum {
+					name := my.enumName(ref)
+					if labels, exists := enums[name]; exists && !slices.Equal(labels, ref.EnumLabels) {
+						enumErr = fmt.Errorf("PostgreSQL enum映射冲突: %s", name)
+						return
+					}
+					enums[name] = ref.EnumLabels
+				}
+			}
+		})
+	})
+	if enumErr != nil {
+		return enumErr
+	}
+	for _, name := range utl.SortKeys(enums) {
+		if !graphQLName(name) {
+			return fmt.Errorf("PostgreSQL enum类型名无法无损映射: %q", name)
+		}
+		my.writeLine("enum ", name, " {")
+		for _, label := range enums[name] {
+			if !graphQLName(label) || label == "true" || label == "false" || label == "null" {
+				return fmt.Errorf("PostgreSQL enum %s 含非法GraphQL值 %q，请使用显式类型映射", name, label)
+			}
+			my.writeLine("  ", label)
+		}
+		my.writeLine("}")
+		my.writeLine()
+	}
+	my.eachTableClass(func(className string, class *protocol.Class) {
+		keys := class.ConflictTargets()
+		if len(keys) == 0 {
+			return
+		}
+		my.writeLine("enum ", className, "ConflictTarget {")
+		for _, key := range keys {
+			my.writeLine("  ", key.Name, "  # ", strings.Join(key.Columns, ", "))
+		}
+		my.writeLine("}")
+		my.writeLine()
+	})
+
 	return nil
 }
 
@@ -205,6 +258,9 @@ func (my *Renderer) eachTableClass(fn func(className string, class *protocol.Cla
 // allows reports whether an operation is exposed for a class. Empty Operations
 // preserves the legacy schema (all operations enabled).
 func (my *Renderer) allows(class *protocol.Class, operation string) bool {
+	if class.ReadOnly && operation != protocol.OP_SELECT && operation != protocol.OP_AGGREGATE {
+		return false
+	}
 	if len(class.Operations) == 0 {
 		return true
 	}
@@ -307,10 +363,57 @@ func (my *Renderer) getGraphQLType(field *protocol.Field) string {
 		// 列表字段仅由关系处理生成，元素类型即关系目标类名
 		return "[" + field.Type + "]"
 	}
+	if ref := my.catalogType(field); ref != nil {
+		return my.catalogGraphQLType(ref)
+	}
 	if gqlType, ok := my.meta.cfg.Schema.TypeMapping[field.Type]; ok {
 		return gqlType
 	}
 	return field.Type
+}
+
+func (my *Renderer) catalogType(field *protocol.Field) *protocol.TypeRef {
+	if field.Catalog == nil {
+		return nil
+	}
+	ref := &field.Catalog.Type
+	// A configured type, primary/foreign ID finalization, or Codec is the final
+	// explicit verdict and must not be overwritten by raw catalog facts.
+	if field.Type != ref.Name && field.Type != ref.Base {
+		return nil
+	}
+	return ref
+}
+
+func (my *Renderer) catalogGraphQLType(ref *protocol.TypeRef) string {
+	switch ref.Kind {
+	case protocol.TypeArray:
+		if ref.Element == nil {
+			return protocol.SCALAR_JSON
+		}
+		return "[" + my.catalogGraphQLType(ref.Element) + "]"
+	case protocol.TypeEnum:
+		return my.enumName(ref)
+	case protocol.TypeDomain:
+		if mapped, ok := my.meta.cfg.Schema.TypeMapping[ref.Base]; ok {
+			return mapped
+		}
+	}
+	if mapped, ok := my.meta.cfg.Schema.TypeMapping[ref.Name]; ok {
+		return mapped
+	}
+	return ref.Name
+}
+
+func (*Renderer) enumName(ref *protocol.TypeRef) string { return strcase.ToCamel(ref.Name) + "Enum" }
+
+func graphQLName(name string) bool {
+	for i, r := range name {
+		if r != '_' && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (i == 0 || r < '0' || r > '9') {
+			return false
+		}
+	}
+	return name != ""
 }
 
 // writableFields 返回类的可写字段名（排除主键、时间戳、虚拟与中间表字段）
@@ -323,9 +426,11 @@ func (my *Renderer) writableFields(class *protocol.Class, operation string) []st
 	names := make([]string, 0, len(class.Fields))
 	my.eachField(class, func(fieldName string, field *protocol.Field) {
 		// 跳过无列字段（关系/resolver）、自动生成字段（主键/时间戳）、虚拟字段、中间表字段、作用域列
+		catalogBacked := field.Catalog != nil && field.Catalog.Type.Kind != ""
+		generatedPrimary := field.IsPrimary && (!catalogBacked || class.IDGenerator != "" && class.IDGenerator != "database")
 		if field.Virtual || field.Column == "" ||
-			field.IsPrimary || scoped[field.Column] ||
-			field.ReadOnly ||
+			generatedPrimary || scoped[field.Column] ||
+			field.ReadOnly || (field.Catalog != nil && field.Catalog.Generation != nil) ||
 			(operation == protocol.OP_INSERT && field.InsertPreset != nil) ||
 			(operation == protocol.OP_UPDATE && field.UpdatePreset != nil) ||
 			strings.EqualFold(fieldName, "createdAt") ||
@@ -342,9 +447,9 @@ func (my *Renderer) writableFields(class *protocol.Class, operation string) []st
 func (my *Renderer) writeRelationOps(class *protocol.Class, _ string) {
 	my.eachField(class, func(fieldName string, field *protocol.Field) {
 		// 仅列表关系虚拟字段（一对多/多对多），中间表隐藏时跳过
-		if field.Column == "" && field.Relation != nil && field.IsList && !my.hiddenField(field) {
+		if field.Column == "" && field.Relation != nil && !field.Relation.Composite() && field.IsList && !my.hiddenField(field) {
 			target := my.meta.Nodes[field.Relation.TargetClass]
-			if target == nil || (!my.allows(target, protocol.OP_INSERT) && !my.allows(target, protocol.OP_UPDATE)) {
+			if target == nil || !my.relationInputAllowed(target) {
 				return
 			}
 			my.writeField(fieldName, field.Relation.TargetClass+"RelationInput")
@@ -356,6 +461,18 @@ func (my *Renderer) writeRelationOps(class *protocol.Class, _ string) {
 func (my *Renderer) renderInput() error {
 	// 为每个实体类生成创建和更新输入类型
 	my.eachTableClass(func(className string, class *protocol.Class) {
+		primaryKeys := class.PrimaryKeyFields()
+		if len(primaryKeys) > 1 {
+			my.writeLine("# ", className, "复合主键")
+			my.writeLine("input ", className, protocol.SUFFIX_KEY_INPUT, " {")
+			for _, column := range primaryKeys {
+				if field := class.Fields[column]; field != nil {
+					my.writeField(field.Name, my.getGraphQLType(field)+"!")
+				}
+			}
+			my.writeLine("}")
+			my.writeLine()
+		}
 		// 无可写字段的类（如纯主键表）不生成输入类型
 		createFields := my.writableFields(class, protocol.OP_INSERT)
 		updateFields := my.writableFields(class, protocol.OP_UPDATE)
@@ -366,7 +483,7 @@ func (my *Renderer) renderInput() error {
 				field := class.Fields[fieldName]
 				typeName := my.getGraphQLType(field)
 				// 非空字段添加!；外键列放宽为可选（嵌套创建时由父行锚点填充，数据库NOT NULL兜底）
-				if !field.Nullable && field.Relation == nil {
+				if !field.Nullable && field.Relation == nil && (field.Catalog == nil || field.Catalog.Default == nil) {
 					typeName += "!"
 				}
 				my.writeField(fieldName, typeName)
@@ -390,16 +507,18 @@ func (my *Renderer) renderInput() error {
 
 	// 按目标类生成关系操作输入：connect/disconnect挂接解除既有行，create内联建新行
 	my.eachTableClass(func(className string, class *protocol.Class) {
-		if !my.allows(class, protocol.OP_UPDATE) && !(my.allows(class, protocol.OP_INSERT) && len(my.writableFields(class, protocol.OP_INSERT)) > 0) {
+		if !my.relationInputAllowed(class) {
 			return
 		}
+		connectable := my.allows(class, protocol.OP_UPDATE)
+		creatable := my.allows(class, protocol.OP_INSERT) && len(my.writableFields(class, protocol.OP_INSERT)) > 0
 		my.writeLine("# ", className, "关系操作（原子挂接/解除/内联创建）")
 		my.writeLine("input ", className, "RelationInput {")
-		if my.allows(class, protocol.OP_UPDATE) {
+		if connectable {
 			my.writeField("connect", protocol.SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("挂接既有行主键"))
 			my.writeField("disconnect", protocol.SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("解除既有行主键(仅更新)"))
 		}
-		if my.allows(class, protocol.OP_INSERT) && len(my.writableFields(class, protocol.OP_INSERT)) > 0 {
+		if creatable {
 			my.writeField("create", "["+className+protocol.SUFFIX_CREATE_INPUT+"!]", renderer.WithComment("内联创建新行"))
 		}
 		my.writeLine("}")
@@ -407,6 +526,11 @@ func (my *Renderer) renderInput() error {
 	})
 
 	return nil
+}
+
+func (my *Renderer) relationInputAllowed(class *protocol.Class) bool {
+	return len(class.PrimaryKeyFields()) == 1 && (my.allows(class, protocol.OP_UPDATE) ||
+		my.allows(class, protocol.OP_INSERT) && len(my.writableFields(class, protocol.OP_INSERT)) > 0)
 }
 
 // renderFilter 渲染基础过滤器类型
@@ -463,7 +587,8 @@ func (my *Renderer) renderEntity() error {
 
 		// 添加常规字段过滤条件：跳过列名索引/虚拟关系字段/随中间表隐藏的字段
 		my.eachField(class, func(fieldName string, field *protocol.Field) {
-			if !field.Virtual && !my.hiddenField(field) {
+			ref := my.catalogType(field)
+			if !field.Virtual && !my.hiddenField(field) && (ref == nil || ref.Kind != protocol.TypeArray && ref.Kind != protocol.TypeEnum) {
 				my.writeLine("  ", fieldName, ": ", my.getGraphQLType(field), protocol.SUFFIX_WHERE_INPUT)
 			}
 		})
@@ -516,13 +641,19 @@ func (my *Renderer) renderQuery() error {
 			args = append(args, renderer.Argument{Name: protocol.SEARCH, Type: protocol.SCALAR_STRING})
 		}
 		my.writeLine("  # ", className, "查询")
+		class := my.meta.Nodes[className]
+		primaryKeys := class.PrimaryKeyFields()
+		if len(primaryKeys) == 1 {
+			args = append(args, renderer.Argument{Name: protocol.ID, Type: protocol.SCALAR_ID})
+		} else if len(primaryKeys) > 1 {
+			args = append(args, renderer.Argument{Name: protocol.KEY, Type: className + protocol.SUFFIX_KEY_INPUT})
+		}
 		my.writeField(
 			queryField(className),
 			className+protocol.SUFFIX_RESULT,
 			renderer.NonNull(),
 			renderer.WithMultilineArgs(),
 			renderer.WithArgs(append(args, []renderer.Argument{
-				{Name: protocol.ID, Type: protocol.SCALAR_ID},
 				{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
 				{Name: protocol.SORT, Type: "[" + className + protocol.SUFFIX_SORT_INPUT + "!]"},
 				{Name: protocol.DISTINCT, Type: "[" + protocol.SCALAR_STRING + "!]"},
@@ -644,11 +775,17 @@ func (my *Renderer) renderMutation() error {
 				}...))
 			}
 
-			if my.allows(class, protocol.OP_UPDATE) && len(my.writableFields(class, protocol.OP_UPDATE)) > 0 {
+			if my.allows(class, protocol.OP_UPDATE) && len(my.writableFields(class, protocol.OP_UPDATE)) > 0 && len(class.ConflictTargets()) > 0 {
 				my.writeLine("  # ", class.Name, "插入或更新（按on列冲突，缺省主键）")
+				onType := className + "ConflictTarget"
+				defaultTarget := "PRIMARY"
+				if _, ok := class.PrimaryConflictTarget(); !ok {
+					onType += "!"
+					defaultTarget = ""
+				}
 				my.writeField(protocol.UPSERT+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
 					{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_INPUT + "!]!"},
-					{Name: protocol.ON, Type: "[" + protocol.SCALAR_STRING + "!]"},
+					{Name: protocol.ON, Type: onType, Default: defaultTarget},
 				}...))
 			}
 
@@ -658,8 +795,14 @@ func (my *Renderer) renderMutation() error {
 			if batchPlural == className {
 				batchPlural += protocol.SUFFIX_MANY
 			}
-			my.writeField(protocol.UPDATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_INPUT + "!"}, {Name: protocol.ID, Type: protocol.SCALAR_ID}, {Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT}}...))
-			my.writeField(protocol.UPDATE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs([]renderer.Argument{{Name: protocol.ID, Type: protocol.SCALAR_ID + "!"}, {Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_INPUT + "!"}}...))
+			args := []renderer.Argument{{Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_INPUT + "!"}}
+			args = append(args, my.keyArguments(className, class, false)...)
+			args = append(args, renderer.Argument{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT})
+			my.writeField(protocol.UPDATE+className, className, renderer.NonNull(), renderer.WithArgs(args...))
+			if key := my.keyArguments(className, class, true); len(key) > 0 {
+				key = append(key, renderer.Argument{Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_INPUT + "!"})
+				my.writeField(protocol.UPDATE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
+			}
 			my.writeField(protocol.UPDATE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}, {Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_INPUT + "!"}}...))
 		}
 
@@ -669,8 +812,11 @@ func (my *Renderer) renderMutation() error {
 				batchPlural += protocol.SUFFIX_MANY
 			}
 			my.writeLine("  # ", class.Name, "删除")
-			my.writeField(protocol.DELETE+className, protocol.SCALAR_INT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.ID, Type: protocol.SCALAR_ID}, {Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT}}...))
-			my.writeField(protocol.DELETE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs([]renderer.Argument{{Name: protocol.ID, Type: protocol.SCALAR_ID + "!"}}...))
+			args := append(my.keyArguments(className, class, false), renderer.Argument{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT})
+			my.writeField(protocol.DELETE+className, protocol.SCALAR_INT, renderer.NonNull(), renderer.WithArgs(args...))
+			if key := my.keyArguments(className, class, true); len(key) > 0 {
+				my.writeField(protocol.DELETE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
+			}
 			my.writeField(protocol.DELETE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
 		}
 		if my.allows(class, protocol.OP_RESTORE) && class.SoftDelete != nil {
@@ -678,13 +824,30 @@ func (my *Renderer) renderMutation() error {
 			if batchPlural == className {
 				batchPlural += protocol.SUFFIX_MANY
 			}
-			my.writeField("restore"+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs([]renderer.Argument{{Name: protocol.ID, Type: protocol.SCALAR_ID + "!"}}...))
+			if key := my.keyArguments(className, class, true); len(key) > 0 {
+				my.writeField("restore"+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
+			}
 			my.writeField("restore"+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
 		}
 	})
 
 	my.writeLine("}")
 	return nil
+}
+
+func (*Renderer) keyArguments(className string, class *protocol.Class, required bool) []renderer.Argument {
+	primaryKeys := class.PrimaryKeyFields()
+	if len(primaryKeys) == 0 {
+		return nil
+	}
+	name, typeName := protocol.ID, protocol.SCALAR_ID
+	if len(primaryKeys) > 1 {
+		name, typeName = protocol.KEY, className+protocol.SUFFIX_KEY_INPUT
+	}
+	if required {
+		typeName += "!"
+	}
+	return []renderer.Argument{{Name: name, Type: typeName}}
 }
 
 // statsSpecs 聚合类型表：一份定义同时驱动聚合结果类型与having过滤类型

@@ -239,15 +239,15 @@ func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) ([]any,
 		}
 		args[i] = slot.Resolve(variables)
 		if slot.List {
-			args[i] = listArg(args[i])
+			args[i] = ListArg(args[i])
 		}
 	}
 	return args, nil
 }
 
-// listArg 列表槽位规范化：单值按GraphQL规范强转单元素列表，
+// ListArg 列表槽位规范化：单值按GraphQL规范强转单元素列表，
 // 同质元素收敛为具体类型切片（驱动无法编码 []any 数组）
-func listArg(value any) any {
+func ListArg(value any) any {
 	list, ok := value.([]any)
 	if !ok {
 		if value == nil {

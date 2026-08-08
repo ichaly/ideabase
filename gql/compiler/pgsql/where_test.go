@@ -154,7 +154,7 @@ func (my *_DialectSuite) TestWhereGuards() {
 	for name, c := range map[string]struct{ query, wants string }{
 		"查询整体变量where":   {`query ($w: UserWhereInput) { users(where: $w) { items { id } } }`, "整体变量"},
 		"变更整体变量where":   {`mutation ($w: UserWhereInput) { updateUser(input: { name: "x" }, where: $w) { id } }`, "整体变量"},
-		"变更空where剪空后报错": {`mutation { updateUser(input: { name: "x" }, where: {}) { id } }`, "需要id或where条件"},
+		"变更空where剪空后报错": {`mutation { updateUser(input: { name: "x" }, where: {}) { id } }`, "需要主键或where条件"},
 	} {
 		my.Run(name, func() {
 			doc, gqlErr := gqlparser.LoadQuery(my.schema, c.query)

@@ -22,7 +22,7 @@ GraphQL 请求
 | 组件 | 职责 |
 |------|------|
 | `metadata` | 四种加载器（pgsql/mysql/file/config）多源融合，自动推导关系并在虚拟字段挂载 join 元数据 |
-| `protocol` | 元数据结构（Class/Field/Relation）与协议常量，方言唯一允许依赖的包 |
+| `protocol` | 元数据结构（Class/Field/Relation/Constraint/Routine）与协议常量，方言唯一允许依赖的包 |
 | `renderer` | 从元数据生成 GraphQL schema（Result/WhereInput/SortInput/CreateInput/UpdateInput） |
 | `compiler` | 编译上下文（对象池、参数槽位、全局别名计数）与 Dialect 接口 |
 | `compiler/pgsql` | PostgreSQL 方言：SELECT 单元化编译 + 变更 CTE |
@@ -57,7 +57,8 @@ fmt.Println(snapshot.Fingerprint(), snapshot.Capabilities())
 ## 查询能力
 
 - 过滤：`where: { name: { eq/ne/gt/ge/lt/le/in/like/iLike/regex/iRegex/is/hasKey... } }`，
-  支持 `and/or/not` 任意组合；`id: X` 是主键等值的快捷方式
+  支持 `and/or/not` 任意组合；单主键用 `id: X` 快捷定位，复合主键由自省生成
+  实体专属 `XKeyInput`，例如 `orders(key: {tenantId: 7, code: "A"})`
 - 排序：`sort: { name: ASC, age: DESC_NULLS_LAST }`（单对象或列表均可）
 - 分页：`limit/offset` + `total`（窗口函数一次查询同时取数与总数）；
   游标分页 `first/after`、`last/before` + `pageInfo{hasNext,hasPrev,start,end}`，
@@ -91,20 +92,36 @@ fmt.Println(snapshot.Fingerprint(), snapshot.Capabilities())
   递归 CTE 单查询全树遍历，depth 缺省 5（1~32，限深防爆炸）；建议 parent_id 建索引
 - 去重：`distinct: ["列"]` 编译为 DISTINCT ON；Json 列支持
   `contains/containedIn`（jsonb @>/<@，可配 GIN 索引）
-- 变更：`createX(input)` / `updateX(input, id|where)` / `deleteX(id|where)`，
+- 变更：`createX(input)` / `updateX(input, id|key|where)` / `deleteX(id|key|where)`，
   变更 CTE + 读回单条 SQL 原子完成；update/delete 强制要求条件
 - 主键策略：实体 `id-generator` 支持 `database`（缺省，数据库自增/UUID default）、
   `snowflake` 与 `WithIDGenerator` 注册的自定义策略；生成发生在缓存计划执行期，
   批量和嵌套创建逐行生成且不重复
 - 批量与 upsert：`createUsers(input: [..!]!)` 多行单条 INSERT（约束：参数总数
-  受 PG 协议 65535 上限，万行级请分批）；`upsertUsers(input, on: ["email"])`（`on` 兼容单值写法 `on: "email"`）
-  ON CONFLICT DO UPDATE，on 缺省主键
+  受 PG 协议 65535 上限，万行级请分批）；`on` 是由真实 primary/unique 约束生成的
+  `UserConflictTarget` 枚举，例如 `upsertUsers(input: [...], on: UNIQUE_1)`。
+  partial/expression/deferrable unique 不会被误报为通用冲突目标；存在主键时 `on` 可省略
 - 嵌套写入：输入中列表关系字段接受 `{connect:[ID!], disconnect:[ID!], create:[子CreateInput!]}`
   （connect/disconnect 挂接解除既有行，create 内联建新行并自动填外键），
   一对多改外键、多对多插删中间表，与主变更同语句原子；携带关系操作的
-  更新必须按 id 定位。注意 PG 快照语义：同请求读回看不到关系变更，
+  更新必须按主键定位。注意 PG 快照语义：同请求读回看不到关系变更，
   需后续查询确认（写入本身原子生效）
 - GraphQL 变量：编译为参数槽位，同一查询文本的计划可缓存复用
+
+### PostgreSQL catalog 契约
+
+引擎直接读取 `pg_catalog`，一次构建保留列序、default、identity/generated、enum/domain、
+array、PK/unique/FK/check/exclusion、partial/expression/include index、table/view/materialized
+view/partitioned/foreign table，以及重载 function/procedure 的结构化参数和返回事实。
+
+- `NOT NULL DEFAULT` 在 `CreateInput` 中可省略；identity/generated 不进入写输入
+- 数据库 enum 只有在类型名和值都能无损表示为 GraphQL Name 时才生成 enum，否则构建失败，
+  可用显式 type mapping 裁决，绝不静默改值
+- PostgreSQL array 以真实 GraphQL list 暴露并可参数化写入；尚未实现的数组过滤不会出现在自省
+- view/materialized view/foreign table 默认只读；没有可执行 Mutation 就不生成 Mutation 字段
+- 复合主键保留每列原生类型并生成 typed `KeyInput`；当前不支持的复合关系嵌套写入不会出现在输入类型
+- `CatalogFingerprint()` 忽略可信 tenant schema 标识符但包含真实结构，用于判断多租户 catalog
+  能否共享 canonical Schema/logical plan；SQL 始终使用配置中的 schema 限定表名
 
 ```go
 meta, err := gql.NewMetadata(k, db,

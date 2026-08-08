@@ -1,1 +1,4 @@
-{"sha256":"cf3171e1a9e83b41c62f9780c93de30639e4e19b0f045e5bc08f9abe22c4d763"}
+{
+  "sha256": "4973e932be4ede69a77f14370b8b5157c21a517ea9cebab18664c1824825dd73",
+  "classification": "security-breaking: upsert on changed from arbitrary String columns to catalog-backed ConflictTarget enum"
+}

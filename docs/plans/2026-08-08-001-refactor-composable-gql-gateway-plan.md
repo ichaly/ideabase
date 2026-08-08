@@ -349,7 +349,7 @@ flowchart TB
 
 ---
 
-- [ ] U3. **深化 PostgreSQL 目录与类型约束模型**
+- [x] U3. **深化 PostgreSQL 目录与类型约束模型**
 
 **Goal:** 从数据库真实推导 default、identity/generated、unique/index、check、enum/domain、array、view、复合键和关系能力，为“设计数据库即可获得正确 API”提供事实基础。
 

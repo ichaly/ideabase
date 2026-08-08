@@ -1174,7 +1174,7 @@ func TestFinalizeConfiguredRawKeys(t *testing.T) {
 	meta.finalize()
 
 	assert.Equal(t, "Custom", class.Fields["userId"].Type, "配置原文键(表名/列名)显式指定的类型不应被finalize覆盖")
-	assert.Equal(t, protocol.SCALAR_ID, class.Fields["id"].Type, "未配置的主键仍应定型为ID")
+	assert.Equal(t, "integer", class.Fields["id"].Type, "复合主键的未配置列保留原生类型供KeyInput使用")
 }
 
 // TestNewMetadataEmptyNodesError 所有加载器执行后无任何实体：

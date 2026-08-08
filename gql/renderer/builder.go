@@ -44,6 +44,10 @@ func build(f *Field) string {
 			sb.WriteString(arg.Name)
 			sb.WriteString(": ")
 			sb.WriteString(arg.Type)
+			if arg.Default != "" {
+				sb.WriteString(" = ")
+				sb.WriteString(arg.Default)
+			}
 			if i < len(f.Args)-1 {
 				sb.WriteByte('\n')
 			}
@@ -61,6 +65,10 @@ func build(f *Field) string {
 			sb.WriteString(arg.Name)
 			sb.WriteString(": ")
 			sb.WriteString(arg.Type)
+			if arg.Default != "" {
+				sb.WriteString(" = ")
+				sb.WriteString(arg.Default)
+			}
 		}
 		sb.WriteByte(')')
 		tail()

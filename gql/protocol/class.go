@@ -21,6 +21,11 @@ type Class struct {
 	IDGenerator string                 `json:"idGenerator,omitempty"` // 主键策略：database/snowflake/自定义名
 	Generate    IDGenerator            `json:"-"`                     // 启动时绑定，执行计划直接引用
 	IsThrough   bool                   `json:"isThrough"`             // 是否为中间表关系表
+	Schema      string                 `json:"schema,omitempty"`
+	TableKind   TableKind              `json:"tableKind,omitempty"`
+	ReadOnly    bool                   `json:"readOnly,omitempty"`
+	Constraints []*Constraint          `json:"constraints,omitempty"`
+	Indexes     []*Index               `json:"indexes,omitempty"`
 }
 
 // AddRelation 追加关系到集合，按身份键去重（db与config声明同一关系时只保留一条）
@@ -97,6 +102,7 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 	return utl.Marshal(Class{
 		Name:        my.Name,
 		Table:       my.Table,
+		Schema:      my.Schema,
 		Fields:      fields,
 		Virtual:     my.Virtual,
 		PrimaryKeys: my.PrimaryKeys,
@@ -109,5 +115,9 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		Where:       my.Where,
 		Permissions: my.Permissions,
 		IDGenerator: my.IDGenerator,
+		TableKind:   my.TableKind,
+		ReadOnly:    my.ReadOnly,
+		Constraints: my.Constraints,
+		Indexes:     my.Indexes,
 	})
 }

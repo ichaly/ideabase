@@ -252,7 +252,7 @@ func TestExecutorBulk(t *testing.T) {
 	data = run(`mutation { upsertUsers(input: [
 		{ name: "A2", email: "a@x.com" },
 		{ name: "C", email: "c@x.com" }
-	], on: ["email"]) { name email } }`, nil)
+	], on: UNIQUE_1) { name email } }`, nil)
 	require.Len(t, data["upsertUsers"].([]interface{}), 2)
 	users := run(`query { users(sort: { name: ASC }) { items { name } total } }`, nil)["users"].(map[string]interface{})
 	require.EqualValues(t, 3, users["total"], "upsert应更新1条插入1条")
@@ -647,7 +647,7 @@ func TestExecutorScope(t *testing.T) {
 	require.Equal(t, "own", name, "被拒绝后行未被篡改")
 
 	// 安全回归：别租户用本租户行的唯一键 upsert → DO UPDATE 被作用域 WHERE 阻止，不劫持
-	reply = executor.run(ctx2, `mutation { upsertUsers(input: [{ name: "hijacked", email: "new1@x.com" }], on: ["email"]) { id } }`, nil, "")
+	reply = executor.run(ctx2, `mutation { upsertUsers(input: [{ name: "hijacked", email: "new1@x.com" }], on: UNIQUE_1) { id } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	var hijTenant int
 	require.NoError(t, db.Raw(`SELECT name, tenant_id FROM users WHERE email = 'new1@x.com'`).Row().Scan(&name, &hijTenant))

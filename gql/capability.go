@@ -10,6 +10,7 @@ import (
 
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -89,22 +90,28 @@ func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
 			if plural != name {
 				add("Mutation", protocol.CREATE+plural, class, protocol.OP_INSERT)
 			}
-			if update {
+			if update && len(class.ConflictTargets()) > 0 {
 				addMany("Mutation", protocol.UPSERT+plural, class, protocol.OP_INSERT, protocol.OP_UPDATE)
 			}
 		}
 		if update {
 			add("Mutation", protocol.UPDATE+name, class, protocol.OP_UPDATE)
-			add("Mutation", protocol.UPDATE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_UPDATE)
+			if len(class.PrimaryKeyFields()) > 0 {
+				add("Mutation", protocol.UPDATE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_UPDATE)
+			}
 			add("Mutation", protocol.UPDATE+batch, class, protocol.OP_UPDATE)
 		}
 		if renderer.allows(class, protocol.OP_DELETE) {
 			add("Mutation", protocol.DELETE+name, class, protocol.OP_DELETE)
-			add("Mutation", protocol.DELETE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_DELETE)
+			if len(class.PrimaryKeyFields()) > 0 {
+				add("Mutation", protocol.DELETE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_DELETE)
+			}
 			add("Mutation", protocol.DELETE+batch, class, protocol.OP_DELETE)
 		}
 		if renderer.allows(class, protocol.OP_RESTORE) && class.SoftDelete != nil {
-			add("Mutation", "restore"+name+protocol.SUFFIX_BY_PK, class, protocol.OP_RESTORE)
+			if len(class.PrimaryKeyFields()) > 0 {
+				add("Mutation", "restore"+name+protocol.SUFFIX_BY_PK, class, protocol.OP_RESTORE)
+			}
 			add("Mutation", "restore"+batch, class, protocol.OP_RESTORE)
 		}
 	}
@@ -221,6 +228,10 @@ func snapshotContract(executor *Executor, schema string, capabilities []Capabili
 			classes = append(classes, class)
 		}
 	}
+	routines := make([]*protocol.Routine, 0, len(executor.metadata.Routines))
+	for _, key := range utl.SortKeys(executor.metadata.Routines) {
+		routines = append(routines, executor.metadata.Routines[key])
+	}
 	runtime := struct {
 		Dialect       string
 		Schema        string
@@ -251,8 +262,9 @@ func snapshotContract(executor *Executor, schema string, capabilities []Capabili
 		Schema       string
 		Capabilities []Capability
 		Classes      []*protocol.Class
+		Routines     []*protocol.Routine
 		Runtime      any
-	}{schemaWithoutComments(schema), capabilities, classes, runtime})
+	}{schemaWithoutComments(schema), capabilities, classes, routines, runtime})
 }
 
 func sortedNodeNames(metadata *Metadata) []string {

@@ -3,10 +3,10 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/ichaly/ideabase/gql/internal"
 	"sort"
 	"time"
 
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
 	"github.com/samber/lo"
@@ -18,6 +18,16 @@ import (
 type baseLoader struct {
 	db  *gorm.DB
 	cfg *internal.Config
+}
+
+type catalogData struct {
+	Tables      []tableInfo      `json:"tables"`
+	Columns     []columnInfo     `json:"columns"`
+	PrimaryKeys []primaryKeyInfo `json:"primaryKeys"`
+	ForeignKeys []foreignKeyInfo `json:"foreignKeys"`
+	Constraints []constraintInfo `json:"constraints"`
+	Indexes     []indexInfo      `json:"indexes"`
+	Routines    []routineInfo    `json:"routines"`
 }
 
 // loadMeta 通用数据库元数据加载主流程
@@ -32,12 +42,7 @@ func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface
 	}
 	defer rows.Close()
 
-	var (
-		tables      []tableInfo
-		columns     []columnInfo
-		primaryKeys []primaryKeyInfo
-		foreignKeys []foreignKeyInfo
-	)
+	var catalog catalogData
 	// 假设rows只返回一行JSON，解析为结构体
 	if rows.Next() {
 		var jsonData []byte
@@ -45,25 +50,17 @@ func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface
 			return fmt.Errorf("扫描元数据结果失败: %w", err)
 		}
 		// 解析JSON为结构体
-		if err := json.Unmarshal(jsonData, &struct {
-			Tables      *[]tableInfo      `json:"tables"`
-			Columns     *[]columnInfo     `json:"columns"`
-			PrimaryKeys *[]primaryKeyInfo `json:"primaryKeys"`
-			ForeignKeys *[]foreignKeyInfo `json:"foreignKeys"`
-		}{
-			&tables, &columns, &primaryKeys, &foreignKeys,
-		}); err != nil {
+		if err := json.Unmarshal(jsonData, &catalog); err != nil {
 			return fmt.Errorf("解析元数据JSON失败: %w", err)
 		}
 	}
+	return my.loadCatalog(h, catalog)
+}
 
-	// 外键按(表,约束,列序)排序：复合外键列序不可乱（与目标列按位对齐），
-	// 中间表fks[0/1]判定与关系生成顺序跨方言跨启动确定
-	// （MySQL的JSON_ARRAYAGG不支持聚合内ORDER BY，无法在SQL层保证）
-	fkKey := func(fk foreignKeyInfo) string {
-		return fmt.Sprintf("%s\x00%s\x00%03d\x00%s", fk.SourceTable, fk.ConstraintName, fk.Position, fk.SourceColumn)
-	}
-	sort.Slice(foreignKeys, func(i, j int) bool { return fkKey(foreignKeys[i]) < fkKey(foreignKeys[j]) })
+func (my *baseLoader) loadCatalog(h protocol.Hoster, catalog catalogData) error {
+	tables, columns := catalog.Tables, catalog.Columns
+	primaryKeys, foreignKeys := catalog.PrimaryKeys, catalog.ForeignKeys
+	constraints, indexes, routines := catalog.Constraints, catalog.Indexes, catalog.Routines
 
 	// 组装Class结构，主索引为表名
 	classMap := make(map[string]*protocol.Class)
@@ -74,29 +71,150 @@ func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface
 			Fields:      make(map[string]*protocol.Field),
 			PrimaryKeys: []string{},
 			Description: t.TableDescription,
+			Schema:      t.Schema,
+			TableKind:   protocol.TableKind(t.TableKind),
+			ReadOnly:    protocol.TableKind(t.TableKind).ReadOnly(),
 		}
 	}
 	// 组装字段信息
 	for _, c := range columns {
 		if class, ok := classMap[c.TableName]; ok {
-			class.Fields[c.ColumnName] = &protocol.Field{
+			field := &protocol.Field{
 				Name:        c.ColumnName,
 				Column:      c.ColumnName,
 				Type:        c.DataType,
 				Nullable:    c.IsNullable.Bool(),
 				Description: c.ColumnDescription,
 			}
+			if c.TypeKind != "" {
+				field.Catalog = &protocol.Column{Ordinal: c.Ordinal, Type: protocol.TypeRef{
+					Schema: c.TypeSchema, Name: c.TypeName, Kind: protocol.TypeKind(c.TypeKind),
+					Base: c.BaseType, EnumLabels: c.EnumLabels,
+				}}
+			}
+			if c.ElementName != "" && field.Catalog != nil {
+				field.Catalog.Type.Element = &protocol.TypeRef{
+					Schema: c.ElementSchema, Name: c.ElementName, Kind: protocol.TypeKind(c.ElementKind), Base: c.ElementBase,
+					EnumLabels: c.EnumLabels,
+				}
+			}
+			if c.DefaultExpression != "" {
+				if field.Catalog == nil {
+					field.Catalog = &protocol.Column{Ordinal: c.Ordinal}
+				}
+				field.Catalog.Default = &protocol.ColumnDefault{Expression: c.DefaultExpression}
+			}
+			if c.GenerationKind != "" {
+				if field.Catalog == nil {
+					field.Catalog = &protocol.Column{Ordinal: c.Ordinal}
+				}
+				field.Catalog.Generation = &protocol.ColumnGeneration{
+					Kind: protocol.GenerationKind(c.GenerationKind), Expression: c.GenerationExpression,
+				}
+				field.ReadOnly = true
+			}
+			class.Fields[c.ColumnName] = field
+		} else {
+			return fmt.Errorf("catalog column references missing table %q", c.TableName)
+		}
+	}
+	for _, ci := range constraints {
+		class, ok := classMap[ci.TableName]
+		if !ok {
+			return fmt.Errorf("catalog constraint %q references missing table %q", ci.Name, ci.TableName)
+		}
+		if ci.ReferencedTable != "" {
+			if _, ok := classMap[ci.ReferencedTable]; !ok {
+				return fmt.Errorf("catalog constraint %q references missing table %q", ci.Name, ci.ReferencedTable)
+			}
+			for _, col := range ci.ReferencedColumns {
+				if classMap[ci.ReferencedTable].Fields[col] == nil {
+					return fmt.Errorf("catalog constraint %q references missing column %q", ci.Name, col)
+				}
+			}
+		}
+		for _, col := range ci.Columns {
+			if class.Fields[col] == nil {
+				return fmt.Errorf("catalog constraint %q references missing column %q", ci.Name, col)
+			}
+		}
+		constraint := &protocol.Constraint{
+			Name: ci.Name, Kind: protocol.ConstraintKind(ci.Kind), Columns: ci.Columns,
+			ReferencedTable: ci.ReferencedTable, ReferencedColumns: ci.ReferencedColumns,
+			Expression: ci.Expression, Deferrable: ci.Deferrable, Validated: ci.Validated,
+			OnUpdate: ci.OnUpdate, OnDelete: ci.OnDelete, Match: ci.Match,
+		}
+		class.Constraints = append(class.Constraints, constraint)
+		switch constraint.Kind {
+		case protocol.ConstraintPrimary:
+			for _, column := range constraint.Columns {
+				class.Fields[column].IsPrimary = true
+				class.PrimaryKeys = append(class.PrimaryKeys, column)
+				primaryKeys = append(primaryKeys, primaryKeyInfo{TableName: ci.TableName, ColumnName: column})
+			}
+		case protocol.ConstraintUnique:
+			if len(constraint.Columns) == 1 {
+				class.Fields[constraint.Columns[0]].IsUnique = true
+			}
+		case protocol.ConstraintForeign:
+			if len(constraint.Columns) == 0 || len(constraint.Columns) != len(constraint.ReferencedColumns) {
+				return fmt.Errorf("catalog foreign key %q has mismatched columns", constraint.Name)
+			}
+			for position, column := range constraint.Columns {
+				foreignKeys = append(foreignKeys, foreignKeyInfo{
+					SourceTable: ci.TableName, SourceColumn: column,
+					TargetTable: ci.ReferencedTable, TargetColumn: ci.ReferencedColumns[position],
+					ConstraintName: ci.Name, Position: position + 1,
+				})
+			}
+		}
+	}
+	for _, ii := range indexes {
+		class, ok := classMap[ii.TableName]
+		if !ok {
+			return fmt.Errorf("catalog index %q references missing table %q", ii.Name, ii.TableName)
+		}
+		keys := make([]protocol.IndexKey, len(ii.Keys))
+		for i, key := range ii.Keys {
+			if key.Column != "" && class.Fields[key.Column] == nil {
+				return fmt.Errorf("catalog index %q references missing column %q", ii.Name, key.Column)
+			}
+			if key.Column == "" && key.Expression == "" {
+				return fmt.Errorf("catalog index %q contains an empty key", ii.Name)
+			}
+			keys[i] = protocol.IndexKey{Column: key.Column, Expression: key.Expression}
+		}
+		for _, column := range ii.Include {
+			if class.Fields[column] == nil {
+				return fmt.Errorf("catalog index %q includes missing column %q", ii.Name, column)
+			}
+		}
+		index := &protocol.Index{Name: ii.Name, Keys: keys, Unique: ii.Unique, Primary: ii.Primary, Invalid: ii.Invalid, Deferred: ii.Deferred, Predicate: ii.Predicate, Method: ii.Method, Include: ii.Include}
+		class.Indexes = append(class.Indexes, index)
+		if index.IsUsableConflictTarget() && len(index.Keys) == 1 && !index.Primary {
+			class.Fields[index.Keys[0].Column].IsUnique = true
 		}
 	}
 	// 处理主键信息
 	for _, pk := range primaryKeys {
 		if class, ok := classMap[pk.TableName]; ok {
-			if field, ok := class.Fields[pk.ColumnName]; ok {
-				field.IsPrimary = true
+			field, exists := class.Fields[pk.ColumnName]
+			if !exists {
+				return fmt.Errorf("catalog primary key references missing column %q", pk.ColumnName)
+			}
+			field.IsPrimary = true
+			if !lo.Contains(class.PrimaryKeys, pk.ColumnName) {
 				class.PrimaryKeys = append(class.PrimaryKeys, pk.ColumnName)
 			}
+		} else {
+			return fmt.Errorf("catalog primary key references missing table %q", pk.TableName)
 		}
 	}
+	// 外键包含方言兼容行和上面从一等约束派生的行，统一按位置排序。
+	fkKey := func(fk foreignKeyInfo) string {
+		return fmt.Sprintf("%s\x00%s\x00%06d\x00%s", fk.SourceTable, fk.ConstraintName, fk.Position, fk.SourceColumn)
+	}
+	sort.Slice(foreignKeys, func(i, j int) bool { return fkKey(foreignKeys[i]) < fkKey(foreignKeys[j]) })
 	// 处理外键：按约束聚合（复合外键多行同名收敛为一条关系），关系为一等对象
 	// 进类级Relations集合——同表多外键、复合键、自引用互不覆盖；
 	// 单列关系同时在外键列挂兼容指针（finalize的ID定型与渲染消费）
@@ -104,14 +222,14 @@ func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface
 	for _, g := range groups {
 		sourceClass, ok := classMap[g[0].SourceTable]
 		if !ok {
-			continue
+			return fmt.Errorf("catalog foreign key %q references missing source table %q", g[0].ConstraintName, g[0].SourceTable)
 		}
 		targetClass, ok := classMap[g[0].TargetTable]
 		if !ok {
-			continue
+			return fmt.Errorf("catalog foreign key %q references missing target table %q", g[0].ConstraintName, g[0].TargetTable)
 		}
 		if !columnsExist(sourceClass, targetClass, g) {
-			continue
+			return fmt.Errorf("catalog foreign key %q references missing column", g[0].ConstraintName)
 		}
 
 		sourceCols := lo.Map(g, func(fk foreignKeyInfo, _ int) string { return fk.SourceColumn })
@@ -153,6 +271,19 @@ func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface
 	for index, class := range classMap {
 		if err := h.PutNode(index, class); err != nil {
 			return fmt.Errorf("注入Hoster失败: %w", err)
+		}
+	}
+	if rh, ok := h.(protocol.RoutineHoster); ok {
+		for _, info := range routines {
+			arguments := make([]protocol.RoutineArgument, len(info.Arguments))
+			for i, argument := range info.Arguments {
+				arguments[i] = protocol.RoutineArgument{Name: argument.Name, Mode: argument.Mode, Type: argument.Type, Default: argument.Default}
+			}
+			routine := &protocol.Routine{Schema: info.Schema, Name: info.Name, Kind: protocol.RoutineKind(info.Kind), Identity: info.IdentityArguments, Arguments: arguments, ReturnType: info.ReturnType, ReturnsSet: info.ReturnsSet, Volatility: protocol.RoutineVolatility(info.Volatility), SecurityDefiner: info.SecurityDefiner}
+			key := routine.Schema + "." + routine.Name + "(" + routine.Identity + ")"
+			if err := rh.PutRoutine(key, routine); err != nil {
+				return fmt.Errorf("注入Routine失败: %w", err)
+			}
 		}
 	}
 	// 使用当前时间作为版本号
