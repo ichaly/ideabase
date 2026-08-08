@@ -24,6 +24,7 @@ type Class struct {
 	Schema      string                 `json:"schema,omitempty"`
 	TableKind   TableKind              `json:"tableKind,omitempty"`
 	ReadOnly    bool                   `json:"readOnly,omitempty"`
+	Global      bool                   `json:"global,omitempty"` // shared-table下显式声明不按tenant隔离
 	Constraints []*Constraint          `json:"constraints,omitempty"`
 	Indexes     []*Index               `json:"indexes,omitempty"`
 }
@@ -117,6 +118,7 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		IDGenerator: my.IDGenerator,
 		TableKind:   my.TableKind,
 		ReadOnly:    my.ReadOnly,
+		Global:      my.Global,
 		Constraints: my.Constraints,
 		Indexes:     my.Indexes,
 	})

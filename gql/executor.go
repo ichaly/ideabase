@@ -74,25 +74,28 @@ func (my gqlReply) MarshalJSON() ([]byte, error) {
 // 负责解析GraphQL查询、编译为SQL并执行查询，支持多种数据库方言
 // 可作为Fiber插件集成到Web服务中，提供标准的GraphQL API
 type Executor struct {
-	intro        *intro.Handler      // 自省处理器，处理__schema和__type查询
-	schema       *ast.Schema         // GraphQL模式定义
-	database     *gorm.DB            // 数据库连接，用于执行生成的SQL
-	metadata     *Metadata           // 元数据信息，包含表结构、关系等
-	compiler     *Compiler           // 编译器，将GraphQL查询编译为SQL
-	cache        *planCache          // 执行计划缓存，命中路径零解析零编译
-	flight       singleflight.Group  // 未命中收敛：并发的同一冷查询只解析编译一次
-	feedMu       sync.Mutex          // 保护feeds及各feed的订阅者集合
-	feeds        map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
-	resolvers    map[string]Resolver // 自定义字段解析器注册表
-	source       string              // 原始schema文本，Register合并注册声明时重建的基底
-	documents    map[string]string   // 持久化查询文档：操作名 -> 查询文本
-	remotes      map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
-	cdc          notifier            // CDC唤醒源（按数据库驱动从注册表选取）
-	frozen       atomic.Bool         // 首次执行后冻结注册表（rebuild与serving不互斥，运行期注册即数据竞争）
-	finalizeOnce sync.Once
-	snapshot     *Snapshot
-	snapshotErr  error
-	validation   *validatorrules.Rules // 快照自有验证规则，不修改gqlparser全局状态
+	intro         *intro.Handler      // 自省处理器，处理__schema和__type查询
+	schema        *ast.Schema         // GraphQL模式定义
+	database      *gorm.DB            // 数据库连接，用于执行生成的SQL
+	metadata      *Metadata           // 元数据信息，包含表结构、关系等
+	compiler      *Compiler           // 编译器，将GraphQL查询编译为SQL
+	cache         *planCache          // 执行计划缓存，命中路径零解析零编译
+	flight        singleflight.Group  // 未命中收敛：并发的同一冷查询只解析编译一次
+	feedMu        sync.Mutex          // 保护feeds及各feed的订阅者集合
+	feeds         map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
+	resolvers     map[string]Resolver // 自定义字段解析器注册表
+	source        string              // 原始schema文本，Register合并注册声明时重建的基底
+	documents     map[string]string   // 持久化查询文档：操作名 -> 查询文本
+	remotes       map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
+	cdc           notifier            // CDC唤醒源（按数据库驱动从注册表选取）
+	frozen        atomic.Bool         // 首次执行后冻结注册表（rebuild与serving不互斥，运行期注册即数据竞争）
+	finalizeOnce  sync.Once
+	snapshot      *Snapshot
+	snapshotErr   error
+	validation    *validatorrules.Rules // 快照自有验证规则，不修改gqlparser全局状态
+	tenantRouter  *TenantRouter
+	tenantSources map[string]*Executor
+	revocation    *RevocationBarrier
 }
 
 // options 读取schema级选项（元数据未配置时为零值安全默认）
@@ -191,6 +194,9 @@ func (my *Executor) mutable(operation string) error {
 
 // Snapshot 返回执行器实际使用的不可变Schema/Handler契约，并冻结启动期注册表。
 func (my *Executor) Snapshot() (*Snapshot, error) {
+	if my.tenantRouter != nil {
+		return my.snapshot, my.snapshotErr
+	}
 	my.finalizeOnce.Do(func() {
 		my.snapshot, my.snapshotErr = buildSnapshot(my)
 		my.frozen.Store(true)
@@ -489,6 +495,14 @@ func materialize(v interface{}) interface{} {
 // execute 执行核心：无resolver的成功结果以直通字节形态返回（raw）
 func (my *Executor) execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	var r gqlReply
+	if my.tenantRouter != nil {
+		target, err := my.tenantTarget(ctx)
+		if err != nil {
+			r.Errors = gqlErrors(err)
+			return r
+		}
+		return target.execute(ctx, query, variables, operationName)
+	}
 	if variables == nil && strings.IndexByte(query, '$') >= 0 {
 		variables = make(map[string]interface{})
 	}

@@ -105,6 +105,8 @@ type ClassConfig struct {
 
 	// 行级作用域：编译期强制注入的过滤（租户/属主隔离），值由 gql.WithScope 在请求上下文注入
 	Scope []ScopeConfig `mapstructure:"scope"`
+	// Global 显式声明shared-table模式下该实体跨租户共享；默认false必须有tenant scope。
+	Global bool `mapstructure:"global"`
 
 	// 允许的GraphQL操作；为空表示保持现有全开放语义
 	Operations []string          `mapstructure:"operations"`

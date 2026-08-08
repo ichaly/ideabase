@@ -30,6 +30,13 @@ type feed struct {
 // 首次立即推送当前结果；ctx取消后通道关闭
 // 依赖数据库 wal_level=logical 与连接账号的REPLICATION权限
 func (my *Executor) subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
+	if my.tenantRouter != nil {
+		target, err := my.tenantTarget(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return target.subscribe(ctx, query, variables, operationName)
+	}
 	if _, err := my.Snapshot(); err != nil {
 		return nil, err
 	}

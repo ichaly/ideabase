@@ -123,6 +123,9 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	if len(classConfig.Search) > 0 {
 		newClass.Search = classConfig.Search
 	}
+	if classConfig.Global {
+		newClass.Global = true
+	}
 	for _, s := range classConfig.Scope {
 		newClass.Scope = append(newClass.Scope, protocol.ScopeRule(s)) // 字段同构，直接转换
 	}

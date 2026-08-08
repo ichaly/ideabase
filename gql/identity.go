@@ -10,19 +10,20 @@ type Identity struct {
 	tenant, subject, actor, requestID string
 	roles                             []string
 	claims                            map[string]any
-	policyRevision                    uint64
+	policyRevision, credentialEpoch   uint64
 }
 
 // IdentityInput is the trusted boundary for constructing an Identity. Callers
 // must populate it from an authenticator or another trusted host integration.
 type IdentityInput struct {
-	Tenant         string
-	Subject        string
-	Actor          string
-	Roles          []string
-	Claims         map[string]any
-	PolicyRevision uint64
-	RequestID      string
+	Tenant          string
+	Subject         string
+	Actor           string
+	Roles           []string
+	Claims          map[string]any
+	PolicyRevision  uint64
+	CredentialEpoch uint64
+	RequestID       string
 }
 
 // IdentityConfig and IdentityParams are descriptive aliases for integrations
@@ -44,17 +45,18 @@ func NewIdentity(input IdentityInput) (Identity, error) {
 	return Identity{
 		tenant: input.Tenant, subject: input.Subject, actor: input.Actor,
 		requestID: input.RequestID, roles: append([]string(nil), input.Roles...),
-		claims: claims, policyRevision: input.PolicyRevision,
+		claims: claims, policyRevision: input.PolicyRevision, credentialEpoch: input.CredentialEpoch,
 	}, nil
 }
 
-func (i Identity) Tenant() string         { return i.tenant }
-func (i Identity) Subject() string        { return i.subject }
-func (i Identity) Actor() string          { return i.actor }
-func (i Identity) RequestID() string      { return i.requestID }
-func (i Identity) PolicyRevision() uint64 { return i.policyRevision }
-func (i Identity) Roles() []string        { return append([]string(nil), i.roles...) }
-func (i Identity) Claims() map[string]any { claims, _ := cloneClaims(i.claims); return claims }
+func (i Identity) Tenant() string          { return i.tenant }
+func (i Identity) Subject() string         { return i.subject }
+func (i Identity) Actor() string           { return i.actor }
+func (i Identity) RequestID() string       { return i.requestID }
+func (i Identity) PolicyRevision() uint64  { return i.policyRevision }
+func (i Identity) CredentialEpoch() uint64 { return i.credentialEpoch }
+func (i Identity) Roles() []string         { return append([]string(nil), i.roles...) }
+func (i Identity) Claims() map[string]any  { claims, _ := cloneClaims(i.claims); return claims }
 
 func cloneClaims(in map[string]any) (map[string]any, error) {
 	if in == nil {
