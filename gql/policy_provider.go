@@ -31,6 +31,7 @@ type PolicyRequest struct {
 	Resource   string
 	Actions    []string
 	FieldUses  []FieldUse
+	Fields     map[FieldUse][]string
 	Values     map[string]any
 }
 

@@ -499,7 +499,7 @@ func (my *Dialect) fixedWhereConjuncts(ctx *compiler.Context, qualifier string, 
 			if i > 0 {
 				ctx.Space("OR")
 			}
-			ctx.Write("(").Write(my.Placeholder(ctx.AddContextSlot(protocol.CONTEXT_ROLE))).Space("=").Write(my.Placeholder(ctx.AddParam(role)))
+			ctx.Write("(").Write(my.Placeholder(ctx.AddParam(role))).Write(" = ANY(").Write(my.Placeholder(ctx.AddContextListSlot(protocol.CONTEXT_ROLES))).Write(")")
 			perm := class.Permissions[role]
 			for _, p := range perm.Filter {
 				ctx.Space("AND")

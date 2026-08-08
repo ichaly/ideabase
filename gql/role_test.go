@@ -31,6 +31,8 @@ func TestIdentityNormalizesTrustedScopeAndLegacyRole(t *testing.T) {
 	require.Equal(t, "tenant-1", got.Tenant())
 	require.Equal(t, "reader", roleValue(ctx), "旧单角色入口使用首个已验证角色")
 	require.Equal(t, []string{"reader", "auditor"}, Roles(ctx))
+	governed := scopeWithRole(ctx, nil, true)
+	require.Equal(t, []string{"reader", "auditor"}, governed[protocol.CONTEXT_ROLES])
 
 	scope := scopeValues(ctx)
 	require.Equal(t, "tenant-1", scope["tenant"], "受控身份字段覆盖同名claim")

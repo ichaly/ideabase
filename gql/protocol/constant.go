@@ -70,7 +70,8 @@ const (
 	SEARCH     = "search"
 	DEPTH      = "depth"
 	// CONTEXT_ROLE is resolved by the executor from the request context.
-	CONTEXT_ROLE = "__gql_role"
+	CONTEXT_ROLE  = "__gql_role"
+	CONTEXT_ROLES = "__gql_roles"
 )
 
 const (

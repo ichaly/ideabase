@@ -216,6 +216,9 @@ func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) ([]any,
 		}
 		if slot.Context != "" { // 行级作用域：从请求上下文取值（认证注入，缺失则nil=匹配不到行）
 			args[i] = scope[slot.Context]
+			if slot.List {
+				args[i] = ListArg(args[i])
+			}
 			continue
 		}
 		if slot.Variable != "" && slot.Cursor >= 0 {
@@ -248,6 +251,10 @@ func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) ([]any,
 // ListArg 列表槽位规范化：单值按GraphQL规范强转单元素列表，
 // 同质元素收敛为具体类型切片（驱动无法编码 []any 数组）
 func ListArg(value any) any {
+	switch value.(type) {
+	case []string, []int64, []float64:
+		return value
+	}
 	list, ok := value.([]any)
 	if !ok {
 		if value == nil {
@@ -308,10 +315,21 @@ func (my *Context) AddListVariable(name string) int {
 // AddContextSlot 添加上下文参数槽位：执行期从scope表按key取值（行级作用域）。
 // 同一key复用一个槽位（值全局相同）——批量写入每行同列共享$N，免槽位膨胀
 func (my *Context) AddContextSlot(key string) int {
+	return my.addContextSlot(key, false)
+}
+
+func (my *Context) AddContextListSlot(key string) int {
+	return my.addContextSlot(key, true)
+}
+
+func (my *Context) addContextSlot(key string, list bool) int {
 	if idx, ok := my.contexts[key]; ok {
+		if list {
+			my.slots[idx-1].List = true
+		}
 		return idx
 	}
-	my.slots = append(my.slots, Slot{Context: key})
+	my.slots = append(my.slots, Slot{Context: key, List: list})
 	idx := len(my.slots)
 	if my.contexts == nil {
 		my.contexts = make(map[string]int)

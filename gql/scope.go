@@ -87,5 +87,6 @@ func scopeWithRole(ctx context.Context, scope map[string]any, needed bool) map[s
 		values[k] = v
 	}
 	values[protocol.CONTEXT_ROLE] = roleValue(ctx)
+	values[protocol.CONTEXT_ROLES] = Roles(ctx)
 	return values
 }

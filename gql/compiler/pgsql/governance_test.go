@@ -31,8 +31,12 @@ func TestGovernancePermissionsAreStableRoleDisjunction(t *testing.T) {
 		"admin": {Select: []string{"id"}},
 	}}
 	require.NoError(t, d.buildWhere(ctx, scope{class: c, qualifier: "users"}, ast.ArgumentList{}, d.fixedWhereConjuncts(ctx, "users", c, protocol.OP_SELECT, "")...))
-	require.Equal(t, `WHERE (($1 = $2) OR ($1 = $3 AND "users"."tenant" = $4))`, ctx.String())
-	require.Equal(t, protocol.CONTEXT_ROLE, ctx.Slots()[0].Context)
+	require.Equal(t, `WHERE (($1 = ANY($2)) OR ($3 = ANY($2) AND "users"."tenant" = $4))`, ctx.String())
+	require.Equal(t, protocol.CONTEXT_ROLES, ctx.Slots()[1].Context)
+	require.True(t, ctx.Slots()[1].List)
+	args, err := compiler.ResolveSlots(ctx.Slots(), nil, map[string]any{protocol.CONTEXT_ROLES: []string{"admin", "zeta"}, "tenant": "t1"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"admin", "zeta"}, args[1])
 }
 
 func TestGovernanceUpsertConflictUsesUpdatePolicy(t *testing.T) {
