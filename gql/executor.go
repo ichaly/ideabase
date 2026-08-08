@@ -42,10 +42,11 @@ type (
 	// gqlReply 表示GraphQL响应
 	// 包含执行结果数据或错误信息
 	gqlReply struct {
-		Data     map[string]interface{} `json:"data,omitempty"`   // 成功结果数据
-		Errors   gqlerror.List          `json:"errors,omitempty"` // 错误信息列表
-		raw      []byte                 // 直通字节：无resolver时DB返回的__root JSON原样输出
-		nullData bool                   // 执行期Non-Null失败需显式输出data:null
+		Data       map[string]interface{} `json:"data,omitempty"`       // 成功结果数据
+		Errors     gqlerror.List          `json:"errors,omitempty"`     // 错误信息列表
+		Extensions map[string]interface{} `json:"extensions,omitempty"` // 执行状态元数据
+		raw        []byte                 // 直通字节：无resolver时DB返回的__root JSON原样输出
+		nullData   bool                   // 执行期Non-Null失败需显式输出data:null
 	}
 )
 
@@ -54,9 +55,10 @@ type (
 func (my gqlReply) MarshalJSON() ([]byte, error) {
 	if my.nullData {
 		return jsonReply.Marshal(struct {
-			Data   any           `json:"data"`
-			Errors gqlerror.List `json:"errors,omitempty"`
-		}{Data: nil, Errors: my.Errors})
+			Data       any                    `json:"data"`
+			Errors     gqlerror.List          `json:"errors,omitempty"`
+			Extensions map[string]interface{} `json:"extensions,omitempty"`
+		}{Data: nil, Errors: my.Errors, Extensions: my.Extensions})
 	}
 	if my.raw == nil || len(my.Errors) > 0 {
 		type alias gqlReply // 别名擦除方法集，避免递归
@@ -66,10 +68,29 @@ func (my gqlReply) MarshalJSON() ([]byte, error) {
 	if len(data) == 0 {
 		data = []byte(`{}`)
 	}
+	if len(my.Extensions) > 0 {
+		return jsonReply.Marshal(struct {
+			Data       stdjson.RawMessage     `json:"data"`
+			Extensions map[string]interface{} `json:"extensions"`
+		}{Data: data, Extensions: my.Extensions})
+	}
 	buf := make([]byte, 0, len(data)+9)
 	buf = append(buf, `{"data":`...)
 	buf = append(buf, data...)
 	return append(buf, '}'), nil
+}
+
+type mutationCommitMetadataKey struct{}
+
+func withMutationCommitMetadata(ctx context.Context) context.Context {
+	return context.WithValue(ctx, mutationCommitMetadataKey{}, true)
+}
+
+func (my gqlReply) mutationCommit(ctx context.Context, state string) gqlReply {
+	if enabled, _ := ctx.Value(mutationCommitMetadataKey{}).(bool); enabled {
+		my.Extensions = map[string]interface{}{"mutationCommit": state}
+	}
+	return my
 }
 
 // Executor GraphQL执行器
@@ -512,8 +533,13 @@ func materialize(v interface{}) interface{} {
 }
 
 // execute 执行核心：无resolver的成功结果以直通字节形态返回（raw）
-func (my *Executor) execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
-	var r gqlReply
+func (my *Executor) execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) (r gqlReply) {
+	mutationState := ""
+	defer func() {
+		if mutationState != "" {
+			r = r.mutationCommit(ctx, mutationState)
+		}
+	}()
 	if my.tenantRouter != nil {
 		target, routed, err := my.tenantDispatch(ctx)
 		if err != nil {
@@ -571,6 +597,9 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 		r.Errors = gqlErrors(err)
 		return r
 	}
+	if plan.operation.Operation == ast.Mutation {
+		mutationState = "rolled_back"
+	}
 	if plan.policyNeeded {
 		if authErr := my.authorize(ctx, plan.operation, variables); authErr != nil {
 			r.Errors = gqlErrors(authErr)
@@ -594,6 +623,9 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 	if err != nil {
 		r.Errors = gqlErrors(err)
 		return r
+	}
+	if mutationState != "" {
+		mutationState = "committed"
 	}
 
 	// 无resolver且无混合自省时跳过解包，序列化期直通输出

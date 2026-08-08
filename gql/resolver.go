@@ -741,15 +741,27 @@ func (my *Executor) executeRootResolvers(ctx context.Context, entry *planEntry, 
 		err = execute(ctx)
 	}
 	if err != nil && len(executionErrors) == 0 {
-		return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
+		reply := gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
+		if operation.Operation == ast.Mutation {
+			return reply.mutationCommit(ctx, "rolled_back")
+		}
+		return reply
 	}
 	if len(executionErrors) > 0 {
-		if stop {
-			return gqlReply{Errors: executionErrors, nullData: true}
+		state := "indeterminate"
+		if mutationRollback {
+			state = "rolled_back"
 		}
-		return gqlReply{Data: data, Errors: append(executionErrors, warnings...)}
+		if stop {
+			return gqlReply{Errors: executionErrors, nullData: true}.mutationCommit(ctx, state)
+		}
+		return gqlReply{Data: data, Errors: append(executionErrors, warnings...)}.mutationCommit(ctx, state)
 	}
-	return gqlReply{Data: data, Errors: warnings}
+	reply := gqlReply{Data: data, Errors: warnings}
+	if operation.Operation == ast.Mutation {
+		return reply.mutationCommit(ctx, "committed")
+	}
+	return reply
 }
 
 func rootFieldExecutionErrors(field *ast.Field, err error, code string, rolledBack bool) gqlerror.List {

@@ -66,6 +66,11 @@ func (my *Executor) Schema() (string, error) {
 	return string([]byte(snapshot.Schema())), nil
 }
 
+// ExecuteOperation executes one named operation from a multi-operation document.
+func (my *Executor) ExecuteOperation(ctx context.Context, query string, variables map[string]any, operationName string) ([]byte, error) {
+	return my.executeBytes(ctx, query, variables, operationName)
+}
+
 // Capabilities returns a deep copy of the frozen execution catalog.
 func (my *Executor) Capabilities() ([]Capability, error) {
 	snapshot, err := my.Snapshot()
