@@ -37,14 +37,14 @@ func (my *Handler) Introspect(operation *ast.OperationDefinition, variables map[
 		case "__typename":
 			result[field.Alias] = "Query"
 		case "__schema":
-			result[field.Alias] = my.project(field.SelectionSet, my.data)
+			result[field.Alias] = my.project(field.SelectionSet, my.data, variables)
 		case "__type":
 			name, err := typeArgument(field, variables)
 			if err != nil {
 				return nil, err
 			}
 			if value, ok := my.types[name]; ok {
-				result[field.Alias] = my.project(field.SelectionSet, value)
+				result[field.Alias] = my.project(field.SelectionSet, value, variables)
 			} else {
 				result[field.Alias] = nil
 			}
@@ -71,12 +71,12 @@ func typeArgument(field *ast.Field, variables map[string]interface{}) (string, e
 }
 
 // project 按选择集投影数据：map按字段取值，数组逐项递归，叶子原样返回
-func (my *Handler) project(set ast.SelectionSet, value interface{}) interface{} {
+func (my *Handler) project(set ast.SelectionSet, value interface{}, variables map[string]interface{}) interface{} {
 	switch node := value.(type) {
 	case []interface{}:
 		out := make([]interface{}, len(node))
 		for i, item := range node {
-			out[i] = my.project(set, item)
+			out[i] = my.project(set, item, variables)
 		}
 		return out
 	case map[string]interface{}:
@@ -90,8 +90,9 @@ func (my *Handler) project(set ast.SelectionSet, value interface{}) interface{} 
 				out[field.Alias] = nil
 				continue
 			}
+			child = filterDeprecated(child, field, variables)
 			if len(field.SelectionSet) > 0 {
-				out[field.Alias] = my.project(field.SelectionSet, child)
+				out[field.Alias] = my.project(field.SelectionSet, child, variables)
 			} else {
 				out[field.Alias] = child
 			}
@@ -100,6 +101,36 @@ func (my *Handler) project(set ast.SelectionSet, value interface{}) interface{} 
 	default:
 		return node
 	}
+}
+
+// filterDeprecated 按标准includeDeprecated参数投影；数据集为共享快照，
+// 过滤时不就地改写，保证并发请求与后续true查询不丢数据。
+func filterDeprecated(value interface{}, field *ast.Field, variables map[string]interface{}) interface{} {
+	items, ok := value.([]interface{})
+	if !ok || len(items) == 0 {
+		return value
+	}
+	if include, _ := field.ArgumentMap(variables)["includeDeprecated"].(bool); include {
+		return value
+	}
+	var out []interface{}
+	for i, item := range items {
+		node, _ := item.(map[string]interface{})
+		deprecated, _ := node["isDeprecated"].(bool)
+		if deprecated {
+			if out == nil {
+				out = append(make([]interface{}, 0, len(items)-1), items[:i]...)
+			}
+			continue
+		}
+		if out != nil {
+			out = append(out, item)
+		}
+	}
+	if out != nil {
+		return out
+	}
+	return value
 }
 
 // ---------- 数据集构建 ----------
@@ -153,7 +184,8 @@ func (my *Handler) fillType(def *ast.Definition) {
 	node["possibleTypes"] = nil
 	node["enumValues"] = nil
 	node["ofType"] = nil
-	node["specifiedByURL"] = nil
+	node["specifiedByURL"] = directiveArgument(def.Directives, "specifiedBy", "url")
+	node["isOneOf"] = nil
 
 	switch def.Kind {
 	case ast.Object, ast.Interface:
@@ -162,14 +194,15 @@ func (my *Handler) fillType(def *ast.Definition) {
 			if strings.HasPrefix(field.Name, "__") {
 				continue // 元字段不出现在fields列表（与规范一致）
 			}
+			deprecated, reason := deprecation(field.Directives)
 			fields = append(fields, map[string]interface{}{
 				"__typename":        "__Field",
 				"name":              field.Name,
 				"description":       description(field.Description),
 				"args":              my.inputValues(field.Arguments),
 				"type":              my.typeRef(field.Type),
-				"isDeprecated":      false,
-				"deprecationReason": nil,
+				"isDeprecated":      deprecated,
+				"deprecationReason": reason,
 			})
 		}
 		node["fields"] = fields
@@ -180,26 +213,31 @@ func (my *Handler) fillType(def *ast.Definition) {
 		}
 		node["interfaces"] = interfaces
 	case ast.InputObject:
+		node["isOneOf"] = def.Directives.ForName("oneOf") != nil
 		inputs := make([]interface{}, 0, len(def.Fields))
 		for _, field := range def.Fields {
+			deprecated, reason := deprecation(field.Directives)
 			inputs = append(inputs, map[string]interface{}{
-				"__typename":   "__InputValue",
-				"name":         field.Name,
-				"description":  description(field.Description),
-				"type":         my.typeRef(field.Type),
-				"defaultValue": defaultValue(field.DefaultValue),
+				"__typename":        "__InputValue",
+				"name":              field.Name,
+				"description":       description(field.Description),
+				"type":              my.typeRef(field.Type),
+				"defaultValue":      defaultValue(field.DefaultValue),
+				"isDeprecated":      deprecated,
+				"deprecationReason": reason,
 			})
 		}
 		node["inputFields"] = inputs
 	case ast.Enum:
 		values := make([]interface{}, 0, len(def.EnumValues))
 		for _, value := range def.EnumValues {
+			deprecated, reason := deprecation(value.Directives)
 			values = append(values, map[string]interface{}{
 				"__typename":        "__EnumValue",
 				"name":              value.Name,
 				"description":       description(value.Description),
-				"isDeprecated":      false,
-				"deprecationReason": nil,
+				"isDeprecated":      deprecated,
+				"deprecationReason": reason,
 			})
 		}
 		node["enumValues"] = values
@@ -237,15 +275,38 @@ func wrap(kind string, inner interface{}) map[string]interface{} {
 func (my *Handler) inputValues(args ast.ArgumentDefinitionList) []interface{} {
 	values := make([]interface{}, 0, len(args))
 	for _, arg := range args {
+		deprecated, reason := deprecation(arg.Directives)
 		values = append(values, map[string]interface{}{
-			"__typename":   "__InputValue",
-			"name":         arg.Name,
-			"description":  description(arg.Description),
-			"type":         my.typeRef(arg.Type),
-			"defaultValue": defaultValue(arg.DefaultValue),
+			"__typename":        "__InputValue",
+			"name":              arg.Name,
+			"description":       description(arg.Description),
+			"type":              my.typeRef(arg.Type),
+			"defaultValue":      defaultValue(arg.DefaultValue),
+			"isDeprecated":      deprecated,
+			"deprecationReason": reason,
 		})
 	}
 	return values
+}
+
+func directiveArgument(directives ast.DirectiveList, name, argument string) interface{} {
+	directive := directives.ForName(name)
+	if directive == nil {
+		return nil
+	}
+	return directive.ArgumentMap(nil)[argument]
+}
+
+func deprecation(directives ast.DirectiveList) (bool, interface{}) {
+	directive := directives.ForName("deprecated")
+	if directive == nil {
+		return false, nil
+	}
+	reason := directive.ArgumentMap(nil)["reason"]
+	if reason == nil {
+		reason = "No longer supported"
+	}
+	return true, reason
 }
 
 // directive 指令定义转__Directive

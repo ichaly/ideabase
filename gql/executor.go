@@ -421,7 +421,7 @@ func (my *Executor) queryData(ctx context.Context, query string, variables map[s
 		if len(raw) > 0 {
 			v, err := decodeValue(raw)
 			if err != nil {
-				return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
+				return gqlReply{Errors: gqlErrors(err)}
 			}
 			r.Data, _ = v.(map[string]interface{})
 		}
@@ -463,8 +463,11 @@ func materialize(v interface{}) interface{} {
 // execute 执行核心：无resolver的成功结果以直通字节形态返回（raw）
 func (my *Executor) execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	var r gqlReply
+	if variables == nil && strings.IndexByte(query, '$') >= 0 {
+		variables = make(map[string]interface{})
+	}
 	if _, err := my.Snapshot(); err != nil {
-		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
+		r.Errors = gqlErrors(err)
 		return r
 	}
 
@@ -475,7 +478,7 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 		if introErr, ok := err.(*introQuery); ok {
 			data, ierr := my.intro.Introspect(introErr.operation, variables)
 			if ierr != nil {
-				r.Errors = gqlerror.List{gqlerror.Wrap(ierr)}
+				r.Errors = gqlErrors(ierr)
 			} else {
 				r.Data = data
 			}
@@ -484,25 +487,25 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 		if rootErr, ok := err.(*rootResolverQuery); ok {
 			if rootErr.entry.policyNeeded {
 				if authErr := my.authorize(ctx, rootErr.entry.operation, variables); authErr != nil {
-					r.Errors = gqlerror.List{gqlerror.Wrap(authErr)}
+					r.Errors = gqlErrors(authErr)
 					return r
 				}
 			}
 			return my.executeRootResolvers(ctx, rootErr.entry, variables)
 		}
-		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
+		r.Errors = gqlErrors(err)
 		return r
 	}
 	if plan.policyNeeded {
 		if authErr := my.authorize(ctx, plan.operation, variables); authErr != nil {
-			r.Errors = gqlerror.List{gqlerror.Wrap(authErr)}
+			r.Errors = gqlErrors(authErr)
 			return r
 		}
 	}
 
 	data, err := my.fetch(ctx, plan, variables)
 	if err != nil {
-		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
+		r.Errors = gqlErrors(err)
 		return r
 	}
 
@@ -513,7 +516,7 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 	}
 	result, warnings, err := my.unpack(ctx, plan, data, variables)
 	if err != nil {
-		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
+		r.Errors = gqlErrors(err)
 		return r
 	}
 	// 非致命警告与data共存（GraphQL部分错误语义）
@@ -685,12 +688,11 @@ type introQuery struct {
 
 func (my *introQuery) Error() string { return "自省查询不支持此入口" }
 
-// plan 获取执行计划：命中缓存零解析；volatile命中仅重做SQL构建；
-// 未命中经singleflight收敛（并发的同一冷查询只解析编译一次），自省查询经introQuery带出
+// plan 获取执行计划：普通查询命中缓存零解析；volatile命中仅重做SQL构建；
+// 冷查询每个请求独立校验变量，编译经singleflight收敛；自省经introQuery带出。
 func (my *Executor) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
-	// Directive results are part of the selection shape. Until the cache key is
-	// partitioned by the evaluated shape, use the safe uncached path rather than
-	// risk serving SQL/resolver work compiled for another variable value.
+	// Directive results are part of the selection shape. Evaluate them before
+	// lookup and partition the cache by that shape so true/false cannot alias.
 	if hasConditionalDirective(query) {
 		operation, err := my.parse(query, operationName, variables)
 		if err != nil {
@@ -704,7 +706,7 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 		}
 		key := planKey{operation: operationName, query: query, shape: selectionShape(operation.SelectionSet)}
 		if entry, ok := my.cache.Get(key); ok {
-			return my.cachedPlan(entry, variables)
+			return my.preparedPlan(entry, variables)
 		}
 		if len(operation.SelectionSet) == 0 || my.needsRootExecution(operation) {
 			roleNeeded, policyNeeded := operationGovernanceNeeds(my.metadata, operation)
@@ -722,25 +724,87 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 	key := planKey{operation: operationName, query: query}
 	entry, ok := my.cache.Get(key)
 	if !ok {
+		flightKey := operationName + "\x00" + query
 		var lead *Plan // 仅领跑者闭包置位：变量已解码、编译产物直接执行，无二次开销
-		value, err, _ := my.flight.Do(operationName+"\x00"+query, func() (interface{}, error) {
-			entry, plan, err := my.miss(key, variables)
+		leader, firstRan := false, false
+		value, err, _ := my.flight.Do(flightKey, func() (interface{}, error) {
+			firstRan = true
+			attempt := variables
+			if strings.IndexByte(query, '$') >= 0 {
+				attempt = cloneVariables(variables) // 失败领跑者不污染自身重试入参
+			}
+			entry, plan, err := my.miss(key, nil, attempt)
 			lead = plan
+			leader = err == nil
+			if leader {
+				assignVariables(variables, attempt)
+			} else if _, introspection := err.(*introQuery); introspection {
+				assignVariables(variables, attempt) // 传递自省变量默认值
+			}
 			return entry, err
 		})
 		if err != nil {
-			return nil, err
+			if introspection, ok := err.(*introQuery); ok {
+				if !firstRan {
+					if _, ownErr := coerceVariables(my.schema, introspection.operation, variables); ownErr != nil {
+						return nil, ownErr
+					}
+				}
+				return nil, err // 共享已验证AST，仅运行当前请求coercion
+			}
+			// 请求值错误不得从领跑者传播；各请求先校验自身，
+			// 通过者再以第二个flight收敛编译。正常冷查询仍只解析一次。
+			operation, ownErr := my.parse(query, operationName, variables)
+			if ownErr != nil {
+				return nil, ownErr
+			}
+			retryAttempt := cloneVariables(variables)
+			value, err, _ = my.flight.Do("retry\x00"+flightKey, func() (interface{}, error) {
+				entry, plan, compileErr := my.miss(key, operation, retryAttempt)
+				lead = plan
+				if compileErr == nil {
+					assignVariables(variables, retryAttempt)
+				}
+				return entry, compileErr
+			})
+			if err != nil {
+				if _, introspection := err.(*introQuery); introspection {
+					return nil, err // 当前请求已校验，可安全路由自省
+				}
+				// cursor等volatile编译错误仍可能与值相关，最后用
+				// 当前请求独立确认，不返回其他请求的错误。
+				finalAttempt := cloneVariables(variables)
+				entry, lead, err = my.miss(key, operation, finalAttempt)
+				if err != nil {
+					return nil, err
+				}
+				assignVariables(variables, finalAttempt)
+			}
+			leader = true // 当前请求已在重试前完成coercion
 		}
 		if lead != nil {
 			return lead, nil
 		}
-		entry = value.(*planEntry)
+		if entry == nil {
+			entry = value.(*planEntry)
+		}
+		if leader {
+			return my.preparedPlan(entry, variables)
+		}
 	}
 	return my.cachedPlan(entry, variables)
 }
 
 func (my *Executor) cachedPlan(entry *planEntry, variables map[string]interface{}) (*Plan, error) {
-	// 收口：任何消费（Resolver分发/执行/volatile重编译）前统一还原codec入参
+	// 收口：任何消费（Resolver分发/执行/volatile重编译）前统一做变量
+	// coercion，再还原codec入参。缓存命中也必须先过请求级校验。
+	if _, err := coerceVariables(my.schema, entry.operation, variables); err != nil {
+		return nil, err
+	}
+	return my.preparedPlan(entry, variables)
+}
+
+func (my *Executor) preparedPlan(entry *planEntry, variables map[string]interface{}) (*Plan, error) {
 	decodeVariables(my.schema, entry.operation.VariableDefinitions, variables, my.metadata)
 	if entry.rootResolver {
 		return nil, &rootResolverQuery{entry: entry}
@@ -759,12 +823,15 @@ func (my *Executor) cachedPlan(entry *planEntry, variables map[string]interface{
 	return plan, nil
 }
 
-// miss 缓存未命中（singleflight领跑者）：解析一次并落缓存条目，同时带回本次编译的
-// 计划（领跑者直接执行）；跟随者与后续请求经统一命中路径消费；自省不缓存经introQuery带出
-func (my *Executor) miss(key planKey, variables map[string]interface{}) (*planEntry, *Plan, error) {
-	operation, err := my.parse(key.query, key.operation, variables)
-	if err != nil {
-		return nil, nil, err
+// miss 缓存未命中的singleflight领跑者：落缓存条目并带回本次
+// 编译计划；重试路径可传入已校验operation，正常路径在flight内解析。
+func (my *Executor) miss(key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
+	if operation == nil {
+		var err error
+		operation, err = my.parse(key.query, key.operation, variables)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	if hasIntroField(operation.SelectionSet) {
 		if !my.options().Introspection {
@@ -804,19 +871,19 @@ func (my *Executor) parse(query, operationName string, variables map[string]inte
 		}
 		operation = doc.Operations[0]
 	}
+	coerced, err := coerceVariables(my.schema, operation, variables)
+	if err != nil {
+		return nil, err
+	}
+	variables = coerced
 	selection, err := normalizeSelection(operation.SelectionSet, doc.Fragments, variables)
 	if err != nil {
 		return nil, err
 	}
 	operation.SelectionSet = selection
-	// codec标量字面量就地还原：解析仅发生一次，改写随计划缓存复用；
-	// 变量默认值同为字面量，一并还原（不传变量时默认值直达SQL，漏解码即类型不符）
+	// 字段参数的codec字面量解析期一次还原；变量默认值保持
+	// 原始GraphQL形态，每个请求物化后由decodeVariables仅转换一次。
 	decodeLiterals(my.schema, operation.SelectionSet, my.metadata)
-	if len(my.metadata.codecs) > 0 {
-		for _, def := range operation.VariableDefinitions {
-			decodeLiteral(my.schema, def.Type, def.DefaultValue, my.metadata)
-		}
-	}
 	return operation, nil
 }
 

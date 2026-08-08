@@ -21,7 +21,7 @@ func (my *Executor) Bind(r fiber.Router) {
 // 边界错误直接 return 交 ErrorHandler 定型为 Result；行级作用域由上游经 gql.WithScope 注入。
 func (my *Executor) Handler(c fiber.Ctx) error {
 	var req gqlQuery
-	if err := c.Bind().Body(&req); err != nil {
+	if err := jsonNumeric.Unmarshal(c.Request().Body(), &req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 

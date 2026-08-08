@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +32,9 @@ type feed struct {
 func (my *Executor) subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
 	if _, err := my.Snapshot(); err != nil {
 		return nil, err
+	}
+	if variables == nil && strings.IndexByte(query, '$') >= 0 {
+		variables = make(map[string]interface{})
 	}
 	if my.cdc == nil {
 		return nil, fmt.Errorf("订阅不可用：当前数据库没有注册CDC唤醒源或DSN不可用")
@@ -324,7 +328,7 @@ func (my *Executor) startSubscription(ctx context.Context, session *socketSessio
 		session.mu.Unlock()
 	}
 	var req gqlQuery
-	if err := json.Unmarshal(message.Payload, &req); err != nil {
+	if err := jsonNumeric.Unmarshal(message.Payload, &req); err != nil {
 		release()
 		_ = session.write(wsReply{ID: message.ID, Type: wsError,
 			Payload: gqlerror.List{gqlerror.Errorf("无效的subscribe载荷: %v", err)}})
@@ -336,7 +340,7 @@ func (my *Executor) startSubscription(ctx context.Context, session *socketSessio
 	if err != nil {
 		stop()
 		release()
-		_ = session.write(wsReply{ID: message.ID, Type: wsError, Payload: gqlerror.List{gqlerror.Wrap(err)}})
+		_ = session.write(wsReply{ID: message.ID, Type: wsError, Payload: gqlErrors(err)})
 		return
 	}
 
