@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/huandu/go-clone"
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
@@ -43,12 +44,14 @@ type Metadata struct {
 	Version string                     `json:"version"`
 
 	// 全文搜索能力（启动探测或配置指定）
-	searchMode   string
-	searchConfig string
+	searchMode    string
+	searchConfig  string
+	legacyTrusted bool
 
 	// 标量编解码器：slice保留注册序（认领优先级），index供热路径按名查找
-	codecs []Codec
-	index  map[string]Codec
+	codecs     []Codec
+	index      map[string]Codec
+	operations map[string]operationCapability
 }
 
 var defaultSnowflake = sonyflake.NewSonyflake(sonyflake.Settings{})
@@ -71,9 +74,33 @@ func (my *Metadata) setCodecs(codecs []Codec) {
 type MetadataOption func(*metadataOptions)
 
 type metadataOptions struct {
-	loaders    []protocol.Loader
-	codecs     []Codec
-	generators map[string]protocol.IDGenerator
+	loaders         []protocol.Loader
+	optionalLoaders map[string]bool
+	codecs          []Codec
+	generators      map[string]protocol.IDGenerator
+	legacyTrusted   bool
+}
+
+// LoaderError identifies a metadata loader failure without losing its cause.
+// Optional is true only when the failed loader was explicitly allowed to skip.
+type LoaderError struct {
+	Loader   string
+	Optional bool
+	Err      error
+}
+
+func (e *LoaderError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("加载器 %s 执行失败（optional=%t）: %v", e.Loader, e.Optional, e.Err)
+}
+
+func (e *LoaderError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 // WithIDGenerator 注册命名主键生成器；同名可覆盖内置snowflake。
@@ -85,12 +112,22 @@ func WithIDGenerator(name string, generate protocol.IDGenerator) MetadataOption 
 	}
 }
 
+// LegacyTrustedBoundaryPolicy explicitly preserves the historical open-access
+// NewExecutor boundary. It is intended only for migration of trusted services.
+func LegacyTrustedBoundaryPolicy() MetadataOption {
+	return func(opts *metadataOptions) { opts.legacyTrusted = true }
+}
+
 // WithLoader 添加或替换Loader
 func WithLoader(loader protocol.Loader) MetadataOption {
 	return func(opts *metadataOptions) {
 		if loader == nil {
 			return
 		}
+		if opts.optionalLoaders == nil {
+			opts.optionalLoaders = make(map[string]bool)
+		}
+		opts.optionalLoaders[loader.Name()] = false
 		// 替换同名Loader
 		for i, l := range opts.loaders {
 			if l.Name() == loader.Name() {
@@ -102,10 +139,23 @@ func WithLoader(loader protocol.Loader) MetadataOption {
 	}
 }
 
+// WithOptionalLoader 添加或替换一个失败时允许跳过的Loader。
+// Loader默认是required；只有显式使用此选项才会获得optional语义。
+func WithOptionalLoader(loader protocol.Loader) MetadataOption {
+	return func(opts *metadataOptions) {
+		if loader == nil {
+			return
+		}
+		WithLoader(loader)(opts)
+		opts.optionalLoaders[loader.Name()] = true
+	}
+}
+
 // WithoutLoader 移除指定名称的Loader
 func WithoutLoader(names ...string) MetadataOption {
 	return func(opts *metadataOptions) {
 		for _, name := range names {
+			delete(opts.optionalLoaders, name)
 			for i := 0; i < len(opts.loaders); {
 				if opts.loaders[i].Name() == name {
 					opts.loaders = append(opts.loaders[:i], opts.loaders[i+1:]...)
@@ -136,6 +186,7 @@ func (my *HookedLoader) Load(h protocol.Hoster) error {
 // NewMetadata 策略模式重构，支持Loader注册与优先级排序
 func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, error) {
 	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: protocol.DataTypes}}
+	fileConfigured := k.IsSet("metadata.file")
 
 	// 设置默认配置
 	k.SetDefault("schema.schema", "public")
@@ -179,7 +230,8 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 		metadata.NewConfigLoader(cfg),
 	}
 	options := &metadataOptions{
-		loaders: defaultLoaders,
+		loaders:         defaultLoaders,
+		optionalLoaders: make(map[string]bool),
 		generators: map[string]protocol.IDGenerator{
 			"snowflake": func() (any, error) {
 				id, err := defaultSnowflake.NextID()
@@ -187,23 +239,48 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 			},
 		},
 	}
+	// 默认文件只是数据库/配置的兼容回退；用户显式配置了文件时，缺失或损坏必须失败。
+	if !fileConfigured {
+		options.optionalLoaders[metadata.LoaderFile] = true
+	}
 	// 应用自定义选项
 	for _, opt := range opts {
 		opt(options)
 	}
+	if options.optionalLoaders[metadata.LoaderConfig] {
+		return nil, fmt.Errorf("加载器 %s 不允许配置为 optional", metadata.LoaderConfig)
+	}
+	if fileConfigured && options.optionalLoaders[metadata.LoaderFile] {
+		return nil, fmt.Errorf("加载器 %s 在显式配置 metadata.file 时不允许配置为 optional", metadata.LoaderFile)
+	}
 	my.setCodecs(options.codecs)
+	my.legacyTrusted = options.legacyTrusted
 	// 按优先级排序
 	loaders := options.loaders
 	sort.Slice(loaders, func(i, j int) bool { return loaders[i].Priority() < loaders[j].Priority() })
 
 	// 依次执行Loader
 	for _, loader := range loaders {
-		if loader.Support() {
+		// FileLoader historically reports unsupported in dev, but an explicitly
+		// configured artifact is authoritative in every mode.
+		supported := loader.Support()
+		if fileConfigured && loader.Name() == metadata.LoaderFile {
+			supported = true
+		}
+		if supported {
 			if err := loader.Load(my); err != nil {
-				log.Warn().Err(err).Str("loader", loader.Name()).Msg("加载器执行失败")
+				loaderErr := &LoaderError{Loader: loader.Name(), Optional: options.optionalLoaders[loader.Name()], Err: err}
+				if loaderErr.Optional {
+					log.Warn().Err(loaderErr).Str("loader", loader.Name()).Msg("可选加载器执行失败，已跳过")
+					continue
+				}
+				return nil, loaderErr
 			}
 		}
 	}
+	// Loaders are allowed to retain and reuse their construction-time objects,
+	// but the runtime metadata must be immutable with respect to those owners.
+	my.cloneNodes()
 	// 所有Loader执行完仍无任何元数据：生产环境直接报错避免带空schema启动，debug模式保留宽松行为便于排查
 	if len(my.Nodes) == 0 && !cfg.IsDebug() {
 		return nil, fmt.Errorf("元数据加载失败：所有加载器执行后无任何实体（请检查数据库连接、metadata.file 或 metadata.classes 配置）")
@@ -234,7 +311,23 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	my.processRelations()
 	// 类型定型：结构推导 + Codec认领
 	my.finalize()
+	my.operations = buildOperationCatalog(my)
 	return my, nil
+}
+
+func (my *Metadata) cloneNodes() {
+	clones := make(map[*protocol.Class]*protocol.Class, len(my.Nodes))
+	for key, class := range my.Nodes {
+		if class == nil {
+			continue
+		}
+		cloned, ok := clones[class]
+		if !ok {
+			cloned = clone.Slowly(class).(*protocol.Class)
+			clones[class] = cloned
+		}
+		my.Nodes[key] = cloned
+	}
 }
 
 // eachClass 按类名有序遍历主名类（跳过表名/别名索引）

@@ -23,6 +23,19 @@ func variableInput(name string) ast.ArgumentList {
 	return ast.ArgumentList{{Name: protocol.INPUT, Value: &ast.Value{Kind: ast.Variable, Raw: name}}}
 }
 
+func policyMetadata(classes ...*protocol.Class) *Metadata {
+	nodes := make(map[string]*protocol.Class, len(classes))
+	for _, class := range classes {
+		if class.Table == "" {
+			class.Table = class.Name
+		}
+		nodes[class.Name] = class
+	}
+	meta := &Metadata{Nodes: nodes}
+	meta.operations = buildOperationCatalog(meta)
+	return meta
+}
+
 func TestPolicyBatchCheckEvaluatesEveryRow(t *testing.T) {
 	c := &protocol.Class{Name: "Item", Table: "items", Fields: map[string]*protocol.Field{}}
 	c.AddField(&protocol.Field{Name: "ownerId", Column: "owner_id"})
@@ -59,7 +72,7 @@ func TestPolicyNestedMutationAuthorizesTarget(t *testing.T) {
 	child.AddField(&protocol.Field{Name: "secret", Column: "secret"})
 	parent.AddField(&protocol.Field{Name: "children", Type: "Child", IsList: true, Relation: &protocol.Relation{TargetClass: "Child"}})
 
-	executor := &Executor{metadata: &Metadata{Nodes: map[string]*protocol.Class{"Parent": parent, "Child": child}}}
+	executor := &Executor{metadata: policyMetadata(parent, child)}
 	root := policyField("createParent", "Parent", variableInput("input"), nil)
 	op := &ast.OperationDefinition{Operation: ast.Mutation, SelectionSet: ast.SelectionSet{root}}
 	ctx := WithRole(context.Background(), "writer")
@@ -96,7 +109,7 @@ func TestPolicyMutationResultAffectedCountDoesNotRequireSelect(t *testing.T) {
 	root := policyField("updateItems", "ItemMutationResult", variableInput("input"), ast.SelectionSet{
 		policyField("affectedCount", "Int", nil, nil),
 	})
-	executor := &Executor{metadata: &Metadata{Nodes: map[string]*protocol.Class{"Item": c}}}
+	executor := &Executor{metadata: policyMetadata(c)}
 	op := &ast.OperationDefinition{Operation: ast.Mutation, SelectionSet: ast.SelectionSet{root}}
 	err := executor.authorize(WithRole(context.Background(), "writer"), op, map[string]any{"input": map[string]any{"name": "x"}})
 	require.NoError(t, err)
@@ -112,7 +125,7 @@ func TestPolicyNestedConnectRequiresTargetUpdate(t *testing.T) {
 	}}
 	child.AddField(&protocol.Field{Name: "id", Column: "id"})
 	parent.AddField(&protocol.Field{Name: "children", Relation: &protocol.Relation{TargetClass: "Child"}, IsList: true})
-	executor := &Executor{metadata: &Metadata{Nodes: map[string]*protocol.Class{"Parent": parent, "Child": child}}}
+	executor := &Executor{metadata: policyMetadata(parent, child)}
 	root := policyField("createParent", "Parent", variableInput("input"), nil)
 	op := &ast.OperationDefinition{Operation: ast.Mutation, SelectionSet: ast.SelectionSet{root}}
 	vars := map[string]any{"input": map[string]any{"name": "p", "children": map[string]any{"connect": []any{1}}}}
@@ -146,8 +159,9 @@ func TestPolicyCheckMissingTrustedContextDenied(t *testing.T) {
 func TestOperationNeedsPolicyIncludesGovernedRelationTarget(t *testing.T) {
 	parent := &protocol.Class{Name: "Parent", Fields: map[string]*protocol.Field{}}
 	child := &protocol.Class{Name: "Child", Fields: map[string]*protocol.Field{}, Permissions: map[string]*protocol.Permission{"writer": {Insert: []string{"*"}}}}
+	parent.AddField(&protocol.Field{Name: "name", Column: "name"})
 	parent.AddField(&protocol.Field{Name: "children", Relation: &protocol.Relation{TargetClass: "Child"}, IsList: true})
-	meta := &Metadata{Nodes: map[string]*protocol.Class{"Parent": parent, "Child": child}}
+	meta := policyMetadata(parent, child)
 	root := policyField("createParent", "Parent", variableInput("input"), nil)
 	op := &ast.OperationDefinition{Operation: ast.Mutation, SelectionSet: ast.SelectionSet{root}}
 	require.True(t, operationNeedsPolicy(meta, op))
@@ -165,7 +179,7 @@ func TestQueryGovernanceProbeOnlyFollowsSelectedRelations(t *testing.T) {
 	child := &protocol.Class{Name: "Child", Fields: map[string]*protocol.Field{}, Permissions: map[string]*protocol.Permission{"reader": {Select: []string{"id"}}}}
 	child.AddField(&protocol.Field{Name: "id", Column: "id"})
 	parent.AddField(&protocol.Field{Name: "children", Relation: &protocol.Relation{TargetClass: "Child"}, IsList: true})
-	meta := &Metadata{Nodes: map[string]*protocol.Class{"Parent": parent, "Child": child}}
+	meta := policyMetadata(parent, child)
 	root := policyField("parents", "Parent", nil, ast.SelectionSet{policyField("id", "ID", nil, nil)})
 	op := &ast.OperationDefinition{Operation: ast.Query, SelectionSet: ast.SelectionSet{root}}
 	require.False(t, operationNeedsPolicy(meta, op))
@@ -178,7 +192,7 @@ func TestPolicyUpsertRequiresUpdatePermissionAndColumns(t *testing.T) {
 		"writer":  {Insert: []string{"name"}, Update: []string{"name"}},
 	}}
 	c.AddField(&protocol.Field{Name: "name", Column: "name"})
-	executor := &Executor{metadata: &Metadata{Nodes: map[string]*protocol.Class{"Item": c}}}
+	executor := &Executor{metadata: policyMetadata(c)}
 	root := policyField("upsertItems", "Item", variableInput("input"), nil)
 	op := &ast.OperationDefinition{Operation: ast.Mutation, SelectionSet: ast.SelectionSet{root}}
 	vars := map[string]any{"input": []any{map[string]any{"name": "x"}}}

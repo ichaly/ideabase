@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/jinzhu/inflection"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -104,15 +103,18 @@ func (my *Executor) authorize(ctx context.Context, op *ast.OperationDefinition, 
 						continue
 					}
 				}
-				if isUpsertField(f) {
-					if len(class.Operations) > 0 && !operationInList(class.Operations, protocol.OP_UPDATE) {
-						first = policyError(class, protocol.OP_UPDATE, "operation")
-						continue
+				for _, required := range additionalActions(my.metadata, f) {
+					if len(class.Operations) > 0 && !operationInList(class.Operations, required) {
+						first = policyError(class, required, "operation")
+						break
 					}
-					if err := my.authorizeMutation(class, f, nil, protocol.OP_UPDATE, vars, scopeWithRole(ctx, scopeValues(ctx), true)); err != nil {
+					if err := my.authorizeMutation(class, f, nil, required, vars, scopeWithRole(ctx, scopeValues(ctx), true)); err != nil {
 						first = err
-						continue
+						break
 					}
+				}
+				if first != nil {
+					continue
 				}
 				visit(f.SelectionSet, class, action, depth+1)
 				continue
@@ -139,12 +141,15 @@ func (my *Executor) authorize(ctx context.Context, op *ast.OperationDefinition, 
 					first = err
 				}
 			}
-			if first == nil && isUpsertField(f) {
-				update, err := permissionFor(class, protocol.OP_UPDATE, scopeWithRole(ctx, scopeValues(ctx), true))
+			for _, required := range additionalActions(my.metadata, f) {
+				permission, err := permissionFor(class, required, scopeWithRole(ctx, scopeValues(ctx), true))
 				if err != nil {
 					first = err
-				} else if err = my.authorizeMutation(class, f, update, protocol.OP_UPDATE, vars, scopeWithRole(ctx, scopeValues(ctx), true)); err != nil {
+				} else if err = my.authorizeMutation(class, f, permission, required, vars, scopeWithRole(ctx, scopeValues(ctx), true)); err != nil {
 					first = err
+				}
+				if first != nil {
+					break
 				}
 			}
 			visit(f.SelectionSet, class, protocol.OP_SELECT, depth+1)
@@ -154,8 +159,12 @@ func (my *Executor) authorize(ctx context.Context, op *ast.OperationDefinition, 
 	return first
 }
 
-func isUpsertField(field *ast.Field) bool {
-	return field != nil && strings.HasPrefix(strings.ToLower(field.Name), protocol.UPSERT)
+func additionalActions(meta *Metadata, field *ast.Field) []string {
+	operation, ok := operationForField(meta, field)
+	if !ok || len(operation.actions) < 2 {
+		return nil
+	}
+	return operation.actions[1:]
 }
 
 func policyError(class *protocol.Class, action, field string) error {
@@ -538,6 +547,9 @@ func classForField(meta *Metadata, f *ast.Field) (*protocol.Class, string) {
 	if f == nil || f.Definition == nil || meta == nil {
 		return nil, ""
 	}
+	if operation, ok := operationForField(meta, f); ok {
+		return operation.class, operation.actions[0]
+	}
 	name := f.Definition.Type.Name()
 	for _, suffix := range []string{protocol.SUFFIX_RESULT, protocol.SUFFIX_STATS} {
 		if strings.HasSuffix(name, suffix) {
@@ -546,40 +558,39 @@ func classForField(meta *Metadata, f *ast.Field) (*protocol.Class, string) {
 		}
 	}
 	if c, ok := meta.GetNode(name); ok {
-		return c, actionForField(f.Name, name, f.Definition.Type.Name())
-	}
-	root := strings.ToLower(f.Name)
-	for _, prefix := range []string{"create", "upsert", "update", "delete", "restore"} {
-		if !strings.HasPrefix(root, prefix) {
-			continue
-		}
-		tail := strings.TrimSuffix(strings.TrimPrefix(root, prefix), "bypk")
-		for key, c := range meta.Nodes {
-			if key != c.Name {
-				continue
-			}
-			candidate := strings.ToLower(c.Name)
-			if tail == candidate || tail == strings.ToLower(inflection.Plural(c.Name)) || strings.TrimSuffix(tail, "many") == candidate || strings.TrimSuffix(tail, "many") == strings.ToLower(inflection.Plural(c.Name)) {
-				return c, actionForField(f.Name, c.Name, f.Definition.Type.Name())
-			}
-		}
+		return c, protocol.OP_SELECT
 	}
 	return nil, ""
+}
+
+func operationForField(meta *Metadata, f *ast.Field) (operationCapability, bool) {
+	if meta == nil || f == nil {
+		return operationCapability{}, false
+	}
+	if f.ObjectDefinition != nil {
+		operation, ok := meta.operations[f.ObjectDefinition.Name+"."+f.Name]
+		return operation, ok
+	}
+	// Tests and programmatic callers may construct a root field without the
+	// validator-populated ObjectDefinition. Exact catalog lookup still avoids
+	// guessing from prefixes or return types.
+	var matched operationCapability
+	matches := 0
+	for coordinate, operation := range meta.operations {
+		if strings.HasSuffix(coordinate, "."+f.Name) {
+			if matches == 0 || matched.class != operation.class || matched.actions[0] != operation.actions[0] {
+				matched, matches = operation, matches+1
+			}
+		}
+	}
+	if matches == 1 {
+		return matched, true
+	}
+	return operationCapability{}, false
 }
 func actionForOperation(op *ast.OperationDefinition) string {
 	if op.Operation == ast.Mutation {
 		return protocol.OP_UPDATE
-	}
-	return protocol.OP_SELECT
-}
-func actionForField(name, _, typeName string) string {
-	if strings.Contains(strings.ToLower(name), "stats") || strings.HasSuffix(typeName, protocol.SUFFIX_STATS) {
-		return protocol.OP_AGGREGATE
-	}
-	for _, x := range []struct{ prefix, action string }{{"create", protocol.OP_INSERT}, {"upsert", protocol.OP_INSERT}, {"update", protocol.OP_UPDATE}, {"delete", protocol.OP_DELETE}, {"restore", protocol.OP_RESTORE}} {
-		if strings.HasPrefix(strings.ToLower(name), x.prefix) {
-			return x.action
-		}
 	}
 	return protocol.OP_SELECT
 }

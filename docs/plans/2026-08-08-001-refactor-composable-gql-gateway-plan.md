@@ -269,7 +269,7 @@ flowchart TB
 
 ---
 
-- [ ] U1. **建立不可变能力快照与兼容构造层**
+- [x] U1. **建立不可变能力快照与兼容构造层**
 
 **Goal:** 以唯一 catalog/snapshot 取代 Renderer、Metadata、Policy、Resolver 和字段名前缀的平行能力推断；构建错误 fail-fast，Build 后冻结；保留旧公共构造 API 作为 facade。
 

@@ -27,22 +27,32 @@ GraphQL 请求
 | `compiler` | 编译上下文（对象池、参数槽位、全局别名计数）与 Dialect 接口 |
 | `compiler/pgsql` | PostgreSQL 方言：SELECT 单元化编译 + 变更 CTE |
 | `executor` | HTTP 入口、计划 LRU 缓存、执行与结果组织、Resolver/Remote 分发、codec 出入参转换、持久化查询 |
+| `Snapshot` | Build 后不可变的 SDL、参数、Handler、Planner、授权 action、resource、cost 与稳定指纹 |
 
 ## 快速开始
 
 ```go
 import _ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 空白导入自注册PostgreSQL方言
 
-k, _ := std.NewKonfig()                    // 配置（可声明虚拟字段/关系/排除表等）
-meta, _ := gql.NewMetadata(k, db)          // db: *gorm.DB，自动加载表结构与外键关系
-compile, _ := gql.NewCompiler(meta, nil)   // nil：按驱动名从注册表自动路由方言
-executor, _ := gql.NewExecutor(db, gql.NewRenderer(meta), meta, compile)
+k, _ := std.NewKonfig()         // 配置中为生产实体声明 permissions
+builder := gql.New(k, db)       // db: *gorm.DB，自动加载表结构与外键关系
+builder.LoadDocuments("queries")
+engine, err := builder.Build()  // 构建一次 capability snapshot，随后冻结
+if err != nil { log.Fatal(err) }
 
-executor.Bind(app.Group(executor.Path()))  // fiber v3：POST查询变更 + GET订阅WebSocket升级
+engine.Bind(app.Group(engine.Path()))  // fiber v3：POST查询变更 + GET订阅WebSocket升级
 
 // 非HTTP场景使用同一字节快路径；GraphQL字段错误位于响应体errors中
-body, err := executor.Execute(ctx, `query { users { items { id name } } }`, nil)
+body, err := engine.Execute(ctx, `query { users { items { id name } } }`, nil)
+
+snapshot, _ := engine.Snapshot()
+fmt.Println(snapshot.Fingerprint(), snapshot.Capabilities())
 ```
+
+新 Builder 默认 fail-closed：任一数据库实体没有 `permissions` 都会拒绝启动。只在明确
+可信的本地工具/测试中使用 `gql.New(k, db).TrustedLocal()`。旧构造链仍兼容；非开发模式
+要保留历史全开放边界时，必须给 `NewMetadata` 显式传入
+`gql.LegacyTrustedBoundaryPolicy()`，启动时会输出迁移告警。
 
 ## 查询能力
 
@@ -115,7 +125,7 @@ SQL 表达不了的字段逻辑用 Resolver 处理。**注册即声明**：字�
 ```go
 // source 是该行已查出的字段——只能读取查询已选择的字段（引擎不会偷偷多查）；
 // args 强类型（json定名/validate校验），客户端可传 hello(lang: "zh")
-executor.Register(gql.NewResolver("User", "hello", "问候语",
+builder.Register(gql.NewResolver("User", "hello", "问候语",
     func(ctx context.Context, source gql.Source, args struct {
         Lang string `json:"lang" validate:"omitempty,oneof=zh en"`
     }) (string, error) {
@@ -123,7 +133,7 @@ executor.Register(gql.NewResolver("User", "hello", "问候语",
     }))
 
 // 批量版：整结果集一次调用免 N+1，返回值与 sources 等长对位
-executor.Register(gql.NewBatch("User", "level", "等级",
+builder.Register(gql.NewBatch("User", "level", "等级",
     func(ctx context.Context, sources []gql.Source, _ struct{}) ([]int, error) { ... }))
 ```
 
@@ -137,7 +147,7 @@ executor.Register(gql.NewBatch("User", "level", "等级",
 仍直接编译为单 SQL；只有复杂业务字段进入 Resolver 分发：
 
 ```go
-executor.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
+builder.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
     func(ctx context.Context, _ gql.Root, req CreateReq) (*ent.Profile, error) {
         return svc.Create(ctx, req)
     }, gql.Result("BotProfile")))
@@ -208,7 +218,7 @@ type Profile struct {
 }
 
 // "id" 为宿主键字段；Fetch 一次收到本批去重后的键集合，天然免 N+1
-executor.RegisterRemote(gql.NewRemote("User", "profile", "用户画像", "id",
+builder.Register(gql.NewRemote("User", "profile", "用户画像", "id",
     func(ctx context.Context, keys []any) (map[any]Profile, error) {
         // 批量调用外部服务，返回 键→值 映射；超时用 ctx 自行控制
     }))
@@ -402,9 +412,9 @@ services:
 
 ## schema 与操作文档加载
 
-- `schema.file` 配置后从文件加载 schema（生产推荐，启动更快且可人工裁剪）；
-  未配置时由 renderer 现场生成并写入 `cfg/schema.graphql`
-- `executor.LoadDocuments(dir)` 加载目录下 `.graphql` 操作文档（持久化查询），
+- `schema.file` 配置后把文件作为生成 catalog 的只读 artifact 加载；类型、参数、输入字段
+  或坐标有任何漂移都会拒绝启动，不能用它声明引擎实际不支持的隐藏能力
+- `builder.LoadDocuments(dir)` 在 Build 前加载目录下 `.graphql` 操作文档（持久化查询），
   操作按名注册并预热编译缓存；HTTP 请求省略 `query` 仅传 `operationName` 即可执行
 
 ## 生产安全开关

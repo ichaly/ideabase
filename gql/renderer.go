@@ -46,8 +46,8 @@ func NewRenderer(meta *Metadata) *Renderer {
 	}
 }
 
-// Generate 生成完整的GraphQL schema
-func (my *Renderer) Generate() (string, error) {
+// Render 纯函数式生成完整GraphQL schema，不写文件。
+func (my *Renderer) Render() (string, error) {
 	// 复用构造时分配的构建器（支持重复Generate）
 	my.sb.Reset()
 
@@ -80,12 +80,18 @@ func (my *Renderer) Generate() (string, error) {
 		}
 	}
 
-	// 保存到文件
-	content := my.sb.String()
+	return my.sb.String(), nil
+}
+
+// Generate 保留旧调用方的生成并落盘语义；新Engine构建使用Render。
+func (my *Renderer) Generate() (string, error) {
+	content, err := my.Render()
+	if err != nil {
+		return "", err
+	}
 	if err := my.saveToFile(content); err != nil {
 		return "", fmt.Errorf("保存schema文件失败: %w", err)
 	}
-
 	return content, nil
 }
 

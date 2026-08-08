@@ -29,6 +29,9 @@ type feed struct {
 // 首次立即推送当前结果；ctx取消后通道关闭
 // 依赖数据库 wal_level=logical 与连接账号的REPLICATION权限
 func (my *Executor) subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
+	if _, err := my.Snapshot(); err != nil {
+		return nil, err
+	}
 	if my.cdc == nil {
 		return nil, fmt.Errorf("订阅不可用：当前数据库没有注册CDC唤醒源或DSN不可用")
 	}

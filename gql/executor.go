@@ -66,21 +66,24 @@ func (my gqlReply) MarshalJSON() ([]byte, error) {
 // 负责解析GraphQL查询、编译为SQL并执行查询，支持多种数据库方言
 // 可作为Fiber插件集成到Web服务中，提供标准的GraphQL API
 type Executor struct {
-	intro     *intro.Handler      // 自省处理器，处理__schema和__type查询
-	schema    *ast.Schema         // GraphQL模式定义
-	database  *gorm.DB            // 数据库连接，用于执行生成的SQL
-	metadata  *Metadata           // 元数据信息，包含表结构、关系等
-	compiler  *Compiler           // 编译器，将GraphQL查询编译为SQL
-	cache     *planCache          // 执行计划缓存，命中路径零解析零编译
-	flight    singleflight.Group  // 未命中收敛：并发的同一冷查询只解析编译一次
-	feedMu    sync.Mutex          // 保护feeds及各feed的订阅者集合
-	feeds     map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
-	resolvers map[string]Resolver // 自定义字段解析器注册表
-	source    string              // 原始schema文本，Register合并注册声明时重建的基底
-	documents map[string]string   // 持久化查询文档：操作名 -> 查询文本
-	remotes   map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
-	cdc       notifier            // CDC唤醒源（按数据库驱动从注册表选取）
-	frozen    atomic.Bool         // 首次执行后冻结注册表（rebuild与serving不互斥，运行期注册即数据竞争）
+	intro        *intro.Handler      // 自省处理器，处理__schema和__type查询
+	schema       *ast.Schema         // GraphQL模式定义
+	database     *gorm.DB            // 数据库连接，用于执行生成的SQL
+	metadata     *Metadata           // 元数据信息，包含表结构、关系等
+	compiler     *Compiler           // 编译器，将GraphQL查询编译为SQL
+	cache        *planCache          // 执行计划缓存，命中路径零解析零编译
+	flight       singleflight.Group  // 未命中收敛：并发的同一冷查询只解析编译一次
+	feedMu       sync.Mutex          // 保护feeds及各feed的订阅者集合
+	feeds        map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
+	resolvers    map[string]Resolver // 自定义字段解析器注册表
+	source       string              // 原始schema文本，Register合并注册声明时重建的基底
+	documents    map[string]string   // 持久化查询文档：操作名 -> 查询文本
+	remotes      map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
+	cdc          notifier            // CDC唤醒源（按数据库驱动从注册表选取）
+	frozen       atomic.Bool         // 首次执行后冻结注册表（rebuild与serving不互斥，运行期注册即数据竞争）
+	finalizeOnce sync.Once
+	snapshot     *Snapshot
+	snapshotErr  error
 }
 
 // options 读取schema级选项（元数据未配置时为零值安全默认）
@@ -177,6 +180,15 @@ func (my *Executor) mutable(operation string) error {
 	return nil
 }
 
+// Snapshot 返回执行器实际使用的不可变Schema/Handler契约，并冻结启动期注册表。
+func (my *Executor) Snapshot() (*Snapshot, error) {
+	my.finalizeOnce.Do(func() {
+		my.snapshot, my.snapshotErr = buildSnapshot(my)
+		my.frozen.Store(true)
+	})
+	return my.snapshot, my.snapshotErr
+}
+
 // 构造函数和初始化方法
 
 // NewExecutor 创建一个新的GraphQL执行器实例
@@ -196,6 +208,26 @@ func (my *Executor) mutable(operation string) error {
 //	    log.Fatal(err)
 //	}
 func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, error) {
+	if m == nil || r == nil {
+		return nil, fmt.Errorf("缺少Metadata或Renderer")
+	}
+	trusted := m.legacyTrusted
+	if m.cfg == nil || !m.cfg.IsDebug() {
+		if err := requirePolicies(m, trusted, "LegacyTrustedBoundaryPolicy"); err != nil {
+			return nil, err
+		}
+	}
+	if m != nil && m.legacyTrusted {
+		log.Warn().Msg("已启用LegacyTrustedBoundaryPolicy；该兼容边界不适用于多租户生产服务")
+	}
+	data, err := loadSchema(m, r)
+	if err != nil {
+		return nil, err
+	}
+	return newExecutor(d, m, c, data)
+}
+
+func newExecutor(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Executor, error) {
 	executor := &Executor{
 		database:  d,
 		metadata:  m,
@@ -207,11 +239,6 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 		remotes:   make(map[string]Remote),
 	}
 
-	// 加载GraphQL模式：配置了schema.file优先从文件加载（生产推荐），否则由renderer生成
-	data, err := loadSchema(m, r)
-	if err != nil {
-		return nil, err
-	}
 	s, err := gqlparser.LoadSchema(&ast.Source{
 		Name:  "schema.graphql",
 		Input: data,
@@ -247,17 +274,45 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 
 // loadSchema 解析schema来源：schema.file配置 > renderer现场生成
 func loadSchema(m *Metadata, r *Renderer) (string, error) {
+	if data, ok, err := schemaFile(m); ok || err != nil {
+		if err != nil {
+			return "", err
+		}
+		generated, err := r.Render()
+		if err != nil {
+			return "", err
+		}
+		return data, validateSchemaArtifact(generated, data)
+	}
+	return r.Generate()
+}
+
+func renderSchema(m *Metadata, r *Renderer) (string, error) {
+	if data, ok, err := schemaFile(m); ok || err != nil {
+		if err != nil {
+			return "", err
+		}
+		generated, err := r.Render()
+		if err != nil {
+			return "", err
+		}
+		return data, validateSchemaArtifact(generated, data)
+	}
+	return r.Render()
+}
+
+func schemaFile(m *Metadata) (string, bool, error) {
 	if file := strings.TrimSpace(m.cfg.Schema.File); file != "" {
 		if !filepath.IsAbs(file) {
 			file = filepath.Join(m.cfg.Root, file)
 		}
 		data, err := os.ReadFile(file)
 		if err != nil {
-			return "", fmt.Errorf("读取schema文件失败: %w", err)
+			return "", true, fmt.Errorf("读取schema文件失败: %w", err)
 		}
-		return string(data), nil
+		return string(data), true, nil
 	}
-	return r.Generate()
+	return "", false, nil
 }
 
 // LoadDocuments 从目录加载.graphql操作文档（持久化查询）
@@ -394,8 +449,11 @@ func materialize(v interface{}) interface{} {
 
 // execute 执行核心：无resolver的成功结果以直通字节形态返回（raw）
 func (my *Executor) execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
-	my.frozen.Store(true) // 首次执行即冻结注册表（rebuild与serving不互斥）
 	var r gqlReply
+	if _, err := my.Snapshot(); err != nil {
+		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
+		return r
+	}
 
 	// 获取执行计划（缓存命中零解析）；缓存未命中时解析一次，
 	// 顶层选择集含__schema/__type则路由到自省投影，否则编译为SQL
