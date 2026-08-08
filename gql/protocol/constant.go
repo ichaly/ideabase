@@ -22,17 +22,21 @@ const (
 	TYPE_DATE_TIME_HAVING = "DateTimeHaving" // 日期聚合的having过滤
 
 	// GraphQL入参名称后缀
-	SUFFIX_STATS           = "Stats"
-	SUFFIX_RESULT          = "Result"
-	SUFFIX_SORT_INPUT      = "SortInput"
-	SUFFIX_WHERE_INPUT     = "WhereInput"
-	SUFFIX_HAVING_INPUT    = "HavingInput" // 每实体的having入参类型后缀
-	SUFFIX_CREATE_INPUT    = "CreateInput"
-	SUFFIX_UPDATE_INPUT    = "UpdateInput"
-	SUFFIX_KEY_INPUT       = "KeyInput"
-	SUFFIX_MUTATION_RESULT = "MutationResult"
-	SUFFIX_BY_PK           = "ByPk"
-	SUFFIX_MANY            = "Many"
+	SUFFIX_STATS                 = "Stats"
+	SUFFIX_RESULT                = "Result"
+	SUFFIX_SORT_INPUT            = "SortInput"
+	SUFFIX_WHERE_INPUT           = "WhereInput"
+	SUFFIX_HAVING_INPUT          = "HavingInput" // 每实体的having入参类型后缀
+	SUFFIX_CREATE_INPUT          = "CreateInput"
+	SUFFIX_CREATE_ROW_INPUT      = "CreateRowInput"
+	SUFFIX_UPDATE_INPUT          = "UpdateInput"
+	SUFFIX_UPDATE_ROW_INPUT      = "UpdateRowInput"
+	SUFFIX_CREATE_RELATION_INPUT = "CreateRelationInput"
+	SUFFIX_UPDATE_RELATION_INPUT = "UpdateRelationInput"
+	SUFFIX_KEY_INPUT             = "KeyInput"
+	SUFFIX_MUTATION_RESULT       = "MutationResult"
+	SUFFIX_BY_PK                 = "ByPk"
+	SUFFIX_MANY                  = "Many"
 )
 
 // Class operation names used by schema governance. An empty Operations list is legacy full access.

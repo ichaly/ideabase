@@ -68,12 +68,42 @@ func TestRenderer_GovernanceUpsertRequiresGlobalInsertAndUpdate(t *testing.T) {
 	assert.Contains(t, schema, "upsertWritables")
 }
 
+func TestRendererMutationInputsOnlyExposeExecutableRelationDepth(t *testing.T) {
+	user := governanceClass("User", protocol.OP_INSERT, protocol.OP_UPDATE)
+	post := governanceClass("Post", protocol.OP_INSERT, protocol.OP_UPDATE)
+	user.AddField(&protocol.Field{Name: "posts", Type: "Post", Virtual: true, IsList: true, Relation: &protocol.Relation{
+		Type: protocol.ONE_TO_MANY, SourceClass: "User", SourceField: "id", TargetClass: "Post", TargetField: "user_id",
+	}})
+	schema := governanceSchema(t, user, post)
+	require.Contains(t, schema, "createUsers(input: [UserCreateRowInput!]!): [User!]!")
+	require.Contains(t, schema, "upsertUsers(input: [UserCreateRowInput!]!")
+	require.Contains(t, schema, "updateUsers(where: UserWhereInput!, input: UserUpdateRowInput!): UserMutationResult!")
+	require.Contains(t, schema, "posts: PostCreateRelationInput")
+	require.NotContains(t, schemaType(schema, "UserCreateRowInput"), "posts:")
+	require.NotContains(t, schemaType(schema, "UserUpdateRowInput"), "posts:")
+	require.NotContains(t, schemaType(schema, "PostCreateRelationInput"), "disconnect:")
+	require.NotContains(t, schemaType(schema, "PostCreateRelationInput"), "PostCreateInput")
+	require.Contains(t, schemaType(schema, "PostUpdateRelationInput"), "disconnect:")
+}
+
+func schemaType(schema, name string) string {
+	start := strings.Index(schema, "input "+name+" {")
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(schema[start:], "\n}")
+	if end < 0 {
+		return schema[start:]
+	}
+	return schema[start : start+end]
+}
+
 func TestRenderer_GovernanceExplicitMutationAndRestoreSDL(t *testing.T) {
 	c := governanceClass("Article", "insert", "update", "delete", "restore")
 	c.SoftDelete = &protocol.SoftDelete{Column: "deleted_at"}
 	schema := governanceSchema(t, c)
 	assert.Contains(t, schema, "updateArticleByPk(id: ID!, input: ArticleUpdateInput!): Article")
-	assert.Contains(t, schema, "updateArticles(where: ArticleWhereInput!, input: ArticleUpdateInput!): ArticleMutationResult!")
+	assert.Contains(t, schema, "updateArticles(where: ArticleWhereInput!, input: ArticleUpdateRowInput!): ArticleMutationResult!")
 	assert.Contains(t, schema, "deleteArticleByPk(id: ID!): Article")
 	assert.Contains(t, schema, "deleteArticles(where: ArticleWhereInput!): ArticleMutationResult!")
 	assert.Contains(t, schema, "restoreArticleByPk(id: ID!): Article")

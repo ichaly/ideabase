@@ -444,7 +444,7 @@ func (my *Renderer) writableFields(class *protocol.Class, operation string) []st
 }
 
 // writeRelationOps 输入类型中的列表关系操作字段（connect/disconnect原子挂接）
-func (my *Renderer) writeRelationOps(class *protocol.Class, _ string) {
+func (my *Renderer) writeRelationOps(class *protocol.Class, operation string) {
 	my.eachField(class, func(fieldName string, field *protocol.Field) {
 		// 仅列表关系虚拟字段（一对多/多对多），中间表隐藏时跳过
 		if field.Column == "" && field.Relation != nil && !field.Relation.Composite() && field.IsList && !my.hiddenField(field) {
@@ -452,9 +452,30 @@ func (my *Renderer) writeRelationOps(class *protocol.Class, _ string) {
 			if target == nil || !my.relationInputAllowed(target) {
 				return
 			}
-			my.writeField(fieldName, field.Relation.TargetClass+"RelationInput")
+			suffix := protocol.SUFFIX_UPDATE_RELATION_INPUT
+			if operation == protocol.OP_INSERT {
+				suffix = protocol.SUFFIX_CREATE_RELATION_INPUT
+			}
+			my.writeField(fieldName, field.Relation.TargetClass+suffix)
 		}
 	})
+}
+
+func (my *Renderer) writeMutationInput(className, suffix string, class *protocol.Class, fields []string, operation string, relations bool) {
+	my.writeLine("input ", className, suffix, " {")
+	for _, fieldName := range fields {
+		field := class.Fields[fieldName]
+		typeName := my.getGraphQLType(field)
+		if operation == protocol.OP_INSERT && !field.Nullable && field.Relation == nil && (field.Catalog == nil || field.Catalog.Default == nil) {
+			typeName += "!"
+		}
+		my.writeField(fieldName, typeName)
+	}
+	if relations {
+		my.writeRelationOps(class, operation)
+	}
+	my.writeLine("}")
+	my.writeLine()
 }
 
 // renderInput 渲染输入类型
@@ -478,30 +499,14 @@ func (my *Renderer) renderInput() error {
 		updateFields := my.writableFields(class, protocol.OP_UPDATE)
 		if my.allows(class, protocol.OP_INSERT) && len(createFields) > 0 {
 			my.writeLine("# ", className, "创建输入")
-			my.writeLine("input ", className, protocol.SUFFIX_CREATE_INPUT, " {")
-			for _, fieldName := range createFields {
-				field := class.Fields[fieldName]
-				typeName := my.getGraphQLType(field)
-				// 非空字段添加!；外键列放宽为可选（嵌套创建时由父行锚点填充，数据库NOT NULL兜底）
-				if !field.Nullable && field.Relation == nil && (field.Catalog == nil || field.Catalog.Default == nil) {
-					typeName += "!"
-				}
-				my.writeField(fieldName, typeName)
-			}
-			my.writeRelationOps(class, protocol.OP_INSERT)
-			my.writeLine("}")
-			my.writeLine("")
+			my.writeMutationInput(className, protocol.SUFFIX_CREATE_INPUT, class, createFields, protocol.OP_INSERT, true)
+			my.writeMutationInput(className, protocol.SUFFIX_CREATE_ROW_INPUT, class, createFields, protocol.OP_INSERT, false)
 		}
 
 		if my.allows(class, protocol.OP_UPDATE) && len(updateFields) > 0 {
 			my.writeLine("# ", className, "更新输入")
-			my.writeLine("input ", className, protocol.SUFFIX_UPDATE_INPUT, " {")
-			for _, fieldName := range updateFields {
-				my.writeField(fieldName, my.getGraphQLType(class.Fields[fieldName]))
-			}
-			my.writeRelationOps(class, protocol.OP_UPDATE)
-			my.writeLine("}")
-			my.writeLine("")
+			my.writeMutationInput(className, protocol.SUFFIX_UPDATE_INPUT, class, updateFields, protocol.OP_UPDATE, true)
+			my.writeMutationInput(className, protocol.SUFFIX_UPDATE_ROW_INPUT, class, updateFields, protocol.OP_UPDATE, false)
 		}
 	})
 
@@ -512,20 +517,47 @@ func (my *Renderer) renderInput() error {
 		}
 		connectable := my.allows(class, protocol.OP_UPDATE)
 		creatable := my.allows(class, protocol.OP_INSERT) && len(my.writableFields(class, protocol.OP_INSERT)) > 0
-		my.writeLine("# ", className, "关系操作（原子挂接/解除/内联创建）")
-		my.writeLine("input ", className, "RelationInput {")
-		if connectable {
-			my.writeField("connect", protocol.SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("挂接既有行主键"))
-			my.writeField("disconnect", protocol.SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("解除既有行主键(仅更新)"))
+		if my.relationInputUsed(className, protocol.OP_INSERT) {
+			my.writeLine("# ", className, "创建关系操作")
+			my.writeLine("input ", className, protocol.SUFFIX_CREATE_RELATION_INPUT, " {")
+			if connectable {
+				my.writeField("connect", protocol.SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("挂接既有行主键"))
+			}
+			if creatable {
+				my.writeField("create", "["+className+protocol.SUFFIX_CREATE_ROW_INPUT+"!]", renderer.WithComment("内联创建新行"))
+			}
+			my.writeLine("}")
+			my.writeLine()
 		}
-		if creatable {
-			my.writeField("create", "["+className+protocol.SUFFIX_CREATE_INPUT+"!]", renderer.WithComment("内联创建新行"))
+		if my.relationInputUsed(className, protocol.OP_UPDATE) {
+			my.writeLine("# ", className, "更新关系操作")
+			my.writeLine("input ", className, protocol.SUFFIX_UPDATE_RELATION_INPUT, " {")
+			if connectable {
+				my.writeField("connect", protocol.SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("挂接既有行主键"))
+				my.writeField("disconnect", protocol.SCALAR_ID, renderer.ListNonNull(), renderer.WithComment("解除既有行主键"))
+			}
+			if creatable {
+				my.writeField("create", "["+className+protocol.SUFFIX_CREATE_ROW_INPUT+"!]", renderer.WithComment("内联创建新行"))
+			}
+			my.writeLine("}")
+			my.writeLine()
 		}
-		my.writeLine("}")
-		my.writeLine()
 	})
 
 	return nil
+}
+
+func (my *Renderer) relationInputUsed(target, operation string) bool {
+	used := false
+	my.eachTableClass(func(_ string, class *protocol.Class) {
+		if used || !my.allows(class, operation) || len(my.writableFields(class, operation)) == 0 {
+			return
+		}
+		my.eachField(class, func(_ string, field *protocol.Field) {
+			used = used || field.IsList && field.Relation != nil && !field.Relation.Composite() && field.Relation.TargetClass == target && !my.hiddenField(field)
+		})
+	})
+	return used
 }
 
 func (my *Renderer) relationInputAllowed(class *protocol.Class) bool {
@@ -771,7 +803,7 @@ func (my *Renderer) renderMutation() error {
 			if plural != className {
 				my.writeLine("  # ", class.Name, "批量创建")
 				my.writeField(protocol.CREATE+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-					{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_INPUT + "!]!"},
+					{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_ROW_INPUT + "!]!"},
 				}...))
 			}
 
@@ -784,7 +816,7 @@ func (my *Renderer) renderMutation() error {
 					defaultTarget = ""
 				}
 				my.writeField(protocol.UPSERT+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-					{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_INPUT + "!]!"},
+					{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_ROW_INPUT + "!]!"},
 					{Name: protocol.ON, Type: onType, Default: defaultTarget},
 				}...))
 			}
@@ -803,7 +835,7 @@ func (my *Renderer) renderMutation() error {
 				key = append(key, renderer.Argument{Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_INPUT + "!"})
 				my.writeField(protocol.UPDATE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
 			}
-			my.writeField(protocol.UPDATE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}, {Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_INPUT + "!"}}...))
+			my.writeField(protocol.UPDATE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}, {Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_ROW_INPUT + "!"}}...))
 		}
 
 		if my.allows(class, protocol.OP_DELETE) {
