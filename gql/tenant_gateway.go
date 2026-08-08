@@ -9,11 +9,20 @@ import (
 // immutable engines. Each datasource keeps its own pool, catalog, plan cache,
 // CDC and transaction boundary; the gateway routes before parsing or calling
 // any handler. All sources must expose the same GraphQL contract.
-type tenantGatewayConfig struct{ revocation *RevocationBarrier }
+type tenantGatewayConfig struct {
+	revocation *RevocationBarrier
+	rls        map[string]RLSConfig
+}
 type TenantGatewayOption func(*tenantGatewayConfig)
 
 func WithRevocationBarrier(barrier *RevocationBarrier) TenantGatewayOption {
 	return func(config *tenantGatewayConfig) { config.revocation = barrier }
+}
+
+// WithRLS validates PostgreSQL role/table facts for shared-table datasources
+// and enables transaction-local verified identity on those source engines.
+func WithRLS(config map[string]RLSConfig) TenantGatewayOption {
+	return func(options *tenantGatewayConfig) { options.rls = config }
 }
 
 func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options ...TenantGatewayOption) (*Engine, error) {
@@ -66,9 +75,49 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 			option(&config)
 		}
 	}
+	if router.mode == TenantModeSharedTable {
+		for source, target := range targets {
+			rls, configured := config.rls[source]
+			production := target.database != nil && target.database.Name() == "postgres" && target.metadata.cfg != nil && !target.metadata.cfg.IsDebug()
+			if !configured && production {
+				var err error
+				rls, err = InspectRLS(target.database, target.metadata)
+				if err != nil {
+					return nil, fmt.Errorf("shared-table datasource %s: %w", source, err)
+				}
+				configured = true
+			}
+			if !configured {
+				continue
+			}
+			if err := ValidateRLS(rls); err != nil {
+				return nil, fmt.Errorf("shared-table datasource %s: %w", source, err)
+			}
+			if err := validateRLSTables(target.metadata, rls.Tables); err != nil {
+				return nil, fmt.Errorf("shared-table datasource %s: %w", source, err)
+			}
+			target.rls = true
+		}
+	}
 	dispatcher := &Executor{tenantRouter: router, tenantSources: targets, revocation: config.revocation, snapshot: canonical}
 	dispatcher.frozen.Store(true)
 	return &Engine{Executor: dispatcher}, nil
+}
+
+func validateRLSTables(metadata *Metadata, tables []RLSTable) error {
+	configured := make(map[string]bool, len(tables))
+	for _, table := range tables {
+		if table.Protected {
+			configured[table.Name] = true
+		}
+	}
+	for _, name := range sortedNodeNames(metadata) {
+		class := metadata.Nodes[name]
+		if class != nil && name == class.Name && class.Table != "" && !class.Global && !configured[class.Table] {
+			return fmt.Errorf("tenant table %s is missing RLS protection", class.Table)
+		}
+	}
+	return nil
 }
 
 func validateSharedTenantScope(metadata *Metadata) error {
@@ -92,25 +141,30 @@ func validateSharedTenantScope(metadata *Metadata) error {
 }
 
 func (my *Executor) tenantTarget(ctx context.Context) (*Executor, error) {
+	target, _, err := my.tenantDispatch(ctx)
+	return target, err
+}
+
+func (my *Executor) tenantDispatch(ctx context.Context) (*Executor, context.Context, error) {
 	if my.tenantRouter == nil {
-		return my, nil
+		return my, ctx, nil
 	}
 	identity, ok := IdentityFromContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("verified identity is required for tenant gateway")
+		return nil, ctx, fmt.Errorf("verified identity is required for tenant gateway")
 	}
 	route, err := my.tenantRouter.Resolve(ctx, identity)
 	if err != nil {
-		return nil, err
+		return nil, ctx, err
 	}
 	if my.revocation != nil {
 		if err := my.revocation.Check(identity, route); err != nil {
-			return nil, err
+			return nil, ctx, err
 		}
 	}
 	target := my.tenantSources[route.DataSource]
 	if target == nil {
-		return nil, fmt.Errorf("tenant datasource is unavailable")
+		return nil, ctx, fmt.Errorf("tenant datasource is unavailable")
 	}
-	return target, nil
+	return target, PinRoute(ctx, route), nil
 }

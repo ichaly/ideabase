@@ -15,6 +15,7 @@ import (
 
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/internal/intro"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -80,6 +81,7 @@ type Executor struct {
 	metadata      *Metadata           // 元数据信息，包含表结构、关系等
 	compiler      *Compiler           // 编译器，将GraphQL查询编译为SQL
 	cache         *planCache          // 执行计划缓存，命中路径零解析零编译
+	policyCache   *planCache          // 外部策略形状计划；请求值只留参数槽
 	flight        singleflight.Group  // 未命中收敛：并发的同一冷查询只解析编译一次
 	feedMu        sync.Mutex          // 保护feeds及各feed的订阅者集合
 	feeds         map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
@@ -96,6 +98,8 @@ type Executor struct {
 	tenantRouter  *TenantRouter
 	tenantSources map[string]*Executor
 	revocation    *RevocationBarrier
+	policy        PolicyProvider
+	rls           bool
 }
 
 // options 读取schema级选项（元数据未配置时为零值安全默认）
@@ -133,6 +137,11 @@ func (my *Executor) Register(items ...any) error {
 			my.resolvers[v.Name()] = v
 		case Remote:
 			my.remotes[v.Name()] = v
+		case PolicyProvider:
+			if my.policy != nil {
+				return fmt.Errorf("PolicyProvider已注册")
+			}
+			my.policy = v
 		default:
 			return fmt.Errorf("不支持的注册类型: %T", item)
 		}
@@ -244,15 +253,16 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 
 func newExecutor(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Executor, error) {
 	executor := &Executor{
-		database:   d,
-		metadata:   m,
-		compiler:   c,
-		cache:      newPlanCache(planCacheSize),
-		feeds:      make(map[string]*feed),
-		resolvers:  make(map[string]Resolver),
-		documents:  make(map[string]string),
-		remotes:    make(map[string]Remote),
-		validation: validatorrules.NewDefaultRules(),
+		database:    d,
+		metadata:    m,
+		compiler:    c,
+		cache:       newPlanCache(planCacheSize),
+		policyCache: newPlanCache(planCacheSize),
+		feeds:       make(map[string]*feed),
+		resolvers:   make(map[string]Resolver),
+		documents:   make(map[string]string),
+		remotes:     make(map[string]Remote),
+		validation:  validatorrules.NewDefaultRules(),
 	}
 
 	s, err := gqlparser.LoadSchema(&ast.Source{
@@ -496,12 +506,12 @@ func materialize(v interface{}) interface{} {
 func (my *Executor) execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	var r gqlReply
 	if my.tenantRouter != nil {
-		target, err := my.tenantTarget(ctx)
+		target, routed, err := my.tenantDispatch(ctx)
 		if err != nil {
 			r.Errors = gqlErrors(err)
 			return r
 		}
-		return target.execute(ctx, query, variables, operationName)
+		return target.execute(routed, query, variables, operationName)
 	}
 	if variables == nil && strings.IndexByte(query, '$') >= 0 {
 		variables = make(map[string]interface{})
@@ -525,6 +535,11 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 			return r
 		}
 		if rootErr, ok := err.(*rootResolverQuery); ok {
+			ctx, err = my.authorizeProvider(ctx, rootErr.entry.operation, variables)
+			if err != nil {
+				r.Errors = gqlErrors(err)
+				return r
+			}
 			if rootErr.entry.policyNeeded {
 				if authErr := my.authorize(ctx, rootErr.entry.operation, variables); authErr != nil {
 					r.Errors = gqlErrors(authErr)
@@ -545,6 +560,18 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 	if plan.policyNeeded {
 		if authErr := my.authorize(ctx, plan.operation, variables); authErr != nil {
 			r.Errors = gqlErrors(authErr)
+			return r
+		}
+	}
+	ctx, err = my.authorizeProvider(ctx, plan.operation, variables)
+	if err != nil {
+		r.Errors = gqlErrors(err)
+		return r
+	}
+	if my.policy != nil {
+		plan, err = my.policyPlan(ctx, plan, variables)
+		if err != nil {
+			r.Errors = gqlErrors(err)
 			return r
 		}
 	}
@@ -596,7 +623,21 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 // ID加解密的出参编码挂在此唯一出口：直通响应、resolver解包、订阅推送、
 // 根Resolver回查全部经此取数，下游看到的字节里ID已是shortId
 func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, error) {
-	args, err := plan.ResolveArgs(variables, scopeWithRole(ctx, scopeValues(ctx), plan.roleNeeded)) // 行级作用域值从请求上下文取
+	scope := scopeWithRole(ctx, scopeValues(ctx), plan.roleNeeded || len(plan.policyRoles) > 0)
+	if len(plan.policyRoles) > 0 || len(plan.policyScope) > 0 {
+		copy := make(map[string]any, len(scope)+len(plan.policyScope)+1)
+		for key, value := range scope {
+			copy[key] = value
+		}
+		for key, value := range plan.policyScope {
+			copy[key] = value
+		}
+		if len(plan.policyRoles) > 0 {
+			copy[protocol.CONTEXT_ROLES] = plan.policyRoles
+		}
+		scope = copy
+	}
+	args, err := plan.ResolveArgs(variables, scope) // 行级作用域值从请求上下文取
 	if err != nil {
 		return nil, err
 	}
@@ -605,7 +646,19 @@ func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]
 		database = tx
 	}
 	var data []byte
-	err = database.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
+	run := func(tx *gorm.DB) error {
+		if my.rls {
+			if err := my.prepareRLS(ctx, tx); err != nil {
+				return err
+			}
+		}
+		return tx.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
+	}
+	if my.rls && Tx(ctx) == nil {
+		err = database.WithContext(ctx).Transaction(run)
+	} else {
+		err = run(database)
+	}
 	if err == nil {
 		data = encodeBytes(data, plan.paths) // 空路径树零成本短路
 	}

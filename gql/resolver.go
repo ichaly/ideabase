@@ -442,14 +442,17 @@ func safely(fn func() error) (err error) {
 
 // Define 是Resolver/Remote注册即声明的schema形状。
 type Define struct {
-	Class    string // Query、Mutation或宿主实体名
-	Name     string // 字段名，如 botSave、greeting
-	Doc      string // 字段描述，渲染为SDL文档字符串
-	Args     string // 参数签名原文，如 "nickname: String!, avatar: String"；空=无参
-	Result   string // 返回类型，如 BotProfile、Int
-	Extra    string // 附加SDL（辅助input/type等声明），重建时按文本去重并入schema
-	Cost     uint32 // 单次字段解析权重；0使用默认权重1
-	Existing bool   // 绑定schema已有字段；仅允许通过显式Replace注册
+	Class       string   // Query、Mutation或宿主实体名
+	Name        string   // 字段名，如 botSave、greeting
+	Doc         string   // 字段描述，渲染为SDL文档字符串
+	Args        string   // 参数签名原文，如 "nickname: String!, avatar: String"；空=无参
+	Result      string   // 返回类型，如 BotProfile、Int
+	Extra       string   // 附加SDL（辅助input/type等声明），重建时按文本去重并入schema
+	Cost        uint32   // 单次字段解析权重；0使用默认权重1
+	Existing    bool     // 绑定schema已有字段；仅允许通过显式Replace注册
+	Resource    string   // PolicyProvider治理的资源；自定义根字段须显式声明
+	Actions     []string // 该Resolver执行的治理动作
+	PolicyAware bool     // 自定义实现显式消费PolicyDecisionFromContext
 }
 
 // sdl 渲染声明为extend片段（文档用三引号块，内容含引号也合法；Extra由rebuild单独并入）
@@ -536,6 +539,7 @@ func (my *Executor) rebuild() error {
 	my.schema = s
 	my.intro = intro.New(s)
 	my.cache = newPlanCache(planCacheSize)
+	my.policyCache = newPlanCache(planCacheSize)
 	return nil
 }
 
@@ -627,6 +631,11 @@ func (my *Executor) executeRootResolvers(ctx context.Context, entry *planEntry, 
 	var err error
 	if operation.Operation == ast.Mutation && my.database != nil && Tx(ctx) == nil {
 		err = my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if my.rls {
+				if err := my.prepareRLS(ctx, tx); err != nil {
+					return err
+				}
+			}
 			err := execute(context.WithValue(ctx, transactionKey{}, tx))
 			if len(executionErrors) > 0 {
 				return errRootTransactionRollback
@@ -781,6 +790,13 @@ func (my *Executor) executeDefaultRootField(ctx context.Context, operation *ast.
 		if !plan.Volatile() {
 			actual, _ := plans.LoadOrStore(field, plan)
 			plan = actual.(*Plan)
+		}
+	}
+	if my.policy != nil {
+		var err error
+		plan, err = my.policyPlan(ctx, plan, variables)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 	raw, err := my.fetch(ctx, plan, variables)

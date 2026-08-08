@@ -3,7 +3,9 @@ package gql
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -566,46 +568,72 @@ func evaluateCheck(c *protocol.Class, p *protocol.Permission, action string, val
 		}
 		values[rule.Column] = value
 	}
-	for _, pred := range p.Check {
+	return evaluatePredicates(c, action, p.Filter, p.Check, values, scope)
+}
+
+func evaluatePredicates(c *protocol.Class, action string, filters, predicates []protocol.Predicate, values map[string]any, scope map[string]interface{}) error {
+	for _, pred := range predicates {
 		v, ok := values[pred.Column]
 		if !ok {
-			if action == protocol.OP_UPDATE && predicateIn(p.Filter, pred) {
+			if action == protocol.OP_UPDATE && predicateIn(filters, pred) {
 				continue
 			}
 			return policyError(c, action, pred.Column)
 		}
-		pass := true
-		switch pred.Operator {
-		case "eq":
-			expected := pred.Value
-			if pred.Context != "" {
-				value, exists := scope[pred.Context]
-				if !exists {
-					return policyError(c, action, pred.Column)
-				}
-				expected = value
+		expected := pred.Value
+		if pred.Context != "" {
+			value, exists := scope[pred.Context]
+			if !exists {
+				return fmt.Errorf("missing check context %s", pred.Context)
 			}
-			pass = fmt.Sprint(v) == fmt.Sprint(expected)
-		case "ne":
-			expected := pred.Value
-			if pred.Context != "" {
-				value, exists := scope[pred.Context]
-				if !exists {
-					return policyError(c, action, pred.Column)
-				}
-				expected = value
-			}
-			pass = fmt.Sprint(v) != fmt.Sprint(expected)
-		case "is-null":
-			pass = v == nil
-		case "not-null", "is-not-null":
-			pass = v != nil
+			expected = value
 		}
-		if !pass {
-			return policyError(c, action, pred.Column)
+		if !predicateMatches(pred.Operator, v, expected) {
+			return fmt.Errorf("check failed for %s", pred.Column)
 		}
 	}
 	return nil
+}
+
+func predicateMatches(operator string, actual, expected any) bool {
+	switch operator {
+	case "eq":
+		return fmt.Sprint(actual) == fmt.Sprint(expected)
+	case "ne", "neq":
+		return fmt.Sprint(actual) != fmt.Sprint(expected)
+	case "is-null":
+		return actual == nil
+	case "not-null", "is-not-null":
+		return actual != nil
+	case "in":
+		list := reflect.ValueOf(expected)
+		if list.IsValid() && (list.Kind() == reflect.Array || list.Kind() == reflect.Slice) {
+			for index := 0; index < list.Len(); index++ {
+				if fmt.Sprint(actual) == fmt.Sprint(list.Index(index).Interface()) {
+					return true
+				}
+			}
+		}
+	case "lt", "lte", "gt", "gte":
+		order := predicateOrder(actual, expected)
+		return operator == "lt" && order < 0 || operator == "lte" && order <= 0 || operator == "gt" && order > 0 || operator == "gte" && order >= 0
+	}
+	return false
+}
+
+func predicateOrder(left, right any) int {
+	a, aerr := strconv.ParseFloat(fmt.Sprint(left), 64)
+	b, berr := strconv.ParseFloat(fmt.Sprint(right), 64)
+	if aerr == nil && berr == nil {
+		if a < b {
+			return -1
+		}
+		if a > b {
+			return 1
+		}
+		return 0
+	}
+	return strings.Compare(fmt.Sprint(left), fmt.Sprint(right))
 }
 func predicateIn(list []protocol.Predicate, want protocol.Predicate) bool {
 	for _, p := range list {

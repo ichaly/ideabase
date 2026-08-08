@@ -30,16 +30,17 @@ const (
 
 // Capability is the immutable execution contract of one schema coordinate.
 type Capability struct {
-	Coordinate string
-	Parent     string
-	Name       string
-	Type       string
-	Arguments  []Argument
-	Handler    HandlerKind
-	Planner    string
-	Actions    []string
-	Resource   string
-	Cost       uint32
+	Coordinate  string
+	Parent      string
+	Name        string
+	Type        string
+	Arguments   []Argument
+	Handler     HandlerKind
+	Planner     string
+	Actions     []string
+	Resource    string
+	Cost        uint32
+	PolicyAware bool
 }
 
 // Argument is the introspectable invocation contract of one field argument.
@@ -301,13 +302,34 @@ func (my *Executor) fieldCapability(parent *ast.Definition, field *ast.FieldDefi
 	}
 	if resolver, ok := my.resolvers[coordinate]; ok {
 		capability.Handler = HandlerResolver
-		if cost := resolver.Define().Cost; cost > 0 {
+		define := resolver.Define()
+		capability.Resource = define.Resource
+		capability.Actions = append([]string(nil), define.Actions...)
+		capability.PolicyAware = define.PolicyAware
+		if cost := define.Cost; cost > 0 {
 			capability.Cost = cost
+		}
+		if capability.Resource == "" {
+			if class, exists := my.metadata.GetNode(parent.Name); exists {
+				capability.Resource, capability.Actions = class.Name, []string{protocol.OP_SELECT}
+			}
+		}
+		if my.policy != nil && (capability.Resource == "" || len(capability.Actions) == 0) {
+			return Capability{}, fmt.Errorf("resolver %s requires explicit policy resource/action", coordinate)
 		}
 		return capability, nil
 	}
-	if _, ok := my.remotes[coordinate]; ok {
+	if remote, ok := my.remotes[coordinate]; ok {
 		capability.Handler = HandlerRemote
+		if mounted, exists := remote.(mounted); exists {
+			define := mounted.Define()
+			capability.Resource = define.Resource
+			capability.Actions = append([]string(nil), define.Actions...)
+			capability.PolicyAware = define.PolicyAware
+		}
+		if my.policy != nil && (capability.Resource == "" || len(capability.Actions) == 0) {
+			return Capability{}, fmt.Errorf("remote %s requires explicit policy resource/action", coordinate)
+		}
 		return capability, nil
 	}
 	if class, ok := my.metadata.GetNode(parent.Name); ok {
@@ -329,7 +351,11 @@ func (my *Executor) fieldCapability(parent *ast.Definition, field *ast.FieldDefi
 			capability.Handler = HandlerRemote
 			return capability, nil
 		}
-		capability.Handler, capability.Resource = HandlerSQL, class.Name
+		resource := class.Name
+		if declared.Relation != nil {
+			resource = declared.Relation.TargetClass
+		}
+		capability.Handler, capability.Resource = HandlerSQL, resource
 		capability.Actions = []string{protocol.OP_SELECT}
 		capability.Planner = "sql"
 		return capability, nil

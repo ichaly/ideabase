@@ -439,17 +439,34 @@ func (my *Dialect) predicateConjuncts(ctx *compiler.Context, qualifier string, p
 func (my *Dialect) writePredicate(ctx *compiler.Context, qualifier string, p protocol.Predicate) error {
 	ctx.Column(qualifier, p.Column)
 	switch p.Operator {
-	case "eq", "ne":
-		if p.Operator == "eq" {
-			ctx.Space("=")
-		} else {
-			ctx.Space("<>")
+	case "eq", "ne", "lt", "lte", "gt", "gte":
+		operator := "="
+		switch p.Operator {
+		case "ne":
+			operator = "<>"
+		case "lt":
+			operator = "<"
+		case "lte":
+			operator = "<="
+		case "gt":
+			operator = ">"
+		case "gte":
+			operator = ">="
 		}
+		ctx.Space(operator)
 		if p.Context != "" {
 			ctx.Write(my.Placeholder(ctx.AddContextSlot(p.Context)))
 		} else {
 			ctx.Write(my.Placeholder(ctx.AddParam(normalizeArg(p.Value))))
 		}
+	case "in":
+		ctx.Write(" = ANY(")
+		if p.Context != "" {
+			ctx.Write(my.Placeholder(ctx.AddContextListSlot(p.Context)))
+		} else {
+			ctx.Write(my.Placeholder(ctx.AddParam(compiler.ListArg(p.Value))))
+		}
+		ctx.Write(")")
 	case "is-null":
 		ctx.Write(" IS NULL")
 	case "not-null", "is-not-null":

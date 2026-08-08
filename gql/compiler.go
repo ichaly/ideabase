@@ -41,6 +41,8 @@ type Plan struct {
 	paths        codecPaths // 选择集中codec字段路径树，出参流式转换用（executor首次编译时固化）
 	roleNeeded   bool
 	policyNeeded bool
+	policyRoles  []string
+	policyScope  map[string]any
 }
 
 // Volatile 编译产物是否依赖变量内容（如整体input变量），不可缓存

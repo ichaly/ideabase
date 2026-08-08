@@ -28,6 +28,19 @@ func Extra(sdl string) Option { return func(my *Define) { my.Extra = sdl } }
 // Cost 声明字段的单次解析权重，供快照、预算和可观测性共用。
 func Cost(weight uint32) Option { return func(my *Define) { my.Cost = weight } }
 
+// Access binds a custom Resolver to the governed resource and actions it
+// performs. Engines without a PolicyProvider may omit it for compatibility.
+func Access(resource string, actions ...string) Option {
+	return func(my *Define) {
+		my.Resource = resource
+		my.Actions = append([]string(nil), actions...)
+	}
+}
+
+// ConsumePolicy declares that custom handler code reads and enforces
+// PolicyDecisionFromContext when a provider returns row/preset/check facts.
+func ConsumePolicy() Option { return func(my *Define) { my.PolicyAware = true } }
+
 // Existing 声明Resolver绑定schema已有字段，只能通过Executor.Replace显式注册。
 func Existing() Option { return func(my *Define) { my.Existing = true } }
 
@@ -101,8 +114,12 @@ func (my *fieldResolver[S, I, O]) resolveTyped(ctx context.Context, source S, in
 }
 
 // NewBatch 批量版NewResolver：整结果集一次调用免N+1，返回值须与sources等长对位
-func NewBatch[I, O any](class, name, doc string, fn func(context.Context, []Source, I) ([]O, error)) Resolver {
-	return &batch[I, O]{define: defineField[I, O](class, name, doc), fn: fn}
+func NewBatch[I, O any](class, name, doc string, fn func(context.Context, []Source, I) ([]O, error), opts ...Option) Resolver {
+	define := defineField[I, O](class, name, doc)
+	for _, opt := range opts {
+		opt(&define)
+	}
+	return &batch[I, O]{define: define, fn: fn}
 }
 
 // defineField 字段级声明：Class非空使sdl()渲染为 extend type <Class>
@@ -148,10 +165,14 @@ func (my *batch[I, O]) ResolveBatch(ctx context.Context, sources []map[string]in
 
 // NewRemote 注册即声明的远程关系：挂载为class实体的虚拟字段，key为宿主键字段名；
 // O为命名struct时自动反射出虚拟类型SDL（多个远程共享同一类型时重建期按文本去重）
-func NewRemote[O any](class, name, doc, key string, fn func(context.Context, []any) (map[any]O, error)) Remote {
+func NewRemote[O any](class, name, doc, key string, fn func(context.Context, []any) (map[any]O, error), opts ...Option) Remote {
 	t := reflect.TypeFor[O]()
+	define := Define{Class: class, Name: name, Doc: doc, Result: deriveResult(t), Extra: deriveObject(t)}
+	for _, opt := range opts {
+		opt(&define)
+	}
 	return &distant[O]{
-		define: Define{Class: class, Name: name, Doc: doc, Result: deriveResult(t), Extra: deriveObject(t)},
+		define: define,
 		key:    key,
 		fn:     fn,
 	}

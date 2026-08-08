@@ -73,6 +73,24 @@ func NormalizeDecision(request PolicyRequest, decision PolicyDecision) (PolicyDe
 	if decision.Limit < 0 || decision.Cost < 0 {
 		return PolicyDecision{}, fmt.Errorf("policy limit and cost must be non-negative")
 	}
+	decision, err := clonePolicyDecision(decision)
+	if err != nil {
+		return PolicyDecision{}, err
+	}
+	for _, p := range append(append(append([]TypedPredicate{}, decision.RowPredicates...), decision.Preset...), decision.Check...) {
+		if err := validateTypedPredicate(p); err != nil {
+			return PolicyDecision{}, err
+		}
+	}
+	if decision.PolicyRevision == 0 {
+		decision.PolicyRevision = request.Identity.PolicyRevision()
+	}
+	decision.PermissionSignature = permissionSignature(request, decision)
+	decision.ShapeSignature = shapeSignature(decision)
+	return decision, nil
+}
+
+func clonePolicyDecision(decision PolicyDecision) (PolicyDecision, error) {
 	decision.Fields = cloneFieldMap(decision.Fields)
 	var err error
 	decision.RowPredicates, err = clonePredicates(decision.RowPredicates)
@@ -88,20 +106,7 @@ func NormalizeDecision(request PolicyRequest, decision PolicyDecision) (PolicyDe
 		return PolicyDecision{}, err
 	}
 	decision.RoleBranches, err = cloneRoleBranches(decision.RoleBranches)
-	if err != nil {
-		return PolicyDecision{}, err
-	}
-	for _, p := range append(append(append([]TypedPredicate{}, decision.RowPredicates...), decision.Preset...), decision.Check...) {
-		if err := validateTypedPredicate(p); err != nil {
-			return PolicyDecision{}, err
-		}
-	}
-	if decision.PolicyRevision == 0 {
-		decision.PolicyRevision = request.Identity.PolicyRevision()
-	}
-	decision.PermissionSignature = permissionSignature(request, decision)
-	decision.ShapeSignature = shapeSignature(decision)
-	return decision, nil
+	return decision, err
 }
 
 func cloneFieldMap(in map[FieldUse][]string) map[FieldUse][]string {
@@ -188,19 +193,19 @@ func ValidateDecisionCatalog(class *protocol.Class, decision PolicyDecision) err
 	if class == nil {
 		return fmt.Errorf("policy resource catalog is required")
 	}
-	field := func(name string) error {
+	field := func(name string, relation bool) error {
 		if name == "*" {
 			return nil
 		}
 		candidate := class.Fields[name]
-		if candidate == nil || candidate.Column == "" {
+		if candidate == nil || (candidate.Column == "" && (!relation || candidate.Relation == nil && candidate.Resolver == "" && candidate.Remote == nil)) {
 			return fmt.Errorf("policy references unknown field %s.%s", class.Name, name)
 		}
 		return nil
 	}
-	for _, fields := range decision.Fields {
+	for use, fields := range decision.Fields {
 		for _, name := range fields {
-			if err := field(name); err != nil {
+			if err := field(name, use == FieldUseJoin); err != nil {
 				return err
 			}
 		}
@@ -211,7 +216,7 @@ func ValidateDecisionCatalog(class *protocol.Class, decision PolicyDecision) err
 	}
 	for _, predicates := range groups {
 		for _, predicate := range predicates {
-			if err := field(predicate.Column); err != nil {
+			if err := field(predicate.Column, false); err != nil {
 				return err
 			}
 		}

@@ -123,6 +123,16 @@ func TestTenantGatewaySharedTableRequiresTenantScopeOrExplicitGlobal(t *testing.
 	require.ErrorContains(t, err, "tenant scope")
 	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{scoped: true})})
 	require.NoError(t, err)
+	engine := build(sharedTenantLoader{scoped: true})
+	_, err = NewTenantGateway(router, map[string]*Engine{"db": engine}, WithRLS(map[string]RLSConfig{"db": {
+		Tables: []RLSTable{{Name: "accounts", Protected: true, HasPolicy: true}},
+	}}))
+	require.NoError(t, err)
+	require.True(t, engine.rls)
+	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{scoped: true})}, WithRLS(map[string]RLSConfig{"db": {
+		Role: RLSRole{BypassRLS: true}, Tables: []RLSTable{{Name: "accounts", Protected: true, HasPolicy: true}},
+	}}))
+	require.ErrorContains(t, err, "BYPASSRLS")
 	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{global: true})})
 	require.NoError(t, err)
 }
