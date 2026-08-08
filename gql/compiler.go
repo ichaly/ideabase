@@ -31,6 +31,7 @@ func NewCompiler(m *Metadata, dialects []compiler.Dialect) (*Compiler, error) {
 // 非volatile的计划可按查询文本缓存，执行期仅需解析参数槽位
 type Plan struct {
 	operation    *ast.OperationDefinition
+	intro        *ast.OperationDefinition
 	SQL          string
 	slots        []compiler.Slot
 	defaults     map[string]interface{}

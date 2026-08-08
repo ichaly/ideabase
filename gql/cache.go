@@ -19,6 +19,7 @@ type planKey struct {
 type planEntry struct {
 	plan         *Plan                    // 编译成品，volatile时为nil
 	operation    *ast.OperationDefinition // 已解析展开的AST
+	intro        *ast.OperationDefinition // 与业务字段混排的自省投影
 	resolvers    []binding                // resolver绑定只依赖AST，volatile重编译复用（非volatile时plan内已含，恒存仅为构造统一）
 	paths        codecPaths               // codec路径树只依赖AST，volatile重编译复用（同上）
 	roleNeeded   bool

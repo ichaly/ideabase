@@ -364,18 +364,26 @@ func (my *Executor) loadDocument(content string) error {
 		// 复用已解析的AST预热编译缓存（不再重复解析文档）；
 		// 依赖变量内容的操作（volatile）缓存AST，执行期免解析重编译
 		operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
+		operation, introspection := splitIntrospection(operation)
+		if introspection != nil && !my.options().Introspection {
+			return fmt.Errorf("自省查询已关闭（schema.introspection=false）")
+		}
+		if operation == nil { // 自省无需SQL预热，执行期直接投影当前schema
+			continue
+		}
 		key := planKey{operation: operation.Name, query: content}
 		if my.needsRootExecution(operation) {
 			roleNeeded, policyNeeded := operationGovernanceNeeds(my.metadata, operation)
 			my.cache.Put(key, &planEntry{
 				operation:    operation,
+				intro:        introspection,
 				rootResolver: true,
 				roleNeeded:   roleNeeded,
 				policyNeeded: policyNeeded,
 			})
 			continue
 		}
-		if _, _, err := my.compile(key, operation, nil); err != nil {
+		if _, _, err := my.compile(key, operation, introspection, nil); err != nil {
 			log.Warn().Err(err).Str("operation", operation.Name).Msg("持久化文档预热编译失败，执行期将重试编译")
 		}
 	}
@@ -491,7 +499,13 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 					return r
 				}
 			}
-			return my.executeRootResolvers(ctx, rootErr.entry, variables)
+			r = my.executeRootResolvers(ctx, rootErr.entry, variables)
+			if rootErr.entry.intro != nil && r.Data != nil {
+				if ierr := my.mergeIntrospection(r.Data, rootErr.entry.intro, variables); ierr != nil {
+					r.Errors = append(r.Errors, gqlErrors(ierr)...)
+				}
+			}
+			return r
 		}
 		r.Errors = gqlErrors(err)
 		return r
@@ -509,15 +523,32 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 		return r
 	}
 
-	// 无resolver时跳过解包，序列化期直通输出
-	if len(plan.resolvers) == 0 {
+	// 无resolver且无混合自省时跳过解包，序列化期直通输出
+	if len(plan.resolvers) == 0 && plan.intro == nil {
 		r.raw = data
 		return r
 	}
-	result, warnings, err := my.unpack(ctx, plan, data, variables)
+	var result map[string]interface{}
+	var warnings gqlerror.List
+	if len(plan.resolvers) == 0 {
+		value, decodeErr := decodeValue(data)
+		err = decodeErr
+		result, _ = value.(map[string]interface{})
+		if result == nil {
+			result = make(map[string]interface{})
+		}
+	} else {
+		result, warnings, err = my.unpack(ctx, plan, data, variables)
+	}
 	if err != nil {
 		r.Errors = gqlErrors(err)
 		return r
+	}
+	if plan.intro != nil {
+		if err = my.mergeIntrospection(result, plan.intro, variables); err != nil {
+			r.Errors = gqlErrors(err)
+			return r
+		}
 	}
 	// 非致命警告与data共存（GraphQL部分错误语义）
 	r.Errors, r.Data = warnings, result
@@ -698,28 +729,15 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 		if err != nil {
 			return nil, err
 		}
-		if hasIntroField(operation.SelectionSet) {
-			if !my.options().Introspection {
-				return nil, fmt.Errorf("自省查询已关闭（schema.introspection=false）")
-			}
-			return nil, &introQuery{operation: operation}
-		}
 		key := planKey{operation: operationName, query: query, shape: selectionShape(operation.SelectionSet)}
 		if entry, ok := my.cache.Get(key); ok {
 			return my.preparedPlan(entry, variables)
 		}
-		if len(operation.SelectionSet) == 0 || my.needsRootExecution(operation) {
-			roleNeeded, policyNeeded := operationGovernanceNeeds(my.metadata, operation)
-			entry := &planEntry{operation: operation, rootResolver: true, roleNeeded: roleNeeded, policyNeeded: policyNeeded}
-			my.cache.Put(key, entry)
-			return nil, &rootResolverQuery{entry: entry}
+		entry, plan, err := my.miss(key, operation, variables)
+		if err != nil || plan != nil {
+			return plan, err
 		}
-		if my.compiler == nil || my.database == nil {
-			return nil, fmt.Errorf("执行器未配置数据库或编译器")
-		}
-		decodeVariables(my.schema, operation.VariableDefinitions, variables, my.metadata)
-		_, plan, err := my.compile(key, operation, variables)
-		return plan, err
+		return my.preparedPlan(entry, variables)
 	}
 	key := planKey{operation: operationName, query: query}
 	entry, ok := my.cache.Get(key)
@@ -818,6 +836,7 @@ func (my *Executor) preparedPlan(entry *planEntry, variables map[string]interfac
 		return nil, err
 	}
 	plan.resolvers, plan.paths = entry.resolvers, entry.paths
+	plan.intro = entry.intro
 	plan.roleNeeded = entry.roleNeeded
 	plan.policyNeeded = entry.policyNeeded
 	return plan, nil
@@ -833,16 +852,20 @@ func (my *Executor) miss(key planKey, operation *ast.OperationDefinition, variab
 			return nil, nil, err
 		}
 	}
-	if hasIntroField(operation.SelectionSet) {
+	operation, introspection := splitIntrospection(operation)
+	if introspection != nil {
 		if !my.options().Introspection {
 			return nil, nil, fmt.Errorf("自省查询已关闭（schema.introspection=false）")
 		}
-		return nil, nil, &introQuery{operation: operation}
+		if operation == nil {
+			return nil, nil, &introQuery{operation: introspection}
+		}
 	}
-	if my.needsRootExecution(operation) {
+	if len(operation.SelectionSet) == 0 || my.needsRootExecution(operation) {
 		roleNeeded, policyNeeded := operationGovernanceNeeds(my.metadata, operation)
 		entry := &planEntry{
 			operation:    operation,
+			intro:        introspection,
 			rootResolver: true,
 			roleNeeded:   roleNeeded,
 			policyNeeded: policyNeeded,
@@ -855,7 +878,7 @@ func (my *Executor) miss(key planKey, operation *ast.OperationDefinition, variab
 	}
 	// 领跑者在此解码入参并编译（跟随者在命中路径自行解码），两侧各解码一次
 	decodeVariables(my.schema, operation.VariableDefinitions, variables, my.metadata)
-	return my.compile(key, operation, variables)
+	return my.compile(key, operation, introspection, variables)
 }
 
 // parse 解析校验查询并选定操作，fragment就地展开为纯字段选择集
@@ -889,14 +912,15 @@ func (my *Executor) parse(query, operationName string, variables map[string]inte
 
 // compile 编译并缓存：resolver绑定与codec路径树在此一次性收集（均只依赖AST）；
 // volatile计划SQL不可复用但AST与两类产物可以——缓存供后续请求免解析重收集
-func (my *Executor) compile(key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
+func (my *Executor) compile(key planKey, operation, introspection *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
 	plan, err := my.compiler.Compile(operation, variables)
 	if err != nil {
 		return nil, nil, err
 	}
 	plan.resolvers = collectBindings(my.metadata, operation)
 	plan.paths = collectCodecPaths(operation.SelectionSet, my.metadata)
-	entry := &planEntry{operation: operation, resolvers: plan.resolvers, paths: plan.paths, roleNeeded: plan.roleNeeded, policyNeeded: plan.policyNeeded}
+	plan.intro = introspection
+	entry := &planEntry{operation: operation, intro: introspection, resolvers: plan.resolvers, paths: plan.paths, roleNeeded: plan.roleNeeded, policyNeeded: plan.policyNeeded}
 	if !plan.Volatile() {
 		entry.plan = plan
 	}
@@ -912,4 +936,40 @@ func hasIntroField(set ast.SelectionSet) bool {
 		}
 	}
 	return false
+}
+
+// splitIntrospection separates built-in introspection projection from executable
+// business fields while preserving one validated operation and variable contract.
+func splitIntrospection(operation *ast.OperationDefinition) (*ast.OperationDefinition, *ast.OperationDefinition) {
+	if operation == nil || !hasIntroField(operation.SelectionSet) {
+		return operation, nil
+	}
+	data, introspection := make(ast.SelectionSet, 0, len(operation.SelectionSet)), make(ast.SelectionSet, 0, 2)
+	for _, selection := range operation.SelectionSet {
+		field, _ := selection.(*ast.Field)
+		if field != nil && (field.Name == "__schema" || field.Name == "__type") {
+			introspection = append(introspection, field)
+		} else {
+			data = append(data, selection)
+		}
+	}
+	introOperation := *operation
+	introOperation.SelectionSet = introspection
+	if len(data) == 0 {
+		return nil, &introOperation
+	}
+	dataOperation := *operation
+	dataOperation.SelectionSet = data
+	return &dataOperation, &introOperation
+}
+
+func (my *Executor) mergeIntrospection(data map[string]interface{}, operation *ast.OperationDefinition, variables map[string]interface{}) error {
+	projected, err := my.intro.Introspect(operation, variables)
+	if err != nil {
+		return err
+	}
+	for key, value := range projected {
+		data[key] = value
+	}
+	return nil
 }
