@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"runtime/debug"
@@ -17,6 +18,8 @@ import (
 	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 )
+
+var errRootTransactionRollback = errors.New("root resolver transaction rollback")
 
 // Resolver 自定义字段解析器：处理无法用SQL表达的字段逻辑
 // 元数据中通过 Field.Resolver 按名绑定，编译期跳过SQL，执行期填充结果
@@ -442,8 +445,14 @@ func (my *Executor) executeRootResolvers(ctx context.Context, entry *planEntry, 
 	}
 	data := make(map[string]interface{}, len(operation.SelectionSet))
 	var warnings gqlerror.List
+	var executionErrors gqlerror.List
+	stop := false
+	mutationRollback := operation.Operation == ast.Mutation && (my.database != nil || Tx(ctx) != nil)
 	execute := func(ctx context.Context) error {
 		for _, s := range operation.SelectionSet {
+			if stop {
+				break
+			}
 			f, ok := s.(*ast.Field)
 			if !ok {
 				continue
@@ -454,7 +463,16 @@ func (my *Executor) executeRootResolvers(ctx context.Context, entry *planEntry, 
 			}
 			value, warns, err := my.resolveRootField(ctx, operation, f, variables, typename, plans)
 			if err != nil {
-				return err
+				code := "EXECUTION_ERROR"
+				if my.resolvers[typename+"."+f.Name] != nil {
+					code = "RESOLVER_ERROR"
+				}
+				executionErrors = append(executionErrors, rootFieldExecutionErrors(f, err, code, mutationRollback)...)
+				data[f.Alias] = nil
+				if f.Definition != nil && f.Definition.Type != nil && f.Definition.Type.NonNull {
+					stop = true
+				}
+				continue
 			}
 			warnings = append(warnings, warns...)
 			data[f.Alias] = value
@@ -464,15 +482,54 @@ func (my *Executor) executeRootResolvers(ctx context.Context, entry *planEntry, 
 	var err error
 	if operation.Operation == ast.Mutation && my.database != nil && Tx(ctx) == nil {
 		err = my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			return execute(context.WithValue(ctx, transactionKey{}, tx))
+			err := execute(context.WithValue(ctx, transactionKey{}, tx))
+			if len(executionErrors) > 0 {
+				return errRootTransactionRollback
+			}
+			return err
 		})
 	} else {
 		err = execute(ctx)
 	}
-	if err != nil {
+	if err != nil && len(executionErrors) == 0 {
 		return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
 	}
+	if len(executionErrors) > 0 {
+		if stop {
+			return gqlReply{Errors: executionErrors, nullData: true}
+		}
+		return gqlReply{Data: data, Errors: append(executionErrors, warnings...)}
+	}
 	return gqlReply{Data: data, Errors: warnings}
+}
+
+func rootFieldExecutionErrors(field *ast.Field, err error, code string, rolledBack bool) gqlerror.List {
+	alias := field.Alias
+	if alias == "" {
+		alias = field.Name
+	}
+	prefix := ast.Path{ast.PathName(alias)}
+	result := gqlErrors(err)
+	for i, original := range result {
+		copy := *original
+		copy.Path = append(prefix, original.Path...)
+		if len(copy.Locations) == 0 && field.Position != nil {
+			copy.Locations = []gqlerror.Location{{Line: field.Position.Line, Column: field.Position.Column}}
+		}
+		ext := make(map[string]any, len(original.Extensions)+2)
+		for k, v := range original.Extensions {
+			ext[k] = v
+		}
+		if _, ok := ext["code"]; !ok {
+			ext["code"] = code
+		}
+		if rolledBack {
+			ext["transactionRolledBack"] = true
+		}
+		copy.Extensions = ext
+		result[i] = &copy
+	}
+	return result
 }
 
 func (my *Executor) resolveRootField(ctx context.Context, operation *ast.OperationDefinition, field *ast.Field, variables map[string]interface{}, parent string, plans *sync.Map) (interface{}, gqlerror.List, error) {

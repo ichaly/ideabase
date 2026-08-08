@@ -39,15 +39,22 @@ type (
 	// gqlReply 表示GraphQL响应
 	// 包含执行结果数据或错误信息
 	gqlReply struct {
-		Data   map[string]interface{} `json:"data,omitempty"`   // 成功结果数据
-		Errors gqlerror.List          `json:"errors,omitempty"` // 错误信息列表
-		raw    []byte                 // 直通字节：无resolver时DB返回的__root JSON原样输出
+		Data     map[string]interface{} `json:"data,omitempty"`   // 成功结果数据
+		Errors   gqlerror.List          `json:"errors,omitempty"` // 错误信息列表
+		raw      []byte                 // 直通字节：无resolver时DB返回的__root JSON原样输出
+		nullData bool                   // 执行期Non-Null失败需显式输出data:null
 	}
 )
 
 // MarshalJSON 直通快路径：__root字节直接拼入响应，免解包重序列化
 // （典型列表响应实测省~0.7ms与上万次分配，HTTP与订阅推送共用）
 func (my gqlReply) MarshalJSON() ([]byte, error) {
+	if my.nullData {
+		return jsonReply.Marshal(struct {
+			Data   any           `json:"data"`
+			Errors gqlerror.List `json:"errors,omitempty"`
+		}{Data: nil, Errors: my.Errors})
+	}
 	if my.raw == nil || len(my.Errors) > 0 {
 		type alias gqlReply // 别名擦除方法集，避免递归
 		return jsonReply.Marshal(alias(my))
