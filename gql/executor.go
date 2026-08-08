@@ -19,6 +19,7 @@ import (
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
+	validatorrules "github.com/vektah/gqlparser/v2/validator/rules"
 	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 )
@@ -91,6 +92,7 @@ type Executor struct {
 	finalizeOnce sync.Once
 	snapshot     *Snapshot
 	snapshotErr  error
+	validation   *validatorrules.Rules // 快照自有验证规则，不修改gqlparser全局状态
 }
 
 // options 读取schema级选项（元数据未配置时为零值安全默认）
@@ -236,14 +238,15 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 
 func newExecutor(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Executor, error) {
 	executor := &Executor{
-		database:  d,
-		metadata:  m,
-		compiler:  c,
-		cache:     newPlanCache(planCacheSize),
-		feeds:     make(map[string]*feed),
-		resolvers: make(map[string]Resolver),
-		documents: make(map[string]string),
-		remotes:   make(map[string]Remote),
+		database:   d,
+		metadata:   m,
+		compiler:   c,
+		cache:      newPlanCache(planCacheSize),
+		feeds:      make(map[string]*feed),
+		resolvers:  make(map[string]Resolver),
+		documents:  make(map[string]string),
+		remotes:    make(map[string]Remote),
+		validation: validatorrules.NewDefaultRules(),
 	}
 
 	s, err := gqlparser.LoadSchema(&ast.Source{
@@ -354,7 +357,7 @@ func (my *Executor) LoadDocuments(dir string) error {
 
 // loadDocument 解析并注册文档中的命名操作
 func (my *Executor) loadDocument(content string) error {
-	doc, errs := gqlparser.LoadQueryWithRules(my.schema, content, nil)
+	doc, errs := loadQuery(my.schema, content, my.metadata.MaxTokens(), my.validation)
 	if len(errs) > 0 {
 		return errs
 	}
@@ -751,6 +754,9 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 		}
 		key := planKey{operation: operationName, query: query, shape: selectionShape(operation.SelectionSet)}
 		if entry, ok := my.cache.Get(key); ok {
+			if err := my.validateMaxCost(operation, variables); err != nil {
+				return nil, err
+			}
 			return my.preparedPlan(entry, variables)
 		}
 		entry, plan, err := my.miss(key, operation, variables)
@@ -839,6 +845,9 @@ func (my *Executor) cachedPlan(entry *planEntry, variables map[string]interface{
 	if _, err := coerceVariables(my.schema, entry.operation, variables); err != nil {
 		return nil, err
 	}
+	if err := my.validateMaxCost(entry.operation, variables); err != nil {
+		return nil, err
+	}
 	return my.preparedPlan(entry, variables)
 }
 
@@ -872,6 +881,9 @@ func (my *Executor) miss(key planKey, operation *ast.OperationDefinition, variab
 			return nil, nil, err
 		}
 	}
+	if err := my.validateMaxCost(operation, variables); err != nil {
+		return nil, nil, err
+	}
 	operation, introspection := splitIntrospection(operation)
 	if introspection != nil {
 		if !my.options().Introspection {
@@ -903,7 +915,7 @@ func (my *Executor) miss(key planKey, operation *ast.OperationDefinition, variab
 
 // parse 解析校验查询并选定操作，fragment就地展开为纯字段选择集
 func (my *Executor) parse(query, operationName string, variables map[string]interface{}) (*ast.OperationDefinition, error) {
-	doc, errs := gqlparser.LoadQueryWithRules(my.schema, query, nil)
+	doc, errs := loadQuery(my.schema, query, my.metadata.MaxTokens(), my.validation)
 	if len(errs) > 0 {
 		return nil, errs
 	}
@@ -945,6 +957,36 @@ func (my *Executor) validateMaxDepth(operation *ast.OperationDefinition) error {
 		}
 	}
 	return nil
+}
+
+func (my *Executor) validateMaxCost(operation *ast.OperationDefinition, variables map[string]interface{}) error {
+	if my.metadata == nil || my.metadata.MaxCost() == 0 {
+		return nil
+	}
+	snapshot, err := my.Snapshot()
+	if err != nil {
+		return err
+	}
+	cost := operationCost(operation, variables, my.metadata.DefaultLimit(), snapshot.index)
+	if cost > my.metadata.MaxCost() {
+		return fmt.Errorf("查询成本%d超过上限%d（schema.max-cost可调，0=不限制）", cost, my.metadata.MaxCost())
+	}
+	return nil
+}
+
+// OperationCost reports the normalized operation cost without enforcing the
+// configured budget; it shares parse/coercion/selection normalization.
+func (my *Executor) OperationCost(query, operationName string, variables map[string]interface{}) (uint64, error) {
+	attempt := cloneVariables(variables)
+	operation, err := my.parse(query, operationName, attempt)
+	if err != nil {
+		return 0, err
+	}
+	snapshot, err := my.Snapshot()
+	if err != nil {
+		return 0, err
+	}
+	return operationCost(operation, attempt, my.metadata.DefaultLimit(), snapshot.index), nil
 }
 
 // compile 编译并缓存：resolver绑定与codec路径树在此一次性收集（均只依赖AST）；

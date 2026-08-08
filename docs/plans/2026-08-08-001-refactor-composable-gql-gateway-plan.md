@@ -241,7 +241,7 @@ flowchart TB
 4. **M4 完整数据库能力：** 补齐 Relay、复合约束、schema/database tenant、完整 catalog 和受治理订阅。
 5. **M5 生产与迁移闭环：** U8/U9 的 HTTP/WS、故障治理、DDL expand/contract、fish-ai-api 迁移和全矩阵性能门禁。
 
-- [ ] U0. **冻结兼容、依赖与性能基线**
+- [x] U0. **冻结兼容、依赖与性能基线**
 
 **Goal:** 在改内核前冻结 Go/GraphQL 消费契约、真实性能和依赖行为，让每个后续里程碑都有可判定回归门禁。
 
@@ -308,7 +308,7 @@ flowchart TB
 
 ---
 
-- [ ] U2. **补齐 GraphQL 2025 前端与错误语义**
+- [x] U2. **补齐 GraphQL 2025 前端与错误语义**
 
 **Goal:** 让 parse、validation、variable/literal coercion、directive、selection merge、cost 和错误完成形成唯一前端，Schema 中的标准能力均真实执行。
 

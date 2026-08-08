@@ -226,6 +226,8 @@ func snapshotContract(executor *Executor, schema string, capabilities []Capabili
 		Schema        string
 		DefaultLimit  int
 		MaxDepth      int
+		MaxTokens     int
+		MaxCost       uint64
 		Introspection bool
 		PersistedOnly bool
 		SearchMode    string
@@ -239,6 +241,8 @@ func snapshotContract(executor *Executor, schema string, capabilities []Capabili
 		runtime.Schema = cfg.Schema.Schema
 		runtime.DefaultLimit = cfg.Schema.DefaultLimit
 		runtime.MaxDepth = cfg.Schema.MaxDepth
+		runtime.MaxTokens = cfg.Schema.MaxTokens
+		runtime.MaxCost = cfg.Schema.MaxCost
 		runtime.Introspection = cfg.Schema.Introspection
 		runtime.PersistedOnly = cfg.Schema.PersistedOnly
 		runtime.SearchMode, runtime.SearchConfig = executor.metadata.SearchMode()
@@ -283,8 +287,11 @@ func (my *Executor) fieldCapability(parent *ast.Definition, field *ast.FieldDefi
 		capability.Handler = HandlerIntrospection
 		return capability, nil
 	}
-	if _, ok := my.resolvers[coordinate]; ok {
+	if resolver, ok := my.resolvers[coordinate]; ok {
 		capability.Handler = HandlerResolver
+		if cost := resolver.Define().Cost; cost > 0 {
+			capability.Cost = cost
+		}
 		return capability, nil
 	}
 	if _, ok := my.remotes[coordinate]; ok {

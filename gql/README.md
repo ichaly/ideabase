@@ -65,7 +65,10 @@ fmt.Println(snapshot.Fingerprint(), snapshot.Capabilities())
   支持变量（`first: $n`），同一查询文本一份计划适配任意页大小。无显式 limit 的
   列表自动注入 `schema.default-limit`（缺省 10，设 0 关闭）防无界全表扫描；
   变更读回、统计分组与递归全树不受此限制。选择集嵌套深度超过
-  `schema.max-depth`（缺省 20，设 0 关闭）编译期拒绝，防深选择集代价攻击
+  `schema.max-depth`（缺省 20，设 0 关闭）在执行前拒绝。可执行文档同时受
+  `schema.max-tokens`（缺省 15000，设 0 不限制）保护；`schema.max-cost`（缺省 0，
+  即只通过 `OperationCost` 观测）可启用请求成本预算。成本消费规范化后的
+  选择树，按分页上界和批量 `input` 长度乘算；无可证明上界的列表在预算模式下fail closed
 - 统计：`userStats(where, groupBy, having, limit, offset)` 返回 `count` 与各列的
   sum/avg/min/max/countDistinct，选择驱动只算请求的聚合。`having` 对聚合值过滤
   （`having: { count: { gt: 10 }, score: { sum: { gt: 1000 } } }`），复用 where
@@ -150,8 +153,12 @@ builder.Register(gql.NewBatch("User", "level", "等级",
 builder.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
     func(ctx context.Context, _ gql.Root, req CreateReq) (*ent.Profile, error) {
         return svc.Create(ctx, req)
-    }, gql.Result("BotProfile")))
+    }, gql.Result("BotProfile"), gql.Cost(8)))
 ```
+
+`Cost` 是该字段的单次解析权重（缺省 1），会进入不可变 Snapshot；
+`engine.OperationCost(query, operationName, variables)` 使用与真实执行相同的验证、
+coercion、directive 和选择集合并路径，但不受当前预算上限影响。
 
 Mutation 根 Resolver 会在引擎事务中执行，数据库写入应从 `gql.Tx(ctx)` 取得连接；
 Query、无数据库执行器或事务外调用返回 `nil`。直接捕获全局 `*gorm.DB` 的旧写法无法

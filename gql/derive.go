@@ -25,6 +25,9 @@ func Result(name string) Option { return func(my *Define) { my.Result = name } }
 // Extra 附加SDL（辅助input/type声明），原样并入schema
 func Extra(sdl string) Option { return func(my *Define) { my.Extra = sdl } }
 
+// Cost 声明字段的单次解析权重，供快照、预算和可观测性共用。
+func Cost(weight uint32) Option { return func(my *Define) { my.Cost = weight } }
+
 // Existing 声明Resolver绑定schema已有字段，只能通过Executor.Replace显式注册。
 func Existing() Option { return func(my *Define) { my.Existing = true } }
 

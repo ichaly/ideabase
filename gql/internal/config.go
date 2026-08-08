@@ -41,7 +41,9 @@ type SchemaConfig struct {
 	DefaultLimit int `mapstructure:"default-limit"`
 
 	// 查询选择集最大嵌套深度（0=不限制）
-	MaxDepth int `mapstructure:"max-depth"`
+	MaxDepth  int    `mapstructure:"max-depth"`
+	MaxTokens int    `mapstructure:"max-tokens"`
+	MaxCost   uint64 `mapstructure:"max-cost"`
 
 	// 是否允许自省查询（生产对外暴露时可关闭）
 	Introspection bool `mapstructure:"introspection"`

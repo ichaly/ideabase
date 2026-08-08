@@ -448,6 +448,7 @@ type Define struct {
 	Args     string // 参数签名原文，如 "nickname: String!, avatar: String"；空=无参
 	Result   string // 返回类型，如 BotProfile、Int
 	Extra    string // 附加SDL（辅助input/type等声明），重建时按文本去重并入schema
+	Cost     uint32 // 单次字段解析权重；0使用默认权重1
 	Existing bool   // 绑定schema已有字段；仅允许通过显式Replace注册
 }
 
