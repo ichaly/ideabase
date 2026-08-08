@@ -384,6 +384,7 @@ func (my *Executor) rebuild() error {
 	if err != nil {
 		return fmt.Errorf("合并注册声明失败: %w", err)
 	}
+	disableUnsupportedDirectives(s)
 	my.schema = s
 	my.intro = intro.New(s)
 	my.cache = newPlanCache(planCacheSize)

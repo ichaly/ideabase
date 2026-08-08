@@ -247,6 +247,10 @@ func newExecutor(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Executor, 
 		return nil, err
 	}
 
+	// gqlparser exposes @defer as a built-in directive, but this engine does not
+	// implement incremental delivery. Removing it keeps validation and
+	// introspection honest without changing gqlparser's global rule set.
+	disableUnsupportedDirectives(s)
 	executor.source = data
 	executor.schema = s
 	executor.intro = intro.New(s)
@@ -270,6 +274,10 @@ func newExecutor(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Executor, 
 		}
 	}
 	return executor, nil
+}
+
+func disableUnsupportedDirectives(schema *ast.Schema) {
+	delete(schema.Directives, "defer")
 }
 
 // loadSchema 解析schema来源：schema.file配置 > renderer现场生成
@@ -348,6 +356,11 @@ func (my *Executor) loadDocument(content string) error {
 			return fmt.Errorf("持久化文档中的操作必须命名")
 		}
 		my.documents[operation.Name] = content
+		// Conditional directives depend on request variables; never prewarm a
+		// directive-free AST into the shared cache for these documents.
+		if hasConditionalDirective(content) {
+			continue
+		}
 		// 复用已解析的AST预热编译缓存（不再重复解析文档）；
 		// 依赖变量内容的操作（volatile）缓存AST，执行期免解析重编译
 		operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
@@ -675,6 +688,37 @@ func (my *introQuery) Error() string { return "自省查询不支持此入口" }
 // plan 获取执行计划：命中缓存零解析；volatile命中仅重做SQL构建；
 // 未命中经singleflight收敛（并发的同一冷查询只解析编译一次），自省查询经introQuery带出
 func (my *Executor) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
+	// Directive results are part of the selection shape. Until the cache key is
+	// partitioned by the evaluated shape, use the safe uncached path rather than
+	// risk serving SQL/resolver work compiled for another variable value.
+	if hasConditionalDirective(query) {
+		operation, err := my.parse(query, operationName, variables)
+		if err != nil {
+			return nil, err
+		}
+		if hasIntroField(operation.SelectionSet) {
+			if !my.options().Introspection {
+				return nil, fmt.Errorf("自省查询已关闭（schema.introspection=false）")
+			}
+			return nil, &introQuery{operation: operation}
+		}
+		key := planKey{operation: operationName, query: query, shape: selectionShape(operation.SelectionSet)}
+		if entry, ok := my.cache.Get(key); ok {
+			return my.cachedPlan(entry, variables)
+		}
+		if len(operation.SelectionSet) == 0 || my.needsRootExecution(operation) {
+			roleNeeded, policyNeeded := operationGovernanceNeeds(my.metadata, operation)
+			entry := &planEntry{operation: operation, rootResolver: true, roleNeeded: roleNeeded, policyNeeded: policyNeeded}
+			my.cache.Put(key, entry)
+			return nil, &rootResolverQuery{entry: entry}
+		}
+		if my.compiler == nil || my.database == nil {
+			return nil, fmt.Errorf("执行器未配置数据库或编译器")
+		}
+		decodeVariables(my.schema, operation.VariableDefinitions, variables, my.metadata)
+		_, plan, err := my.compile(key, operation, variables)
+		return plan, err
+	}
 	key := planKey{operation: operationName, query: query}
 	entry, ok := my.cache.Get(key)
 	if !ok {
@@ -692,6 +736,10 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 		}
 		entry = value.(*planEntry)
 	}
+	return my.cachedPlan(entry, variables)
+}
+
+func (my *Executor) cachedPlan(entry *planEntry, variables map[string]interface{}) (*Plan, error) {
 	// 收口：任何消费（Resolver分发/执行/volatile重编译）前统一还原codec入参
 	decodeVariables(my.schema, entry.operation.VariableDefinitions, variables, my.metadata)
 	if entry.rootResolver {
@@ -714,7 +762,7 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 // miss 缓存未命中（singleflight领跑者）：解析一次并落缓存条目，同时带回本次编译的
 // 计划（领跑者直接执行）；跟随者与后续请求经统一命中路径消费；自省不缓存经introQuery带出
 func (my *Executor) miss(key planKey, variables map[string]interface{}) (*planEntry, *Plan, error) {
-	operation, err := my.parse(key.query, key.operation)
+	operation, err := my.parse(key.query, key.operation, variables)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -744,7 +792,7 @@ func (my *Executor) miss(key planKey, variables map[string]interface{}) (*planEn
 }
 
 // parse 解析校验查询并选定操作，fragment就地展开为纯字段选择集
-func (my *Executor) parse(query, operationName string) (*ast.OperationDefinition, error) {
+func (my *Executor) parse(query, operationName string, variables map[string]interface{}) (*ast.OperationDefinition, error) {
 	doc, errs := gqlparser.LoadQueryWithRules(my.schema, query, nil)
 	if len(errs) > 0 {
 		return nil, errs
@@ -756,7 +804,11 @@ func (my *Executor) parse(query, operationName string) (*ast.OperationDefinition
 		}
 		operation = doc.Operations[0]
 	}
-	operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
+	selection, err := normalizeSelection(operation.SelectionSet, doc.Fragments, variables)
+	if err != nil {
+		return nil, err
+	}
+	operation.SelectionSet = selection
 	// codec标量字面量就地还原：解析仅发生一次，改写随计划缓存复用；
 	// 变量默认值同为字面量，一并还原（不传变量时默认值直达SQL，漏解码即类型不符）
 	decodeLiterals(my.schema, operation.SelectionSet, my.metadata)

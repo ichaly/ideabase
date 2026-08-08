@@ -141,6 +141,7 @@ func TestIntrospection(t *testing.T) {
 			directives[item.(map[string]interface{})["name"].(string)] = true
 		}
 		assert.True(t, directives["include"] && directives["skip"])
+		assert.False(t, directives["defer"], "未实现的@defer不得出现在自省契约")
 	})
 
 	t.Run("Type Introspection", func(t *testing.T) {
@@ -165,6 +166,80 @@ func TestIntrospection(t *testing.T) {
 		assert.Empty(t, result.Errors)
 		assert.Nil(t, result.Data["__type"])
 	})
+}
+
+func TestConditionalDirectivesSkipResolverAndFragments(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	calls := 0
+	resolver := NewResolver[Root, struct{}, string]("Query", "greeting", "问候", func(context.Context, Root, struct{}) (string, error) {
+		calls++
+		return "hello", nil
+	})
+	assert.NoError(t, executor.Register(resolver))
+
+	result := executor.run(context.Background(), `query($show: Boolean = false) {
+		greeting @include(if: $show)
+		...Greeting
+	}
+	fragment Greeting on Query { greeting @skip(if: true) }`, nil, "")
+	assert.Empty(t, result.Errors)
+	assert.Empty(t, result.Data)
+	assert.Zero(t, calls, "被@include跳过的Resolver不得调用")
+
+	result = executor.run(context.Background(), `query($show: Boolean!) {
+		... on Query @include(if: $show) { greeting }
+	}`, map[string]interface{}{"show": true}, "")
+	assert.Empty(t, result.Errors)
+	assert.Equal(t, "hello", result.Data["greeting"])
+	assert.Equal(t, 1, calls)
+
+	result = executor.run(context.Background(), `query { greeting @defer }`, nil, "")
+	assert.NotEmpty(t, result.Errors, "未实现的@defer必须在validation阶段失败")
+
+	result = executor.run(context.Background(), `{ __schema { directives { name } } }`, nil, "")
+	assert.Empty(t, result.Errors)
+	for _, item := range result.Data["__schema"].(map[string]interface{})["directives"].([]interface{}) {
+		assert.NotEqual(t, "defer", item.(map[string]interface{})["name"], "Schema重建后不得重新暴露@defer")
+	}
+}
+
+func TestConditionalDirectiveChangesSQLShape(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	query := `query($show: Boolean = false) { users { items { id name @include(if: $show) } } }`
+	for _, tc := range []struct {
+		name string
+		vars map[string]interface{}
+		want string
+		have string
+	}{
+		{name: "omitted default false", vars: nil, want: `"id"`, have: `"name"`},
+		{name: "variable true", vars: map[string]interface{}{"show": true}, want: `"name"`, have: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := executor.plan(query, "", tc.vars)
+			assert.NoError(t, err)
+			assert.Contains(t, plan.SQL, tc.want)
+			if tc.have != "" {
+				assert.NotContains(t, plan.SQL, tc.have)
+			}
+		})
+	}
+	first, err := executor.plan(query, "", map[string]interface{}{"show": true})
+	assert.NoError(t, err)
+	second, err := executor.plan(query, "", map[string]interface{}{"show": true})
+	assert.NoError(t, err)
+	assert.Same(t, first, second, "相同directive选择形状必须复用编译计划")
+
+	ignoredTokens := `query($show: Boolean!) { users { items { id name @ # ignored token
+		include(if: $show) } } }`
+	hidden, err := executor.plan(ignoredTokens, "", map[string]interface{}{"show": false})
+	assert.NoError(t, err)
+	assert.NotContains(t, hidden.SQL, `"name"`)
+	shown, err := executor.plan(ignoredTokens, "", map[string]interface{}{"show": true})
+	assert.NoError(t, err)
+	assert.Contains(t, shown.SQL, `"name"`, "指令名与@之间的GraphQL忽略token不得绕过计划分形")
 }
 
 // standardIntrospectionQuery GraphiQL/graphql-js getIntrospectionQuery() 的标准文本
