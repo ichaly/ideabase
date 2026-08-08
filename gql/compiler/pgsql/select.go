@@ -70,6 +70,10 @@ func (my *Dialect) BuildQuery(ctx *compiler.Context, set ast.SelectionSet) error
 			ctx.Write(`'`, field.Alias, `', 'Query'`)
 			continue
 		}
+		if field.Name == "_empty" {
+			ctx.Write(`'`, field.Alias, `', FALSE`)
+			continue
+		}
 
 		typeName := field.Definition.Type.Name()
 		kind := shapeResult
@@ -497,6 +501,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	// 读基表的查询单元才注入，变更读回顶层单元读CTE跳过
 	if !u.readback {
 		conjuncts = append(conjuncts, my.scopeConjuncts(ctx, sc.qualifier, u.class)...)
+		conjuncts = append(conjuncts, my.fixedWhereConjuncts(ctx, sc.qualifier, u.class, protocol.OP_SELECT, "")...)
 	}
 	if err = my.buildWhere(ctx, sc, u.args, conjuncts...); err != nil {
 		return err
@@ -679,6 +684,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 
 	// 行级作用域：递归CTE的起始层与步进层都注入，递归只在本租户内遍历（限范围、防跨租户）
 	scopeFilter := func() { my.appendScope(ctx, u.class.Table, u.class.Scope) }
+	fixedFilter := my.fixedWhereConjuncts(ctx, u.class.Table, u.class, protocol.OP_SELECT, "")
 
 	ctx.Space(`FROM (WITH RECURSIVE`).QuotedWithSpace(tree).Write(`AS (SELECT `)
 	list(u.class.Table)
@@ -688,6 +694,12 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 		Column(u.class.Table, targetCol).
 		Write(` = `).Column(u.parent, parentCol)
 	scopeFilter()
+	for _, filter := range fixedFilter {
+		ctx.Write(` AND `)
+		if err := filter(); err != nil {
+			return err
+		}
+	}
 	ctx.Write(` UNION ALL SELECT `)
 	list(u.class.Table)
 	ctx.Write(`, `).Quote(tree).Write(`."__lv" + 1 FROM `)
@@ -697,6 +709,12 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 		Write(` = `).Column(tree, sourceCol).
 		Write(` AND `).Quote(tree).Write(`."__lv" < `, depth)
 	scopeFilter()
+	for _, filter := range fixedFilter {
+		ctx.Write(` AND `)
+		if err := filter(); err != nil {
+			return err
+		}
+	}
 	ctx.Write(`) SELECT `)
 	list(tree)
 	ctx.Write(` FROM `).Quote(tree)

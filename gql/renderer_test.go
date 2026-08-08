@@ -2,19 +2,100 @@ package gql
 
 import (
 	"fmt"
-	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/ichaly/ideabase/gql/renderer"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/gql/renderer"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
+
+func governanceSchema(t *testing.T, classes ...*protocol.Class) string {
+	t.Helper()
+	meta := createMockMetadata(t)
+	meta.Nodes = make(map[string]*protocol.Class, len(classes))
+	for _, class := range classes {
+		meta.Nodes[class.Name] = class
+	}
+	r := NewRenderer(meta)
+	schema, err := r.Generate()
+	require.NoError(t, err)
+	_, err = gqlparser.LoadSchema(&ast.Source{Name: "governance.graphql", Input: schema})
+	require.NoError(t, err, "治理配置生成的 SDL 必须可被 GraphQL parser 加载")
+	return schema
+}
+
+func governanceClass(name string, operations ...string) *protocol.Class {
+	c := &protocol.Class{Name: name, Table: strings.ToLower(name), Operations: operations, PrimaryKeys: []string{"id"}, Fields: make(map[string]*protocol.Field)}
+	c.AddField(&protocol.Field{Name: "id", Column: "id", Type: "integer", IsPrimary: true})
+	c.AddField(&protocol.Field{Name: "title", Column: "title", Type: "text"})
+	c.AddField(&protocol.Field{Name: "readOnly", Column: "read_only", Type: "text", ReadOnly: true})
+	c.AddField(&protocol.Field{Name: "insertPreset", Column: "insert_preset", Type: "text", InsertPreset: &protocol.ValueSource{Context: "tenant"}})
+	c.AddField(&protocol.Field{Name: "updatePreset", Column: "update_preset", Type: "text", UpdatePreset: &protocol.ValueSource{Context: "user"}})
+	return c
+}
+
+func TestRenderer_GovernanceOperationGatingAndInputs(t *testing.T) {
+	c := governanceClass("Gated", "select", "aggregate", "update")
+	schema := governanceSchema(t, c)
+	assert.Contains(t, schema, "gateds(")
+	assert.Contains(t, schema, "gatedStats(")
+	assert.Contains(t, schema, "updateGatedByPk")
+	assert.NotContains(t, schema, "createGated")
+	assert.NotContains(t, schema, "upsertGated")
+	assert.NotContains(t, schema, "deleteGated")
+	assert.NotContains(t, schema, "restoreGated")
+	updateStart := strings.Index(schema, "input GatedUpdateInput {")
+	updateEnd := strings.Index(schema[updateStart:], "}\n") + updateStart
+	update := schema[updateStart:updateEnd]
+	assert.NotContains(t, update, "readOnly:")
+	assert.NotContains(t, update, "updatePreset:")
+}
+
+func TestRenderer_GovernanceUpsertRequiresGlobalInsertAndUpdate(t *testing.T) {
+	insertOnly := governanceClass("InsertOnly", protocol.OP_INSERT)
+	writable := governanceClass("Writable", protocol.OP_INSERT, protocol.OP_UPDATE)
+	schema := governanceSchema(t, insertOnly, writable)
+	assert.NotContains(t, schema, "upsertInsertOnlies")
+	assert.Contains(t, schema, "upsertWritables")
+}
+
+func TestRenderer_GovernanceExplicitMutationAndRestoreSDL(t *testing.T) {
+	c := governanceClass("Article", "insert", "update", "delete", "restore")
+	c.SoftDelete = &protocol.SoftDelete{Column: "deleted_at"}
+	schema := governanceSchema(t, c)
+	assert.Contains(t, schema, "updateArticleByPk(id: ID!, input: ArticleUpdateInput!): Article")
+	assert.Contains(t, schema, "updateArticles(where: ArticleWhereInput!, input: ArticleUpdateInput!): ArticleMutationResult!")
+	assert.Contains(t, schema, "deleteArticleByPk(id: ID!): Article")
+	assert.Contains(t, schema, "deleteArticles(where: ArticleWhereInput!): ArticleMutationResult!")
+	assert.Contains(t, schema, "restoreArticleByPk(id: ID!): Article")
+	assert.Contains(t, schema, "restoreArticles(where: ArticleWhereInput!): ArticleMutationResult!")
+	assert.Contains(t, schema, "type ArticleMutationResult {")
+	assert.Contains(t, schema, "affectedCount: Int!")
+	assert.Contains(t, schema, "returning: [Article!]!")
+}
+
+func TestRenderer_GovernanceLegacyEmptyOperationsAndUncountablePlural(t *testing.T) {
+	legacy := governanceClass("Legacy")
+	uncountable := governanceClass("News", "insert", "update", "delete", "restore")
+	uncountable.SoftDelete = &protocol.SoftDelete{Column: "deleted_at"}
+	schema := governanceSchema(t, legacy, uncountable)
+	assert.Contains(t, schema, "createLegacy")
+	assert.Contains(t, schema, "updateLegacy")
+	assert.Contains(t, schema, "deleteLegacy")
+	assert.NotContains(t, schema, "updateNewses")
+	assert.NotContains(t, schema, "deleteNewses")
+	assert.Contains(t, schema, "updateNewsByPk")
+	assert.Contains(t, schema, "restoreNewsMany(where: NewsWhereInput!): NewsMutationResult!")
+}
 
 // 尝试从测试数据库获取元数据
 func getTestMetadata(t *testing.T) (*Metadata, error) {

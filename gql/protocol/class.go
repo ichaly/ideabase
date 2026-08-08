@@ -4,18 +4,23 @@ import "github.com/ichaly/ideabase/utl"
 
 // Class 表示一个数据类/表的完整定义
 type Class struct {
-	Name        string            `json:"name"`                  // 类名（可能是转换后的名称）
-	Table       string            `json:"table"`                 // 原始表名
-	Virtual     bool              `json:"virtual"`               // 是否为虚拟类
-	PrimaryKeys []string          `json:"primaryKeys"`           // 主键列表
-	Description string            `json:"description"`           // 描述信息
-	Fields      map[string]*Field `json:"fields"`                // 字段映射表(包含字段名和列名的索引)
-	Relations   []*Relation       `json:"relations,omitempty"`   // 本类参与的关系集合（约束为一等对象，虚拟关系字段由此派生）
-	Search      []string          `json:"search,omitempty"`      // 参与全文搜索的字段
-	Scope       []ScopeRule       `json:"scope,omitempty"`       // 行级作用域：编译期强制注入的过滤（租户/属主隔离）
-	IDGenerator string            `json:"idGenerator,omitempty"` // 主键策略：database/snowflake/自定义名
-	Generate    IDGenerator       `json:"-"`                     // 启动时绑定，执行计划直接引用
-	IsThrough   bool              `json:"isThrough"`             // 是否为中间表关系表
+	Name        string            `json:"name"`                // 类名（可能是转换后的名称）
+	Table       string            `json:"table"`               // 原始表名
+	Virtual     bool              `json:"virtual"`             // 是否为虚拟类
+	PrimaryKeys []string          `json:"primaryKeys"`         // 主键列表
+	Description string            `json:"description"`         // 描述信息
+	Fields      map[string]*Field `json:"fields"`              // 字段映射表(包含字段名和列名的索引)
+	Relations   []*Relation       `json:"relations,omitempty"` // 本类参与的关系集合（约束为一等对象，虚拟关系字段由此派生）
+	Search      []string          `json:"search,omitempty"`    // 参与全文搜索的字段
+	Scope       []ScopeRule       `json:"scope,omitempty"`     // 行级作用域：编译期强制注入的过滤（租户/属主隔离）
+	Operations  []string          `json:"operations,omitempty"`
+	SoftDelete  *SoftDelete       `json:"softDelete,omitempty"`
+	Where       []Predicate       `json:"where,omitempty"`
+	// Permissions为空表示legacy全允许；配置后未命中角色默认拒绝。
+	Permissions map[string]*Permission `json:"permissions,omitempty"`
+	IDGenerator string                 `json:"idGenerator,omitempty"` // 主键策略：database/snowflake/自定义名
+	Generate    IDGenerator            `json:"-"`                     // 启动时绑定，执行计划直接引用
+	IsThrough   bool                   `json:"isThrough"`             // 是否为中间表关系表
 }
 
 // AddRelation 追加关系到集合，按身份键去重（db与config声明同一关系时只保留一条）
@@ -33,6 +38,33 @@ func (my *Class) AddRelation(rel *Relation) {
 type ScopeRule struct {
 	Column  string `json:"column"`  // 数据库列名（如 tenant_id / user_id）
 	Context string `json:"context"` // 上下文键名（如 tenant / userId），值由 gql.WithScope 注入
+}
+
+type SoftDelete struct {
+	Column string `json:"column"`
+}
+
+type ValueSource struct {
+	Context string `json:"context,omitempty"`
+	Value   any    `json:"value,omitempty"`
+}
+
+type Predicate struct {
+	Column   string `json:"column"`
+	Operator string `json:"operator"`
+	Context  string `json:"context,omitempty"`
+	Value    any    `json:"value,omitempty"`
+}
+
+type Permission struct {
+	Select    []string    `json:"select,omitempty"`
+	Insert    []string    `json:"insert,omitempty"`
+	Update    []string    `json:"update,omitempty"`
+	Delete    bool        `json:"delete,omitempty"`
+	Restore   bool        `json:"restore,omitempty"`
+	Aggregate bool        `json:"aggregate,omitempty"`
+	Filter    []Predicate `json:"filter,omitempty"`
+	Check     []Predicate `json:"check,omitempty"`
 }
 
 // AddField 添加字段到类中
@@ -72,6 +104,10 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		Relations:   my.Relations, // 关系集合随元数据序列化，file路径由此再生虚拟字段
 		Search:      my.Search,
 		Scope:       my.Scope, // 作用域随元数据序列化，文件缓存路径不丢隔离配置
+		Operations:  my.Operations,
+		SoftDelete:  my.SoftDelete,
+		Where:       my.Where,
+		Permissions: my.Permissions,
 		IDGenerator: my.IDGenerator,
 	})
 }

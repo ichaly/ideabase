@@ -269,6 +269,76 @@ SELECT ... FROM posts WHERE posts.tenant_id = $1   -- $1 = ctx 的 tenant
 - 变更读回（读 CTE）跳过注入，不误过滤刚写入的行
 - 作用域值是参数（不影响 SQL 文本），同查询不同租户共享一份计划
 
+## 数据治理（软删除、审计与角色权限）
+
+治理规则仍编译进参数化 SQL；角色和上下文值不进入计划缓存键。同一查询文本在不同
+角色间复用同一计划，未配置 `permissions` 与 `operations` 的实体保持原有全开放行为。
+
+```yaml
+metadata:
+  classes:
+    Post:
+      table: posts
+      operations: [select, aggregate, insert, update, delete, restore]
+      soft_delete: { column: deleted_at }
+      where:
+        - { column: enabled, operator: eq, value: true }
+      fields:
+        createdBy: { column: created_by, read_only: true, insert_preset: { context: userId } }
+        updatedBy: { column: updated_by, read_only: true, update_preset: { context: userId } }
+      permissions:
+        editor:
+          select: [id, title, createdBy, updatedBy]
+          insert: [title]
+          update: [title]
+          delete: true
+          restore: true
+          aggregate: true
+          filter:
+            - { column: tenant_id, operator: eq, context: tenant }
+          check:
+            - { column: tenant_id, operator: eq, context: tenant }
+```
+
+认证层同时注入作用域与角色；角色只接受服务端上下文，不能由 GraphQL variables 伪造：
+
+```go
+ctx := gql.WithScope(ctx, map[string]any{
+    "tenant": claims.Tenant,
+    "userId": claims.UserId,
+})
+ctx = gql.WithRole(ctx, claims.Role)
+```
+
+规则语义：
+
+- `operations` 为空兼容旧行为；配置后只渲染并执行列出的能力
+- `soft_delete` 自动给正常查询加 `IS NULL`；delete 改为时间戳更新，restore 只恢复已删除行
+- `where` 是客户端无法移除的固定条件，覆盖根查询、嵌套、统计与变更
+- `read_only` 不进入写入 input；`insert_preset` / `update_preset` 由服务端强制写入
+- `permissions` 未配置时兼容旧行为；一旦配置，未匹配角色默认拒绝
+- `select` / `insert` / `update` 是字段白名单，`*` 表示全部，空列表表示拒绝；
+  filter/sort/distinct/groupBy/having/search 同样受读取字段白名单约束
+- `filter` 在 SQL 中限制可见/可改行；`check` 在发 SQL 前逐行验证新值，批量任一行失败则整次拒绝
+
+明确的 mutation 契约与旧字段并存：
+
+```graphql
+updatePostByPk(id: ID!, input: PostUpdateInput!): Post
+updatePosts(where: PostWhereInput!, input: PostUpdateInput!): PostMutationResult!
+deletePostByPk(id: ID!): Post
+deletePosts(where: PostWhereInput!): PostMutationResult!
+restorePostByPk(id: ID!): Post
+restorePosts(where: PostWhereInput!): PostMutationResult!
+
+type PostMutationResult {
+  affectedCount: Int!
+  returning: [Post!]!
+}
+```
+
+不可数类名的批量字段使用 `Many` 后缀，避免与单条字段重名。
+
 ### 批量机制：resolver 如何不产生 N+1
 
 关系嵌套的 N+1 由单条 SQL 根除；resolver 在 SQL 之外，靠**整结果集批量收集 +

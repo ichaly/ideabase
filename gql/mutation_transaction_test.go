@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/compiler"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -162,6 +163,32 @@ func TestPersistedMutationKeepsSerialExecutionAfterPrewarm(t *testing.T) {
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	post := reply.Data["createPost"].(map[string]any)
 	require.Equal(t, "After", post["user"].(map[string]any)["name"])
+}
+
+func TestPersistedRootPlanPrewarmKeepsGovernanceFlags(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+
+	// 多根 mutation 会走 rootResolver 预热路径；User 的治理配置必须同步写入
+	// 持久化缓存条目，否则执行期会直接跳过 authorize。
+	executor.metadata.Nodes["User"].Permissions = map[string]*protocol.Permission{
+		"writer": {Insert: []string{"name", "email"}},
+	}
+	resolver := NewResolver("Mutation", "pingMutation", "测试持久化根计划治理标记",
+		func(context.Context, Root, struct{}) (string, error) { return "pong", nil })
+	require.NoError(t, executor.Register(resolver))
+
+	content := `mutation PersistedGoverned($email: String!) {
+		createUser(input: { name: "Alice", email: $email }) { id }
+		pingMutation
+	}`
+	require.NoError(t, executor.loadDocument(content))
+
+	entry, ok := executor.cache.Get(planKey{operation: "PersistedGoverned", query: content})
+	require.True(t, ok)
+	require.True(t, entry.rootResolver)
+	require.True(t, entry.policyNeeded, "持久化根计划必须保留policyNeeded")
+	require.True(t, entry.roleNeeded, "持久化根计划必须保留roleNeeded")
 }
 
 func TestNestedMutationReusesOuterTransaction(t *testing.T) {

@@ -3,6 +3,7 @@ package pgsql
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/compiler"
@@ -334,6 +335,101 @@ func (my *Dialect) scopeConjuncts(ctx *compiler.Context, qualifier string, class
 		}
 	}
 	return conjuncts
+}
+
+// predicateConjuncts renders metadata predicates as fixed SQL. Values are always
+// slots so the compiled statement shape does not depend on request data.
+func (my *Dialect) predicateConjuncts(ctx *compiler.Context, qualifier string, predicates []protocol.Predicate, skipColumn string) []func() error {
+	out := make([]func() error, 0, len(predicates))
+	for _, p := range predicates {
+		p := p
+		if p.Column == "" || (p.Column == skipColumn && p.Operator == "is-null") {
+			continue
+		}
+		out = append(out, func() error {
+			return my.writePredicate(ctx, qualifier, p)
+		})
+	}
+	return out
+}
+
+func (my *Dialect) writePredicate(ctx *compiler.Context, qualifier string, p protocol.Predicate) error {
+	ctx.Column(qualifier, p.Column)
+	switch p.Operator {
+	case "eq", "ne":
+		if p.Operator == "eq" {
+			ctx.Space("=")
+		} else {
+			ctx.Space("<>")
+		}
+		if p.Context != "" {
+			ctx.Write(my.Placeholder(ctx.AddContextSlot(p.Context)))
+		} else {
+			ctx.Write(my.Placeholder(ctx.AddParam(normalizeArg(p.Value))))
+		}
+	case "is-null":
+		ctx.Write(" IS NULL")
+	case "not-null", "is-not-null":
+		ctx.Write(" IS NOT NULL")
+	default:
+		return fmt.Errorf("不支持的固定谓词操作符: %s", p.Operator)
+	}
+	return nil
+}
+
+// fixedWhereConjuncts combines metadata row predicates and role policy. It is
+// deliberately role-independent: the executor supplies __gql_role at runtime.
+func (my *Dialect) fixedWhereConjuncts(ctx *compiler.Context, qualifier string, class *protocol.Class, operation string, skipColumn string) []func() error {
+	out := my.predicateConjuncts(ctx, qualifier, class.Where, skipColumn)
+	if class.Permissions == nil {
+		return out
+	}
+	roles := make([]string, 0, len(class.Permissions))
+	for role, perm := range class.Permissions {
+		allowed := false
+		switch operation {
+		case protocol.OP_SELECT:
+			allowed = perm != nil && len(perm.Select) > 0
+		case protocol.OP_AGGREGATE:
+			allowed = perm != nil && perm.Aggregate
+		case protocol.OP_UPDATE:
+			allowed = perm != nil && len(perm.Update) > 0
+		case protocol.OP_INSERT:
+			allowed = perm != nil && len(perm.Insert) > 0
+		case protocol.OP_DELETE:
+			allowed = perm != nil && perm.Delete
+		case protocol.OP_RESTORE:
+			allowed = perm != nil && perm.Restore
+		}
+		if allowed {
+			roles = append(roles, role)
+		}
+	}
+	sort.Strings(roles)
+	out = append(out, func() error {
+		if len(roles) == 0 {
+			ctx.Write("FALSE")
+			return nil
+		}
+		ctx.Write("(")
+		for i, role := range roles {
+			if i > 0 {
+				ctx.Space("OR")
+			}
+			ctx.Write("(").Write(my.Placeholder(ctx.AddContextSlot(protocol.CONTEXT_ROLE))).Space("=").Write(my.Placeholder(ctx.AddParam(role)))
+			perm := class.Permissions[role]
+			for _, p := range perm.Filter {
+				ctx.Space("AND")
+				if err := my.writePredicate(ctx, qualifier, p); err != nil {
+					return err
+				}
+			}
+			ctx.Write(")")
+		}
+		ctx.Write(")")
+		return nil
+	})
+	return out
 }
 
 // appendScope 在已有WHERE后追加 AND 作用域条件（递归CTE层、关系操作目标行校验）

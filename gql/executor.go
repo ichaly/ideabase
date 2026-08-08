@@ -298,7 +298,13 @@ func (my *Executor) loadDocument(content string) error {
 		operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
 		key := planKey{operation: operation.Name, query: content}
 		if my.needsRootExecution(operation) {
-			my.cache.Put(key, &planEntry{operation: operation, rootResolver: true})
+			roleNeeded, policyNeeded := operationGovernanceNeeds(my.metadata, operation)
+			my.cache.Put(key, &planEntry{
+				operation:    operation,
+				rootResolver: true,
+				roleNeeded:   roleNeeded,
+				policyNeeded: policyNeeded,
+			})
 			continue
 		}
 		if _, _, err := my.compile(key, operation, nil); err != nil {
@@ -405,10 +411,22 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 			return r
 		}
 		if rootErr, ok := err.(*rootResolverQuery); ok {
+			if rootErr.entry.policyNeeded {
+				if authErr := my.authorize(ctx, rootErr.entry.operation, variables); authErr != nil {
+					r.Errors = gqlerror.List{gqlerror.Wrap(authErr)}
+					return r
+				}
+			}
 			return my.executeRootResolvers(ctx, rootErr.entry, variables)
 		}
 		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
 		return r
+	}
+	if plan.policyNeeded {
+		if authErr := my.authorize(ctx, plan.operation, variables); authErr != nil {
+			r.Errors = gqlerror.List{gqlerror.Wrap(authErr)}
+			return r
+		}
 	}
 
 	data, err := my.fetch(ctx, plan, variables)
@@ -436,7 +454,7 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 // ID加解密的出参编码挂在此唯一出口：直通响应、resolver解包、订阅推送、
 // 根Resolver回查全部经此取数，下游看到的字节里ID已是shortId
 func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, error) {
-	args, err := plan.ResolveArgs(variables, scopeValues(ctx)) // 行级作用域值从请求上下文取
+	args, err := plan.ResolveArgs(variables, scopeWithRole(ctx, scopeValues(ctx), plan.roleNeeded)) // 行级作用域值从请求上下文取
 	if err != nil {
 		return nil, err
 	}
@@ -625,11 +643,13 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 		return entry.plan, nil
 	}
 	// volatile：仅重做SQL构建，binding与codec路径树复用缓存（均只依赖AST）
-	plan, err := my.compiler.Compile(entry.operation, variables)
+	plan, err := my.compiler.compile(entry.operation, variables, false)
 	if err != nil {
 		return nil, err
 	}
 	plan.resolvers, plan.paths = entry.resolvers, entry.paths
+	plan.roleNeeded = entry.roleNeeded
+	plan.policyNeeded = entry.policyNeeded
 	return plan, nil
 }
 
@@ -647,7 +667,13 @@ func (my *Executor) miss(key planKey, variables map[string]interface{}) (*planEn
 		return nil, nil, &introQuery{operation: operation}
 	}
 	if my.needsRootExecution(operation) {
-		entry := &planEntry{operation: operation, rootResolver: true}
+		roleNeeded, policyNeeded := operationGovernanceNeeds(my.metadata, operation)
+		entry := &planEntry{
+			operation:    operation,
+			rootResolver: true,
+			roleNeeded:   roleNeeded,
+			policyNeeded: policyNeeded,
+		}
 		my.cache.Put(key, entry)
 		return entry, nil, nil
 	}
@@ -693,7 +719,7 @@ func (my *Executor) compile(key planKey, operation *ast.OperationDefinition, var
 	}
 	plan.resolvers = collectBindings(my.metadata, operation)
 	plan.paths = collectCodecPaths(operation.SelectionSet, my.metadata)
-	entry := &planEntry{operation: operation, resolvers: plan.resolvers, paths: plan.paths}
+	entry := &planEntry{operation: operation, resolvers: plan.resolvers, paths: plan.paths, roleNeeded: plan.roleNeeded, policyNeeded: plan.policyNeeded}
 	if !plan.Volatile() {
 		entry.plan = plan
 	}

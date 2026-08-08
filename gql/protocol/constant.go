@@ -22,13 +22,26 @@ const (
 	TYPE_DATE_TIME_HAVING = "DateTimeHaving" // 日期聚合的having过滤
 
 	// GraphQL入参名称后缀
-	SUFFIX_STATS        = "Stats"
-	SUFFIX_RESULT       = "Result"
-	SUFFIX_SORT_INPUT   = "SortInput"
-	SUFFIX_WHERE_INPUT  = "WhereInput"
-	SUFFIX_HAVING_INPUT = "HavingInput" // 每实体的having入参类型后缀
-	SUFFIX_CREATE_INPUT = "CreateInput"
-	SUFFIX_UPDATE_INPUT = "UpdateInput"
+	SUFFIX_STATS           = "Stats"
+	SUFFIX_RESULT          = "Result"
+	SUFFIX_SORT_INPUT      = "SortInput"
+	SUFFIX_WHERE_INPUT     = "WhereInput"
+	SUFFIX_HAVING_INPUT    = "HavingInput" // 每实体的having入参类型后缀
+	SUFFIX_CREATE_INPUT    = "CreateInput"
+	SUFFIX_UPDATE_INPUT    = "UpdateInput"
+	SUFFIX_MUTATION_RESULT = "MutationResult"
+	SUFFIX_BY_PK           = "ByPk"
+	SUFFIX_MANY            = "Many"
+)
+
+// Class operation names used by schema governance. An empty Operations list is legacy full access.
+const (
+	OP_SELECT    = "select"
+	OP_AGGREGATE = "aggregate"
+	OP_INSERT    = "insert"
+	OP_UPDATE    = "update"
+	OP_DELETE    = "delete"
+	OP_RESTORE   = "restore"
 )
 
 // 参数名称
@@ -54,6 +67,8 @@ const (
 	HAVING     = "having"
 	SEARCH     = "search"
 	DEPTH      = "depth"
+	// CONTEXT_ROLE is resolved by the executor from the request context.
+	CONTEXT_ROLE = "__gql_role"
 )
 
 const (
