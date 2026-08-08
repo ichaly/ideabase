@@ -12,6 +12,17 @@ import (
 
 type scopeKey struct{}
 type roleKey struct{}
+type identityKey struct{}
+
+// WithIdentity attaches one host-verified immutable identity to a request.
+func WithIdentity(ctx context.Context, identity Identity) context.Context {
+	return context.WithValue(ctx, identityKey{}, identity)
+}
+
+func IdentityFromContext(ctx context.Context) (Identity, bool) {
+	identity, ok := ctx.Value(identityKey{}).(Identity)
+	return identity, ok
+}
 
 // WithRole attaches the authenticated role; roles must not come from GraphQL variables.
 func WithRole(ctx context.Context, role string) context.Context {
@@ -20,10 +31,23 @@ func WithRole(ctx context.Context, role string) context.Context {
 
 // Role returns the authenticated role when present.
 func Role(ctx context.Context) (string, bool) {
+	if identity, ok := IdentityFromContext(ctx); ok && len(identity.roles) > 0 {
+		return identity.roles[0], true
+	}
 	role, ok := ctx.Value(roleKey{}).(string)
 	return role, ok && role != ""
 }
 func roleValue(ctx context.Context) string { role, _ := Role(ctx); return role }
+
+func Roles(ctx context.Context) []string {
+	if identity, ok := IdentityFromContext(ctx); ok {
+		return identity.Roles()
+	}
+	if role, ok := Role(ctx); ok {
+		return []string{role}
+	}
+	return nil
+}
 
 // WithScope 把行级作用域值注入请求上下文（认证中间件调用）。
 // 键名对应实体 scope 配置的 context；例如：
@@ -36,7 +60,22 @@ func WithScope(ctx context.Context, values map[string]any) context.Context {
 // scopeValues 取出请求上下文中的作用域值表（无则nil，作用域参数解析为nil=匹配不到行）
 func scopeValues(ctx context.Context) map[string]any {
 	values, _ := ctx.Value(scopeKey{}).(map[string]any)
-	return values
+	identity, ok := IdentityFromContext(ctx)
+	if !ok {
+		return values
+	}
+	scope := identity.Claims()
+	if scope == nil {
+		scope = make(map[string]any, len(values)+4)
+	}
+	for key, value := range values {
+		scope[key] = value
+	}
+	scope["tenant"] = identity.Tenant()
+	scope["subject"] = identity.Subject()
+	scope["actor"] = identity.Actor()
+	scope["requestId"] = identity.RequestID()
+	return scope
 }
 
 func scopeWithRole(ctx context.Context, scope map[string]any, needed bool) map[string]any {
