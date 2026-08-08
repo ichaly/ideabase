@@ -11,7 +11,7 @@ require (
 	github.com/ichaly/ideabase/std v0.0.0-20260110145933-e564f1aca14f
 	github.com/ichaly/ideabase/utl v0.0.0-20260110145933-e564f1aca14f
 	github.com/jackc/pglogrepl v0.0.0-20260401131349-e37c41485510
-	github.com/jackc/pgx/v5 v5.9.1
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/jinzhu/inflection v1.0.0
 	github.com/joho/godotenv v1.5.1
 	github.com/json-iterator/go v1.1.12
