@@ -386,7 +386,7 @@ flowchart TB
 
 ---
 
-- [ ] U4. **统一分页、CRUD、删除和审计操作计划**
+- [x] U4. **统一分页、CRUD、删除和审计操作计划**
 
 **Goal:** 从同一 collection/operation plan 生成传统分页、Relay connection、显式 CRUD、嵌套写、软删/恢复/purge 和六字段审计，并确保每个 Input 只展示实际可执行操作。
 

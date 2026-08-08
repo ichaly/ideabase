@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2"
@@ -226,6 +227,14 @@ func (my *Executor) effectiveSchema(ctx context.Context) (*effectiveView, error)
 			if err := ValidateDecisionCatalog(class, decision); err != nil {
 				return nil, err
 			}
+			if class.SoftDelete != nil && !allowedColumn(decision.Fields[FieldUseFilter], class.Fields[class.SoftDelete.Column]) {
+				parent, name, _ := strings.Cut(capability.Coordinate, ".")
+				if definition := schema.Types[parent]; definition != nil {
+					if field := definition.Fields.ForName(name); field != nil {
+						field.Arguments = removeSchemaArgument(field.Arguments, protocol.DELETION)
+					}
+				}
+			}
 			uses := allowed[class.Name]
 			if uses == nil {
 				uses = make(map[FieldUse][]string)
@@ -266,6 +275,16 @@ func (my *Executor) effectiveSchema(ctx context.Context) (*effectiveView, error)
 		my.effectiveMu.Unlock()
 	}
 	return view, nil
+}
+
+func removeSchemaArgument(arguments ast.ArgumentDefinitionList, name string) ast.ArgumentDefinitionList {
+	out := arguments[:0]
+	for _, argument := range arguments {
+		if argument.Name != name {
+			out = append(out, argument)
+		}
+	}
+	return out
 }
 
 func (my *Executor) effectivePolicy(ctx context.Context) (PolicyProvider, Identity, bool, error) {
@@ -321,6 +340,36 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_KEY_INPUT], class, uses[FieldUseFilter], true)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_HAVING_INPUT], class, uses[FieldUseGroup], true)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_STATS], class, uses[FieldUseAggregate], true)
+	if !filterEffectiveEnum(schema.Types[class.Name+protocol.SUFFIX_DISTINCT_FIELD], class, uses[FieldUseGroup]) {
+		removeFieldArgument(schema.Types["Query"], queryField(class.Name), protocol.DISTINCT)
+		removeFieldArgument(schema.Types["Subscription"], queryField(class.Name), protocol.DISTINCT)
+	}
+	if !filterEffectiveEnum(schema.Types[class.Name+protocol.SUFFIX_GROUP_FIELD], class, uses[FieldUseGroup]) {
+		removeFieldArgument(schema.Types["Query"], strcase.ToLowerCamel(class.Name)+protocol.SUFFIX_STATS, protocol.GROUP_BY)
+	}
+}
+
+func filterEffectiveEnum(definition *ast.Definition, class *protocol.Class, allowed []string) bool {
+	if definition == nil {
+		return false
+	}
+	values := definition.EnumValues[:0]
+	for _, value := range definition.EnumValues {
+		if allowedColumn(allowed, class.Fields[value.Name]) {
+			values = append(values, value)
+		}
+	}
+	definition.EnumValues = values
+	return len(values) > 0
+}
+
+func removeFieldArgument(definition *ast.Definition, fieldName, argumentName string) {
+	if definition == nil {
+		return
+	}
+	if field := definition.Fields.ForName(fieldName); field != nil {
+		field.Arguments = removeSchemaArgument(field.Arguments, argumentName)
+	}
 }
 
 func filterEffectiveFields(definition *ast.Definition, class *protocol.Class, allowed []string, generated bool) {

@@ -266,7 +266,7 @@ func TestPolicyProviderFiltersIntrospectionAndSchemaArtifact(t *testing.T) {
 		allowed := []string{"*"}
 		for _, use := range request.FieldUses {
 			useAllowed := allowed
-			if request.Resource == "User" && (use == FieldUseSelect || use == FieldUseReturn || use == FieldUseJoin || use == FieldUseAggregate) {
+			if request.Resource == "User" && (use == FieldUseSelect || use == FieldUseReturn || use == FieldUseJoin || use == FieldUseAggregate || use == FieldUseFilter || use == FieldUseGroup) {
 				useAllowed = []string{"id"}
 			}
 			fields[use] = useAllowed
@@ -283,6 +283,9 @@ func TestPolicyProviderFiltersIntrospectionAndSchemaArtifact(t *testing.T) {
 	reply = executor.run(ctx, `{ __type(name: "UserStats") { fields { name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	require.Equal(t, []any{map[string]any{"name": "key"}, map[string]any{"name": "count"}}, reply.Data["__type"].(map[string]any)["fields"])
+	reply = executor.run(ctx, `{ __type(name: "UserDistinctField") { enumValues { name } } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, []any{map[string]any{"name": "id"}}, reply.Data["__type"].(map[string]any)["enumValues"])
 	artifact, err := executor.EffectiveSchema(ctx)
 	require.NoError(t, err)
 	require.NotEmpty(t, artifact.PermissionSignature)

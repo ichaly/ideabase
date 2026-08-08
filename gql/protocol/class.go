@@ -24,6 +24,7 @@ type Class struct {
 	Schema      string                 `json:"schema,omitempty"`
 	TableKind   TableKind              `json:"tableKind,omitempty"`
 	ReadOnly    bool                   `json:"readOnly,omitempty"`
+	Hidden      bool                   `json:"hidden,omitempty"`
 	Global      bool                   `json:"global,omitempty"` // shared-table下显式声明不按tenant隔离
 	Constraints []*Constraint          `json:"constraints,omitempty"`
 	Indexes     []*Index               `json:"indexes,omitempty"`
@@ -68,6 +69,7 @@ type Permission struct {
 	Update    []string    `json:"update,omitempty"`
 	Delete    bool        `json:"delete,omitempty"`
 	Restore   bool        `json:"restore,omitempty"`
+	Purge     bool        `json:"purge,omitempty"`
 	Aggregate bool        `json:"aggregate,omitempty"`
 	Filter    []Predicate `json:"filter,omitempty"`
 	Check     []Predicate `json:"check,omitempty"`
@@ -118,6 +120,7 @@ func (my *Class) MarshalJSON() ([]byte, error) {
 		IDGenerator: my.IDGenerator,
 		TableKind:   my.TableKind,
 		ReadOnly:    my.ReadOnly,
+		Hidden:      my.Hidden,
 		Global:      my.Global,
 		Constraints: my.Constraints,
 		Indexes:     my.Indexes,

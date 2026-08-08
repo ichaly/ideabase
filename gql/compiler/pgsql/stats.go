@@ -92,7 +92,7 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 	tableRef(ctx, u.class.Table)
 	// 行级作用域：聚合也强制隔离，否则 count/sum 泄露全表跨租户统计
 	conjuncts := my.scopeConjuncts(ctx, sc.qualifier, u.class)
-	conjuncts = append(conjuncts, my.fixedWhereConjuncts(ctx, sc.qualifier, u.class, protocol.OP_AGGREGATE, "")...)
+	conjuncts = append(conjuncts, my.queryWhereConjuncts(ctx, sc.qualifier, u.class, protocol.OP_AGGREGATE, u.args)...)
 	if err = my.buildWhere(ctx, sc, u.args, conjuncts...); err != nil {
 		return err
 	}

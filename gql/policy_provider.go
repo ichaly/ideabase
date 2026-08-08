@@ -355,6 +355,8 @@ func (p *ProtocolPolicyProvider) Decide(_ context.Context, request PolicyRequest
 				allowed = permission.Delete
 			case "restore":
 				allowed = permission.Restore
+			case "purge":
+				allowed = permission.Purge
 			case "aggregate":
 				allowed = permission.Aggregate
 			default:

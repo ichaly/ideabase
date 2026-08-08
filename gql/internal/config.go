@@ -151,6 +151,7 @@ type PermissionConfig struct {
 	Update    []string          `mapstructure:"update"`
 	Delete    bool              `mapstructure:"delete"`
 	Restore   bool              `mapstructure:"restore"`
+	Purge     bool              `mapstructure:"purge"`
 	Aggregate bool              `mapstructure:"aggregate"`
 	Filter    []PredicateConfig `mapstructure:"filter"`
 	Check     []PredicateConfig `mapstructure:"check"`

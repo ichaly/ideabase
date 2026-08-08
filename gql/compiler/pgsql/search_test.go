@@ -78,7 +78,7 @@ func (my *_DialectSuite) TestDistinctAndJsonb() {
 	cases := []Case{
 		{
 			name:  "distinct去重并前置排序",
-			query: `query { users(distinct: ["name"], sort: { age: DESC }) { items { id name } } }`,
+			query: `query { users(distinct: [name], sort: { age: DESC }) { items { id name } } }`,
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__rn' ORDER BY "__sr_0"."__rn"), '[]')) AS "json"

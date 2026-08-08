@@ -81,3 +81,31 @@ func TestCatalogReferencesFailClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestCatalogDetectsConventionalSoftDelete(t *testing.T) {
+	h := newFakeHoster()
+	err := (&baseLoader{}).loadCatalog(h, catalogData{
+		Tables: []tableInfo{{TableName: "articles", TableKind: string(protocol.TableBase)}},
+		Columns: []columnInfo{
+			{TableName: "articles", ColumnName: "id", DataType: "int8"},
+			{TableName: "articles", ColumnName: "deleted_at", DataType: "timestamp", IsNullable: true},
+		},
+	})
+	require.NoError(t, err)
+	class, ok := h.GetNode("articles")
+	require.True(t, ok)
+	require.Equal(t, "deleted_at", class.SoftDelete.Column)
+	require.Contains(t, class.Where, protocol.Predicate{Column: "deleted_at", Operator: "is-null"})
+}
+
+func TestCatalogMarksAuditOutboxHidden(t *testing.T) {
+	h := newFakeHoster()
+	err := (&baseLoader{}).loadCatalog(h, catalogData{
+		Tables:  []tableInfo{{TableName: "gql_audit_outbox", TableKind: string(protocol.TableBase)}},
+		Columns: []columnInfo{{TableName: "gql_audit_outbox", ColumnName: "event_key", DataType: "text"}},
+	})
+	require.NoError(t, err)
+	class, ok := h.GetNode("gql_audit_outbox")
+	require.True(t, ok)
+	require.True(t, class.Hidden)
+}

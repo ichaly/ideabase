@@ -17,7 +17,7 @@ func (my *_DialectSuite) TestStats() {
 		},
 		{
 			name:  "分组聚合",
-			query: `query { userStats(groupBy: ["name"], limit: 10) { key count email { countDistinct } } }`,
+			query: `query { userStats(groupBy: [name], limit: 10) { key count email { countDistinct } } }`,
 			expected: `SELECT JSONB_BUILD_OBJECT('userStats', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]') AS "json"
@@ -47,7 +47,7 @@ func (my *_DialectSuite) TestStats() {
 		},
 		{
 			name:  "having分组后聚合过滤",
-			query: `query { userStats(groupBy: ["name"], having: { count: { gt: 5 }, age: { avg: { ge: 18 } } }) { count } }`,
+			query: `query { userStats(groupBy: [name], having: { count: { gt: 5 }, age: { avg: { ge: 18 } } }) { count } }`,
 			args:  []any{int64(5), int64(18)},
 			expected: `SELECT JSONB_BUILD_OBJECT('userStats', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (

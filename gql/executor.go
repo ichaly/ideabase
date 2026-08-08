@@ -636,6 +636,9 @@ func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]
 	if plan.cursor {
 		scope = scopeWithCursor(ctx, scope)
 	}
+	if plan.audit {
+		scope = scopeWithAudit(ctx, scope, my.snapshot.Fingerprint())
+	}
 	if len(plan.policyRoles) > 0 || len(plan.policyScope) > 0 {
 		copy := make(map[string]any, len(scope)+len(plan.policyScope)+1)
 		for key, value := range scope {

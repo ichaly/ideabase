@@ -500,6 +500,8 @@ func (my *Dialect) fixedWhereConjuncts(ctx *compiler.Context, qualifier string, 
 			allowed = perm != nil && perm.Delete
 		case protocol.OP_RESTORE:
 			allowed = perm != nil && perm.Restore
+		case protocol.OP_PURGE:
+			allowed = perm != nil && perm.Purge
 		}
 		if allowed {
 			roles = append(roles, role)
@@ -527,6 +529,39 @@ func (my *Dialect) fixedWhereConjuncts(ctx *compiler.Context, qualifier string, 
 			ctx.Write(")")
 		}
 		ctx.Write(")")
+		return nil
+	})
+	return out
+}
+
+// queryWhereConjuncts applies the soft-delete view selected by the public
+// deletion argument. Keeping the mode in one SQL slot preserves plan reuse for
+// variable-driven requests while the default ACTIVE path stays minimal.
+func (my *Dialect) queryWhereConjuncts(ctx *compiler.Context, qualifier string, class *protocol.Class, operation string, args ast.ArgumentList) []func() error {
+	if class.SoftDelete == nil {
+		return my.fixedWhereConjuncts(ctx, qualifier, class, operation, "")
+	}
+	arg := args.ForName(protocol.DELETION)
+	if arg == nil || arg.Value == nil {
+		return my.fixedWhereConjuncts(ctx, qualifier, class, operation, "")
+	}
+	column := class.SoftDelete.Column
+	out := my.fixedWhereConjuncts(ctx, qualifier, class, operation, column)
+	out = append(out, func() error {
+		var slot int
+		if arg.Value.Kind == ast.Variable {
+			slot = ctx.AddVariable(arg.Value.Raw)
+		} else {
+			value, err := arg.Value.Value(nil)
+			if err != nil {
+				return fmt.Errorf("解析deletion参数失败: %w", err)
+			}
+			slot = ctx.AddParam(value)
+		}
+		mode := my.Placeholder(slot) + "::text"
+		ctx.Write("(", mode, " = 'WITH_DELETED' OR (")
+		ctx.Write(mode, " = 'ACTIVE' AND ").Column(qualifier, column).Write(" IS NULL) OR (")
+		ctx.Write(mode, " = 'ONLY_DELETED' AND ").Column(qualifier, column).Write(" IS NOT NULL))")
 		return nil
 	})
 	return out

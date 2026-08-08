@@ -90,7 +90,7 @@ fmt.Println(snapshot.Fingerprint(), snapshot.Capabilities())
   嵌套关系字段同样支持 `where/sort/limit/offset`
 - 递归全树：自关联实体自动生成 `descendants/ancestors(depth: Int)` 字段，
   递归 CTE 单查询全树遍历，depth 缺省 5（1~32，限深防爆炸）；建议 parent_id 建索引
-- 去重：`distinct: ["列"]` 编译为 DISTINCT ON；Json 列支持
+- 去重：`distinct: [field]` 使用实体专属枚举并编译为 DISTINCT ON；Json 列支持
   `contains/containedIn`（jsonb @>/<@，可配 GIN 索引）
 - 变更：`createX(input)` / `updateX(input, id|key|where)` / `deleteX(id|key|where)`，
   变更 CTE + 读回单条 SQL 原子完成；update/delete 强制要求条件
@@ -313,7 +313,7 @@ metadata:
   classes:
     Post:
       table: posts
-      operations: [select, aggregate, insert, update, delete, restore]
+	  operations: [select, aggregate, insert, update, delete, restore, purge]
       soft_delete: { column: deleted_at }
       where:
         - { column: enabled, operator: eq, value: true }
@@ -326,7 +326,8 @@ metadata:
           insert: [title]
           update: [title]
           delete: true
-          restore: true
+	      restore: true
+	      purge: true
           aggregate: true
           filter:
             - { column: tenant_id, operator: eq, context: tenant }
@@ -347,7 +348,11 @@ ctx = gql.WithRole(ctx, claims.Role)
 规则语义：
 
 - `operations` 为空兼容旧行为；配置后只渲染并执行列出的能力
-- `soft_delete` 自动给正常查询加 `IS NULL`；delete 改为时间戳更新，restore 只恢复已删除行
+- 存在约定列 `deleted_at` 时自动启用软删，也可用 `soft_delete` 显式指定；查询的
+  `deletion: ACTIVE | WITH_DELETED | ONLY_DELETED` 完整出现在自省中并受字段权限控制
+- delete 标记当前活动行，restore 只恢复已删除行；显式声明并授权 `purge` 后才暴露物理删除
+- 约定的 `created_at/created_by/updated_at/updated_by/deleted_at/deleted_by` 是服务端审计列，
+  不进入写入 Input；`*_at` 使用数据库时钟，`*_by` 来自可信 Identity actor
 - `where` 是客户端无法移除的固定条件，覆盖根查询、嵌套、统计与变更
 - `read_only` 不进入写入 input；`insert_preset` / `update_preset` 由服务端强制写入
 - `permissions` 未配置时兼容旧行为；一旦配置，未匹配角色默认拒绝
@@ -364,6 +369,8 @@ deletePostByPk(id: ID!): Post
 deletePosts(where: PostWhereInput!): PostMutationResult!
 restorePostByPk(id: ID!): Post
 restorePosts(where: PostWhereInput!): PostMutationResult!
+purgePostByPk(id: ID!): Post
+purgePosts(where: PostWhereInput!): PostMutationResult!
 
 type PostMutationResult {
   affectedCount: Int!
@@ -372,6 +379,10 @@ type PostMutationResult {
 ```
 
 不可数类名的批量字段使用 `Many` 后缀，避免与单条字段重名。
+
+`purge` 会在同一条 PostgreSQL 语句中写入内部 `gql_audit_outbox`；缺表或写入失败会回滚
+物理删除。迁移系统应执行 `pgsql.AuditOutboxDDL`，并让业务数据库角色只拥有 INSERT；
+外部 sink 在提交后按 `event_key` 幂等消费。内部 outbox 表永不进入 GraphQL Schema。
 
 ### 批量机制：resolver 如何不产生 N+1
 

@@ -199,6 +199,8 @@ func operationAllowed(c *protocol.Class, p *protocol.Permission, action string) 
 		return p.Delete
 	case protocol.OP_RESTORE:
 		return p.Restore
+	case protocol.OP_PURGE:
+		return p.Purge
 	}
 	return false
 }
@@ -249,8 +251,8 @@ func (my *Executor) authorizeSelection(c *protocol.Class, root *ast.Field, p *pr
 func authorizeArgs(c *protocol.Class, f *ast.Field, p *protocol.Permission, action string, vars map[string]interface{}) error {
 	for _, arg := range f.Arguments {
 		queryAction := action == protocol.OP_SELECT || action == protocol.OP_AGGREGATE
-		mutationAction := action == protocol.OP_INSERT || action == protocol.OP_UPDATE || action == protocol.OP_DELETE || action == protocol.OP_RESTORE
-		if (!queryAction || (arg.Name != protocol.WHERE && arg.Name != protocol.KEY && arg.Name != protocol.SORT && arg.Name != protocol.DISTINCT && arg.Name != protocol.GROUP_BY && arg.Name != protocol.HAVING && arg.Name != protocol.SEARCH)) &&
+		mutationAction := action == protocol.OP_INSERT || action == protocol.OP_UPDATE || action == protocol.OP_DELETE || action == protocol.OP_RESTORE || action == protocol.OP_PURGE
+		if (!queryAction || (arg.Name != protocol.WHERE && arg.Name != protocol.KEY && arg.Name != protocol.SORT && arg.Name != protocol.DISTINCT && arg.Name != protocol.GROUP_BY && arg.Name != protocol.HAVING && arg.Name != protocol.SEARCH && arg.Name != protocol.DELETION)) &&
 			(!mutationAction || (arg.Name != protocol.WHERE && arg.Name != protocol.KEY && arg.Name != protocol.ON)) {
 			continue
 		}
@@ -274,7 +276,11 @@ func authorizeArgs(c *protocol.Class, f *ast.Field, p *protocol.Permission, acti
 				}
 			}
 		}
-		if arg.Name == protocol.KEY {
+		if arg.Name == protocol.DELETION {
+			if value != "ACTIVE" && c.SoftDelete != nil {
+				check(c.SoftDelete.Column)
+			}
+		} else if arg.Name == protocol.KEY {
 			for _, name := range c.PrimaryKeys {
 				check(name)
 			}

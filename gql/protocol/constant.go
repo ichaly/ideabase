@@ -20,6 +20,7 @@ const (
 	TYPE_NUMBER_HAVING    = "NumberHaving"   // 数值聚合的having过滤（镜像NumberStats）
 	TYPE_STRING_HAVING    = "StringHaving"   // 字符串聚合的having过滤
 	TYPE_DATE_TIME_HAVING = "DateTimeHaving" // 日期聚合的having过滤
+	TYPE_DELETION_MODE    = "DeletionMode"
 
 	// GraphQL入参名称后缀
 	SUFFIX_STATS                 = "Stats"
@@ -33,8 +34,12 @@ const (
 	SUFFIX_UPDATE_ROW_INPUT      = "UpdateRowInput"
 	SUFFIX_CREATE_RELATION_INPUT = "CreateRelationInput"
 	SUFFIX_UPDATE_RELATION_INPUT = "UpdateRelationInput"
+	SUFFIX_DISTINCT_FIELD        = "DistinctField"
+	SUFFIX_GROUP_FIELD           = "GroupField"
 	SUFFIX_KEY_INPUT             = "KeyInput"
 	SUFFIX_MUTATION_RESULT       = "MutationResult"
+	SUFFIX_CONNECTION            = "Connection"
+	SUFFIX_EDGE                  = "Edge"
 	SUFFIX_BY_PK                 = "ByPk"
 	SUFFIX_MANY                  = "Many"
 )
@@ -47,6 +52,7 @@ const (
 	OP_UPDATE    = "update"
 	OP_DELETE    = "delete"
 	OP_RESTORE   = "restore"
+	OP_PURGE     = "purge"
 )
 
 // 参数名称
@@ -67,11 +73,13 @@ const (
 	UPSERT     = "upsert"
 	UPDATE     = "update"
 	DELETE     = "delete"
+	PURGE      = "purge"
 	CONNECT    = "connect"
 	DISCONNECT = "disconnect"
 	GROUP_BY   = "groupBy"
 	HAVING     = "having"
 	SEARCH     = "search"
+	DELETION   = "deletion"
 	DEPTH      = "depth"
 	// CONTEXT_ROLE is resolved by the executor from the request context.
 	CONTEXT_ROLE  = "__gql_role"

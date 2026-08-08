@@ -338,7 +338,7 @@ func (my *Executor) collectPolicyFields(target *policyTarget, class *protocol.Cl
 	for _, argument := range root.Arguments {
 		use := FieldUse("")
 		switch argument.Name {
-		case protocol.WHERE, protocol.KEY, protocol.SEARCH:
+		case protocol.WHERE, protocol.KEY, protocol.SEARCH, protocol.DELETION:
 			use = FieldUseFilter
 		case protocol.SORT:
 			use = FieldUseOrder
@@ -357,6 +357,12 @@ func (my *Executor) collectPolicyFields(target *policyTarget, class *protocol.Cl
 		}
 		value, err := argument.Value.Value(variables)
 		if err != nil {
+			continue
+		}
+		if argument.Name == protocol.DELETION {
+			if value != "ACTIVE" && class.SoftDelete != nil {
+				target.add(use, class.SoftDelete.Column)
+			}
 			continue
 		}
 		walkResolvedAny(value, func(name string) {
@@ -530,6 +536,8 @@ func applyDecisionFields(permission *protocol.Permission, actions []string, fiel
 			permission.Delete = true
 		case protocol.OP_RESTORE:
 			permission.Restore = true
+		case protocol.OP_PURGE:
+			permission.Purge = true
 		}
 	}
 	permission.Select = sortedUnique(permission.Select)

@@ -1,4 +1,4 @@
 {
-  "sha256": "37ae5cf8fe6c0716125985408afb493793303e9aa1b9ee23a3e2e1486ffedefa",
-  "classification": "security-breaking: upsert on changed from arbitrary String columns to catalog-backed ConflictTarget enum"
+  "sha256": "7eb6c104655f430e329c1ee0a77ed885271fe7f8e95e5bdc1cf43788597ffc0a",
+  "classification": "security-breaking: distinct/groupBy use catalog enums; additive Relay Connection fields preserve legacy paging"
 }

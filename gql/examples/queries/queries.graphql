@@ -39,11 +39,11 @@ query JsonDistinctRelations {
   users(where: { profile: { contains: { vip: true }, hasKey: "city" } }) {
     items { id name profile posts { id title comments { id content } } }
   }
-  posts(distinct: ["userId"]) { items { userId } }
+  posts(distinct: [userId]) { items { userId } }
 }
 
 query AggregateHaving {
-  postStats(groupBy: ["userId"], having: { count: { gt: 0 } }, limit: 20) {
+  postStats(groupBy: [userId], having: { count: { gt: 0 } }, limit: 20) {
     key
     count
     title { min max countDistinct }

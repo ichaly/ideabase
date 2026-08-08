@@ -52,6 +52,7 @@ type Plan struct {
 	policyRoles  []string
 	policyScope  map[string]any
 	cursor       bool
+	audit        bool
 }
 
 // Volatile 编译产物是否依赖变量内容（如整体input变量），不可缓存
@@ -166,6 +167,7 @@ func (my *Compiler) compile(operation *ast.OperationDefinition, variables map[st
 		volatile:  ctx.Volatile(),
 		tables:    ctx.Tables(),
 		cursor:    ctx.UsesCursor(),
+		audit:     ctx.UsesAudit(),
 	}
 	if inspectGovernance {
 		plan.roleNeeded, plan.policyNeeded = operationGovernanceNeeds(my.meta, operation)

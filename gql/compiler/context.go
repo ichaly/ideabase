@@ -29,6 +29,7 @@ type Context struct {
 	cursorContract    *CursorContract
 	cursorFingerprint string
 	usesCursor        bool
+	usesAudit         bool
 	cursorRoot        string
 }
 
@@ -39,6 +40,7 @@ type Slot struct {
 	Variable       string               // 变量名，非空时优先生效
 	Cursor         int                  // >=0时变量为base64游标，解码JSON数组后取第Cursor个键值
 	Context        string               // 非空时从执行期scope表取值（行级作用域：租户/属主，认证注入）
+	Required       bool                 // 缺失上下文时拒绝执行（审计等不可降级为NULL的可信值）
 	List           bool                 // 列表槽位（如 = ANY($n)）：执行期规范化为驱动可编码的具体类型数组
 	Generate       protocol.IDGenerator // 非空时每次解析计划生成一个新值
 	CursorContract *CursorContract      // 非nil时游标必须属于此完整契约
@@ -117,6 +119,7 @@ func (my *Context) Release() {
 	my.cursorContract = nil
 	my.cursorFingerprint = ""
 	my.usesCursor = false
+	my.usesAudit = false
 	my.cursorRoot = ""
 	my.slots = my.slots[:0]
 	contextPool.Put(my)
@@ -228,7 +231,11 @@ func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) ([]any,
 			continue
 		}
 		if slot.Context != "" { // 行级作用域：从请求上下文取值（认证注入，缺失则nil=匹配不到行）
-			args[i] = scope[slot.Context]
+			value, ok := scope[slot.Context]
+			if slot.Required && (!ok || value == nil || value == "") {
+				return nil, fmt.Errorf("缺少必需上下文: %s", slot.Context)
+			}
+			args[i] = value
 			if slot.List {
 				args[i] = ListArg(args[i])
 			}
@@ -349,6 +356,12 @@ func (my *Context) AddContextSlot(key string) int {
 	return my.addContextSlot(key, false)
 }
 
+func (my *Context) AddRequiredContextSlot(key string) int {
+	idx := my.addContextSlot(key, false)
+	my.slots[idx-1].Required = true
+	return idx
+}
+
 func (my *Context) AddContextListSlot(key string) int {
 	return my.addContextSlot(key, true)
 }
@@ -401,6 +414,8 @@ func (my *Context) SetCursorFingerprint(fingerprint string)   { my.cursorFingerp
 func (my *Context) CursorFingerprint() string                 { return my.cursorFingerprint }
 func (my *Context) MarkCursor()                               { my.usesCursor = true }
 func (my *Context) UsesCursor() bool                          { return my.usesCursor }
+func (my *Context) MarkAudit()                                { my.usesAudit = true }
+func (my *Context) UsesAudit() bool                           { return my.usesAudit }
 func (my *Context) SetCursorRoot(root string)                 { my.cursorRoot = root }
 func (my *Context) CursorCoordinate(field string) string      { return my.cursorRoot + "." + field }
 

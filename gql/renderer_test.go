@@ -99,15 +99,27 @@ func schemaType(schema, name string) string {
 }
 
 func TestRenderer_GovernanceExplicitMutationAndRestoreSDL(t *testing.T) {
-	c := governanceClass("Article", "insert", "update", "delete", "restore")
+	c := governanceClass("Article", "insert", "update", "delete", "restore", "purge", "select", "aggregate")
 	c.SoftDelete = &protocol.SoftDelete{Column: "deleted_at"}
+	for _, column := range []string{"created_at", "created_by", "updated_at", "updated_by", "deleted_at", "deleted_by"} {
+		c.AddField(&protocol.Field{Name: column, Column: column, Type: "text"})
+	}
 	schema := governanceSchema(t, c)
+	assert.Equal(t, 1, strings.Count(schema, "enum DeletionMode"))
+	assert.Contains(t, schema, "articles(")
+	assert.Contains(t, schema, "deletion: DeletionMode = ACTIVE")
+	assert.Contains(t, schema, "distinct: [ArticleDistinctField!]")
+	assert.Contains(t, schema, "groupBy: [ArticleGroupField!]")
 	assert.Contains(t, schema, "updateArticleByPk(id: ID!, input: ArticleUpdateInput!): Article")
 	assert.Contains(t, schema, "updateArticles(where: ArticleWhereInput!, input: ArticleUpdateRowInput!): ArticleMutationResult!")
 	assert.Contains(t, schema, "deleteArticleByPk(id: ID!): Article")
 	assert.Contains(t, schema, "deleteArticles(where: ArticleWhereInput!): ArticleMutationResult!")
 	assert.Contains(t, schema, "restoreArticleByPk(id: ID!): Article")
 	assert.Contains(t, schema, "restoreArticles(where: ArticleWhereInput!): ArticleMutationResult!")
+	assert.Contains(t, schema, "purgeArticleByPk(id: ID!): Article")
+	assert.Contains(t, schema, "purgeArticles(where: ArticleWhereInput!): ArticleMutationResult!")
+	assert.NotContains(t, schemaType(schema, "ArticleCreateInput"), "created_")
+	assert.NotContains(t, schemaType(schema, "ArticleUpdateInput"), "deleted_")
 	assert.Contains(t, schema, "type ArticleMutationResult {")
 	assert.Contains(t, schema, "affectedCount: Int!")
 	assert.Contains(t, schema, "returning: [Article!]!")
@@ -125,6 +137,7 @@ func TestRenderer_GovernanceLegacyEmptyOperationsAndUncountablePlural(t *testing
 	assert.NotContains(t, schema, "deleteNewses")
 	assert.Contains(t, schema, "updateNewsByPk")
 	assert.Contains(t, schema, "restoreNewsMany(where: NewsWhereInput!): NewsMutationResult!")
+	assert.NotContains(t, schema, "purgeNews")
 }
 
 // 尝试从测试数据库获取元数据

@@ -110,3 +110,17 @@ func scopeWithCursor(ctx context.Context, scope map[string]any) map[string]any {
 	values[compiler.CursorPolicyContext] = revision
 	return values
 }
+
+func scopeWithAudit(ctx context.Context, scope map[string]any, snapshot string) map[string]any {
+	values := make(map[string]any, len(scope)+2)
+	for key, value := range scope {
+		values[key] = value
+	}
+	values["snapshot"] = snapshot
+	var revision uint64
+	if identity, ok := IdentityFromContext(ctx); ok {
+		revision = identity.PolicyRevision()
+	}
+	values["policyRevision"] = revision
+	return values
+}

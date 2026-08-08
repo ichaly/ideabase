@@ -178,6 +178,16 @@ func (my *Renderer) renderEnums() error {
 	my.writeLine("  NOT_NULL")
 	my.writeLine("}")
 	my.writeLine()
+	hasSoftDelete := false
+	my.eachTableClass(func(_ string, class *protocol.Class) { hasSoftDelete = hasSoftDelete || class.SoftDelete != nil })
+	if hasSoftDelete {
+		my.writeLine("enum ", protocol.TYPE_DELETION_MODE, " {")
+		my.writeLine("  ACTIVE")
+		my.writeLine("  WITH_DELETED")
+		my.writeLine("  ONLY_DELETED")
+		my.writeLine("}")
+		my.writeLine()
+	}
 
 	// Database enums are emitted only when labels are losslessly representable
 	// by GraphQL. Unsafe labels fail schema build instead of being silently
@@ -219,6 +229,22 @@ func (my *Renderer) renderEnums() error {
 		my.writeLine()
 	}
 	my.eachTableClass(func(className string, class *protocol.Class) {
+		writeColumns := func(suffix string) {
+			my.writeLine("enum ", className, suffix, " {")
+			my.eachField(class, func(name string, field *protocol.Field) {
+				if field.Column != "" && !my.hiddenField(field) {
+					my.writeLine("  ", name)
+				}
+			})
+			my.writeLine("}")
+			my.writeLine()
+		}
+		if my.allows(class, protocol.OP_SELECT) {
+			writeColumns(protocol.SUFFIX_DISTINCT_FIELD)
+		}
+		if my.allows(class, protocol.OP_AGGREGATE) {
+			writeColumns(protocol.SUFFIX_GROUP_FIELD)
+		}
 		keys := class.ConflictTargets()
 		if len(keys) == 0 {
 			return
@@ -238,7 +264,7 @@ func (my *Renderer) renderEnums() error {
 func (my *Renderer) eachClass(fn func(className string, class *protocol.Class)) {
 	for _, className := range utl.SortKeys(my.meta.Nodes) {
 		class := my.meta.Nodes[className]
-		if className != class.Name || (class.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
+		if className != class.Name || class.Hidden || (class.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
 			continue
 		}
 		fn(className, class)
@@ -266,6 +292,18 @@ func (my *Renderer) allows(class *protocol.Class, operation string) bool {
 	}
 	for _, candidate := range class.Operations {
 		if strings.EqualFold(candidate, operation) {
+			return true
+		}
+	}
+	return false
+}
+
+func (my *Renderer) allowsPurge(class *protocol.Class) bool {
+	if class == nil || class.ReadOnly || class.SoftDelete == nil {
+		return false
+	}
+	for _, operation := range class.Operations {
+		if strings.EqualFold(operation, protocol.OP_PURGE) {
 			return true
 		}
 	}
@@ -335,6 +373,9 @@ func (my *Renderer) renderTypes() error {
 					{Name: protocol.SORT, Type: "[" + target + protocol.SUFFIX_SORT_INPUT + "!]"},
 					{Name: protocol.LIMIT, Type: protocol.SCALAR_INT},
 					{Name: protocol.OFFSET, Type: protocol.SCALAR_INT},
+				}
+				if targetClass := my.meta.Nodes[target]; targetClass != nil && targetClass.SoftDelete != nil {
+					args = append(args, renderer.Argument{Name: protocol.DELETION, Type: protocol.TYPE_DELETION_MODE, Default: "ACTIVE"})
 				}
 				if field.Relation.Deep {
 					args = append(args, renderer.Argument{Name: protocol.DEPTH, Type: protocol.SCALAR_INT})
@@ -416,6 +457,14 @@ func graphQLName(name string) bool {
 	return name != ""
 }
 
+func auditColumn(column string) bool {
+	switch column {
+	case "created_at", "created_by", "updated_at", "updated_by", "deleted_at", "deleted_by":
+		return true
+	}
+	return false
+}
+
 // writableFields 返回类的可写字段名（排除主键、时间戳、虚拟与中间表字段）
 func (my *Renderer) writableFields(class *protocol.Class, operation string) []string {
 	// 作用域列由服务端强制填充，不进可写输入（客户端碰不到，也避免必填冲突）
@@ -433,8 +482,7 @@ func (my *Renderer) writableFields(class *protocol.Class, operation string) []st
 			field.ReadOnly || (field.Catalog != nil && field.Catalog.Generation != nil) ||
 			(operation == protocol.OP_INSERT && field.InsertPreset != nil) ||
 			(operation == protocol.OP_UPDATE && field.UpdatePreset != nil) ||
-			strings.EqualFold(fieldName, "createdAt") ||
-			strings.EqualFold(fieldName, "updatedAt") ||
+			auditColumn(field.Column) ||
 			(field.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
 			return
 		}
@@ -674,6 +722,9 @@ func (my *Renderer) renderQuery() error {
 		}
 		my.writeLine("  # ", className, "查询")
 		class := my.meta.Nodes[className]
+		if class.SoftDelete != nil {
+			args = append(args, renderer.Argument{Name: protocol.DELETION, Type: protocol.TYPE_DELETION_MODE, Default: "ACTIVE"})
+		}
 		primaryKeys := class.PrimaryKeyFields()
 		if len(primaryKeys) == 1 {
 			args = append(args, renderer.Argument{Name: protocol.ID, Type: protocol.SCALAR_ID})
@@ -688,7 +739,7 @@ func (my *Renderer) renderQuery() error {
 			renderer.WithArgs(append(args, []renderer.Argument{
 				{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
 				{Name: protocol.SORT, Type: "[" + className + protocol.SUFFIX_SORT_INPUT + "!]"},
-				{Name: protocol.DISTINCT, Type: "[" + protocol.SCALAR_STRING + "!]"},
+				{Name: protocol.DISTINCT, Type: "[" + className + protocol.SUFFIX_DISTINCT_FIELD + "!]"},
 				{Name: protocol.LIMIT, Type: protocol.SCALAR_INT},
 				{Name: protocol.OFFSET, Type: protocol.SCALAR_INT},
 				{Name: protocol.FIRST, Type: protocol.SCALAR_INT},
@@ -697,6 +748,28 @@ func (my *Renderer) renderQuery() error {
 				{Name: protocol.BEFORE, Type: protocol.SCALAR_CURSOR},
 			}...)...),
 		)
+	}
+	writeConnectionField := func(className string) {
+		class := my.meta.Nodes[className]
+		if len(class.PrimaryKeyFields()) == 0 {
+			return
+		}
+		args := []renderer.Argument{
+			{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
+			{Name: protocol.SORT, Type: "[" + className + protocol.SUFFIX_SORT_INPUT + "!]"},
+			{Name: protocol.FIRST, Type: protocol.SCALAR_INT},
+			{Name: protocol.AFTER, Type: protocol.SCALAR_CURSOR},
+			{Name: protocol.LAST, Type: protocol.SCALAR_INT},
+			{Name: protocol.BEFORE, Type: protocol.SCALAR_CURSOR},
+		}
+		if len(class.Search) > 0 {
+			args = append([]renderer.Argument{{Name: protocol.SEARCH, Type: protocol.SCALAR_STRING}}, args...)
+		}
+		if class.SoftDelete != nil {
+			args = append(args, renderer.Argument{Name: protocol.DELETION, Type: protocol.TYPE_DELETION_MODE, Default: "ACTIVE"})
+		}
+		my.writeField(strcase.ToLowerCamel(className)+protocol.SUFFIX_CONNECTION,
+			className+protocol.SUFFIX_CONNECTION, renderer.NonNull(), renderer.WithMultilineArgs(), renderer.WithArgs(args...))
 	}
 
 	// 收集可渲染的实体类名
@@ -718,6 +791,9 @@ func (my *Renderer) renderQuery() error {
 		class := my.meta.Nodes[className]
 		if my.allows(class, protocol.OP_SELECT) {
 			writeEntityField(className)
+			if len(class.PrimaryKeyFields()) > 0 {
+				writeConnectionField(className)
+			}
 		}
 
 		// 统计查询
@@ -725,17 +801,21 @@ func (my *Renderer) renderQuery() error {
 			continue
 		}
 		my.writeLine("  # ", className, "统计")
+		statsArgs := []renderer.Argument{
+			{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
+			{Name: protocol.GROUP_BY, Type: "[" + className + protocol.SUFFIX_GROUP_FIELD + "!]"},
+			{Name: protocol.HAVING, Type: className + protocol.SUFFIX_HAVING_INPUT},
+			{Name: protocol.LIMIT, Type: protocol.SCALAR_INT},
+			{Name: protocol.OFFSET, Type: protocol.SCALAR_INT},
+		}
+		if class.SoftDelete != nil {
+			statsArgs = append(statsArgs, renderer.Argument{Name: protocol.DELETION, Type: protocol.TYPE_DELETION_MODE, Default: "ACTIVE"})
+		}
 		my.writeField(
 			strcase.ToLowerCamel(className)+protocol.SUFFIX_STATS,
 			"["+className+protocol.SUFFIX_STATS+"!]",
 			renderer.NonNull(),
-			renderer.WithArgs([]renderer.Argument{
-				{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
-				{Name: protocol.GROUP_BY, Type: "[" + protocol.SCALAR_STRING + "!]"},
-				{Name: protocol.HAVING, Type: className + protocol.SUFFIX_HAVING_INPUT},
-				{Name: protocol.LIMIT, Type: protocol.SCALAR_INT},
-				{Name: protocol.OFFSET, Type: protocol.SCALAR_INT},
-			}...),
+			renderer.WithArgs(statsArgs...),
 		)
 	}
 	if len(names) == 0 {
@@ -750,6 +830,9 @@ func (my *Renderer) renderQuery() error {
 	for _, className := range names {
 		if my.allows(my.meta.Nodes[className], protocol.OP_SELECT) {
 			writeEntityField(className)
+			if len(my.meta.Nodes[className].PrimaryKeyFields()) > 0 {
+				writeConnectionField(className)
+			}
 		}
 	}
 	if len(selectNames) == 0 {
@@ -766,7 +849,7 @@ func (my *Renderer) renderMutation() error {
 	my.eachTableClass(func(_ string, class *protocol.Class) {
 		if (my.allows(class, protocol.OP_INSERT) && len(my.writableFields(class, protocol.OP_INSERT)) > 0) ||
 			(my.allows(class, protocol.OP_UPDATE) && len(my.writableFields(class, protocol.OP_UPDATE)) > 0) ||
-			my.allows(class, protocol.OP_DELETE) || (my.allows(class, protocol.OP_RESTORE) && class.SoftDelete != nil) {
+			my.allows(class, protocol.OP_DELETE) || (my.allows(class, protocol.OP_RESTORE) && class.SoftDelete != nil) || my.allowsPurge(class) {
 			hasMutation = true
 		}
 	})
@@ -774,7 +857,7 @@ func (my *Renderer) renderMutation() error {
 		return nil
 	}
 	my.eachTableClass(func(className string, class *protocol.Class) {
-		if !((my.allows(class, protocol.OP_UPDATE) && len(my.writableFields(class, protocol.OP_UPDATE)) > 0) || my.allows(class, protocol.OP_DELETE) || (my.allows(class, protocol.OP_RESTORE) && class.SoftDelete != nil)) {
+		if !((my.allows(class, protocol.OP_UPDATE) && len(my.writableFields(class, protocol.OP_UPDATE)) > 0) || my.allows(class, protocol.OP_DELETE) || (my.allows(class, protocol.OP_RESTORE) && class.SoftDelete != nil) || my.allowsPurge(class)) {
 			return
 		}
 		my.writeLine("type ", className, protocol.SUFFIX_MUTATION_RESULT, " {")
@@ -860,6 +943,16 @@ func (my *Renderer) renderMutation() error {
 				my.writeField("restore"+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
 			}
 			my.writeField("restore"+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
+		}
+		if my.allowsPurge(class) {
+			batchPlural := inflection.Plural(className)
+			if batchPlural == className {
+				batchPlural += protocol.SUFFIX_MANY
+			}
+			if key := my.keyArguments(className, class, true); len(key) > 0 {
+				my.writeField(protocol.PURGE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
+			}
+			my.writeField(protocol.PURGE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
 		}
 	})
 
@@ -996,6 +1089,21 @@ func (my *Renderer) renderPaging() error {
 		my.writeField(protocol.PAGE_INFO, protocol.TYPE_PAGE_INFO, renderer.WithComment("游标分页信息(需配合first/last使用)"))
 		my.writeLine("}")
 		my.writeLine("")
+		if my.allows(class, protocol.OP_SELECT) && len(class.PrimaryKeyFields()) > 0 {
+			my.writeLine("# ", className, "连接分页边")
+			my.writeLine("type ", className, protocol.SUFFIX_EDGE, " {")
+			my.writeField("node", className, renderer.NonNull())
+			my.writeField("cursor", protocol.SCALAR_CURSOR, renderer.NonNull())
+			my.writeLine("}")
+			my.writeLine("")
+			my.writeLine("# ", className, "连接分页")
+			my.writeLine("type ", className, protocol.SUFFIX_CONNECTION, " {")
+			my.writeField("edges", "["+className+protocol.SUFFIX_EDGE+"!]", renderer.NonNull())
+			my.writeField(protocol.PAGE_INFO, protocol.TYPE_PAGE_INFO, renderer.NonNull())
+			my.writeField("totalCount", protocol.SCALAR_INT, renderer.NonNull())
+			my.writeLine("}")
+			my.writeLine("")
+		}
 	})
 
 	return nil

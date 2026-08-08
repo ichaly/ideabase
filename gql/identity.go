@@ -42,6 +42,9 @@ func NewIdentity(input IdentityInput) (Identity, error) {
 	if err != nil {
 		return Identity{}, err
 	}
+	if input.Actor == "" {
+		input.Actor = input.Subject
+	}
 	return Identity{
 		tenant: input.Tenant, subject: input.Subject, actor: input.Actor,
 		requestID: input.RequestID, roles: append([]string(nil), input.Roles...),

@@ -223,7 +223,7 @@ func TestExecutorDistinct(t *testing.T) {
 	]) { id } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 
-	reply = executor.run(ctx, `query { users(distinct: ["name"]) { items { name } } }`, nil, "")
+	reply = executor.run(ctx, `query { users(distinct: [name]) { items { name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "distinct查询失败: %v", reply.Errors)
 	items := reply.Data["users"].(map[string]interface{})["items"].([]interface{})
 	require.Len(t, items, 2, "按name去重应得2行")
@@ -556,7 +556,7 @@ func TestExecutorStats(t *testing.T) {
 	require.EqualValues(t, 3, row["email"].(map[string]interface{})["countDistinct"])
 
 	// 分组聚合
-	reply = executor.run(ctx, `query { userStats(groupBy: ["name"], where: { name: { eq: "B" } }) { key count } }`, nil, "")
+	reply = executor.run(ctx, `query { userStats(groupBy: [name], where: { name: { eq: "B" } }) { key count } }`, nil, "")
 	require.Empty(t, reply.Errors, "分组聚合失败: %v", reply.Errors)
 	rows = reply.Data["userStats"].([]interface{})
 	require.Len(t, rows, 1)
@@ -565,7 +565,7 @@ func TestExecutorStats(t *testing.T) {
 	require.Equal(t, "B", row["key"].(map[string]interface{})["name"])
 
 	// having：分组后按聚合值过滤（库内HAVING，A组count=1被滤，只剩B组count=2）
-	reply = executor.run(ctx, `query { userStats(groupBy: ["name"], having: { count: { gt: 1 } }) { key count } }`, nil, "")
+	reply = executor.run(ctx, `query { userStats(groupBy: [name], having: { count: { gt: 1 } }) { key count } }`, nil, "")
 	require.Empty(t, reply.Errors, "having过滤失败: %v", reply.Errors)
 	rows = reply.Data["userStats"].([]interface{})
 	require.Len(t, rows, 1, "having count>1 只应返回B组")

@@ -74,6 +74,7 @@ func (my *baseLoader) loadCatalog(h protocol.Hoster, catalog catalogData) error 
 			Schema:      t.Schema,
 			TableKind:   protocol.TableKind(t.TableKind),
 			ReadOnly:    protocol.TableKind(t.TableKind).ReadOnly(),
+			Hidden:      t.TableName == "gql_audit_outbox",
 		}
 	}
 	// 组装字段信息
@@ -116,6 +117,12 @@ func (my *baseLoader) loadCatalog(h protocol.Hoster, catalog catalogData) error 
 			class.Fields[c.ColumnName] = field
 		} else {
 			return fmt.Errorf("catalog column references missing table %q", c.TableName)
+		}
+	}
+	for _, class := range classMap {
+		if class.Fields["deleted_at"] != nil {
+			class.SoftDelete = &protocol.SoftDelete{Column: "deleted_at"}
+			class.Where = append(class.Where, protocol.Predicate{Column: "deleted_at", Operator: "is-null"})
 		}
 	}
 	for _, ci := range constraints {

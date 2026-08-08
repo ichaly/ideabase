@@ -19,10 +19,11 @@ import (
 type shape int
 
 const (
-	shapeResult shape = iota // 查询根字段：Result契约 items/total/pageInfo
-	shapeSingle              // 单对象：多对一关系、单条变更读回
-	shapeList                // 纯数组：列表关系、批量/upsert读回
-	shapeStats               // 统计聚合
+	shapeResult     shape = iota // 查询根字段：Result契约 items/total/pageInfo
+	shapeConnection              // 查询根字段：Relay Connection契约 edges/pageInfo/totalCount
+	shapeSingle                  // 单对象：多对一关系、单条变更读回
+	shapeList                    // 纯数组：列表关系、批量/upsert读回
+	shapeStats                   // 统计聚合
 )
 
 // unit 一个LATERAL JOIN子查询单元：查询根字段、关系字段或变更读回
@@ -78,10 +79,13 @@ func (my *Dialect) BuildQuery(ctx *compiler.Context, set ast.SelectionSet) error
 
 		typeName := field.Definition.Type.Name()
 		kind := shapeResult
+		if strings.HasSuffix(typeName, protocol.SUFFIX_CONNECTION) {
+			kind = shapeConnection
+		}
 		if strings.HasSuffix(typeName, protocol.SUFFIX_STATS) {
 			kind = shapeStats
 		}
-		className := strings.TrimSuffix(strings.TrimSuffix(typeName, protocol.SUFFIX_RESULT), protocol.SUFFIX_STATS)
+		className := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(typeName, protocol.SUFFIX_RESULT), protocol.SUFFIX_STATS), protocol.SUFFIX_CONNECTION)
 		class, ok := ctx.GetClass(className)
 		if !ok {
 			return fmt.Errorf("不支持的根查询字段: %s", field.Name)
@@ -116,6 +120,8 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 		ctx.Write(`) AS `).Quote(`__sr_`, u.index)
 	case shapeResult:
 		err = my.buildResultWrap(ctx, u)
+	case shapeConnection:
+		err = my.buildConnectionWrap(ctx, u)
 	default: // shapeList / shapeStats：纯数组包装
 		core := func() error { return my.buildCore(ctx, u, compiler.FieldsOf(u.field.SelectionSet), false) }
 		if u.shape == shapeStats {
@@ -137,6 +143,135 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 	}
 
 	ctx.Write(`) AS `).Quote(`__sj_`, u.index).Write(` ON TRUE`)
+	return nil
+}
+
+// buildConnectionWrap 将同一条 keyset 查询包装为 Relay 风格的 edges 连接。
+// node 仍由 buildCore 完成投影和关系 LATERAL JOIN，只有请求 totalCount 时才注入窗口计数。
+func (my *Dialect) buildConnectionWrap(ctx *compiler.Context, u *unit) error {
+	var edge, pageInfo, totalField *ast.Field
+	var node []*ast.Field
+	var edgeFields, typeNames []*ast.Field
+	for _, f := range compiler.FieldsOf(u.field.SelectionSet) {
+		switch f.Name {
+		case "edges":
+			edge = f
+			edgeFields = compiler.FieldsOf(f.SelectionSet)
+			for _, e := range compiler.FieldsOf(f.SelectionSet) {
+				switch e.Name {
+				case "node":
+					node = compiler.FieldsOf(e.SelectionSet)
+				case "cursor":
+				}
+			}
+		case protocol.PAGE_INFO:
+			pageInfo = f
+		case "totalCount":
+			totalField = f
+		case typename:
+			typeNames = append(typeNames, f)
+		}
+	}
+	page, err := newPager(scope{class: u.class}, u.args)
+	if err != nil {
+		return err
+	}
+	if page == nil {
+		limit := ctx.DefaultLimit()
+		if limit <= 0 {
+			limit = 20
+		}
+		u.args = append(u.args, &ast.Argument{Name: protocol.FIRST, Value: &ast.Value{Kind: ast.IntValue, Raw: strconv.Itoa(limit)}})
+		page, err = newPager(scope{class: u.class}, u.args)
+		if err != nil {
+			return err
+		}
+	}
+	u.page = page
+	ctx.SetCursorContract(compiler.CursorContract{
+		StructuralFingerprint: ctx.CursorFingerprint(), Coordinate: ctx.CursorCoordinate(u.field.Name), Sort: cursorSort(page.keys),
+	})
+	ctx.MarkCursor()
+
+	sr := func() *compiler.Context { return ctx.Quote(`__sr_`, u.index) }
+	ctx.Write(`SELECT JSONB_BUILD_OBJECT(`)
+	first := true
+	commaField := func() {
+		if !first {
+			ctx.Write(`, `)
+		}
+		first = false
+	}
+	if edge != nil {
+		commaField()
+		ctx.Write(`'`, edge.Alias, `', COALESCE(JSONB_AGG(JSONB_BUILD_OBJECT(`)
+		for i, selected := range edgeFields {
+			if i > 0 {
+				ctx.Write(`, `)
+			}
+			ctx.Write(`'`, selected.Alias, `', `)
+			switch selected.Name {
+			case "node":
+				ctx.Write(`(TO_JSONB(`)
+				sr().Write(`.*) - '__rn' - '__cursor' - '__total')`)
+			case "cursor":
+				sr().Write(`."__cursor"`)
+			case typename:
+				ctx.Write(`'`, u.class.Name, protocol.SUFFIX_EDGE, `'`)
+			}
+		}
+		ctx.Write(`) ORDER BY `)
+		sr().Write(`."__rn"`)
+		if page.last {
+			ctx.Write(` DESC`)
+		}
+		ctx.Write(`) FILTER (WHERE `)
+		sr().Write(`."__rn" <= `)
+		page.writeSize(ctx, my, 0)
+		ctx.Write(`), '[]')`)
+	}
+	if pageInfo != nil {
+		commaField()
+		ctx.Write(`'`, pageInfo.Alias, `', `)
+		my.buildPageInfo(ctx, u, pageInfo)
+	}
+	if totalField != nil {
+		commaField()
+		ctx.Write(`'`, totalField.Alias, `', `)
+		if err := my.buildConnectionTotal(ctx, u); err != nil {
+			return err
+		}
+	}
+	for _, field := range typeNames {
+		commaField()
+		ctx.Write(`'`, field.Alias, `', '`, u.class.Name, protocol.SUFFIX_CONNECTION, `'`)
+	}
+	ctx.Write(`) AS "json" FROM (`)
+	if err := my.buildCore(ctx, u, node, false); err != nil {
+		return err
+	}
+	ctx.Write(`) AS `)
+	sr()
+	return nil
+}
+
+func (my *Dialect) buildConnectionTotal(ctx *compiler.Context, u *unit) error {
+	count := *u
+	count.shape, count.page, count.sorts = shapeStats, nil, nil
+	count.args = count.args[:0]
+	for _, argument := range u.args {
+		switch argument.Name {
+		case protocol.FIRST, protocol.AFTER, protocol.LAST, protocol.BEFORE, protocol.SORT:
+			continue
+		}
+		count.args = append(count.args, argument)
+	}
+	key := u.class.PrimaryKeys[0]
+	ctx.Write(`(SELECT COALESCE(MIN("__total"), 0) FROM (`)
+	if err := my.buildCore(ctx, &count, []*ast.Field{{Name: key, Alias: "__count_key"}}, true); err != nil {
+		return err
+	}
+	ctx.Write(`) AS `).Quote("__sc_", u.index).Write(`)`)
 	return nil
 }
 
@@ -502,7 +637,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	// 读基表的查询单元才注入，变更读回顶层单元读CTE跳过
 	if !u.readback {
 		conjuncts = append(conjuncts, my.scopeConjuncts(ctx, sc.qualifier, u.class)...)
-		conjuncts = append(conjuncts, my.fixedWhereConjuncts(ctx, sc.qualifier, u.class, protocol.OP_SELECT, "")...)
+		conjuncts = append(conjuncts, my.queryWhereConjuncts(ctx, sc.qualifier, u.class, protocol.OP_SELECT, u.args)...)
 	}
 	if err = my.buildWhere(ctx, sc, u.args, conjuncts...); err != nil {
 		return err
@@ -704,7 +839,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 
 	// 行级作用域：递归CTE的起始层与步进层都注入，递归只在本租户内遍历（限范围、防跨租户）
 	scopeFilter := func() { my.appendScope(ctx, u.class.Table, u.class.Scope) }
-	fixedFilter := my.fixedWhereConjuncts(ctx, u.class.Table, u.class, protocol.OP_SELECT, "")
+	fixedFilter := my.queryWhereConjuncts(ctx, u.class.Table, u.class, protocol.OP_SELECT, u.args)
 
 	ctx.Space(`FROM (WITH RECURSIVE`).QuotedWithSpace(tree).Write(`AS (SELECT `)
 	list(u.class.Table)

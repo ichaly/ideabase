@@ -69,12 +69,17 @@ func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
 	}
 	for _, name := range sortedNodeNames(metadata) {
 		class := metadata.Nodes[name]
-		if class == nil || name != class.Name || class.Table == "" {
+		if class == nil || name != class.Name || class.Table == "" || class.Hidden {
 			continue
 		}
 		if renderer.allows(class, protocol.OP_SELECT) {
 			add("Query", queryField(name), class, protocol.OP_SELECT)
 			add("Subscription", queryField(name), class, protocol.OP_SELECT)
+			if len(class.PrimaryKeyFields()) > 0 {
+				connection := strcase.ToLowerCamel(name) + protocol.SUFFIX_CONNECTION
+				add("Query", connection, class, protocol.OP_SELECT)
+				add("Subscription", connection, class, protocol.OP_SELECT)
+			}
 		}
 		if renderer.allows(class, protocol.OP_AGGREGATE) {
 			add("Query", strcase.ToLowerCamel(name)+protocol.SUFFIX_STATS, class, protocol.OP_AGGREGATE)
@@ -114,6 +119,12 @@ func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
 				add("Mutation", "restore"+name+protocol.SUFFIX_BY_PK, class, protocol.OP_RESTORE)
 			}
 			add("Mutation", "restore"+batch, class, protocol.OP_RESTORE)
+		}
+		if renderer.allowsPurge(class) {
+			if len(class.PrimaryKeyFields()) > 0 {
+				add("Mutation", protocol.PURGE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_PURGE)
+			}
+			add("Mutation", protocol.PURGE+batch, class, protocol.OP_PURGE)
 		}
 	}
 	return catalog

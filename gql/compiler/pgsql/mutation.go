@@ -120,11 +120,16 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 			err = my.buildDelete(ctx, m)
 		case protocol.OP_RESTORE:
 			err = my.buildRestore(ctx, m)
+		case protocol.OP_PURGE:
+			err = my.buildPurge(ctx, m)
 		}
 		if err != nil {
 			return err
 		}
 		ctx.Write(`)`)
+		if m.op == protocol.OP_PURGE {
+			my.buildPurgeAudit(ctx, m)
+		}
 		if err = my.buildRelationOps(ctx, m.class, ops); err != nil {
 			return err
 		}
@@ -192,7 +197,7 @@ func (my *Dialect) buildMutationResultJSON(ctx *compiler.Context, m *mutation) {
 
 // parseMutation 解析变更字段：createUser单条 / createUsers批量 / upsertUsers / updateX / deleteX
 func parseMutation(ctx *compiler.Context, field *ast.Field) (*mutation, error) {
-	for _, op := range []string{protocol.CREATE, protocol.UPSERT, protocol.UPDATE, protocol.DELETE, protocol.OP_RESTORE} {
+	for _, op := range []string{protocol.CREATE, protocol.UPSERT, protocol.UPDATE, protocol.DELETE, protocol.OP_RESTORE, protocol.PURGE} {
 		if !strings.HasPrefix(field.Name, op) {
 			continue
 		}
@@ -212,7 +217,7 @@ func parseMutation(ctx *compiler.Context, field *ast.Field) (*mutation, error) {
 		}
 		// 复数字段=批量语义
 		if class, ok := ctx.GetClass(inflection.Singular(name)); ok {
-			return &mutation{field: field, class: class, op: op, bulk: true, result: op == protocol.UPDATE || op == protocol.DELETE || op == protocol.OP_RESTORE, single: byPK}, nil
+			return &mutation{field: field, class: class, op: op, bulk: true, result: op == protocol.UPDATE || op == protocol.DELETE || op == protocol.OP_RESTORE || op == protocol.OP_PURGE, single: byPK}, nil
 		}
 	}
 	return nil, fmt.Errorf("不支持的变更字段: %s", field.Name)
@@ -241,6 +246,7 @@ func (my *Dialect) buildInsert(ctx *compiler.Context, m *mutation) ([]relationOp
 	}
 
 	my.applyPreset(m.class, rows, protocol.OP_INSERT)
+	my.applyAudit(m.class, rows, protocol.OP_INSERT)
 	my.applyScope(m.class, rows) // 强制作用域列=上下文值（防越租户创建）
 	if _, err = my.writeInsertValues(ctx, m.class, rows); err != nil {
 		return nil, err
@@ -261,6 +267,7 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 		}
 	}
 	my.applyPreset(m.class, rows, protocol.OP_INSERT)
+	my.applyAudit(m.class, rows, protocol.OP_INSERT)
 
 	// 冲突目标只能是catalog已证明的全局unique/primary key；
 	// GraphQL enum标签由protocol与Renderer共用，不接受任意列名。
@@ -326,6 +333,9 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 		}
 	}
 	for _, column := range updateColumns {
+		if column == "created_at" || column == "created_by" {
+			continue
+		}
 		if skip[column] {
 			continue
 		}
@@ -334,7 +344,11 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 		}
 		written++
 		ctx.Quote(column).Write(` = `)
-		if field := fieldByColumn(m.class, column); field != nil && field.UpdatePreset != nil {
+		if column == "updated_at" || column == "updated_by" {
+			if err := my.auditWriter(column)(ctx); err != nil {
+				return err
+			}
+		} else if field := fieldByColumn(m.class, column); field != nil && field.UpdatePreset != nil {
 			if err := my.writePreset(ctx, field.UpdatePreset); err != nil {
 				return err
 			}
@@ -469,6 +483,7 @@ func (my *Dialect) buildUpdate(ctx *compiler.Context, m *mutation) ([]relationOp
 	}
 
 	my.applyPreset(m.class, rows, protocol.OP_UPDATE)
+	my.applyAudit(m.class, rows, protocol.OP_UPDATE)
 	row = rows[0]
 	if len(row.columns) == 0 {
 		if len(row.ops) == 0 {
@@ -504,6 +519,10 @@ func (my *Dialect) buildDelete(ctx *compiler.Context, m *mutation) error {
 		ctx.Write(`UPDATE `)
 		tableRef(ctx, m.class.Table)
 		ctx.Write(` SET `).Quote(m.class.SoftDelete.Column).Write(` = CURRENT_TIMESTAMP`)
+		columns := auditColumnsFor(m.class)
+		if err := my.appendAuditAssignments(ctx, []string{columns.deletedBy, columns.updatedAt, columns.updatedBy}, false); err != nil {
+			return err
+		}
 		if err := my.buildMutationWhere(ctx, m.class, m.field, protocol.OP_DELETE, m.class.SoftDelete.Column); err != nil {
 			return err
 		}
@@ -527,7 +546,28 @@ func (my *Dialect) buildRestore(ctx *compiler.Context, m *mutation) error {
 	ctx.Write(`UPDATE `)
 	tableRef(ctx, m.class.Table)
 	ctx.Write(` SET `).Quote(m.class.SoftDelete.Column).Write(` = NULL`)
+	columns := auditColumnsFor(m.class)
+	if err := my.appendAuditAssignments(ctx, []string{columns.deletedBy}, true); err != nil {
+		return err
+	}
+	if err := my.appendAuditAssignments(ctx, []string{columns.updatedAt, columns.updatedBy}, false); err != nil {
+		return err
+	}
 	if err := my.buildMutationWhere(ctx, m.class, m.field, protocol.OP_RESTORE, m.class.SoftDelete.Column); err != nil {
+		return err
+	}
+	ctx.Space(`AND`).Column(m.class.Table, m.class.SoftDelete.Column).Write(` IS NOT NULL`)
+	ctx.Write(` RETURNING *`)
+	return nil
+}
+
+func (my *Dialect) buildPurge(ctx *compiler.Context, m *mutation) error {
+	if m.class.SoftDelete == nil {
+		return fmt.Errorf("实体 %s 不支持purge", m.class.Name)
+	}
+	ctx.Write(`DELETE FROM `)
+	tableRef(ctx, m.class.Table)
+	if err := my.buildMutationWhere(ctx, m.class, m.field, protocol.OP_PURGE, m.class.SoftDelete.Column); err != nil {
 		return err
 	}
 	ctx.Space(`AND`).Column(m.class.Table, m.class.SoftDelete.Column).Write(` IS NOT NULL`)
@@ -784,6 +824,9 @@ func writableColumn(class *protocol.Class, name, operation string) (string, erro
 	}
 	if f.ReadOnly || (operation == protocol.OP_INSERT && f.InsertPreset != nil) || (operation == protocol.OP_UPDATE && f.UpdatePreset != nil) {
 		return "", fmt.Errorf("input包含只读或由服务端预置字段: %s", name)
+	}
+	if auditColumn(f.Column) {
+		return "", fmt.Errorf("input包含只读或由服务端审计字段: %s", name)
 	}
 	return f.Column, nil
 }

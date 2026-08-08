@@ -476,7 +476,7 @@ func (my *ConfigLoader) resolvePermissionFields(class *protocol.Class, names []s
 
 func (my *ConfigLoader) applyGovernance(class *protocol.Class, config *internal.ClassConfig) error {
 	if len(config.Operations) > 0 {
-		allowed := map[string]bool{"select": true, "aggregate": true, "insert": true, "update": true, "delete": true, "restore": true}
+		allowed := map[string]bool{"select": true, "aggregate": true, "insert": true, "update": true, "delete": true, "restore": true, "purge": true}
 		seen := make(map[string]bool)
 		class.Operations = nil
 		for _, operation := range config.Operations {
@@ -533,7 +533,7 @@ func (my *ConfigLoader) applyGovernance(class *protocol.Class, config *internal.
 		if pc == nil {
 			return fmt.Errorf("permission %s 不能为空", role)
 		}
-		perm := &protocol.Permission{Delete: pc.Delete, Restore: pc.Restore, Aggregate: pc.Aggregate}
+		perm := &protocol.Permission{Delete: pc.Delete, Restore: pc.Restore, Purge: pc.Purge, Aggregate: pc.Aggregate}
 		var err error
 		if perm.Select, err = my.resolvePermissionFields(class, pc.Select); err != nil {
 			return fmt.Errorf("permission %s select: %w", role, err)
