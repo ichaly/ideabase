@@ -876,7 +876,7 @@ func (my *Executor) parse(query, operationName string, variables map[string]inte
 		return nil, err
 	}
 	variables = coerced
-	selection, err := normalizeSelection(operation.SelectionSet, doc.Fragments, variables)
+	selection, err := normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, variables, my.schema)
 	if err != nil {
 		return nil, err
 	}

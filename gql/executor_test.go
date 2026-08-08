@@ -638,11 +638,11 @@ func TestExecutorScope(t *testing.T) {
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	require.Equal(t, "own", reply.Data["updateUser"].(map[string]interface{})["name"], "租户1 改自己的行成功")
 
-	// 安全回归：客户端整体变量 input 偷传作用域列 → 编译器层硬拒绝（堵整体变量绕过 schema）
+	// 安全回归：客户端整体变量 input 偷传作用域列 → 变量强校验先于编译器拒绝（堵整体变量绕过 schema）
 	reply = executor.run(ctx1, `mutation ($i: UserUpdateInput!) { updateUser(input: $i, where: { name: { eq: "own" } }) { id } }`,
 		map[string]any{"i": map[string]any{"name": "z", "tenantId": 2}}, "")
 	require.NotEmpty(t, reply.Errors, "偷传作用域列应被拒绝")
-	require.Contains(t, reply.Errors[0].Message, "作用域列")
+	require.Contains(t, reply.Errors[0].Message, "unknown field")
 	require.NoError(t, db.Raw(`SELECT name FROM users WHERE id = ?`, newID).Scan(&name).Error)
 	require.Equal(t, "own", name, "被拒绝后行未被篡改")
 

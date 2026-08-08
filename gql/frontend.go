@@ -12,10 +12,14 @@ import (
 // fragments before authorization, compilation, and resolver collection. The
 // compiler consequently receives one honest, directive-free selection shape.
 func normalizeSelection(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]interface{}) (ast.SelectionSet, error) {
-	return normalizeSelections(set, fragments, variables, make(map[string]bool))
+	return normalizeSelections(set, fragments, variables, make(map[string]bool), nil)
 }
 
-func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]interface{}, active map[string]bool) (ast.SelectionSet, error) {
+func normalizeSelectionWithSchema(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]interface{}, schema *ast.Schema) (ast.SelectionSet, error) {
+	return normalizeSelections(set, fragments, variables, make(map[string]bool), schema)
+}
+
+func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]interface{}, active map[string]bool, schema *ast.Schema) (ast.SelectionSet, error) {
 	out := make(ast.SelectionSet, 0, len(set))
 	for _, selection := range set {
 		var directives ast.DirectiveList
@@ -37,8 +41,13 @@ func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 			} else if skip {
 				continue
 			}
+			if node.Definition != nil {
+				if err := validateFragmentCondition(node.Definition.Definition, node.ObjectDefinition); err != nil {
+					return nil, err
+				}
+			}
 			active[node.Name] = true
-			expanded, err := normalizeSelections(fragment.SelectionSet, fragments, variables, active)
+			expanded, err := normalizeSelections(fragment.SelectionSet, fragments, variables, active, schema)
 			delete(active, node.Name)
 			if err != nil {
 				return nil, err
@@ -55,8 +64,13 @@ func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 		} else if skip {
 			continue
 		}
+		if inline, ok := selection.(*ast.InlineFragment); ok {
+			if err := validateInlineCondition(inline, schema); err != nil {
+				return nil, err
+			}
+		}
 		if nested != nil {
-			expanded, err := normalizeSelections(nested, fragments, variables, active)
+			expanded, err := normalizeSelections(nested, fragments, variables, active, schema)
 			if err != nil {
 				return nil, err
 			}
@@ -81,7 +95,66 @@ func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 		}
 		out = append(out, selection)
 	}
-	return out, nil
+	return mergeSelectionSet(out), nil
+}
+
+func validateFragmentCondition(fragment, parent *ast.Definition) error {
+	if fragment == nil {
+		return nil
+	}
+	if fragment.Kind != ast.Object {
+		return fmt.Errorf("不支持在%s类型条件下展平fragment %q", fragment.Kind, fragment.Name)
+	}
+	if parent != nil && parent.Kind != ast.Object {
+		return fmt.Errorf("不支持在%s结果上展平fragment %q", parent.Kind, fragment.Name)
+	}
+	return nil
+}
+
+func validateInlineCondition(fragment *ast.InlineFragment, schema *ast.Schema) error {
+	if fragment.TypeCondition == "" {
+		return nil
+	}
+	if fragment.ObjectDefinition != nil && fragment.ObjectDefinition.Kind != ast.Object {
+		return fmt.Errorf("不支持在%s结果上展平inline fragment", fragment.ObjectDefinition.Kind)
+	}
+	if schema != nil {
+		if def := schema.Types[fragment.TypeCondition]; def == nil || def.Kind != ast.Object {
+			return fmt.Errorf("不支持在%s类型条件下展平inline fragment", fragment.TypeCondition)
+		}
+	}
+	return nil
+}
+
+// mergeSelectionSet performs GraphQL field collection after directives and
+// fragments have been normalized. The first occurrence owns response order;
+// subsequent compatible occurrences contribute only their child selections.
+func mergeSelectionSet(set ast.SelectionSet) ast.SelectionSet {
+	if len(set) < 2 {
+		return set
+	}
+	merged := make(ast.SelectionSet, 0, len(set))
+	byKey := make(map[string]*ast.Field, len(set))
+	for _, selection := range set {
+		field, ok := selection.(*ast.Field)
+		if !ok {
+			merged = append(merged, selection)
+			continue
+		}
+		key := field.Name
+		if field.Alias != "" {
+			key = field.Alias
+		}
+		if prior := byKey[key]; prior != nil {
+			prior.SelectionSet = append(prior.SelectionSet, field.SelectionSet...)
+			prior.SelectionSet = mergeSelectionSet(prior.SelectionSet)
+			continue
+		}
+		field.SelectionSet = mergeSelectionSet(field.SelectionSet)
+		byKey[key] = field
+		merged = append(merged, field)
+	}
+	return merged
 }
 
 func shouldSkip(directives ast.DirectiveList, variables map[string]interface{}) (bool, error) {
