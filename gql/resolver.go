@@ -103,26 +103,27 @@ type BatchResolver interface {
 // binding 编译期收集的后处理绑定：宿主对象路径 + 目标字段 + 处理器名。
 // Key非空即远程关系绑定（Name为数据源名，Key为补投影的内部键别名），否则为resolver绑定
 type binding struct {
-	Path  []string   // data根到宿主对象的字段别名路径（数组层级在执行期透明展开）
-	Field string     // 要填充的字段别名
-	Name  string     // resolver名或远程数据源名
-	Key   string     // 远程绑定的宿主键别名（编译期补投影的内部列）
-	node  *ast.Field // resolver字段AST引用：执行期按请求变量解出实参（随计划缓存复用）
+	Path  []string     // data根到宿主对象的字段别名路径（数组层级在执行期透明展开）
+	Field string       // 要填充的字段别名
+	Name  string       // resolver名或远程数据源名
+	Key   string       // 远程绑定的宿主键别名（编译期补投影的内部列）
+	node  *ast.Field   // resolver字段AST引用：执行期按请求变量解出实参（随计划缓存复用）
+	trail []*ast.Field // Path每一段对应的字段，用于错误冷路径按nullability冒泡
 }
 
 // collectBindings 遍历操作选择集，收集所有resolver字段的绑定
 func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []binding {
 	var bindings []binding
 
-	var walk func(class *protocol.Class, set ast.SelectionSet, path []string)
-	walk = func(class *protocol.Class, set ast.SelectionSet, path []string) {
+	var walk func(class *protocol.Class, set ast.SelectionSet, path []string, trail []*ast.Field)
+	walk = func(class *protocol.Class, set ast.SelectionSet, path []string, trail []*ast.Field) {
 		for _, s := range set {
 			f, ok := s.(*ast.Field)
 			if !ok {
 				continue
 			}
 			if f.Name == protocol.ITEMS {
-				walk(class, f.SelectionSet, append(path[:len(path):len(path)], f.Alias))
+				walk(class, f.SelectionSet, append(path[:len(path):len(path)], f.Alias), appendField(trail, f))
 				continue
 			}
 			field, ok := class.Fields[f.Name]
@@ -135,6 +136,7 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 					Field: f.Alias,
 					Name:  field.Resolver,
 					node:  f,
+					trail: trail,
 				})
 				continue
 			}
@@ -144,12 +146,14 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 					Field: f.Alias,
 					Name:  field.Remote.Source,
 					Key:   remoteKeyAlias(field.Remote.Key),
+					node:  f,
+					trail: trail,
 				})
 				continue
 			}
 			if field.Column == "" && field.Relation != nil {
 				if target, ok := meta.GetNode(field.Relation.TargetClass); ok {
-					walk(target, f.SelectionSet, append(path[:len(path):len(path)], f.Alias))
+					walk(target, f.SelectionSet, append(path[:len(path):len(path)], f.Alias), appendField(trail, f))
 				}
 			}
 		}
@@ -168,10 +172,14 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 			class, ok = meta.GetNode(strings.TrimSuffix(className, protocol.SUFFIX_RESULT))
 		}
 		if ok {
-			walk(class, f.SelectionSet, []string{f.Alias})
+			walk(class, f.SelectionSet, []string{f.Alias}, []*ast.Field{f})
 		}
 	}
 	return bindings
+}
+
+func appendField(fields []*ast.Field, field *ast.Field) []*ast.Field {
+	return append(fields[:len(fields):len(fields)], field)
 }
 
 // hosts 按路径收集宿主对象，数组层级自动展开
@@ -198,6 +206,82 @@ func hosts(root map[string]interface{}, path []string) []map[string]interface{} 
 	return cur
 }
 
+type hostRef struct {
+	value      map[string]interface{}
+	path       ast.Path
+	boundaries []nullBoundary
+}
+
+type nullBoundary struct {
+	typeRef *ast.Type
+	setNull func()
+}
+
+type nonNullResolverError struct{ errors gqlerror.List }
+
+func (e *nonNullResolverError) Error() string { return e.errors.Error() }
+
+func hostRefs(root map[string]interface{}, binding binding) []hostRef {
+	refs := []hostRef{{value: root}}
+	for depth, segment := range binding.Path {
+		next := make([]hostRef, 0, len(refs))
+		for _, ref := range refs {
+			var fieldType *ast.Type
+			if depth < len(binding.trail) && binding.trail[depth].Definition != nil {
+				fieldType = binding.trail[depth].Definition.Type
+			}
+			parent := ref.value
+			fieldBoundary := nullBoundary{typeRef: fieldType, setNull: func() { parent[segment] = nil }}
+			switch value := ref.value[segment].(type) {
+			case []interface{}:
+				for i, item := range value {
+					if object, ok := item.(map[string]interface{}); ok {
+						index := i
+						var elementType *ast.Type
+						if fieldType != nil {
+							elementType = fieldType.Elem
+						}
+						boundaries := appendBoundary(ref.boundaries, fieldBoundary)
+						boundaries = appendBoundary(boundaries, nullBoundary{typeRef: elementType, setNull: func() { value[index] = nil }})
+						next = append(next, hostRef{value: object, path: appendPath(ref.path, segment, ast.PathIndex(i)), boundaries: boundaries})
+					}
+				}
+			case map[string]interface{}:
+				next = append(next, hostRef{value: value, path: appendPath(ref.path, segment), boundaries: appendBoundary(ref.boundaries, fieldBoundary)})
+			}
+		}
+		refs = next
+	}
+	return refs
+}
+
+func appendBoundary(boundaries []nullBoundary, boundary nullBoundary) []nullBoundary {
+	return append(boundaries[:len(boundaries):len(boundaries)], boundary)
+}
+
+// completeResolverFailure nulls the failed field, then follows GraphQL's
+// Non-Null chain through object, list element, list and root boundaries.
+func completeResolverFailure(ref hostRef, binding binding) bool {
+	ref.value[binding.Field] = nil
+	if binding.node == nil || binding.node.Definition == nil || binding.node.Definition.Type == nil || !binding.node.Definition.Type.NonNull {
+		return false
+	}
+	for i := len(ref.boundaries) - 1; i >= 0; i-- {
+		boundary := ref.boundaries[i]
+		boundary.setNull()
+		if boundary.typeRef == nil || !boundary.typeRef.NonNull {
+			return false
+		}
+	}
+	return true
+}
+
+func appendPath(path ast.Path, segment string, index ...ast.PathElement) ast.Path {
+	out := append(ast.Path(nil), path...)
+	out = append(out, ast.PathName(segment))
+	return append(out, index...)
+}
+
 // resolve 按绑定填充后处理字段。远程关系绑定先行：网络取数并发（各job独立）、
 // 回填串行（宿主map非并发安全），失败字段置null并以警告随响应errors返回（不中断）；
 // resolver绑定随后：批量解析器整列表一次调用，普通解析器逐宿主并行计算
@@ -213,6 +297,7 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 		}
 	}
 	if len(jobs) > 0 {
+		rootNull := false
 		group, gctx := errgroup.WithContext(ctx)
 		for _, job := range jobs {
 			group.Go(func() error { job.fetch(gctx, my.remotes); return nil })
@@ -221,11 +306,22 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 		for _, job := range jobs {
 			job.fill()
 			if job.err != nil {
-				warnings = append(warnings, gqlerror.Wrap(job.err))
+				refs := hostRefs(data, job.binding)
+				if len(refs) == 0 {
+					warnings = append(warnings, resolverFieldErrors(job.binding, nil, job.err)...)
+				} else {
+					for _, ref := range refs {
+						warnings = append(warnings, resolverFieldErrors(job.binding, ref.path, job.err)...)
+						rootNull = completeResolverFailure(ref, job.binding) || rootNull
+					}
+				}
 			}
 		}
 		for _, job := range jobs { // 全部回填后再剥内部键：多个远程可共用同一宿主键列
 			job.strip()
+		}
+		if rootNull {
+			return warnings, &nonNullResolverError{errors: warnings}
 		}
 	}
 
@@ -248,6 +344,7 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 
 		var values []interface{}
 		var err error
+		var itemErrors []error
 		if many, ok := resolver.(BatchResolver); ok {
 			err = safely(func() (err error) {
 				values, err = many.ResolveBatch(ctx, sources, args)
@@ -257,32 +354,79 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 				err = fmt.Errorf("返回数量不匹配: 期望%d实际%d", len(sources), len(values))
 			}
 		} else {
-			values, err = resolveEach(ctx, resolver, sources, args)
+			values, itemErrors = resolveEachPartial(ctx, resolver, sources, args)
 		}
 		if err != nil {
-			return warnings, fmt.Errorf("resolver %s 执行失败: %w", b.Name, err)
+			refs := hostRefs(data, b)
+			rootNull := false
+			for i := range refs {
+				warnings = append(warnings, resolverFieldErrors(b, refs[i].path, err)...)
+				rootNull = completeResolverFailure(refs[i], b) || rootNull
+			}
+			if rootNull {
+				return warnings, &nonNullResolverError{errors: warnings}
+			}
+			continue
 		}
+		var refs []hostRef
 		for i, source := range sources {
-			source[b.Field] = values[i]
+			if i < len(itemErrors) && itemErrors[i] != nil {
+				if refs == nil {
+					refs = hostRefs(data, b)
+				}
+				warnings = append(warnings, resolverFieldErrors(b, refs[i].path, itemErrors[i])...)
+				if completeResolverFailure(refs[i], b) {
+					return warnings, &nonNullResolverError{errors: warnings}
+				}
+			} else {
+				source[b.Field] = values[i]
+			}
 		}
 	}
 	return warnings, nil
 }
 
+func resolverFieldErrors(b binding, hostPath ast.Path, err error) gqlerror.List {
+	path := append(append(ast.Path(nil), hostPath...), ast.PathName(b.Field))
+	originals := gqlErrors(err)
+	if len(originals) == 0 {
+		return gqlerror.List{gqlerror.ErrorPathf(path, "resolver failed")}
+	}
+	result := make(gqlerror.List, len(originals))
+	for i, original := range originals {
+		copy := *original
+		copy.Path = append(path, original.Path...)
+		if len(copy.Locations) == 0 && b.node != nil && b.node.Position != nil {
+			copy.Locations = []gqlerror.Location{{Line: b.node.Position.Line, Column: b.node.Position.Column}}
+		}
+		extensions := make(map[string]any, len(copy.Extensions)+1)
+		for key, value := range copy.Extensions {
+			extensions[key] = value
+		}
+		if _, ok := extensions["code"]; !ok {
+			extensions["code"] = "RESOLVER_ERROR"
+		}
+		copy.Extensions = extensions
+		result[i] = &copy
+	}
+	return result
+}
+
 // resolveEach 普通resolver逐宿主有界并发计算，返回与sources对位的结果
-func resolveEach(ctx context.Context, resolver Resolver, sources []map[string]interface{}, args map[string]interface{}) ([]interface{}, error) {
+func resolveEachPartial(ctx context.Context, resolver Resolver, sources []map[string]interface{}, args map[string]interface{}) ([]interface{}, []error) {
 	values := make([]interface{}, len(sources))
+	errs := make([]error, len(sources))
 	group, ctx := errgroup.WithContext(ctx)
 	group.SetLimit(8)
 	for i, source := range sources {
+		i, source := i, source
 		group.Go(func() error {
-			return safely(func() (err error) {
-				values[i], err = resolver.Resolve(ctx, source, args)
-				return
-			})
+			errs[i] = safely(func() (err error) { values[i], err = resolver.Resolve(ctx, source, args); return })
+			return nil
 		})
 	}
-	return values, group.Wait()
+	_ = group.Wait()
+	return values, errs
 }
 
 // safely 拦截用户实现（resolver/remote）的panic转为错误：

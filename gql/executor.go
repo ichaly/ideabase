@@ -556,6 +556,11 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 		result, warnings, err = my.unpack(ctx, plan, data, variables)
 	}
 	if err != nil {
+		if nonNull, ok := err.(*nonNullResolverError); ok {
+			r.Errors = nonNull.errors
+			r.nullData = true
+			return r
+		}
 		r.Errors = gqlErrors(err)
 		return r
 	}

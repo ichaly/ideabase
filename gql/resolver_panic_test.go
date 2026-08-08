@@ -39,6 +39,7 @@ func TestResolverPanicIsolation(t *testing.T) {
 	// remote panic → 容错语义:字段置null,警告随errors返回,数据不丢
 	reply = executor.run(ctx, `query { users { items { name extra { level } } } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "remote panic应作为警告返回")
+	require.Equal(t, "users.items[0].extra", reply.Errors[0].Path.String())
 	items := reply.Data["users"].(map[string]interface{})["items"].([]interface{})
 	require.NotEmpty(t, items, "remote容错不中断主查询")
 	require.Nil(t, items[0].(map[string]interface{})["extra"], "panic的远程字段应置null")
