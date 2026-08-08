@@ -84,6 +84,22 @@ func TestNormalizeDecisionRejectsInvalidRoleBranch(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestPolicyDecisionValidatesEveryCatalogReference(t *testing.T) {
+	class := &protocol.Class{Name: "User", Fields: map[string]*protocol.Field{}}
+	class.AddField(&protocol.Field{Name: "tenantId", Column: "tenant id"})
+	valid := PolicyDecision{
+		Fields:        map[FieldUse][]string{FieldUseFilter: {"tenantId"}},
+		RowPredicates: []TypedPredicate{{Column: "tenant id", Operator: "eq", Context: "tenant"}},
+	}
+	require.NoError(t, ValidateDecisionCatalog(class, valid))
+	invalid := valid
+	invalid.Fields = map[FieldUse][]string{FieldUseFilter: {"missing"}}
+	require.ErrorContains(t, ValidateDecisionCatalog(class, invalid), "missing")
+	invalid = valid
+	invalid.RowPredicates = []TypedPredicate{{Column: "missing", Operator: "eq"}}
+	require.ErrorContains(t, ValidateDecisionCatalog(class, invalid), "missing")
+}
+
 func TestOperationPolicyProviderIsCalledOnce(t *testing.T) {
 	calls := 0
 	provider := OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {

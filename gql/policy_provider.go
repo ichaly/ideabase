@@ -181,6 +181,44 @@ func validateTypedPredicate(p TypedPredicate) error {
 	return nil
 }
 
+// ValidateDecisionCatalog closes the typed-policy boundary: providers name
+// fields or columns, never SQL fragments, and every name must resolve to the
+// immutable database catalog before a plan can be built.
+func ValidateDecisionCatalog(class *protocol.Class, decision PolicyDecision) error {
+	if class == nil {
+		return fmt.Errorf("policy resource catalog is required")
+	}
+	field := func(name string) error {
+		if name == "*" {
+			return nil
+		}
+		candidate := class.Fields[name]
+		if candidate == nil || candidate.Column == "" {
+			return fmt.Errorf("policy references unknown field %s.%s", class.Name, name)
+		}
+		return nil
+	}
+	for _, fields := range decision.Fields {
+		for _, name := range fields {
+			if err := field(name); err != nil {
+				return err
+			}
+		}
+	}
+	groups := [][]TypedPredicate{decision.RowPredicates, decision.Preset, decision.Check}
+	for _, branch := range decision.RoleBranches {
+		groups = append(groups, branch.RowPredicates, branch.Check)
+	}
+	for _, predicates := range groups {
+		for _, predicate := range predicates {
+			if err := field(predicate.Column); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func clonePredicates(in []TypedPredicate) ([]TypedPredicate, error) {
 	out := make([]TypedPredicate, len(in))
 	for n, p := range in {
