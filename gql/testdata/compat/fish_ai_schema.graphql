@@ -1,0 +1,47 @@
+# Exact definitions selected from fish-ai-api/cfg/schema.graphql:116-267, 292-303,
+# 664-776, and 1192-1237 to validate the operation fixture.
+scalar Json
+scalar Cursor
+scalar DateTime
+
+type BotProfile {
+  botPersonas(where: BotPersonaWhereInput, sort: [BotPersonaSortInput!], limit: Int, offset: Int): [BotPersona]!
+  botQuota(where: BotQuotumWhereInput, sort: [BotQuotumSortInput!], limit: Int, offset: Int): [BotQuotum]!
+  id: ID!
+  sysUser: SysUser!
+}
+
+type BotPersona { personality: String }
+type BotQuotum { postMax: Int }
+type SysUser { nickname: String }
+
+type BotProfileResult {
+  items: [BotProfile!]!
+  total: Int!
+}
+
+input BotPersonaWhereInput { personality: StringWhereInput }
+input BotQuotumWhereInput { postMax: IntWhereInput }
+input BotPersonaSortInput { personality: SortDirection }
+input BotQuotumSortInput { postMax: SortDirection }
+input StringWhereInput { eq: String }
+input IntWhereInput { eq: Int }
+enum SortDirection { ASC DESC ASC_NULLS_FIRST DESC_NULLS_FIRST ASC_NULLS_LAST DESC_NULLS_LAST }
+
+type Query {
+  botProfiles(
+    id: ID
+    where: BotProfileWhereInput
+    sort: [BotProfileSortInput!]
+    distinct: [String!]
+    limit: Int
+    offset: Int
+    first: Int
+    after: Cursor
+    last: Int
+    before: Cursor
+  ): BotProfileResult!
+}
+
+input BotProfileWhereInput { id: ID }
+input BotProfileSortInput { id: SortDirection }
