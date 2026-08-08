@@ -351,19 +351,27 @@ func (my *Executor) loadDocument(content string) error {
 	if len(errs) > 0 {
 		return errs
 	}
+	conditional := hasConditionalDirective(content)
 	for _, operation := range doc.Operations {
 		if operation.Name == "" {
 			return fmt.Errorf("持久化文档中的操作必须命名")
 		}
+		if !conditional {
+			// Static documents can be guarded before prewarm. Conditional documents
+			// are normalized and checked per request after skipped fields disappear.
+			operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
+			if err := my.validateMaxDepth(operation); err != nil {
+				return err
+			}
+		}
 		my.documents[operation.Name] = content
 		// Conditional directives depend on request variables; never prewarm a
 		// directive-free AST into the shared cache for these documents.
-		if hasConditionalDirective(content) {
+		if conditional {
 			continue
 		}
 		// 复用已解析的AST预热编译缓存（不再重复解析文档）；
 		// 依赖变量内容的操作（volatile）缓存AST，执行期免解析重编译
-		operation.SelectionSet = inline(operation.SelectionSet, doc.Fragments)
 		operation, introspection := splitIntrospection(operation)
 		if introspection != nil && !my.options().Introspection {
 			return fmt.Errorf("自省查询已关闭（schema.introspection=false）")
@@ -904,10 +912,27 @@ func (my *Executor) parse(query, operationName string, variables map[string]inte
 		return nil, err
 	}
 	operation.SelectionSet = selection
+	// 统一前端深度护栏：在路由到 SQL、根 Resolver 或自省 Handler 前拒绝
+	// 超深选择集；Compiler 内的同一检查作为 defense-in-depth 保留。
+	if err := my.validateMaxDepth(operation); err != nil {
+		return nil, err
+	}
 	// 字段参数的codec字面量解析期一次还原；变量默认值保持
 	// 原始GraphQL形态，每个请求物化后由decodeVariables仅转换一次。
 	decodeLiterals(my.schema, operation.SelectionSet, my.metadata)
 	return operation, nil
+}
+
+func (my *Executor) validateMaxDepth(operation *ast.OperationDefinition) error {
+	if operation == nil || my.metadata == nil {
+		return nil
+	}
+	if max := my.metadata.MaxDepth(); max > 0 {
+		if depth := depthOf(operation.SelectionSet); depth > max {
+			return fmt.Errorf("查询嵌套深度%d超过上限%d（schema.max-depth可调，0=不限制）", depth, max)
+		}
+	}
+	return nil
 }
 
 // compile 编译并缓存：resolver绑定与codec路径树在此一次性收集（均只依赖AST）；
