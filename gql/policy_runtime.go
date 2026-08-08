@@ -65,6 +65,9 @@ func (my *Executor) authorizeProvider(ctx context.Context, operation *ast.Operat
 		if !decision.Allow {
 			return ctx, fmt.Errorf("policy denied %s", coordinate)
 		}
+		if err := my.validatePolicyBudget(target, decision, operation, variables); err != nil {
+			return ctx, fmt.Errorf("policy denied %s: %w", coordinate, err)
+		}
 		if capability.Handler != HandlerSQL && hasRowPolicy(decision) && !capability.PolicyAware {
 			return ctx, fmt.Errorf("policy %s requires a policy-aware handler", coordinate)
 		}
@@ -86,6 +89,51 @@ func (my *Executor) authorizeProvider(ctx context.Context, operation *ast.Operat
 		decisions[coordinate] = decision
 	}
 	return context.WithValue(ctx, policyDecisionsKey{}, decisions), nil
+}
+
+func (my *Executor) validatePolicyBudget(target policyTarget, decision PolicyDecision, operation *ast.OperationDefinition, variables map[string]interface{}) error {
+	if decision.Cost > 0 {
+		cost := operationCost(operation, variables, my.metadata.DefaultLimit(), my.snapshot.index)
+		if cost > uint64(decision.Cost) {
+			return fmt.Errorf("cost %d exceeds %d", cost, decision.Cost)
+		}
+	}
+	if decision.Limit <= 0 || !operationInList(target.capability.Actions, protocol.OP_SELECT) && !operationInList(target.capability.Actions, protocol.OP_AGGREGATE) {
+		return nil
+	}
+	for _, node := range target.nodes {
+		limit := my.metadata.DefaultLimit()
+		for _, name := range []string{protocol.LIMIT, protocol.FIRST, protocol.LAST} {
+			if argument := node.Arguments.ForName(name); argument != nil {
+				value, err := argument.Value.Value(variables)
+				if err != nil {
+					return err
+				}
+				if requested, ok := policyInt(value); ok {
+					limit = requested
+				}
+			}
+		}
+		if limit > decision.Limit {
+			return fmt.Errorf("limit %d exceeds %d", limit, decision.Limit)
+		}
+	}
+	return nil
+}
+
+func policyInt(value any) (int, bool) {
+	switch value := value.(type) {
+	case int:
+		return value, true
+	case int32:
+		return int(value), true
+	case int64:
+		return int(value), true
+	case float64:
+		return int(value), true
+	default:
+		return 0, false
+	}
 }
 
 func hasRowPolicy(decision PolicyDecision) bool {

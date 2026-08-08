@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/internal/intro"
@@ -75,31 +76,34 @@ func (my gqlReply) MarshalJSON() ([]byte, error) {
 // 负责解析GraphQL查询、编译为SQL并执行查询，支持多种数据库方言
 // 可作为Fiber插件集成到Web服务中，提供标准的GraphQL API
 type Executor struct {
-	intro         *intro.Handler      // 自省处理器，处理__schema和__type查询
-	schema        *ast.Schema         // GraphQL模式定义
-	database      *gorm.DB            // 数据库连接，用于执行生成的SQL
-	metadata      *Metadata           // 元数据信息，包含表结构、关系等
-	compiler      *Compiler           // 编译器，将GraphQL查询编译为SQL
-	cache         *planCache          // 执行计划缓存，命中路径零解析零编译
-	policyCache   *planCache          // 外部策略形状计划；请求值只留参数槽
-	flight        singleflight.Group  // 未命中收敛：并发的同一冷查询只解析编译一次
-	feedMu        sync.Mutex          // 保护feeds及各feed的订阅者集合
-	feeds         map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
-	resolvers     map[string]Resolver // 自定义字段解析器注册表
-	source        string              // 原始schema文本，Register合并注册声明时重建的基底
-	documents     map[string]string   // 持久化查询文档：操作名 -> 查询文本
-	remotes       map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
-	cdc           notifier            // CDC唤醒源（按数据库驱动从注册表选取）
-	frozen        atomic.Bool         // 首次执行后冻结注册表（rebuild与serving不互斥，运行期注册即数据竞争）
-	finalizeOnce  sync.Once
-	snapshot      *Snapshot
-	snapshotErr   error
-	validation    *validatorrules.Rules // 快照自有验证规则，不修改gqlparser全局状态
-	tenantRouter  *TenantRouter
-	tenantSources map[string]*Executor
-	revocation    *RevocationBarrier
-	policy        PolicyProvider
-	rls           bool
+	intro             *intro.Handler      // 自省处理器，处理__schema和__type查询
+	schema            *ast.Schema         // GraphQL模式定义
+	database          *gorm.DB            // 数据库连接，用于执行生成的SQL
+	metadata          *Metadata           // 元数据信息，包含表结构、关系等
+	compiler          *Compiler           // 编译器，将GraphQL查询编译为SQL
+	cache             *planCache          // 执行计划缓存，命中路径零解析零编译
+	policyCache       *planCache          // 外部策略形状计划；请求值只留参数槽
+	flight            singleflight.Group  // 未命中收敛：并发的同一冷查询只解析编译一次
+	feedMu            sync.Mutex          // 保护feeds及各feed的订阅者集合
+	feeds             map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
+	resolvers         map[string]Resolver // 自定义字段解析器注册表
+	source            string              // 原始schema文本，Register合并注册声明时重建的基底
+	documents         map[string]string   // 持久化查询文档：操作名 -> 查询文本
+	remotes           map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
+	cdc               notifier            // CDC唤醒源（按数据库驱动从注册表选取）
+	frozen            atomic.Bool         // 首次执行后冻结注册表（rebuild与serving不互斥，运行期注册即数据竞争）
+	finalizeOnce      sync.Once
+	snapshot          *Snapshot
+	snapshotErr       error
+	validation        *validatorrules.Rules // 快照自有验证规则，不修改gqlparser全局状态
+	tenantRouter      *TenantRouter
+	tenantSources     map[string]*Executor
+	revocation        *RevocationBarrier
+	policy            PolicyProvider
+	rls               bool
+	effectiveMu       sync.Mutex
+	effective         map[string]*effectiveView
+	subscriptionLease time.Duration
 }
 
 // options 读取schema级选项（元数据未配置时为零值安全默认）
@@ -526,7 +530,12 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 	plan, err := my.plan(query, operationName, variables)
 	if err != nil {
 		if introErr, ok := err.(*introQuery); ok {
-			data, ierr := my.intro.Introspect(introErr.operation, variables)
+			handler, viewErr := my.effectiveIntrospection(ctx)
+			if viewErr != nil {
+				r.Errors = gqlErrors(viewErr)
+				return r
+			}
+			data, ierr := handler.Introspect(introErr.operation, variables)
 			if ierr != nil {
 				r.Errors = gqlErrors(ierr)
 			} else {
@@ -548,7 +557,7 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 			}
 			r = my.executeRootResolvers(ctx, rootErr.entry, variables)
 			if rootErr.entry.intro != nil && r.Data != nil {
-				if ierr := my.mergeIntrospection(r.Data, rootErr.entry.intro, variables); ierr != nil {
+				if ierr := my.mergeIntrospection(ctx, r.Data, rootErr.entry.intro, variables); ierr != nil {
 					r.Errors = append(r.Errors, gqlErrors(ierr)...)
 				}
 			}
@@ -609,7 +618,7 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 		return r
 	}
 	if plan.intro != nil {
-		if err = my.mergeIntrospection(result, plan.intro, variables); err != nil {
+		if err = my.mergeIntrospection(ctx, result, plan.intro, variables); err != nil {
 			r.Errors = gqlErrors(err)
 			return r
 		}
@@ -1109,8 +1118,12 @@ func splitIntrospection(operation *ast.OperationDefinition) (*ast.OperationDefin
 	return &dataOperation, &introOperation
 }
 
-func (my *Executor) mergeIntrospection(data map[string]interface{}, operation *ast.OperationDefinition, variables map[string]interface{}) error {
-	projected, err := my.intro.Introspect(operation, variables)
+func (my *Executor) mergeIntrospection(ctx context.Context, data map[string]interface{}, operation *ast.OperationDefinition, variables map[string]interface{}) error {
+	handler, err := my.effectiveIntrospection(ctx)
+	if err != nil {
+		return err
+	}
+	projected, err := handler.Introspect(operation, variables)
 	if err != nil {
 		return err
 	}

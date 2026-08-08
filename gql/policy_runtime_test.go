@@ -254,3 +254,51 @@ func TestPolicyPlanCacheIsPartitionedByTenantRoute(t *testing.T) {
 	require.NotEqual(t, seen["a"], seen["b"])
 	require.Equal(t, 2, executor.policyCache.order.Len())
 }
+
+func TestPolicyProviderFiltersIntrospectionAndSchemaArtifact(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	require.NoError(t, executor.Register(OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		fields := map[FieldUse][]string{}
+		allowed := []string{"*"}
+		for _, use := range request.FieldUses {
+			useAllowed := allowed
+			if request.Resource == "User" && (use == FieldUseSelect || use == FieldUseReturn || use == FieldUseJoin) {
+				useAllowed = []string{"id"}
+			}
+			fields[use] = useAllowed
+		}
+		return PolicyDecision{Allow: true, Fields: fields, PolicyRevision: 7}, nil
+	})))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u", PolicyRevision: 7})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	reply := executor.run(ctx, `{ __type(name: "User") { fields { name } inputFields { name } } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	typeInfo := reply.Data["__type"].(map[string]any)
+	require.Equal(t, []any{map[string]any{"name": "id"}}, typeInfo["fields"])
+	artifact, err := executor.EffectiveSchema(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, artifact.PermissionSignature)
+	require.Equal(t, uint64(7), artifact.PolicyRevision)
+	require.NotEqual(t, artifact.StructuralFingerprint, artifact.Fingerprint)
+	profile, err := executor.GenerateSchemaProfile(ctx, "reader")
+	require.NoError(t, err)
+	require.NoError(t, profile.ValidateOperation(`query { users { items { id } } }`))
+	require.Error(t, profile.ValidateOperation(`query { users { items { name } } }`))
+	require.NoError(t, CheckProfileCompatibility(profile, profile))
+}
+
+func TestPolicyProviderEnforcesRequestLimitBeforeSQL(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	require.NoError(t, executor.Register(OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{Allow: true, Fields: request.Fields, Limit: 1}, nil
+	})))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users(limit: 2) { items { id } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "limit 2 exceeds 1")
+	require.NotContains(t, string(body), `"data"`)
+}
