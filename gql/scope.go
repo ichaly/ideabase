@@ -3,6 +3,7 @@ package gql
 import (
 	"context"
 
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
 )
 
@@ -88,5 +89,24 @@ func scopeWithRole(ctx context.Context, scope map[string]any, needed bool) map[s
 	}
 	values[protocol.CONTEXT_ROLE] = roleValue(ctx)
 	values[protocol.CONTEXT_ROLES] = Roles(ctx)
+	return values
+}
+
+func scopeWithCursor(ctx context.Context, scope map[string]any) map[string]any {
+	values := make(map[string]any, len(scope)+3)
+	for key, value := range scope {
+		values[key] = value
+	}
+	tenant, route := "default", "local"
+	var revision uint64
+	if identity, ok := IdentityFromContext(ctx); ok {
+		tenant, revision = identity.Tenant(), identity.PolicyRevision()
+	}
+	if pinned, ok := PinnedRoute(ctx); ok {
+		route = pinned.CacheKey
+	}
+	values[compiler.CursorTenantContext] = tenant
+	values[compiler.CursorRouteContext] = route
+	values[compiler.CursorPolicyContext] = revision
 	return values
 }

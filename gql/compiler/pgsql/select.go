@@ -5,6 +5,7 @@
 package pgsql
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -165,6 +166,12 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 		return err
 	}
 	u.page = page
+	if page != nil {
+		ctx.SetCursorContract(compiler.CursorContract{
+			StructuralFingerprint: ctx.CursorFingerprint(), Coordinate: ctx.CursorCoordinate(u.field.Name), Sort: cursorSort(page.keys),
+		})
+		ctx.MarkCursor()
+	}
 	switch {
 	case pageInfo != nil && page == nil:
 		return fmt.Errorf("pageInfo需要配合first/last使用")
@@ -426,18 +433,12 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		ctx.Write(`ROW_NUMBER() OVER () AS "__rn"`)
 	}
 	if u.page != nil {
-		// 行号探测hasNext，行级游标=base64(排序键值JSON数组)
+		// 行号探测hasNext，行级游标携带结构、身份与完整排序契约。
 		next()
 		ctx.Write(`ROW_NUMBER() OVER () AS "__rn"`)
 		next()
-		ctx.Write(`encode(convert_to(JSONB_BUILD_ARRAY(`)
-		for i, key := range u.page.keys {
-			if i > 0 {
-				ctx.Write(`, `)
-			}
-			ctx.Column(base, key.column)
-		}
-		ctx.Write(`)::text, 'UTF8'), 'base64') AS "__cursor"`)
+		my.writeCursorToken(ctx, base, u.page)
+		ctx.Write(` AS "__cursor"`)
 	}
 	for _, child := range children {
 		next()
@@ -554,6 +555,25 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		}
 	}
 	return nil
+}
+
+func (my *Dialect) writeCursorToken(ctx *compiler.Context, base string, page *pager) {
+	contract, _ := ctx.CursorContract()
+	order, _ := json.Marshal(contract.Sort)
+	ctx.Write(`'v1.' || encode(convert_to(JSONB_BUILD_OBJECT('v', 1, 'k', JSONB_BUILD_OBJECT(`)
+	ctx.Write(`'s', `, my.Placeholder(ctx.AddParam(contract.StructuralFingerprint)), `::text, `)
+	ctx.Write(`'p', `, my.Placeholder(ctx.AddContextSlot(compiler.CursorPolicyContext)), `::bigint, `)
+	ctx.Write(`'t', `, my.Placeholder(ctx.AddContextSlot(compiler.CursorTenantContext)), `::text, `)
+	ctx.Write(`'r', `, my.Placeholder(ctx.AddContextSlot(compiler.CursorRouteContext)), `::text, `)
+	ctx.Write(`'c', `, my.Placeholder(ctx.AddParam(contract.Coordinate)), `::text, `)
+	ctx.Write(`'o', `, my.Placeholder(ctx.AddParam(string(order))), `::jsonb), 'x', JSONB_BUILD_ARRAY(`)
+	for i, key := range page.keys {
+		if i > 0 {
+			ctx.Write(`, `)
+		}
+		ctx.Column(base, key.column)
+	}
+	ctx.Write(`))::text, 'UTF8'), 'base64')`)
 }
 
 // relationBond 生成父子关联条件（合取项）；多对多在基础查询追加中间表JOIN

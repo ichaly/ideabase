@@ -126,9 +126,12 @@ func TestRenderRelation(t *testing.T) {
 		inputSchema := schema.String()
 
 		// 列表关系字段提供按目标类的关系操作（挂接/解除/内联创建）
-		assert.Contains(t, inputSchema, "input CommentRelationInput {")
-		assert.Contains(t, inputSchema, "children: CommentRelationInput")
-		assert.Contains(t, inputSchema, "create: [CommentCreateInput!]")
+		assert.Contains(t, inputSchema, "input CommentCreateRelationInput {")
+		assert.Contains(t, inputSchema, "input CommentUpdateRelationInput {")
+		assert.Contains(t, inputSchema, "children: CommentCreateRelationInput")
+		assert.Contains(t, inputSchema, "children: CommentUpdateRelationInput")
+		assert.Contains(t, inputSchema, "create: [CommentCreateRowInput!]")
+		assert.NotContains(t, schemaType(inputSchema, "CommentCreateRowInput"), "children:")
 
 		// 修改配置隐藏中间表关系
 		meta.cfg.Metadata.ShowThrough = false

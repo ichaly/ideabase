@@ -17,26 +17,31 @@ import (
 // 仅依赖internal，不依赖gql主包
 
 type Context struct {
-	buf       *strings.Builder
-	quote     string
-	slots     []Slot
-	counter   int
-	volatile  bool
-	hoster    protocol.Hoster
-	variables map[string]interface{}
-	tables    []string       // 涉及的表（去重slice，表数极少；省去map与Keys分配）
-	contexts  map[string]int // 行级作用域槽位dedup：同上下文键复用一个$N（批量场景免槽位膨胀）
+	buf               *strings.Builder
+	quote             string
+	slots             []Slot
+	counter           int
+	volatile          bool
+	hoster            protocol.Hoster
+	variables         map[string]interface{}
+	tables            []string       // 涉及的表（去重slice，表数极少；省去map与Keys分配）
+	contexts          map[string]int // 行级作用域槽位dedup：同上下文键复用一个$N（批量场景免槽位膨胀）
+	cursorContract    *CursorContract
+	cursorFingerprint string
+	usesCursor        bool
+	cursorRoot        string
 }
 
 // Slot 表示SQL参数槽位：字面量值或变量引用
 // 变量引用在执行期解析，使编译产物可按查询文本缓存复用
 type Slot struct {
-	Value    any                  // 字面量值
-	Variable string               // 变量名，非空时优先生效
-	Cursor   int                  // >=0时变量为base64游标，解码JSON数组后取第Cursor个键值
-	Context  string               // 非空时从执行期scope表取值（行级作用域：租户/属主，认证注入）
-	List     bool                 // 列表槽位（如 = ANY($n)）：执行期规范化为驱动可编码的具体类型数组
-	Generate protocol.IDGenerator // 非空时每次解析计划生成一个新值
+	Value          any                  // 字面量值
+	Variable       string               // 变量名，非空时优先生效
+	Cursor         int                  // >=0时变量为base64游标，解码JSON数组后取第Cursor个键值
+	Context        string               // 非空时从执行期scope表取值（行级作用域：租户/属主，认证注入）
+	List           bool                 // 列表槽位（如 = ANY($n)）：执行期规范化为驱动可编码的具体类型数组
+	Generate       protocol.IDGenerator // 非空时每次解析计划生成一个新值
+	CursorContract *CursorContract      // 非nil时游标必须属于此完整契约
 }
 
 // Resolve 解析槽位的实际参数值（游标槽位由ResolveSlots统一memoize解码）
@@ -61,6 +66,10 @@ func DecodeCursor(cursor string) ([]any, error) {
 	if err = decoder.Decode(&keys); err != nil {
 		return nil, fmt.Errorf("无效的游标内容: %w", err)
 	}
+	return normalizeCursorNumbers(keys), nil
+}
+
+func normalizeCursorNumbers(keys []any) []any {
 	for i, key := range keys {
 		if number, ok := key.(json.Number); ok {
 			if v, err := strconv.ParseInt(number.String(), 10, 64); err == nil {
@@ -70,7 +79,7 @@ func DecodeCursor(cursor string) ([]any, error) {
 			}
 		}
 	}
-	return keys, nil
+	return keys
 }
 
 // contextPool 用于Context对象池管理，减少GC压力
@@ -105,6 +114,10 @@ func (my *Context) Release() {
 	my.variables = nil
 	my.tables = nil
 	my.contexts = nil
+	my.cursorContract = nil
+	my.cursorFingerprint = ""
+	my.usesCursor = false
+	my.cursorRoot = ""
 	my.slots = my.slots[:0]
 	contextPool.Put(my)
 }
@@ -221,19 +234,37 @@ func ResolveSlots(slots []Slot, variables, scope map[string]interface{}) ([]any,
 			}
 			continue
 		}
-		if slot.Variable != "" && slot.Cursor >= 0 {
+		if slot.Cursor >= 0 && (slot.Variable != "" || slot.Value != nil) {
 			if cursors == nil {
 				cursors = make(map[string][]any, 1)
 			}
-			keys, ok := cursors[slot.Variable]
+			value := slot.Value
+			if slot.Variable != "" {
+				value = variables[slot.Variable]
+			}
+			if value == nil {
+				continue
+			}
+			cacheKey := fmt.Sprintf("%s\x00%v\x00%v", slot.Variable, value, slot.CursorContract)
+			keys, ok := cursors[cacheKey]
 			if !ok {
-				if text, isText := variables[slot.Variable].(string); isText {
-					var err error
-					if keys, err = DecodeCursor(text); err != nil {
-						return nil, err
-					}
+				text, isText := value.(string)
+				if !isText {
+					return nil, fmt.Errorf("游标必须是字符串")
 				}
-				cursors[slot.Variable] = keys
+				var err error
+				if slot.CursorContract != nil {
+					keys, err = DecodeCursorToken(text, ResolveCursorContract(*slot.CursorContract, scope))
+				} else {
+					keys, err = DecodeCursor(text)
+				}
+				if err != nil {
+					if slot.CursorContract != nil {
+						return nil, BadCursor(err)
+					}
+					return nil, err
+				}
+				cursors[cacheKey] = keys
 			}
 			if slot.Cursor < len(keys) {
 				args[i] = keys[slot.Cursor]
@@ -346,8 +377,39 @@ func (my *Context) AddGenerated(generate protocol.IDGenerator) int {
 
 // AddCursor 添加游标键值参数：执行期解码变量游标取第index个键值
 func (my *Context) AddCursor(name string, index int) int {
-	my.slots = append(my.slots, Slot{Variable: name, Cursor: index})
+	return my.addCursor(name, nil, index)
+}
+
+func (my *Context) AddCursorValue(value any, index int) int {
+	return my.addCursor("", value, index)
+}
+
+func (my *Context) addCursor(name string, value any, index int) int {
+	var contract *CursorContract
+	if my.cursorContract != nil {
+		copy := *my.cursorContract
+		copy.Sort = append([]string(nil), copy.Sort...)
+		contract = &copy
+	}
+	my.slots = append(my.slots, Slot{Variable: name, Value: value, Cursor: index, CursorContract: contract})
 	return len(my.slots)
+}
+
+// SetCursorContract enables strict opaque cursor validation for subsequent slots.
+func (my *Context) SetCursorContract(contract CursorContract) { my.cursorContract = &contract }
+func (my *Context) SetCursorFingerprint(fingerprint string)   { my.cursorFingerprint = fingerprint }
+func (my *Context) CursorFingerprint() string                 { return my.cursorFingerprint }
+func (my *Context) MarkCursor()                               { my.usesCursor = true }
+func (my *Context) UsesCursor() bool                          { return my.usesCursor }
+func (my *Context) SetCursorRoot(root string)                 { my.cursorRoot = root }
+func (my *Context) CursorCoordinate(field string) string      { return my.cursorRoot + "." + field }
+
+// CursorContract returns the contract configured for this compilation context.
+func (my *Context) CursorContract() (CursorContract, bool) {
+	if my.cursorContract == nil {
+		return CursorContract{}, false
+	}
+	return *my.cursorContract, true
 }
 
 // String 获取当前SQL字符串

@@ -208,9 +208,11 @@ func (my *_DialectSuite) TestRelationOps() {
 
 // TestRelationOpGuards 关系操作约束
 func (my *_DialectSuite) TestRelationOpGuards() {
+	_, gqlErr := gqlparser.LoadQuery(my.schema, `mutation { createUser(input: { name: "x", email: "e", posts: { disconnect: [1] } }) { id } }`)
+	my.Require().NotEmpty(gqlErr)
+	my.Contains(gqlErr.Error(), `Field "disconnect" is not defined`)
 	for name, c := range map[string]struct{ query, wants string }{
-		"创建不支持disconnect": {`mutation { createUser(input: { name: "x", email: "e", posts: { disconnect: [1] } }) { id } }`, "不支持disconnect"},
-		"关系操作必须按主键":       {`mutation { updateUser(input: { posts: { connect: [1] } }, where: { name: { eq: "x" } }) { id } }`, "必须用主键定位"},
+		"关系操作必须按主键": {`mutation { updateUser(input: { posts: { connect: [1] } }, where: { name: { eq: "x" } }) { id } }`, "必须用主键定位"},
 	} {
 		my.Run(name, func() {
 			doc, gqlErr := gqlparser.LoadQuery(my.schema, c.query)
@@ -280,7 +282,7 @@ func (my *_DialectSuite) TestMutationVariableElement() {
 	my.runCases([]Case{
 		{
 			name:      "列表含变量元素展开",
-			query:     `mutation ($u: UserCreateInput!) { createUsers(input: [$u, { name: "B", email: "b@x" }]) { id } }`,
+			query:     `mutation ($u: UserCreateRowInput!) { createUsers(input: [$u, { name: "B", email: "b@x" }]) { id } }`,
 			variables: map[string]interface{}{"u": map[string]interface{}{"name": "A", "email": "a@x"}},
 			args:      []any{"a@x", "A", "b@x", "B"},
 			expected: `WITH "sys_user" AS (INSERT INTO "public"."sys_user" ("email", "name") VALUES ($1, $2), ($3, $4) RETURNING *)
@@ -295,7 +297,7 @@ func (my *_DialectSuite) TestMutationVariableElement() {
 		},
 	})
 
-	query := `mutation ($u: UserCreateInput!) { createUsers(input: [$u]) { id } }`
+	query := `mutation ($u: UserCreateRowInput!) { createUsers(input: [$u]) { id } }`
 	doc, gqlErr := gqlparser.LoadQuery(my.schema, query)
 	my.Require().Empty(gqlErr, "解析失败")
 	compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})

@@ -490,7 +490,7 @@ func (my *Executor) policyPlan(ctx context.Context, base *Plan, variables map[st
 		}
 	}
 	overlay.operations = buildOperationCatalog(&overlay)
-	compiler := &Compiler{meta: &overlay, dialect: my.compiler.dialect}
+	compiler := &Compiler{meta: &overlay, dialect: my.compiler.dialect, cursorFingerprint: my.compiler.cursorFingerprint}
 	plan, err := compiler.Compile(base.operation, variables)
 	if err != nil {
 		return nil, err

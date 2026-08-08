@@ -633,6 +633,9 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 // 根Resolver回查全部经此取数，下游看到的字节里ID已是shortId
 func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, error) {
 	scope := scopeWithRole(ctx, scopeValues(ctx), plan.roleNeeded || len(plan.policyRoles) > 0)
+	if plan.cursor {
+		scope = scopeWithCursor(ctx, scope)
+	}
 	if len(plan.policyRoles) > 0 || len(plan.policyScope) > 0 {
 		copy := make(map[string]any, len(scope)+len(plan.policyScope)+1)
 		for key, value := range scope {

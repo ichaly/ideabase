@@ -10,8 +10,9 @@ import (
 
 // Compiler 编译上下文
 type Compiler struct {
-	meta    *Metadata        // 元数据引用
-	dialect compiler.Dialect // 方言实现引用，避免重复查询
+	meta              *Metadata        // 元数据引用
+	dialect           compiler.Dialect // 方言实现引用，避免重复查询
+	cursorFingerprint string
 }
 
 // NewCompiler 创建新的编译上下文
@@ -21,6 +22,13 @@ func NewCompiler(m *Metadata, dialects []compiler.Dialect) (*Compiler, error) {
 		dialects = compiler.Dialects()
 	}
 	my := &Compiler{meta: m}
+	if m != nil {
+		fingerprint, err := m.CatalogFingerprint()
+		if err != nil {
+			return nil, err
+		}
+		my.cursorFingerprint = fingerprint
+	}
 	if err := my.selectDialect(dialects); err != nil {
 		return nil, err
 	}
@@ -43,6 +51,7 @@ type Plan struct {
 	policyNeeded bool
 	policyRoles  []string
 	policyScope  map[string]any
+	cursor       bool
 }
 
 // Volatile 编译产物是否依赖变量内容（如整体input变量），不可缓存
@@ -63,6 +72,22 @@ func (my *Plan) ResolveArgs(variables, scope map[string]interface{}) ([]any, err
 			merged[k] = v
 		}
 		variables = merged
+	}
+	if my.cursor {
+		copy := make(map[string]any, len(scope)+3)
+		for key, value := range scope {
+			copy[key] = value
+		}
+		if _, ok := copy[compiler.CursorTenantContext]; !ok {
+			copy[compiler.CursorTenantContext] = "default"
+		}
+		if _, ok := copy[compiler.CursorRouteContext]; !ok {
+			copy[compiler.CursorRouteContext] = "local"
+		}
+		if _, ok := copy[compiler.CursorPolicyContext]; !ok {
+			copy[compiler.CursorPolicyContext] = uint64(0)
+		}
+		scope = copy
 	}
 	return compiler.ResolveSlots(my.slots, variables, scope)
 }
@@ -115,6 +140,12 @@ func (my *Compiler) compile(operation *ast.OperationDefinition, variables map[st
 		}
 	}
 	ctx := compiler.NewContext(my.meta, my.dialect.Quotation(), variables)
+	ctx.SetCursorFingerprint(my.cursorFingerprint)
+	root := "Query"
+	if operation.Operation == ast.Subscription {
+		root = "Subscription"
+	}
+	ctx.SetCursorRoot(root)
 	defer ctx.Release()
 
 	var err error
@@ -134,6 +165,7 @@ func (my *Compiler) compile(operation *ast.OperationDefinition, variables map[st
 		slots:     ctx.Slots(),
 		volatile:  ctx.Volatile(),
 		tables:    ctx.Tables(),
+		cursor:    ctx.UsesCursor(),
 	}
 	if inspectGovernance {
 		plan.roleNeeded, plan.policyNeeded = operationGovernanceNeeds(my.meta, operation)

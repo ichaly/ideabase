@@ -191,9 +191,17 @@ func (my *Dialect) buildKeyset(ctx *compiler.Context, sc scope, p *pager) error 
 // cursorParams 游标键值参数化：字面量编译期解码，变量执行期按下标抽取
 func (my *Dialect) cursorParams(ctx *compiler.Context, p *pager) ([]string, error) {
 	placeholders := make([]string, len(p.keys))
-	if p.cursor.Kind == ast.Variable {
+	contract, strict := ctx.CursorContract()
+	if strict && !cursorSortMatches(contract.Sort, p.keys) {
+		return nil, compiler.BadCursor(fmt.Errorf("游标排序契约不匹配"))
+	}
+	if p.cursor.Kind == ast.Variable || strict {
 		for i := range p.keys {
-			placeholders[i] = my.Placeholder(ctx.AddCursor(p.cursor.Raw, i))
+			if p.cursor.Kind == ast.Variable {
+				placeholders[i] = my.Placeholder(ctx.AddCursor(p.cursor.Raw, i))
+			} else {
+				placeholders[i] = my.Placeholder(ctx.AddCursorValue(p.cursor.Raw, i))
+			}
 		}
 		return placeholders, nil
 	}
@@ -209,4 +217,32 @@ func (my *Dialect) cursorParams(ctx *compiler.Context, p *pager) ([]string, erro
 		placeholders[i] = my.Placeholder(ctx.AddParam(value))
 	}
 	return placeholders, nil
+}
+
+func cursorSort(keys []pageKey) []string {
+	out := make([]string, len(keys))
+	for i, key := range keys {
+		direction := "ASC"
+		if key.desc {
+			direction = "DESC"
+		}
+		out[i] = key.column + ":" + direction
+	}
+	return out
+}
+
+func cursorSortMatches(expected []string, keys []pageKey) bool {
+	if len(expected) != len(keys) {
+		return false
+	}
+	for i, key := range keys {
+		direction := "ASC"
+		if key.desc {
+			direction = "DESC"
+		}
+		if expected[i] != key.column+":"+direction {
+			return false
+		}
+	}
+	return true
 }

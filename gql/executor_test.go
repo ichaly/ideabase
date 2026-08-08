@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 自注册PostgreSQL方言
@@ -241,7 +242,7 @@ func TestExecutorBulk(t *testing.T) {
 	}
 
 	// 批量创建（变量数组形态）
-	data := run(`mutation ($in: [UserCreateInput!]!) { createUsers(input: $in) { id name } }`,
+	data := run(`mutation ($in: [UserCreateRowInput!]!) { createUsers(input: $in) { id name } }`,
 		map[string]interface{}{"in": []interface{}{
 			map[string]interface{}{"name": "A", "email": "a@x.com"},
 			map[string]interface{}{"name": "B", "email": "b@x.com"},
@@ -487,6 +488,47 @@ func TestExecutorCursor(t *testing.T) {
 		require.Len(t, users["items"].([]interface{}), n, "first=$n 应返回n条")
 		require.Equal(t, true, users["pageInfo"].(map[string]interface{})["hasNext"], "5条数据取前%d应有下一页", n)
 	}
+}
+
+func TestExecutorCursorRejectsCrossIdentityRevisionCoordinateAndSort(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	create := executor.run(context.Background(), `mutation { createUser(input: { name: "cursor", email: "cursor@x.com" }) { id } }`, nil, "")
+	require.Empty(t, create.Errors, "%v", create.Errors)
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user", PolicyRevision: 7})
+	require.NoError(t, err)
+	first := executor.run(WithIdentity(context.Background(), identity), `{ users(first: 1, sort: { id: ASC }) { pageInfo { end } items { id } } }`, nil, "")
+	require.Empty(t, first.Errors, "%v", first.Errors)
+	cursor := first.Data["users"].(map[string]any)["pageInfo"].(map[string]any)["end"].(string)
+	require.True(t, strings.HasPrefix(cursor, "v1."), cursor)
+
+	for name, ctx := range map[string]context.Context{
+		"tenant": WithIdentity(context.Background(), mustIdentity(t, IdentityInput{Tenant: "tenant-b", Subject: "user", PolicyRevision: 7})),
+		"policy": WithIdentity(context.Background(), mustIdentity(t, IdentityInput{Tenant: "tenant-a", Subject: "user", PolicyRevision: 8})),
+	} {
+		t.Run(name, func(t *testing.T) {
+			reply := executor.run(ctx, `query($cursor: Cursor) { users(first: 1, after: $cursor, sort: { id: ASC }) { items { id } } }`, map[string]any{"cursor": cursor}, "")
+			require.NotEmpty(t, reply.Errors)
+			require.Equal(t, "BAD_CURSOR", reply.Errors[0].Extensions["code"])
+		})
+	}
+	for name, query := range map[string]string{
+		"coordinate": `query($cursor: Cursor) { posts(first: 1, after: $cursor, sort: { id: ASC }) { items { id } } }`,
+		"sort":       `query($cursor: Cursor) { users(first: 1, after: $cursor, sort: { id: DESC }) { items { id } } }`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			reply := executor.run(WithIdentity(context.Background(), identity), query, map[string]any{"cursor": cursor}, "")
+			require.NotEmpty(t, reply.Errors)
+			require.Equal(t, "BAD_CURSOR", reply.Errors[0].Extensions["code"])
+		})
+	}
+}
+
+func mustIdentity(t *testing.T, input IdentityInput) Identity {
+	t.Helper()
+	identity, err := NewIdentity(input)
+	require.NoError(t, err)
+	return identity
 }
 
 // TestExecutorStats 统计聚合真库验证：全表聚合与分组聚合

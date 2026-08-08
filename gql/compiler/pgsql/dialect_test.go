@@ -20,6 +20,7 @@ type Case struct {
 	variables map[string]interface{}
 	expected  string
 	args      []any
+	skipSQL   bool
 }
 
 type _DialectSuite struct {
@@ -114,7 +115,9 @@ func (my *_DialectSuite) runCases(cases []Case) {
 			sql, args, err := compile.Build(doc.Operations[0], c.variables)
 			my.Require().NoError(err, "编译GraphQL查询失败")
 
-			my.Assert().Equal(normalizeSQL(c.expected), normalizeSQL(sql), "生成的SQL与预期不符")
+			if !c.skipSQL {
+				my.Assert().Equal(normalizeSQL(c.expected), normalizeSQL(sql), "生成的SQL与预期不符")
+			}
 			if c.args != nil {
 				my.Assert().Equal(c.args, args, "SQL参数与预期不符")
 			}
