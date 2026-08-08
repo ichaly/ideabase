@@ -430,7 +430,7 @@ flowchart TB
 
 ---
 
-- [ ] U5. **建立统一身份、租户路由与策略执行**
+- [x] U5. **建立统一身份、租户路由与策略执行**
 
 **Goal:** 用不可伪造 Identity、TenantRouter 和 PolicyProvider 覆盖所有执行路径，并支持 built-in policy、Casbin 等外部决策器和 PostgreSQL RLS defense-in-depth。
 

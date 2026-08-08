@@ -51,8 +51,8 @@ func (profile SchemaProfile) ValidateOperation(query string) error {
 	return nil
 }
 
-// CheckProfileCompatibility rejects removals and field type changes that
-// would break clients generated from the previous profile.
+// CheckProfileCompatibility rejects schema changes that break clients
+// generated from the previous profile.
 func CheckProfileCompatibility(previous, next SchemaProfile) error {
 	before, err := gqlparser.LoadSchema(&ast.Source{Name: previous.Name + ".graphql", Input: previous.Schema})
 	if err != nil {
@@ -78,6 +78,22 @@ func CheckProfileCompatibility(previous, next SchemaProfile) error {
 				breaking = append(breaking, "removed field "+name+"."+oldField.Name)
 			} else if newField.Type.String() != oldField.Type.String() {
 				breaking = append(breaking, "changed field "+name+"."+oldField.Name)
+			} else if oldType.Kind != ast.InputObject {
+				breaking = append(breaking, incompatibleArguments(name+"."+oldField.Name, oldField.Arguments, newField.Arguments)...)
+			}
+		}
+		if oldType.Kind == ast.InputObject {
+			for _, field := range newType.Fields {
+				if oldType.Fields.ForName(field.Name) == nil && field.Type.NonNull && field.DefaultValue == nil {
+					breaking = append(breaking, "added required input field "+name+"."+field.Name)
+				}
+			}
+		}
+		if oldType.Kind == ast.Enum {
+			for _, value := range oldType.EnumValues {
+				if newType.EnumValues.ForName(value.Name) == nil {
+					breaking = append(breaking, "removed enum value "+name+"."+value.Name)
+				}
 			}
 		}
 	}
@@ -86,6 +102,24 @@ func CheckProfileCompatibility(previous, next SchemaProfile) error {
 		return fmt.Errorf("incompatible schema profile: %s", strings.Join(breaking, ", "))
 	}
 	return nil
+}
+
+func incompatibleArguments(coordinate string, before, after ast.ArgumentDefinitionList) []string {
+	var breaking []string
+	for _, argument := range before {
+		next := after.ForName(argument.Name)
+		if next == nil {
+			breaking = append(breaking, "removed argument "+coordinate+"("+argument.Name+")")
+		} else if next.Type.String() != argument.Type.String() {
+			breaking = append(breaking, "changed argument "+coordinate+"("+argument.Name+")")
+		}
+	}
+	for _, argument := range after {
+		if before.ForName(argument.Name) == nil && argument.Type.NonNull && argument.DefaultValue == nil {
+			breaking = append(breaking, "added required argument "+coordinate+"("+argument.Name+")")
+		}
+	}
+	return breaking
 }
 
 type effectiveView struct {
