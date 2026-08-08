@@ -479,7 +479,7 @@ flowchart TB
 
 ---
 
-- [ ] U6. **统一 SQL 与自定义 Resolver 的 Field Handler**
+- [x] U6. **统一 SQL 与自定义 Resolver 的 Field Handler**
 
 **Goal:** 让数据库 CRUD、Typed、Batch、Remote 和 namespace 字段共享同一注册/授权/计划/完成契约，同时保留 SQL 专用快路径和开发者友好的泛型 API。
 
