@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -29,6 +30,13 @@ type Resolver interface {
 	Define() Define
 	// Resolve 计算单个宿主对象的字段值，source为该对象已查出的字段
 	Resolve(ctx context.Context, source any, args map[string]interface{}) (interface{}, error)
+}
+
+// Handler 是所有字段执行器共享的声明契约；Resolver是开发者面对的主API，
+// SQL/Batch/Remote只是在同一契约下采用不同快路径。
+type Handler interface {
+	Name() string
+	Define() Define
 }
 
 // NextResolver 是泛型Resolver中间件调用下游的强类型函数。
@@ -107,6 +115,7 @@ type binding struct {
 	Field string       // 要填充的字段别名
 	Name  string       // resolver名或远程数据源名
 	Key   string       // 远程绑定的宿主键别名（编译期补投影的内部列）
+	Strip []string     // planner内部补投影、全部Handler完成后从响应剥除的字段
 	node  *ast.Field   // resolver字段AST引用：执行期按请求变量解出实参（随计划缓存复用）
 	trail []*ast.Field // Path每一段对应的字段，用于错误冷路径按nullability冒泡
 }
@@ -117,6 +126,12 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 
 	var walk func(class *protocol.Class, set ast.SelectionSet, path []string, trail []*ast.Field)
 	walk = func(class *protocol.Class, set ast.SelectionSet, path []string, trail []*ast.Field) {
+		selected := make(map[string]bool, len(set))
+		for _, selection := range set {
+			if field, ok := selection.(*ast.Field); ok && field.Alias == field.Name {
+				selected[field.Name] = true
+			}
+		}
 		for _, s := range set {
 			f, ok := s.(*ast.Field)
 			if !ok {
@@ -126,15 +141,26 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 				walk(class, f.SelectionSet, append(path[:len(path):len(path)], f.Alias), appendField(trail, f))
 				continue
 			}
+			if f.Name == "edges" || f.Name == "node" {
+				walk(class, f.SelectionSet, append(path[:len(path):len(path)], f.Alias), appendField(trail, f))
+				continue
+			}
 			field, ok := class.Fields[f.Name]
 			if !ok {
 				continue
 			}
 			if field.Resolver != "" {
+				strip := make([]string, 0, len(field.Requires))
+				for _, dependency := range field.Requires {
+					if !selected[dependency] {
+						strip = append(strip, dependency)
+					}
+				}
 				bindings = append(bindings, binding{
 					Path:  path,
 					Field: f.Alias,
 					Name:  field.Resolver,
+					Strip: strip,
 					node:  f,
 					trail: trail,
 				})
@@ -170,6 +196,9 @@ func collectBindings(meta *Metadata, operation *ast.OperationDefinition) []bindi
 		class, ok := meta.GetNode(className)
 		if !ok {
 			class, ok = meta.GetNode(strings.TrimSuffix(className, protocol.SUFFIX_RESULT))
+		}
+		if !ok {
+			class, ok = meta.GetNode(strings.TrimSuffix(className, protocol.SUFFIX_CONNECTION))
 		}
 		if ok {
 			walk(class, f.SelectionSet, []string{f.Alias}, []*ast.Field{f})
@@ -288,17 +317,23 @@ func appendPath(path ast.Path, segment string, index ...ast.PathElement) ast.Pat
 func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[string]interface{}, variables map[string]interface{}) (gqlerror.List, error) {
 	var warnings gqlerror.List
 	var jobs []*remoteJob
+	type batchResult struct {
+		values []interface{}
+		err    error
+	}
+	batchMemo := make(map[string]batchResult)
 	for _, b := range bindings {
 		if b.Key == "" {
 			continue
 		}
 		if sources := hosts(data, b.Path); len(sources) > 0 {
-			jobs = append(jobs, &remoteJob{binding: b, sources: sources})
+			jobs = append(jobs, &remoteJob{binding: b, sources: sources, executor: my})
 		}
 	}
 	if len(jobs) > 0 {
 		rootNull := false
 		group, gctx := errgroup.WithContext(ctx)
+		group.SetLimit(8)
 		for _, job := range jobs {
 			group.Go(func() error { job.fetch(gctx, my.remotes); return nil })
 		}
@@ -345,16 +380,27 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 		var values []interface{}
 		var err error
 		var itemErrors []error
+		callCtx := my.executionContext(ctx, b.node.SelectionSet)
 		if many, ok := resolver.(BatchResolver); ok {
-			err = safely(func() (err error) {
-				values, err = many.ResolveBatch(ctx, sources, args)
-				return
-			})
+			key := batchRequestKey(b, args)
+			if cached, exists := batchMemo[key]; exists {
+				values, err = cached.values, cached.err
+			} else if len(sources) > handlerBatchLimit(resolver) {
+				err = fmt.Errorf("batch超过限制: %d", handlerBatchLimit(resolver))
+			} else {
+				hctx, cancel := handlerContext(callCtx, resolver)
+				err = safely(func() (err error) {
+					values, err = many.ResolveBatch(hctx, sources, args)
+					return handlerResult(hctx, err)
+				})
+				cancel()
+			}
+			batchMemo[key] = batchResult{values: values, err: err}
 			if err == nil && len(values) != len(sources) {
 				err = fmt.Errorf("返回数量不匹配: 期望%d实际%d", len(sources), len(values))
 			}
 		} else {
-			values, itemErrors = resolveEachPartial(ctx, resolver, sources, args)
+			values, itemErrors = resolveEachPartial(callCtx, resolver, sources, args)
 		}
 		if err != nil {
 			refs := hostRefs(data, b)
@@ -383,7 +429,24 @@ func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[st
 			}
 		}
 	}
+	for _, b := range bindings {
+		if b.Key != "" || len(b.Strip) == 0 {
+			continue
+		}
+		for _, source := range hosts(data, b.Path) {
+			for _, field := range b.Strip {
+				delete(source, field)
+			}
+		}
+	}
 	return warnings, nil
+}
+
+func batchRequestKey(b binding, args map[string]interface{}) string {
+	encoded, _ := jsonNumeric.Marshal(args)
+	var selection strings.Builder
+	writeSelectionSet(&selection, b.node.SelectionSet)
+	return b.Name + "\x00" + strings.Join(b.Path, "\x00") + "\x00" + string(encoded) + "\x00" + selection.String()
 }
 
 func resolverFieldErrors(b binding, hostPath ast.Path, err error) gqlerror.List {
@@ -421,7 +484,12 @@ func resolveEachPartial(ctx context.Context, resolver Resolver, sources []map[st
 	for i, source := range sources {
 		i, source := i, source
 		group.Go(func() error {
-			errs[i] = safely(func() (err error) { values[i], err = resolver.Resolve(ctx, source, args); return })
+			hctx, cancel := handlerContext(ctx, resolver)
+			defer cancel()
+			errs[i] = safely(func() (err error) {
+				values[i], err = resolver.Resolve(hctx, source, args)
+				return handlerResult(hctx, err)
+			})
 			return nil
 		})
 	}
@@ -442,17 +510,24 @@ func safely(fn func() error) (err error) {
 
 // Define 是Resolver/Remote注册即声明的schema形状。
 type Define struct {
-	Class       string   // Query、Mutation或宿主实体名
-	Name        string   // 字段名，如 botSave、greeting
-	Doc         string   // 字段描述，渲染为SDL文档字符串
-	Args        string   // 参数签名原文，如 "nickname: String!, avatar: String"；空=无参
-	Result      string   // 返回类型，如 BotProfile、Int
-	Extra       string   // 附加SDL（辅助input/type等声明），重建时按文本去重并入schema
-	Cost        uint32   // 单次字段解析权重；0使用默认权重1
-	Existing    bool     // 绑定schema已有字段；仅允许通过显式Replace注册
-	Resource    string   // PolicyProvider治理的资源；自定义根字段须显式声明
-	Actions     []string // 该Resolver执行的治理动作
-	PolicyAware bool     // 自定义实现显式消费PolicyDecisionFromContext
+	Class          string   // Query、Mutation或宿主实体名
+	Name           string   // 字段名，如 botSave、greeting
+	Doc            string   // 字段描述，渲染为SDL文档字符串
+	Args           string   // 参数签名原文，如 "nickname: String!, avatar: String"；空=无参
+	Result         string   // 返回类型，如 BotProfile、Int
+	Extra          string   // 附加SDL（辅助input/type等声明），重建时按文本去重并入schema
+	Cost           uint32   // 单次字段解析权重；0使用默认权重1
+	Existing       bool     // 绑定schema已有字段；仅允许通过显式Replace注册
+	Resource       string   // PolicyProvider治理的资源；自定义根字段须显式声明
+	Actions        []string // 该Resolver执行的治理动作
+	PolicyAware    bool     // 自定义实现显式消费PolicyDecisionFromContext
+	Requires       []string // 实体Resolver的内部宿主字段依赖
+	Timeout        time.Duration
+	RetrySafe      bool
+	IdempotencyKey string
+	MaxBatch       int
+	inputType      reflect.Type // 仅供启动期生成强类型嵌套input，不进入运行期热路径
+	outputType     reflect.Type // 仅供启动期生成强类型output，不进入运行期热路径
 }
 
 // sdl 渲染声明为extend片段（文档用三引号块，内容含引号也合法；Extra由rebuild单独并入）
@@ -492,6 +567,13 @@ func (my *Executor) mount(m mounted) error {
 		return fmt.Errorf("字段已存在: %s.%s", d.Class, d.Name)
 	}
 	field := m.field()
+	for i, dependency := range field.Requires {
+		required, exists := class.Fields[dependency]
+		if !exists || required.Column == "" {
+			return fmt.Errorf("resolver %s依赖未知列字段: %s", m.Define().Name, dependency)
+		}
+		field.Requires[i] = required.Name
+	}
 	field.Name, field.Type, field.Description, field.Virtual = d.Name, d.Result, d.Doc, true
 	class.Fields[d.Name] = field
 	return nil
@@ -519,6 +601,14 @@ func (my *Executor) rebuild() error {
 	var sb strings.Builder
 	sb.WriteString(my.source)
 	extras := make(map[string]bool)
+	base, err := gqlparser.LoadSchema(&ast.Source{Name: "base.graphql", Input: my.source})
+	if err != nil {
+		return fmt.Errorf("解析基础schema失败: %w", err)
+	}
+	known := make(map[string]bool, len(base.Types))
+	for name := range base.Types {
+		known[name] = true
+	}
 	for _, name := range names {
 		d := defines[name]
 		if sdl := d.sdl(); sdl != "" {
@@ -529,6 +619,11 @@ func (my *Executor) rebuild() error {
 			extras[d.Extra] = true
 			sb.WriteString("\n")
 			sb.WriteString(d.Extra)
+		}
+		generated := generatedTypes(d, known)
+		if generated != "" {
+			sb.WriteString("\n")
+			sb.WriteString(generated)
 		}
 	}
 	s, err := gqlparser.LoadSchema(&ast.Source{Name: "schema.graphql", Input: sb.String()})
@@ -629,7 +724,7 @@ func (my *Executor) executeRootResolvers(ctx context.Context, entry *planEntry, 
 		return nil
 	}
 	var err error
-	if operation.Operation == ast.Mutation && my.database != nil && Tx(ctx) == nil {
+	if my.database != nil && Tx(ctx) == nil && (operation.Operation == ast.Mutation || my.rls) {
 		err = my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			if my.rls {
 				if err := my.prepareRLS(ctx, tx); err != nil {
@@ -693,8 +788,10 @@ func (my *Executor) resolveRootField(ctx context.Context, operation *ast.Operati
 	}
 	var result interface{}
 	err := safely(func() (err error) {
-		result, err = resolver.Resolve(ctx, Root{}, field.ArgumentMap(variables))
-		return
+		hctx, cancel := handlerContext(my.executionContext(ctx, field.SelectionSet), resolver)
+		defer cancel()
+		result, err = resolver.Resolve(hctx, Root{}, field.ArgumentMap(variables))
+		return handlerResult(hctx, err)
 	})
 	if err != nil {
 		return nil, nil, err

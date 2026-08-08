@@ -143,14 +143,14 @@ SQL 表达不了的字段逻辑用 Resolver 处理。**注册即声明**：字�
 参数与字段类型反射自函数签名，不写 yaml：
 
 ```go
-// source 是该行已查出的字段——只能读取查询已选择的字段（引擎不会偷偷多查）；
-// args 强类型（json定名/validate校验），客户端可传 hello(lang: "zh")
+// source 默认只有客户端选择的列；Requires 声明业务依赖，planner 内部补投影并在响应前剥除。
+// args 及其嵌套 struct 都生成强类型、自省可见的 GraphQL input。
 builder.Register(gql.NewResolver("User", "hello", "问候语",
     func(ctx context.Context, source gql.Source, args struct {
         Lang string `json:"lang" validate:"omitempty,oneof=zh en"`
     }) (string, error) {
         return greet(args.Lang, source["name"]), nil
-    }))
+    }, gql.Requires("name"), gql.Timeout(200*time.Millisecond)))
 
 // 批量版：整结果集一次调用免 N+1，返回值与 sources 等长对位
 builder.Register(gql.NewBatch("User", "level", "等级",
@@ -173,11 +173,14 @@ builder.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
     }, gql.Result("BotProfile"), gql.Cost(8)))
 ```
 
-`Cost` 是该字段的单次解析权重（缺省 1），会进入不可变 Snapshot；
+`Cost`、`Requires`、`Timeout`、`MaxBatch` 与显式 `RetrySafe(idempotencyKey)` 都会进入
+不可变 Snapshot。命名的嵌套输入/输出 struct 自动生成结构化 SDL，`Extra` 仅保留为兼容逃生口；
 `engine.OperationCost(query, operationName, variables)` 使用与真实执行相同的验证、
 coercion、directive 和选择集合并路径，但不受当前预算上限影响。
 
-Mutation 根 Resolver 会在引擎事务中执行，数据库写入应从 `gql.Tx(ctx)` 取得连接；
+Mutation 根 Resolver 会在引擎事务中执行；业务代码统一从 `gql.DB(ctx)` 或
+`gql.RequireDB(ctx)` 取得 request-scoped 连接，它会优先返回当前事务。需要 identity、
+selection、deadline 和 snapshot fingerprint 时使用 `gql.ExecutionContextFromContext(ctx)`；
 Query、无数据库执行器或事务外调用返回 `nil`。直接捕获全局 `*gorm.DB` 的旧写法无法
 自动加入引擎事务，需要把事务连接继续传给 service/repository。
 
@@ -186,7 +189,8 @@ Query、无数据库执行器或事务外调用返回 `nil`。直接捕获全局
 单根默认 CRUD 保持原单 SQL 快路径，多根 Mutation 按文本顺序在同一事务中执行。
 
 - 类型映射：`std.Id`→ID、`time.Time`→DateTime、切片→列表（`[]std.Id`→`[ID!]`）、
-  map/嵌套struct→Json；`validate:"required"` 渲染非空 `!`，`doc` tag 作参数文档
+  map/匿名 struct→Json、命名嵌套 struct→结构化类型；`validate:"required"` 渲染非空 `!`，
+  `doc` tag 作字段文档
 - 返回类型名匹配元数据实体 → 触发回查补全（返回实体结构体自动取 Id，等价于返回 id）；
   标量/map/切片 → 直接输出；`gql.Extra(sdl)` 可附加辅助 input/type 声明
 - 回查补全时 resolver/关系/codec 全部生效；要完全控制 schema

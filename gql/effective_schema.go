@@ -329,7 +329,28 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 	if class == nil {
 		return
 	}
-	output := append(append(append([]string(nil), uses[FieldUseSelect]...), uses[FieldUseReturn]...), uses[FieldUseJoin]...)
+	output := append(append([]string(nil), uses[FieldUseSelect]...), uses[FieldUseReturn]...)
+	for _, name := range uses[FieldUseJoin] {
+		field := class.Fields[name]
+		dependencies := []string(nil)
+		if field != nil {
+			switch {
+			case field.Relation != nil:
+				dependencies = field.Relation.SourceColumns()
+			case field.Resolver != "":
+				dependencies = field.Requires
+			case field.Remote != nil:
+				dependencies = []string{field.Remote.Key}
+			}
+		}
+		allowed := true
+		for _, dependency := range dependencies {
+			allowed = allowed && allowedColumn(uses[FieldUseInternalDependency], class.Fields[dependency])
+		}
+		if allowed {
+			output = append(output, name)
+		}
+	}
 	filterEffectiveFields(schema.Types[class.Name], class, output, false)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_CREATE_INPUT], class, uses[FieldUseWrite], false)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_CREATE_ROW_INPUT], class, uses[FieldUseWrite], false)

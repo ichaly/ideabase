@@ -41,6 +41,22 @@ func Access(resource string, actions ...string) Option {
 // PolicyDecisionFromContext when a provider returns row/preset/check facts.
 func ConsumePolicy() Option { return func(my *Define) { my.PolicyAware = true } }
 
+// Requires 声明实体字段Resolver依赖的宿主字段；planner会内部补投影并在响应前剥除。
+func Requires(fields ...string) Option {
+	return func(my *Define) { my.Requires = append([]string(nil), fields...) }
+}
+
+// Timeout 声明Handler的协作式超时；实现返回后引擎仍会检查deadline。
+func Timeout(duration time.Duration) Option { return func(my *Define) { my.Timeout = duration } }
+
+// RetrySafe 显式声明Handler可按稳定幂等键安全重试；默认永远为false。
+func RetrySafe(idempotencyKey string) Option {
+	return func(my *Define) { my.RetrySafe, my.IdempotencyKey = true, idempotencyKey }
+}
+
+// MaxBatch 限制一次Batch Resolver接收的最大宿主数；0表示使用引擎默认。
+func MaxBatch(size int) Option { return func(my *Define) { my.MaxBatch = size } }
+
 // Existing 声明Resolver绑定schema已有字段，只能通过Executor.Replace显式注册。
 func Existing() Option { return func(my *Define) { my.Existing = true } }
 
@@ -91,7 +107,7 @@ type fieldResolver[S, I, O any] struct {
 func (my *fieldResolver[S, I, O]) Name() string   { return my.define.Class + "." + my.define.Name }
 func (my *fieldResolver[S, I, O]) Define() Define { return my.define }
 func (my *fieldResolver[S, I, O]) field() *protocol.Field {
-	return &protocol.Field{Resolver: my.Name()}
+	return &protocol.Field{Resolver: my.Name(), Requires: append([]string(nil), my.define.Requires...)}
 }
 func (my *fieldResolver[S, I, O]) Resolve(ctx context.Context, source any, args map[string]interface{}) (interface{}, error) {
 	typed, ok := source.(S)
@@ -124,12 +140,11 @@ func NewBatch[I, O any](class, name, doc string, fn func(context.Context, []Sour
 
 // defineField 字段级声明：Class非空使sdl()渲染为 extend type <Class>
 func defineField[I, O any](class, name, doc string) Define {
+	input, output := reflect.TypeFor[I](), reflect.TypeFor[O]()
 	return Define{
-		Class:  class,
-		Name:   name,
-		Doc:    doc,
-		Args:   deriveArgs(reflect.TypeFor[I]()),
-		Result: deriveResult(reflect.TypeFor[O]()),
+		Class: class, Name: name, Doc: doc,
+		Args: deriveArgs(input), Result: deriveResult(output),
+		inputType: input, outputType: output,
 	}
 }
 
@@ -139,9 +154,11 @@ type batch[I, O any] struct {
 	fn     func(context.Context, []Source, I) ([]O, error)
 }
 
-func (my *batch[I, O]) Name() string           { return my.define.Class + "." + my.define.Name }
-func (my *batch[I, O]) Define() Define         { return my.define }
-func (my *batch[I, O]) field() *protocol.Field { return &protocol.Field{Resolver: my.Name()} }
+func (my *batch[I, O]) Name() string   { return my.define.Class + "." + my.define.Name }
+func (my *batch[I, O]) Define() Define { return my.define }
+func (my *batch[I, O]) field() *protocol.Field {
+	return &protocol.Field{Resolver: my.Name(), Requires: append([]string(nil), my.define.Requires...)}
+}
 
 func (my *batch[I, O]) Resolve(context.Context, any, map[string]interface{}) (interface{}, error) {
 	return nil, fmt.Errorf("批量解析器不支持单对象路径")
@@ -167,7 +184,7 @@ func (my *batch[I, O]) ResolveBatch(ctx context.Context, sources []map[string]in
 // O为命名struct时自动反射出虚拟类型SDL（多个远程共享同一类型时重建期按文本去重）
 func NewRemote[O any](class, name, doc, key string, fn func(context.Context, []any) (map[any]O, error), opts ...Option) Remote {
 	t := reflect.TypeFor[O]()
-	define := Define{Class: class, Name: name, Doc: doc, Result: deriveResult(t), Extra: deriveObject(t)}
+	define := Define{Class: class, Name: name, Doc: doc, Result: deriveResult(t), outputType: t}
 	for _, opt := range opts {
 		opt(&define)
 	}
@@ -239,25 +256,6 @@ func eachField(t reflect.Type, fn func(f reflect.StructField, name, doc string))
 	}
 }
 
-// deriveObject 反射命名struct为GraphQL输出类型SDL（远程虚拟类型）；
-// 标量特化类型与非命名struct返回空（结果为标量/Json，无需辅助类型）
-func deriveObject(t reflect.Type) string {
-	t = deref(t)
-	if _, ok := scalars[t]; ok || t.Kind() != reflect.Struct || t.Name() == "" {
-		return ""
-	}
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "type %s {\n", t.Name())
-	eachField(t, func(f reflect.StructField, name, doc string) {
-		if doc != "" {
-			fmt.Fprintf(&sb, "  \"\"\"%s\"\"\"\n", doc)
-		}
-		fmt.Fprintf(&sb, "  %s: %s\n", name, deriveScalar(f.Type))
-	})
-	sb.WriteString("}")
-	return sb.String()
-}
-
 // check validate标签校验：与REST绑定路径同款std.Validator（含去空格与中文翻译）
 var validator = sync.OnceValues(std.NewValidator)
 
@@ -277,7 +275,7 @@ func deriveArgs(t reflect.Type) string {
 	}
 	var parts []string
 	eachField(t, func(f reflect.StructField, name, doc string) {
-		kind := deriveScalar(f.Type)
+		kind := deriveType(f.Type, true)
 		if required(f.Tag.Get("validate")) {
 			kind += "!"
 		}
@@ -300,10 +298,15 @@ func required(tag string) bool {
 	return false
 }
 
-// deriveScalar Go类型→GraphQL入参类型：指针剥离（可空由required缺失表达），
-// 切片元素非指针补!，map与嵌套struct视作Json透传
+// deriveScalar Go类型→GraphQL标量或复合类型引用。
 func deriveScalar(t reflect.Type) string {
-	t = deref(t)
+	return deriveType(t, false)
+}
+
+func deriveType(t reflect.Type, input bool) string {
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
 	if name, ok := scalars[t]; ok {
 		return name
 	}
@@ -322,8 +325,16 @@ func deriveScalar(t reflect.Type) string {
 		if t.Elem().Kind() == reflect.Ptr {
 			bang = ""
 		}
-		return "[" + deriveScalar(t.Elem()) + bang + "]"
-	default: // map与struct等复合形态按Json透传（json往返解码天然支持）
+		return "[" + deriveType(t.Elem(), input) + bang + "]"
+	case reflect.Struct:
+		if t.Name() != "" {
+			if input {
+				return t.Name() + "Input"
+			}
+			return t.Name()
+		}
+		return protocol.SCALAR_JSON
+	default: // map/interface等开放形态按Json透传
 		return protocol.SCALAR_JSON
 	}
 }
@@ -331,14 +342,64 @@ func deriveScalar(t reflect.Type) string {
 // deriveResult Go类型→GraphQL结果类型：struct取类型名（与元数据实体同名即触发
 // 回查补全，不一致用Result选项覆盖），其余同入参规则
 func deriveResult(t reflect.Type) string {
-	t = deref(t)
-	if t.Kind() == reflect.Struct {
-		if name, ok := scalars[t]; ok {
-			return name
+	return deriveType(t, false)
+}
+
+// generatedTypes emits only the named shapes reachable from a handler's Go
+// signature. Top-level input structs stay flattened as GraphQL arguments;
+// nested structs become input objects. Existing schema types are reused.
+func generatedTypes(d Define, known map[string]bool) string {
+	var definitions []string
+	seen := map[string]bool{}
+	var collect func(reflect.Type, bool)
+	collect = func(t reflect.Type, input bool) {
+		for t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+			t = t.Elem()
 		}
-		return t.Name()
+		if _, scalar := scalars[t]; scalar || t.Kind() != reflect.Struct || t.Name() == "" {
+			return
+		}
+		name := t.Name()
+		kind := "type"
+		if input {
+			name, kind = name+"Input", "input"
+		}
+		if seen[name] {
+			return
+		}
+		seen[name] = true // cycles are legal only when nullable; parser validates the final SDL
+		eachField(t, func(field reflect.StructField, _, _ string) { collect(field.Type, input) })
+		if known[name] {
+			return
+		}
+		known[name] = true
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%s %s {\n", kind, name)
+		eachField(t, func(field reflect.StructField, fieldName, doc string) {
+			if doc != "" {
+				fmt.Fprintf(&sb, "  \"\"\"%s\"\"\"\n", doc)
+			}
+			fieldType := deriveType(field.Type, input)
+			if input && required(field.Tag.Get("validate")) {
+				fieldType += "!"
+			}
+			fmt.Fprintf(&sb, "  %s: %s\n", fieldName, fieldType)
+		})
+		sb.WriteString("}")
+		definitions = append(definitions, sb.String())
 	}
-	return deriveScalar(t)
+
+	if d.inputType != nil {
+		input := deref(d.inputType)
+		if input.Kind() == reflect.Struct {
+			eachField(input, func(field reflect.StructField, _, _ string) { collect(field.Type, true) })
+		}
+	}
+	// Explicit Extra remains the escape hatch and owns output declarations.
+	if d.Extra == "" && d.outputType != nil && d.Result == deriveResult(d.outputType) {
+		collect(d.outputType, false)
+	}
+	return strings.Join(definitions, "\n")
 }
 
 // scalars 特化标量映射（先于Kind分派）

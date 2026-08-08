@@ -22,10 +22,11 @@ type Remote interface {
 // remoteJob 一条远程绑定的执行单元：fetch阶段各job独立可并发，
 // fill阶段串行回填（宿主map非并发安全）
 type remoteJob struct {
-	binding binding
-	sources []map[string]any
-	values  map[any]any
-	err     error
+	binding  binding
+	sources  []map[string]any
+	values   map[any]any
+	err      error
+	executor *Executor
 }
 
 // fetch 收集去重键并批量取数。容错语义：数据源未注册或Fetch失败时
@@ -44,9 +45,22 @@ func (my *remoteJob) fetch(ctx context.Context, remotes map[string]Remote) {
 	if !ok {
 		my.err = fmt.Errorf("远程数据源未注册: %s", my.binding.Name)
 	} else if len(keys) > 0 {
-		my.err = safely(func() (err error) { // panic与错误同走容错语义,不打崩进程
-			my.values, err = remote.Fetch(ctx, keys)
+		if handler, ok := remote.(Handler); ok && len(keys) > handlerBatchLimit(handler) {
+			my.err = fmt.Errorf("远程batch超过限制: %d", handlerBatchLimit(handler))
 			return
+		}
+		my.err = safely(func() (err error) { // panic与错误同走容错语义,不打崩进程
+			callCtx := ctx
+			if my.executor != nil {
+				callCtx = my.executor.executionContext(ctx, my.binding.node.SelectionSet)
+			}
+			hctx, cancel := context.WithCancel(callCtx)
+			if handler, ok := remote.(Handler); ok {
+				hctx, cancel = handlerContext(callCtx, handler)
+			}
+			defer cancel()
+			my.values, err = remote.Fetch(hctx, keys)
+			return handlerResult(hctx, err)
 		})
 		if my.err != nil {
 			my.err = fmt.Errorf("远程数据源 %s 取数失败: %w", my.binding.Name, my.err)

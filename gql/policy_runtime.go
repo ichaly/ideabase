@@ -389,6 +389,10 @@ func (my *Executor) collectPolicyFields(target *policyTarget, class *protocol.Cl
 					for _, name := range declared.Relation.SourceColumns() {
 						target.add(FieldUseInternalDependency, name)
 					}
+				} else if declared.Resolver != "" {
+					for _, name := range declared.Requires {
+						target.add(FieldUseInternalDependency, name)
+					}
 				} else if declared.Remote != nil {
 					target.add(FieldUseInternalDependency, declared.Remote.Key)
 				}

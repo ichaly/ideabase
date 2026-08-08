@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -30,17 +31,22 @@ const (
 
 // Capability is the immutable execution contract of one schema coordinate.
 type Capability struct {
-	Coordinate  string
-	Parent      string
-	Name        string
-	Type        string
-	Arguments   []Argument
-	Handler     HandlerKind
-	Planner     string
-	Actions     []string
-	Resource    string
-	Cost        uint32
-	PolicyAware bool
+	Coordinate     string
+	Parent         string
+	Name           string
+	Type           string
+	Arguments      []Argument
+	Handler        HandlerKind
+	Planner        string
+	Actions        []string
+	Resource       string
+	Cost           uint32
+	PolicyAware    bool
+	Requires       []string
+	Timeout        time.Duration
+	RetrySafe      bool
+	IdempotencyKey string
+	MaxBatch       int
 }
 
 // Argument is the introspectable invocation contract of one field argument.
@@ -157,6 +163,7 @@ func (my *Snapshot) Capability(coordinate string) (Capability, bool) {
 func cloneCapability(capability Capability) Capability {
 	capability.Arguments = append([]Argument(nil), capability.Arguments...)
 	capability.Actions = append([]string(nil), capability.Actions...)
+	capability.Requires = append([]string(nil), capability.Requires...)
 	return capability
 }
 
@@ -317,6 +324,12 @@ func (my *Executor) fieldCapability(parent *ast.Definition, field *ast.FieldDefi
 		capability.Resource = define.Resource
 		capability.Actions = append([]string(nil), define.Actions...)
 		capability.PolicyAware = define.PolicyAware
+		capability.Requires = append([]string(nil), define.Requires...)
+		capability.Timeout = define.Timeout
+		capability.RetrySafe, capability.IdempotencyKey = define.RetrySafe, define.IdempotencyKey
+		if _, ok := resolver.(BatchResolver); ok {
+			capability.MaxBatch = handlerBatchLimit(resolver)
+		}
 		if cost := define.Cost; cost > 0 {
 			capability.Cost = cost
 		}
@@ -336,7 +349,12 @@ func (my *Executor) fieldCapability(parent *ast.Definition, field *ast.FieldDefi
 			define := mounted.Define()
 			capability.Resource = define.Resource
 			capability.Actions = append([]string(nil), define.Actions...)
-			capability.PolicyAware = define.PolicyAware
+			capability.Requires = append([]string(nil), define.Requires...)
+			capability.Timeout = define.Timeout
+			capability.RetrySafe, capability.IdempotencyKey = define.RetrySafe, define.IdempotencyKey
+			if handler, ok := remote.(Handler); ok {
+				capability.MaxBatch = handlerBatchLimit(handler)
+			}
 		}
 		if my.policy != nil && (capability.Resource == "" || len(capability.Actions) == 0) {
 			return Capability{}, fmt.Errorf("remote %s requires explicit policy resource/action", coordinate)

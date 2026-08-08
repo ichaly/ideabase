@@ -130,6 +130,11 @@ func (my *Executor) Register(items ...any) error {
 		return err
 	}
 	for _, item := range items {
+		if handler, ok := item.(Handler); ok {
+			if err := validateHandler(handler); err != nil {
+				return err
+			}
+		}
 		switch v := item.(type) {
 		case Resolver:
 			if v.Define().Existing {
@@ -693,7 +698,22 @@ func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte, variabl
 	} else {
 		result, _ = v.(map[string]interface{})
 	}
-	warnings, err := my.resolve(ctx, plan.resolvers, result, variables)
+	var warnings gqlerror.List
+	var err error
+	resolve := func(callCtx context.Context) error {
+		warnings, err = my.resolve(callCtx, plan.resolvers, result, variables)
+		return err
+	}
+	if my.rls && my.database != nil && Tx(ctx) == nil {
+		err = my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := my.prepareRLS(ctx, tx); err != nil {
+				return err
+			}
+			return resolve(context.WithValue(ctx, transactionKey{}, tx))
+		})
+	} else {
+		err = resolve(ctx)
+	}
 	return result, warnings, err
 }
 

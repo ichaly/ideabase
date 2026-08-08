@@ -245,6 +245,13 @@ func (my *Executor) authorizeSelection(c *protocol.Class, root *ast.Field, p *pr
 		if (action == protocol.OP_SELECT || action == protocol.OP_AGGREGATE) && !allowedColumn(p.Select, field) {
 			return policyError(c, action, name)
 		}
+		if action == protocol.OP_SELECT && field.Resolver != "" {
+			for _, dependency := range field.Requires {
+				if !allowedColumn(p.Select, c.Fields[dependency]) {
+					return policyError(c, action, dependency)
+				}
+			}
+		}
 	}
 	return authorizeArgs(c, root, p, action, vars)
 }

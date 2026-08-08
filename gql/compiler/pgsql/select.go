@@ -502,6 +502,19 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			}
 			continue
 		}
+		if field.Resolver != "" {
+			for _, dependency := range field.Requires {
+				required := u.class.Fields[dependency]
+				if required == nil || required.Column == "" {
+					return fmt.Errorf("resolver %s依赖未知列字段: %s", field.Resolver, dependency)
+				}
+				if !hasAlias(scalars, required.Name) {
+					scalars = append(scalars, &ast.Field{Name: required.Name, Alias: required.Name})
+					appendColumn(required.Column)
+				}
+			}
+			continue
+		}
 		if field.Remote != nil {
 			// 远程关系字段不落SQL，但把宿主键列以内部别名补进投影：
 			// 执行期批量取数依赖它，别名避开选择集与codec路径保证键值原始，回填后剥除
