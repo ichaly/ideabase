@@ -66,8 +66,10 @@ type endpointTopology interface {
 	topology() (map[string]struct{}, int)
 }
 
-type endpointPinner interface {
-	pinEndpoint(string) (Endpoint, error)
+// SnapshotEndpoint can bind execution to the exact manifest revision imported
+// by a parent Gateway.
+type SnapshotEndpoint interface {
+	ForSnapshot(string) (Endpoint, error)
 }
 
 type gatewayRevision struct {
@@ -108,12 +110,12 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 	}
 	namespaces = append([]Namespace(nil), namespaces...)
 	for index := range namespaces {
-		if pinner, ok := namespaces[index].Endpoint.(endpointPinner); ok {
+		if pinner, ok := namespaces[index].Endpoint.(SnapshotEndpoint); ok {
 			snapshot, err := namespaces[index].Endpoint.Snapshot()
 			if err != nil {
 				return nil, fmt.Errorf("namespace %s snapshot: %w", namespaces[index].Name, err)
 			}
-			pinned, err := pinner.pinEndpoint(snapshot.Fingerprint())
+			pinned, err := pinner.ForSnapshot(snapshot.Fingerprint())
 			if err != nil {
 				return nil, fmt.Errorf("namespace %s snapshot changed during build: %w", namespaces[index].Name, err)
 			}
@@ -205,7 +207,7 @@ func namespaceIdentity(namespace Namespace) (string, error) {
 
 func (my *Gateway) EndpointID() string { return my.id }
 
-func (my *Gateway) pinEndpoint(fingerprint string) (Endpoint, error) {
+func (my *Gateway) ForSnapshot(fingerprint string) (Endpoint, error) {
 	state := my.current()
 	if state == nil || state.snapshot.Fingerprint() != fingerprint {
 		return nil, fmt.Errorf("snapshot revision unavailable")
@@ -633,7 +635,7 @@ func (my *gatewayState) executeMutation(ctx context.Context, operation *ast.Oper
 		childField.Name = contract.mutations[field.Name]
 		childField.Alias = key
 		query, childVariables := childOperation(ast.Mutation, ast.SelectionSet{&childField}, operation.VariableDefinitions, variables, contract.publicToChild)
-		body, err := contract.endpoint.Execute(withMutationCommitMetadata(ctx), query, childVariables)
+		body, err := contract.endpoint.Execute(WithMutationCommitMetadata(ctx), query, childVariables)
 		var child endpointReply
 		uncertain := err != nil
 		if err == nil {

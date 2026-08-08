@@ -82,12 +82,19 @@ func (my gqlReply) MarshalJSON() ([]byte, error) {
 
 type mutationCommitMetadataKey struct{}
 
-func withMutationCommitMetadata(ctx context.Context) context.Context {
+// WithMutationCommitMetadata requests the internal cross-endpoint commit-state
+// extension. Transports use it for Gateway coordination; ordinary clients do not.
+func WithMutationCommitMetadata(ctx context.Context) context.Context {
 	return context.WithValue(ctx, mutationCommitMetadataKey{}, true)
 }
 
+func MutationCommitMetadataRequested(ctx context.Context) bool {
+	enabled, _ := ctx.Value(mutationCommitMetadataKey{}).(bool)
+	return enabled
+}
+
 func (my gqlReply) mutationCommit(ctx context.Context, state string) gqlReply {
-	if enabled, _ := ctx.Value(mutationCommitMetadataKey{}).(bool); enabled {
+	if MutationCommitMetadataRequested(ctx) {
 		my.Extensions = map[string]interface{}{"mutationCommit": state}
 	}
 	return my

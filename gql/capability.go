@@ -144,6 +144,29 @@ type Snapshot struct {
 	index        map[string]Capability
 }
 
+// NewSnapshotArtifact validates and freezes a remotely supplied endpoint
+// manifest without exposing Snapshot's mutable representation.
+func NewSnapshotArtifact(schema, fingerprint string, capabilities []Capability) (*Snapshot, error) {
+	if schema == "" || fingerprint == "" {
+		return nil, fmt.Errorf("snapshot schema and fingerprint are required")
+	}
+	if _, err := gqlparser.LoadSchema(&ast.Source{Name: "endpoint.graphql", Input: schema}); err != nil {
+		return nil, fmt.Errorf("endpoint schema: %w", err)
+	}
+	index := make(map[string]Capability, len(capabilities))
+	for _, capability := range capabilities {
+		if capability.Coordinate == "" || index[capability.Coordinate].Coordinate != "" {
+			return nil, fmt.Errorf("endpoint capability coordinate invalid or duplicated: %q", capability.Coordinate)
+		}
+		index[capability.Coordinate] = cloneCapability(capability)
+	}
+	copy := make([]Capability, len(capabilities))
+	for i, capability := range capabilities {
+		copy[i] = cloneCapability(capability)
+	}
+	return &Snapshot{schema: schema, fingerprint: fingerprint, capabilities: copy, index: index}, nil
+}
+
 func (my *Snapshot) Schema() string      { return my.schema }
 func (my *Snapshot) Fingerprint() string { return my.fingerprint }
 

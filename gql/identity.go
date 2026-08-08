@@ -1,6 +1,7 @@
 package gql
 
 import (
+	stdjson "encoding/json"
 	"fmt"
 )
 
@@ -98,6 +99,14 @@ func cloneClaim(v any) (any, error) {
 			out[k] = value
 		}
 		return out, nil
+	case stdjson.Number:
+		if integer, err := x.Int64(); err == nil {
+			return integer, nil
+		}
+		if number, err := x.Float64(); err == nil {
+			return number, nil
+		}
+		return nil, fmt.Errorf("invalid JSON number")
 	case nil, bool, string,
 		int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,

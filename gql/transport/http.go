@@ -3,6 +3,7 @@ package transport
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	core "github.com/ichaly/ideabase/gql"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
 )
@@ -30,6 +32,12 @@ type operationEndpoint interface {
 type Options struct {
 	MaxBodyBytes int64
 	Timeout      time.Duration
+	Delegation   DelegationVerifier
+}
+
+// DelegationVerifier authenticates a signed identity bound to one request.
+type DelegationVerifier interface {
+	Verify(context.Context, string, string) (context.Context, error)
 }
 
 const (
@@ -121,6 +129,35 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	if r.Header.Get("GQL-Mutation-Commit") == "1" {
+		ctx = core.WithMutationCommitMetadata(ctx)
+	}
+	if h.options.Delegation != nil {
+		const scheme = "GQL-Delegation "
+		authorization := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authorization, scheme) {
+			http.Error(w, "delegation required", http.StatusUnauthorized)
+			return
+		}
+		var authErr error
+		ctx, authErr = h.options.Delegation.Verify(ctx, strings.TrimPrefix(authorization, scheme), operationDigest(req))
+		if authErr != nil {
+			http.Error(w, "invalid delegation", http.StatusUnauthorized)
+			return
+		}
+	}
+	if revision := r.Header.Get("GQL-Snapshot"); revision != "" {
+		source, ok := h.endpoint.(manifestEndpoint)
+		if !ok {
+			http.Error(w, "snapshot pinning unavailable", http.StatusConflict)
+			return
+		}
+		snapshot, snapshotErr := source.Snapshot()
+		if snapshotErr != nil || snapshot.Fingerprint() != revision {
+			http.Error(w, "snapshot revision changed", http.StatusConflict)
+			return
+		}
+	}
 	if h.options.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, h.options.Timeout)
@@ -142,6 +179,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeGraphQLError(w, http.StatusInternalServerError, fmt.Errorf("empty execution response"))
+}
+
+func operationDigest(req request) string {
+	body, _ := json.Marshal(req)
+	return fmt.Sprintf("%x", sha256.Sum256(body))
 }
 
 func decodeLimited(r *http.Request, limit int64, dst any) error {

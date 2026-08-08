@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/fasthttp/websocket v1.5.12
 	github.com/gofiber/fiber/v3 v3.4.0
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/huandu/go-clone v1.7.3
 	github.com/iancoleman/strcase v0.3.0
 	github.com/ichaly/ideabase/log v0.0.0-20260110145933-e564f1aca14f
@@ -60,7 +61,6 @@ require (
 	github.com/gofiber/schema v1.8.0 // indirect
 	github.com/gofiber/utils/v2 v2.1.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/invzhi/next v1.1.1 // indirect
 	github.com/jackc/pgio v1.0.0 // indirect

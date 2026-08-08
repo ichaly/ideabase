@@ -1,0 +1,109 @@
+package transport
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	core "github.com/ichaly/ideabase/gql"
+)
+
+type runtimeEndpoint struct {
+	snapshot       *core.Snapshot
+	identity       core.Identity
+	commitMetadata bool
+}
+
+func (my *runtimeEndpoint) Snapshot() (*core.Snapshot, error) { return my.snapshot, nil }
+func (my *runtimeEndpoint) Execute(ctx context.Context, _ string, _ map[string]any) ([]byte, error) {
+	my.identity, _ = core.IdentityFromContext(ctx)
+	my.commitMetadata = core.MutationCommitMetadataRequested(ctx)
+	return []byte(`{"data":{"hello":"world"}}`), nil
+}
+
+func TestRemoteEndpointLoadsManifestAndDelegatesIdentity(t *testing.T) {
+	snapshot, err := core.NewSnapshotArtifact("type Query { hello: String! }", "revision-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := &runtimeEndpoint{snapshot: snapshot}
+	key := []byte("0123456789abcdef0123456789abcdef")
+	serverCodec, err := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientCodec, err := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	mux.Handle("/graphql", NewHandler(endpoint, Options{Delegation: serverCodec}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
+		EndpointID: "child", ManifestURL: server.URL + "/manifest", ExecuteURL: server.URL + "/graphql",
+		Delegation: clientCodec, AllowHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := remote.Snapshot()
+	if err != nil || loaded.Fingerprint() != "revision-1" {
+		t.Fatalf("snapshot = %#v, %v", loaded, err)
+	}
+	identity, err := core.NewIdentity(core.IdentityInput{Tenant: "tenant", Subject: "user", Roles: []string{"reader"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := remote.Execute(core.WithIdentity(context.Background(), identity), `{ hello }`, nil)
+	if err != nil || string(body) != `{"data":{"hello":"world"}}` {
+		t.Fatalf("execute = %s, %v", body, err)
+	}
+	if endpoint.identity.Tenant() != "tenant" || endpoint.identity.Subject() != "user" {
+		t.Fatalf("delegated identity = %#v", endpoint.identity)
+	}
+	_, err = remote.Execute(core.WithMutationCommitMetadata(core.WithIdentity(context.Background(), identity)), `{ hello }`, nil)
+	if err != nil || !endpoint.commitMetadata {
+		t.Fatalf("commit metadata context was not forwarded: %v", err)
+	}
+	gateway, err := core.NewGateway("root", core.Namespace{Name: "child", Endpoint: remote})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = gateway.Execute(core.WithIdentity(context.Background(), identity), `{ child { hello } }`, nil)
+	if err != nil || string(body) != `{"data":{"child":{"hello":"world"}}}` {
+		t.Fatalf("gateway execute = %s, %v", body, err)
+	}
+}
+
+func TestRemoteEndpointRefreshKeepsLastKnownGoodManifest(t *testing.T) {
+	snapshot, _ := core.NewSnapshotArtifact("type Query { hello: String }", "good", nil)
+	endpoint := &runtimeEndpoint{snapshot: snapshot}
+	mux := http.NewServeMux()
+	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
+		EndpointID: "child", ManifestURL: server.URL + "/manifest", ExecuteURL: server.URL + "/graphql", AllowHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint.snapshot, _ = core.NewSnapshotArtifact("type Query { broken: String }", "bad", nil)
+	badMux := http.NewServeMux()
+	badMux.Handle("/manifest", NewManifestHandler("different-id", endpoint))
+	badServer := httptest.NewServer(badMux)
+	defer badServer.Close()
+	remote.manifest = badServer.URL + "/manifest"
+	if err := remote.Refresh(context.Background()); err == nil {
+		t.Fatal("invalid manifest refresh succeeded")
+	}
+	got, _ := remote.Snapshot()
+	if got.Fingerprint() != "good" {
+		t.Fatalf("LKG fingerprint = %s", got.Fingerprint())
+	}
+}
