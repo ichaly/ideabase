@@ -488,7 +488,74 @@ func (my *Executor) resolveRootField(ctx context.Context, operation *ast.Operati
 	if err != nil {
 		return nil, nil, err
 	}
-	return my.enrich(ctx, operation, field, variables, result)
+	result, warnings, projected, err := my.enrich(ctx, operation, field, variables, result)
+	if err != nil {
+		return nil, warnings, err
+	}
+	// Entity requery already applies aliases, nested selections and nullability
+	// through the normal SQL path; projecting it again by field.Name would lose
+	// alias keys. Direct map/struct/list results still need the helper below.
+	if projected {
+		return result, warnings, nil
+	}
+	objectType := ""
+	if field.Definition != nil && field.Definition.Type != nil {
+		objectType = field.Definition.Type.Name()
+	}
+	return projectRootResult(result, field.SelectionSet, objectType), warnings, nil
+}
+
+// projectRootResult applies the client's selection to values returned directly
+// by a root Resolver. SQL-backed and entity-requery paths already return a
+// projected shape; this helper keeps map/struct/list root results consistent.
+func projectRootResult(value any, set ast.SelectionSet, objectType string) any {
+	if value == nil || len(set) == 0 {
+		return value
+	}
+	return projectRootValue(plain(value), set, objectType)
+}
+
+func projectRootValue(value any, set ast.SelectionSet, objectType string) any {
+	switch current := value.(type) {
+	case []any:
+		out := make([]any, len(current))
+		for i, item := range current {
+			out[i] = projectRootValue(item, set, objectType)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(set))
+		for _, selection := range set {
+			field, ok := selection.(*ast.Field)
+			if !ok {
+				continue
+			}
+			key := field.Alias
+			if key == "" {
+				key = field.Name
+			}
+			if field.Name == "__typename" {
+				out[key] = objectType
+				if actual, ok := current["__typename"].(string); ok {
+					out[key] = actual
+				}
+				continue
+			}
+			child, exists := current[field.Name]
+			if !exists {
+				out[key] = nil
+				continue
+			}
+			childType := objectType
+			if field.Definition != nil && field.Definition.Type != nil {
+				childType = field.Definition.Type.Name()
+			}
+			out[key] = projectRootValue(child, field.SelectionSet, childType)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 // executeDefaultRootField 在自定义根Resolver与默认数据库字段混排时逐字段复用原
@@ -536,17 +603,20 @@ func (my *Executor) executeDefaultRootField(ctx context.Context, operation *ast.
 // enrich 回查补全：根Resolver返回实体id时，以客户端选择集合成实体查询走既有
 // 编译路径读回（计划缓存、字段级resolver、关系全部复用），对齐变更读回语义。
 // 第二返回值为回查携带的非致命警告（data与errors共存时），随最终响应errors返回
-func (my *Executor) enrich(ctx context.Context, operation *ast.OperationDefinition, f *ast.Field, variables map[string]interface{}, result interface{}) (interface{}, gqlerror.List, error) {
+func (my *Executor) enrich(ctx context.Context, operation *ast.OperationDefinition, f *ast.Field, variables map[string]interface{}, result interface{}) (interface{}, gqlerror.List, bool, error) {
 	if result == nil || len(f.SelectionSet) == 0 {
-		return result, nil, nil
+		return result, nil, false, nil
 	}
 	switch result.(type) {
 	case map[string]interface{}, []interface{}:
-		return result, nil, nil
+		return result, nil, false, nil
+	}
+	if my.metadata == nil || f.Definition == nil || f.Definition.Type == nil {
+		return result, nil, false, nil
 	}
 	className := f.Definition.Type.Name()
 	if _, ok := my.metadata.GetNode(className); !ok {
-		return result, nil, nil
+		return result, nil, false, nil
 	}
 	// 类型化Resolver返回实体结构体：取Id触发回查，与返回标量id等价
 	if v := reflect.Indirect(reflect.ValueOf(result)); v.Kind() == reflect.Struct {
@@ -599,14 +669,14 @@ func (my *Executor) enrich(ctx context.Context, operation *ast.OperationDefiniti
 
 	reply := my.queryData(ctx, sb.String(), args, "")
 	if reply.Data == nil && len(reply.Errors) > 0 { // 部分错误(如远程警告)与data共存时视为成功
-		return nil, nil, fmt.Errorf("Resolver回查失败: %w", reply.Errors)
+		return nil, nil, false, fmt.Errorf("Resolver回查失败: %w", reply.Errors)
 	}
 	wrapper, _ := reply.Data[fieldName].(map[string]interface{})
 	items, _ := wrapper[protocol.ITEMS].([]interface{})
 	if len(items) == 0 {
-		return nil, reply.Errors, nil
+		return nil, reply.Errors, false, nil
 	}
-	return items[0], reply.Errors, nil
+	return items[0], reply.Errors, true, nil
 }
 
 // writeSelectionSet 把客户端选择集序列化回GraphQL文本用于合成回查
