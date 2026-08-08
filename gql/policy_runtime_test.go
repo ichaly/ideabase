@@ -4,8 +4,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 func emptyMetadata(t *testing.T) *Metadata {
@@ -263,7 +266,7 @@ func TestPolicyProviderFiltersIntrospectionAndSchemaArtifact(t *testing.T) {
 		allowed := []string{"*"}
 		for _, use := range request.FieldUses {
 			useAllowed := allowed
-			if request.Resource == "User" && (use == FieldUseSelect || use == FieldUseReturn || use == FieldUseJoin) {
+			if request.Resource == "User" && (use == FieldUseSelect || use == FieldUseReturn || use == FieldUseJoin || use == FieldUseAggregate) {
 				useAllowed = []string{"id"}
 			}
 			fields[use] = useAllowed
@@ -277,6 +280,9 @@ func TestPolicyProviderFiltersIntrospectionAndSchemaArtifact(t *testing.T) {
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	typeInfo := reply.Data["__type"].(map[string]any)
 	require.Equal(t, []any{map[string]any{"name": "id"}}, typeInfo["fields"])
+	reply = executor.run(ctx, `{ __type(name: "UserStats") { fields { name } } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, []any{map[string]any{"name": "key"}, map[string]any{"name": "count"}}, reply.Data["__type"].(map[string]any)["fields"])
 	artifact, err := executor.EffectiveSchema(ctx)
 	require.NoError(t, err)
 	require.NotEmpty(t, artifact.PermissionSignature)
@@ -301,4 +307,23 @@ func TestPolicyProviderEnforcesRequestLimitBeforeSQL(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(body), "limit 2 exceeds 1")
 	require.NotContains(t, string(body), `"data"`)
+}
+
+func TestBuiltinPermissionsFilterEffectiveIntrospection(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	user, ok := executor.metadata.GetNode("User")
+	require.True(t, ok)
+	user.Permissions = map[string]*protocol.Permission{"reader": {Select: []string{"id"}}}
+	reply := executor.run(WithRole(context.Background(), "reader"), `{ __type(name: "User") { fields { name } } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	fields := reply.Data["__type"].(map[string]any)["fields"]
+	require.Equal(t, []any{map[string]any{"name": "id"}}, fields)
+	reply = executor.run(WithRole(context.Background(), "reader"), `{ __type(name: "UserCreateInput") { name } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Nil(t, reply.Data["__type"])
+	artifact, err := executor.EffectiveSchema(WithRole(context.Background(), "reader"))
+	require.NoError(t, err)
+	_, err = gqlparser.LoadSchema(&ast.Source{Name: "reader.graphql", Input: artifact.Schema})
+	require.NoError(t, err)
 }
