@@ -69,7 +69,8 @@ func (my *Executor) authorize(ctx context.Context, op *ast.OperationDefinition, 
 	if op == nil || my.metadata == nil {
 		return nil
 	}
-	role, hasRole := Role(ctx)
+	roles := Roles(ctx)
+	hasRole := len(roles) > 0
 	var first error
 	var visit func(ast.SelectionSet, *protocol.Class, string, int)
 	visit = func(set ast.SelectionSet, inherited *protocol.Class, inheritedAction string, depth int) {
@@ -123,8 +124,8 @@ func (my *Executor) authorize(ctx context.Context, op *ast.OperationDefinition, 
 				first = policyError(class, action, "role")
 				continue
 			}
-			perm, ok := class.Permissions[role]
-			if !ok || perm == nil {
+			perm := mergePermissions(class, roles)
+			if perm == nil {
 				first = policyError(class, action, "role")
 				continue
 			}
@@ -142,7 +143,7 @@ func (my *Executor) authorize(ctx context.Context, op *ast.OperationDefinition, 
 				}
 			}
 			for _, required := range additionalActions(my.metadata, f) {
-				permission, err := permissionFor(class, required, scopeWithRole(ctx, scopeValues(ctx), true))
+				permission, err := permissionForRoles(class, required, roles)
 				if err != nil {
 					first = err
 				} else if err = my.authorizeMutation(class, f, permission, required, vars, scopeWithRole(ctx, scopeValues(ctx), true)); err != nil {
@@ -369,12 +370,41 @@ func (my *Executor) authorizeInputValue(class *protocol.Class, permission *proto
 			candidate[field.Column] = row[name]
 		}
 		if permission != nil {
-			if err := evaluateCheck(class, permission, action, candidate, scope); err != nil {
-				return err
+			var checkErr error
+			if roles, ok := scope[protocol.CONTEXT_ROLES].([]string); ok && len(roles) > 0 {
+				checkErr = evaluateCheckAny(class, roles, action, candidate, scope)
+			} else {
+				checkErr = evaluateCheck(class, permission, action, candidate, scope)
+			}
+			if checkErr != nil {
+				return checkErr
 			}
 		}
 	}
 	return nil
+}
+
+func evaluateCheckAny(class *protocol.Class, roles []string, action string, values map[string]any, scope map[string]interface{}) error {
+	var first error
+	for _, role := range roles {
+		permission := class.Permissions[role]
+		if permission == nil || !operationAllowed(class, permission, action) {
+			continue
+		}
+		copyValues := make(map[string]any, len(values))
+		for key, value := range values {
+			copyValues[key] = value
+		}
+		if err := evaluateCheck(class, permission, action, copyValues, scope); err == nil {
+			return nil
+		} else if first == nil {
+			first = err
+		}
+	}
+	if first != nil {
+		return first
+	}
+	return policyError(class, action, "role")
 }
 
 func (my *Executor) authorizeRelationInput(field *protocol.Field, value any, scope map[string]interface{}) error {
@@ -402,7 +432,12 @@ func (my *Executor) authorizeRelationInput(field *protocol.Field, value any, sco
 						return policyError(target, protocol.OP_UPDATE, field.Relation.TargetField)
 					}
 				}
-				if err = evaluateCheck(target, permission, protocol.OP_UPDATE, map[string]any{}, scope); err != nil {
+				if roles, ok := scope[protocol.CONTEXT_ROLES].([]string); ok && len(roles) > 0 {
+					err = evaluateCheckAny(target, roles, protocol.OP_UPDATE, map[string]any{}, scope)
+				} else {
+					err = evaluateCheck(target, permission, protocol.OP_UPDATE, map[string]any{}, scope)
+				}
+				if err != nil {
 					return err
 				}
 			}
@@ -427,12 +462,63 @@ func permissionFor(class *protocol.Class, action string, scope map[string]interf
 	if class.Permissions == nil {
 		return nil, nil
 	}
+	if roles, ok := scope[protocol.CONTEXT_ROLES].([]string); ok && len(roles) > 0 {
+		return permissionForRoles(class, action, roles)
+	}
 	role, _ := scope[protocol.CONTEXT_ROLE].(string)
 	permission := class.Permissions[role]
 	if role == "" || permission == nil || !operationAllowed(class, permission, action) {
 		return nil, policyError(class, action, "role")
 	}
 	return permission, nil
+}
+
+func permissionForRoles(class *protocol.Class, action string, roles []string) (*protocol.Permission, error) {
+	permission := mergePermissions(class, roles)
+	if permission == nil || !operationAllowed(class, permission, action) {
+		return nil, policyError(class, action, "role")
+	}
+	return permission, nil
+}
+
+func mergePermissions(class *protocol.Class, roles []string) *protocol.Permission {
+	if class == nil || class.Permissions == nil {
+		return nil
+	}
+	out := &protocol.Permission{}
+	found := false
+	for _, role := range roles {
+		p := class.Permissions[role]
+		if p == nil {
+			continue
+		}
+		found = true
+		out.Select = append(out.Select, p.Select...)
+		out.Insert = append(out.Insert, p.Insert...)
+		out.Update = append(out.Update, p.Update...)
+		out.Delete = out.Delete || p.Delete
+		out.Restore = out.Restore || p.Restore
+		out.Aggregate = out.Aggregate || p.Aggregate
+	}
+	if !found {
+		return nil
+	}
+	out.Select = uniqueStrings(out.Select)
+	out.Insert = uniqueStrings(out.Insert)
+	out.Update = uniqueStrings(out.Update)
+	return out
+}
+
+func uniqueStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, item := range in {
+		if !seen[item] {
+			seen[item] = true
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func policyRows(value any) ([]map[string]interface{}, error) {

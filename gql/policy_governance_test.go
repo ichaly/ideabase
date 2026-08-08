@@ -238,3 +238,34 @@ func TestPolicyEntityFieldNamedLikeWrapperStillRequiresSelect(t *testing.T) {
 	f := policyField("items", "Item", nil, ast.SelectionSet{policyField("total", "Int", nil, nil)})
 	require.ErrorContains(t, (&Executor{}).authorizeSelection(c, f, p, protocol.OP_SELECT, nil), "total")
 }
+
+func TestPolicyMultipleRolesUnionFieldsAndOrChecks(t *testing.T) {
+	c := &protocol.Class{Name: "Item", Table: "items", Fields: map[string]*protocol.Field{}, Permissions: map[string]*protocol.Permission{
+		"viewer":  {Select: []string{"public"}},
+		"reader":  {Select: []string{"public"}, Insert: []string{"public", "ownerId"}, Check: []protocol.Predicate{{Column: "owner_id", Operator: "eq", Context: "userId"}}},
+		"auditor": {Select: []string{"audit"}, Insert: []string{"audit"}, Check: []protocol.Predicate{{Column: "audit_id", Operator: "eq", Context: "userId"}}},
+	}}
+	c.AddField(&protocol.Field{Name: "public", Column: "public"})
+	c.AddField(&protocol.Field{Name: "audit", Column: "audit"})
+	c.AddField(&protocol.Field{Name: "ownerId", Column: "owner_id"})
+	c.AddField(&protocol.Field{Name: "auditId", Column: "audit_id"})
+	executor := &Executor{metadata: policyMetadata(c)}
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u", Roles: []string{"reader", "auditor"}})
+	require.NoError(t, err)
+	ctx := WithScope(WithIdentity(context.Background(), identity), map[string]any{"userId": "u"})
+	root := policyField("items", "Item", nil, ast.SelectionSet{policyField("public", "String", nil, nil), policyField("audit", "String", nil, nil)})
+	op := &ast.OperationDefinition{Operation: ast.Query, SelectionSet: ast.SelectionSet{root}}
+	require.NoError(t, executor.authorize(ctx, op, nil))
+
+	mutation := policyField("createItem", "Item", variableInput("input"), nil)
+	// Each role independently satisfies a different check; role branches are OR.
+	vars := map[string]any{"input": map[string]any{"public": "x", "ownerId": "u"}}
+	mutationOp := &ast.OperationDefinition{Operation: ast.Mutation, SelectionSet: ast.SelectionSet{mutation}}
+	require.NoError(t, executor.authorize(ctx, mutationOp, vars))
+
+	viewerReader, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u", Roles: []string{"viewer", "reader"}})
+	require.NoError(t, err)
+	deniedCtx := WithScope(WithIdentity(context.Background(), viewerReader), map[string]any{"userId": "u"})
+	denied := map[string]any{"input": map[string]any{"public": "x", "ownerId": "someone-else"}}
+	require.ErrorContains(t, executor.authorize(deniedCtx, mutationOp, denied), "owner_id")
+}
