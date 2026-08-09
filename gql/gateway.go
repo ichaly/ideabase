@@ -22,8 +22,11 @@ import (
 )
 
 const (
-	gatewayMaxTokens = 100_000
-	gatewayMaxDepth  = 8
+	gatewayMaxTokens        = 100_000
+	gatewayMaxDepth         = 8
+	gatewayMaxRootFields    = 64
+	gatewayMaxFanout        = 32
+	gatewayMaxChildResponse = 8 << 20
 )
 
 // Endpoint 是命名空间组合所需的最小传输无关契约。
@@ -399,6 +402,9 @@ func (my *gatewayState) execute(ctx context.Context, query string, variables map
 	if err != nil {
 		return marshalGatewayReply(gatewayReply{Errors: gqlErrors(err)})
 	}
+	if len(operation.SelectionSet) > gatewayMaxRootFields {
+		return marshalGatewayReply(gatewayReply{Errors: gatewayLimitError("root field")})
+	}
 	operation.SelectionSet, err = normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, coerced, my.schema)
 	if err != nil {
 		return marshalGatewayReply(gatewayReply{Errors: gqlErrors(err)})
@@ -414,6 +420,9 @@ func (my *gatewayState) execute(ctx context.Context, query string, variables map
 			executed = my.executeMutation(ctx, dataOperation, coerced)
 		default:
 			executed.Errors = gqlerror.List{gqlerror.Errorf("gateway暂不支持%s操作", dataOperation.Operation)}
+		}
+		if executed.Data == nil && len(executed.Errors) > 0 {
+			return marshalGatewayReply(executed)
 		}
 		if !executed.NullData {
 			for key, value := range executed.Data {
@@ -450,6 +459,12 @@ func marshalGatewayReply(reply gatewayReply) ([]byte, error) {
 			Extensions map[string]any `json:"extensions,omitempty"`
 		}{Data: nil, Errors: reply.Errors, Extensions: reply.Extensions})
 	}
+	if reply.Data == nil {
+		return jsonReply.Marshal(struct {
+			Errors     gqlerror.List  `json:"errors,omitempty"`
+			Extensions map[string]any `json:"extensions,omitempty"`
+		}{Errors: reply.Errors, Extensions: reply.Extensions})
+	}
 	return jsonReply.Marshal(struct {
 		Data       any            `json:"data,omitempty"`
 		Errors     gqlerror.List  `json:"errors,omitempty"`
@@ -476,6 +491,9 @@ func (my *gatewayState) executeQuery(ctx context.Context, operation *ast.Operati
 			continue
 		}
 		groups[contract] = append(groups[contract], queryEntry{index: index, field: field})
+	}
+	if len(groups) > gatewayMaxFanout {
+		return gatewayReply{Errors: gatewayLimitError("namespace fan-out")}
 	}
 	for contract, entries := range groups {
 		wait.Add(1)
@@ -695,6 +713,9 @@ type endpointReply struct {
 
 func decodeEndpointReply(body []byte) (endpointReply, error) {
 	var reply endpointReply
+	if len(body) > gatewayMaxChildResponse {
+		return reply, fmt.Errorf("endpoint response exceeds %d bytes", gatewayMaxChildResponse)
+	}
 	decoder := stdjson.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&reply); err != nil {
@@ -710,6 +731,12 @@ func decodeEndpointReply(body []byte) (endpointReply, error) {
 		return reply, fmt.Errorf("endpoint响应缺少data或errors")
 	}
 	return reply, nil
+}
+
+func gatewayLimitError(resource string) gqlerror.List {
+	err := gqlerror.Errorf("gateway %s limit exceeded", resource)
+	err.Extensions = map[string]any{"code": "LIMIT_EXCEEDED"}
+	return gqlerror.List{err}
 }
 
 func childOperation(kind ast.Operation, set ast.SelectionSet, definitions ast.VariableDefinitionList, variables map[string]any, reverse map[string]string) (string, map[string]any) {

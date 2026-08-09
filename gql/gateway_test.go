@@ -412,3 +412,24 @@ func TestGatewayBatchesRepeatedNamespaceAliasesIntoOneChildOperation(t *testing.
 	require.Equal(t, int32(1), child.calls.Load())
 	require.JSONEq(t, `{"data":{"first":{"user":{"id":"1"}},"second":{"users":[{"id":"2"}]}}}`, string(body))
 }
+
+func TestGatewayRejectsExcessiveFanoutBeforeCallingChildren(t *testing.T) {
+	namespaces := make([]Namespace, gatewayMaxFanout+1)
+	var query strings.Builder
+	query.WriteString("{")
+	for index := range namespaces {
+		name := fmt.Sprintf("n%d", index)
+		namespaces[index] = Namespace{Name: name, Endpoint: newGatewayEndpoint(name, gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+			t.Fatal("child called before fan-out rejection")
+			return nil, nil
+		})}
+		fmt.Fprintf(&query, " %s { user { id } }", name)
+	}
+	query.WriteString(" }")
+	gateway, err := NewGateway("root", namespaces...)
+	require.NoError(t, err)
+	body, err := gateway.Execute(context.Background(), query.String(), nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "LIMIT_EXCEEDED")
+	require.NotContains(t, string(body), `"data"`)
+}
