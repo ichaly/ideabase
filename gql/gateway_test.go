@@ -589,6 +589,28 @@ func TestGatewayDoesNotCacheVariableConditionalSelection(t *testing.T) {
 	require.False(t, cached)
 }
 
+func TestGatewayCachedOperationIsConcurrentReadOnly(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+		return []byte(`{"data":{"user":{"id":"1"}}}`), nil
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	query := `{ crm { user { id } } }`
+	_, err = gateway.Execute(context.Background(), query, nil)
+	require.NoError(t, err)
+	var wait sync.WaitGroup
+	for range 64 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			body, executeErr := gateway.Execute(context.Background(), query, nil)
+			require.NoError(t, executeErr)
+			require.JSONEq(t, `{"data":{"crm":{"user":{"id":"1"}}}}`, string(body))
+		}()
+	}
+	wait.Wait()
+}
+
 func BenchmarkGatewayWarmQuery(b *testing.B) {
 	child := newGatewayEndpoint("crm", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
 		return []byte(`{"data":{"user":{"id":"1"}}}`), nil
