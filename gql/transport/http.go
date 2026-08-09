@@ -31,9 +31,9 @@ type operationEndpoint interface {
 
 // Options controls the HTTP resource limits. Zero values use safe defaults.
 type Options struct {
-	MaxBodyBytes int64
-	Timeout      time.Duration
-	Delegation   DelegationVerifier
+	MaxBodyBytes, MaxResponseBytes int64
+	Timeout                        time.Duration
+	Delegation                     DelegationVerifier
 }
 
 // DelegationVerifier authenticates a signed identity bound to one request.
@@ -43,6 +43,7 @@ type DelegationVerifier interface {
 
 const (
 	defaultMaxBodyBytes = 1 << 20
+	defaultMaxResponse  = 8 << 20
 	defaultTimeout      = 30 * time.Second
 	responseType        = "application/graphql-response+json"
 )
@@ -55,6 +56,9 @@ func NewHandler(endpoint Endpoint, options ...Options) http.Handler {
 	}
 	if opts.MaxBodyBytes <= 0 {
 		opts.MaxBodyBytes = defaultMaxBodyBytes
+	}
+	if opts.MaxResponseBytes <= 0 {
+		opts.MaxResponseBytes = defaultMaxResponse
 	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = defaultTimeout
@@ -192,6 +196,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body, err = h.endpoint.Execute(ctx, req.Query, req.Variables)
 	}
 	if len(body) != 0 {
+		if int64(len(body)) > h.options.MaxResponseBytes {
+			writeGraphQLError(w, http.StatusInternalServerError, fmt.Errorf("GraphQL response exceeds configured limit"))
+			return
+		}
 		if writeGraphQL(w, body) {
 			return
 		}

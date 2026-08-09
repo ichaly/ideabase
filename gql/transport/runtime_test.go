@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,5 +235,21 @@ func TestRemoteEndpointRejectsFalseSubscriptionCapability(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("schema-only subscription capability was accepted")
+	}
+}
+
+func TestSubscriptionHandlerLimitsEventFrames(t *testing.T) {
+	snapshot, _ := core.NewSnapshotArtifact("type Query { hello: String }", "frame-limit", nil)
+	frames := make(chan []byte, 1)
+	frames <- []byte(`{"data":{"value":"` + strings.Repeat("x", 64) + `"}}`)
+	close(frames)
+	endpoint := &subscriptionRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}, events: frames}
+	request := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { changed }"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "text/event-stream")
+	response := httptest.NewRecorder()
+	NewSubscriptionHandler(endpoint, Options{MaxResponseBytes: 32}).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "LIMIT_EXCEEDED") || strings.Contains(response.Body.String(), strings.Repeat("x", 64)) {
+		t.Fatalf("oversized subscription frame = %d %s", response.Code, response.Body.String())
 	}
 }

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -164,5 +165,14 @@ func TestRequestBodyLimitAndDeadline(t *testing.T) {
 	}
 	if _, ok := ep.ctx.Deadline(); !ok {
 		t.Fatal("request deadline missing")
+	}
+}
+
+func TestResponseBodyLimitRejectsBeforeWritingGraphQL(t *testing.T) {
+	ep := &testEndpoint{body: []byte(`{"data":{"value":"` + strings.Repeat("x", 64) + `"}}`)}
+	w := httptest.NewRecorder()
+	NewHandler(ep, Options{MaxResponseBytes: 32}).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
+	if w.Code != http.StatusInternalServerError || w.Header().Get("Content-Type") == responseType || bytes.Contains(w.Body.Bytes(), ep.body) {
+		t.Fatalf("oversized response = %d/%q %s", w.Code, w.Header().Get("Content-Type"), w.Body.Bytes())
 	}
 }

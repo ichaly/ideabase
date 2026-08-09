@@ -3,7 +3,6 @@ package transport
 import (
 	"context"
 	"fmt"
-	"mime"
 	"net/http"
 	"strings"
 )
@@ -21,6 +20,9 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 	if opts.MaxBodyBytes <= 0 {
 		opts.MaxBodyBytes = defaultMaxBodyBytes
 	}
+	if opts.MaxResponseBytes <= 0 {
+		opts.MaxResponseBytes = defaultMaxResponse
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if endpoint == nil {
 			http.Error(w, "subscription unavailable", http.StatusServiceUnavailable)
@@ -35,8 +37,7 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 			http.Error(w, "Accept must include text/event-stream", http.StatusNotAcceptable)
 			return
 		}
-		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil || mediaType != "application/json" {
+		if !isJSONContentType(r.Header.Get("Content-Type")) {
 			http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 			return
 		}
@@ -92,6 +93,11 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 			case frame, open := <-events:
 				if !open {
 					_, _ = fmt.Fprint(w, "event: complete\n\n")
+					flusher.Flush()
+					return
+				}
+				if int64(len(frame)) > opts.MaxResponseBytes {
+					_, _ = fmt.Fprint(w, "event: next\ndata: {\"errors\":[{\"message\":\"subscription event exceeds response limit\",\"extensions\":{\"code\":\"LIMIT_EXCEEDED\"}}]}\n\nevent: complete\n\n")
 					flusher.Flush()
 					return
 				}
