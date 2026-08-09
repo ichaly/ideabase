@@ -26,6 +26,9 @@ const (
 	gatewayMaxDepth         = 8
 	gatewayMaxRootFields    = 64
 	gatewayMaxFanout        = 32
+	gatewayMaxDocumentBytes = 1 << 20
+	gatewayMaxVariableBytes = 1 << 20
+	gatewayMaxVariables     = 256
 	gatewayMaxChildResponse = 8 << 20
 	gatewayTypeKey          = "__gql_gateway_type"
 )
@@ -293,6 +296,9 @@ func (my *gatewayState) subscribe(ctx context.Context, query string, variables m
 	if my == nil || my.schema.Subscription == nil {
 		return nil, fmt.Errorf("gateway subscription不可用")
 	}
+	if errs := validateGatewayRequest(query, variables); len(errs) > 0 {
+		return nil, errs
+	}
 	doc, errs := loadQuery(my.schema, query, gatewayMaxTokens, my.validation)
 	if len(errs) > 0 {
 		return nil, errs
@@ -390,6 +396,9 @@ func (my *Gateway) ExecuteOperation(ctx context.Context, query string, variables
 func (my *gatewayState) execute(ctx context.Context, query string, variables map[string]any, operationName string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if errs := validateGatewayRequest(query, variables); len(errs) > 0 {
+		return marshalGatewayReply(gatewayReply{Errors: errs})
 	}
 	doc, errs := loadQuery(my.schema, query, gatewayMaxTokens, my.validation)
 	if len(errs) > 0 {
@@ -738,6 +747,28 @@ func gatewayLimitError(resource string) gqlerror.List {
 	err := gqlerror.Errorf("gateway %s limit exceeded", resource)
 	err.Extensions = map[string]any{"code": "LIMIT_EXCEEDED"}
 	return gqlerror.List{err}
+}
+
+func validateGatewayRequest(query string, variables map[string]any) gqlerror.List {
+	if len(query) > gatewayMaxDocumentBytes {
+		return gatewayLimitError("document size")
+	}
+	if len(variables) > gatewayMaxVariables {
+		return gatewayLimitError("variable count")
+	}
+	if len(variables) == 0 {
+		return nil
+	}
+	body, err := stdjson.Marshal(variables)
+	if err != nil {
+		item := gqlerror.Errorf("gateway variables must be JSON-compatible")
+		item.Extensions = map[string]any{"code": "BAD_USER_INPUT"}
+		return gqlerror.List{item}
+	}
+	if len(body) > gatewayMaxVariableBytes {
+		return gatewayLimitError("variable size")
+	}
+	return nil
 }
 
 func childOperation(kind ast.Operation, set ast.SelectionSet, definitions ast.VariableDefinitionList, variables map[string]any, reverse map[string]string) (string, map[string]any) {

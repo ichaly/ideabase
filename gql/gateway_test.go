@@ -502,3 +502,22 @@ func TestGatewayRejectsExcessiveFanoutBeforeCallingChildren(t *testing.T) {
 	require.Contains(t, string(body), "LIMIT_EXCEEDED")
 	require.NotContains(t, string(body), `"data"`)
 }
+
+func TestGatewayRejectsOversizedEmbeddedRequestBeforeCallingChild(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+		t.Fatal("child called before request limit rejection")
+		return nil, nil
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+
+	body, err := gateway.Execute(context.Background(), `{ crm { user { id } } }`, map[string]any{"input": strings.Repeat("x", gatewayMaxVariableBytes+1)})
+	require.NoError(t, err)
+	require.Contains(t, string(body), "LIMIT_EXCEEDED")
+	require.Zero(t, child.calls.Load())
+
+	body, err = gateway.Execute(context.Background(), "#"+strings.Repeat("x", gatewayMaxDocumentBytes)+"\n{ crm { user { id } } }", nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "LIMIT_EXCEEDED")
+	require.Zero(t, child.calls.Load())
+}
