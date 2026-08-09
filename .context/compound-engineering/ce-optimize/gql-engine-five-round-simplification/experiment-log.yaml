@@ -63,19 +63,47 @@ experiments:
       observer_disabled_ns: 2.149
     primary_delta: "-24"
     learnings: Private compatibility wrappers can be removed safely only after checking both production and same-package tests; observable error text must remain unchanged.
+  - iteration: 2
+    batch: 2
+    hypothesis: Replace hand-written ordered concatenation and deletion loops in metadata assembly with standard-library slice algorithms.
+    category: metadata-schema
+    outcome: kept
+    changes:
+      - file: gql/metadata.go
+        summary: Replaced the loader deletion loop with slices.DeleteFunc.
+      - file: gql/metadata/loader_config.go
+        summary: Replaced repeated ordered appends with exact-capacity slices.Concat.
+    gates:
+      unit_tests_passed: 1
+      race_tests_passed: 1
+      vet_passed: 1
+      staticcheck_findings: 7
+      api_compatibility_passed: 1
+      simple_compile_allocs: 22
+      nested_compile_allocs: 51
+      gateway_warm_allocs: 75
+      observer_disabled_allocs: 0
+    gates_passed: true
+    diagnostics:
+      production_go_lines: 22157
+      production_go_files: 76
+      production_functions: 889
+      production_branch_tokens: 3699
+      test_go_lines: 14673
+      simple_compile_ns: 2060
+      nested_compile_ns: 4706
+      gateway_warm_ns: 7928
+      observer_disabled_ns: 2.101
+    primary_delta: "-9"
+    learnings: Standard-library slice algorithms express startup ordering exactly while reducing branches and leaving request-path allocations unchanged.
 
 best:
-  iteration: 1
+  iteration: 2
   metrics:
-    production_go_lines: 22166
+    production_go_lines: 22157
   total_judge_cost_usd: 0
 
 hypothesis_backlog:
-  - description: Consolidate metadata and schema construction helpers without adding hot-path abstraction.
-    category: metadata-schema
-    priority: high
-    dep_status: not_applicable
-    required_deps: []
   - description: Deduplicate PostgreSQL compiler operation shapes and shared rendering branches.
     category: compiler
     priority: high

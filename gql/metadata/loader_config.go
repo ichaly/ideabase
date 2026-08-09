@@ -51,10 +51,7 @@ func (my *ConfigLoader) Load(h protocol.Hoster) error {
 			aliasClasses = append(aliasClasses, className)
 		}
 	}
-	orderedClasses := append(tableClasses, canonClasses...)
-	orderedClasses = append(orderedClasses, overrideClasses...)
-	orderedClasses = append(orderedClasses, aliasClasses...)
-	orderedClasses = append(orderedClasses, virtualClasses...)
+	orderedClasses := slices.Concat(tableClasses, canonClasses, overrideClasses, aliasClasses, virtualClasses)
 
 	for _, className := range orderedClasses {
 		classConfig := my.cfg.Metadata.Classes[className]
@@ -256,10 +253,7 @@ func (my *ConfigLoader) applyFieldConfig(class *protocol.Class, fieldConfigs map
 			aliasFields = append(aliasFields, fieldName)
 		}
 	}
-	orderedFields := append(tableFields, classFields...)
-	orderedFields = append(orderedFields, overrideFields...)
-	orderedFields = append(orderedFields, aliasFields...)
-	orderedFields = append(orderedFields, virtualFields...)
+	orderedFields := slices.Concat(tableFields, classFields, overrideFields, aliasFields, virtualFields)
 
 	fields := class.Fields
 	for _, fieldName := range orderedFields {

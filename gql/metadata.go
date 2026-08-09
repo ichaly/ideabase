@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -159,13 +160,9 @@ func WithoutLoader(names ...string) MetadataOption {
 	return func(opts *metadataOptions) {
 		for _, name := range names {
 			delete(opts.optionalLoaders, name)
-			for i := 0; i < len(opts.loaders); {
-				if opts.loaders[i].Name() == name {
-					opts.loaders = append(opts.loaders[:i], opts.loaders[i+1:]...)
-				} else {
-					i++
-				}
-			}
+			opts.loaders = slices.DeleteFunc(opts.loaders, func(loader protocol.Loader) bool {
+				return loader.Name() == name
+			})
 		}
 	}
 }
