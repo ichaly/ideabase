@@ -48,7 +48,7 @@ func TestHandlerRejectsUnknownRequiresForEntityAndRoot(t *testing.T) {
 	require.Contains(t, err.Error(), "不能声明source依赖")
 }
 
-func TestHandlerTimeoutAlwaysReportsResolverError(t *testing.T) {
+func TestHandlerTimeoutReportsStableTimeoutCode(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	require.NoError(t, executor.Register(
@@ -65,7 +65,7 @@ func TestHandlerTimeoutAlwaysReportsResolverError(t *testing.T) {
 	for _, field := range []string{"cooperativeTimeout", "ignoredTimeout"} {
 		reply := executor.run(context.Background(), "{ "+field+" }", nil, "")
 		require.Len(t, reply.Errors, 1, field)
-		require.Equal(t, "RESOLVER_ERROR", reply.Errors[0].Extensions["code"], field)
+		require.Equal(t, "TIMEOUT", reply.Errors[0].Extensions["code"], field)
 		require.Nil(t, reply.Data[field], field)
 	}
 }

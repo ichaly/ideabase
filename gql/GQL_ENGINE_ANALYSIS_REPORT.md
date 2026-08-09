@@ -1,5 +1,12 @@
 # GQL 引擎架构审查与完善方案
 
+> 2026-08-09 更新：本文主体是基于 `2e63dac` 的历史差距分析，评分不代表当前
+> `feat/gql-gateway-engine`。该分支已完成统一 Resolver/Handler、标准 mutation 串行事务、
+> fail-closed 权限与 RLS、审计/软删/purge、有效 Schema、可组合 Gateway、远程 delegation、
+> transport-neutral runtime、HTTP/SSE/WS、健康检查、资源上限和低基数观测。当前行为与
+> 迁移边界以 [`README.md`](README.md)、[`MIGRATION.md`](MIGRATION.md) 和执行测试为准；
+> 下文保留作为问题来源及设计决策记录。
+
 > 审查范围：`/Users/Chaly/Documents/Workspace/ideabase/gql`
 >
 > 审查基线：`2e63dac`

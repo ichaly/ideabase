@@ -117,7 +117,7 @@ func demoDSN() string {
 	return cmp.Or(os.Getenv("DEMO_DSN"), "host=localhost port=5433 user=demo password=demo dbname=demo sslmode=disable")
 }
 
-// buildExecutor 装配完整引擎：配置 -> 元数据 -> 编译器（方言自注册） -> 执行器 + resolver
+// buildExecutor 用统一入口装配完整引擎；Builder 是元数据、编译器与执行器的唯一组装点。
 // main与性能测试共用，保证基准跑的就是demo实际装配
 func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
 	// 配置：数据侧声明（搜索列等）——生产中可放config.yml，键名一致；
@@ -144,29 +144,18 @@ func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
 		"VirtualRecord":   map[string]any{"table": "virtual_records", "id-generator": "virtual"},
 	})
 
-	meta, err := gql.NewMetadata(k, db,
+	builder := gql.New(k, db,
 		gql.WithCodecs(gql.NewIdCodec(), UpperCodec{}),
 		gql.WithIDGenerator("virtual", func() (any, error) {
 			return "v_" + strconv.FormatInt(time.Now().UnixNano(), 36), nil
 		}),
-	)
-	if err != nil {
-		return nil, err
-	}
-	compiler, err := gql.NewCompiler(meta, nil)
-	if err != nil {
-		return nil, err
-	}
-	executor, err := gql.NewExecutor(db, gql.NewRenderer(meta), meta, compiler)
-	if err != nil {
-		return nil, err
-	}
+	).TrustedLocal()
 	// 普通/批量/根字段Resolver与远程关系使用同一个注册入口。
-	if err = executor.Register(signResolver(), greetingResolver(), serverInfoResolver(), echoResolver(), reputationRemote()); err != nil {
+	if err = builder.Register(signResolver(), greetingResolver(), serverInfoResolver(), echoResolver(), reputationRemote()); err != nil {
 		return nil, err
 	}
 	// 中间件按坐标增强已注册Resolver，不重写业务函数。
-	if err = executor.Wrap("User.greeting", gql.NewResolverMiddleware(
+	if err = builder.Wrap("User.greeting", gql.NewResolverMiddleware(
 		func(ctx context.Context, source gql.Source, args helloArgs,
 			next gql.NextResolver[gql.Source, helloArgs, string],
 		) (string, error) {
@@ -175,7 +164,14 @@ func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
 		})); err != nil {
 		return nil, err
 	}
-	return executor, nil
+	if err = builder.LoadDocuments("./queries"); err != nil {
+		return nil, err
+	}
+	engine, err := builder.Build()
+	if err != nil {
+		return nil, err
+	}
+	return engine.Executor, nil
 }
 
 func main() {
@@ -185,10 +181,7 @@ func main() {
 	executor, err := buildExecutor(db)
 	die(err)
 
-	// 2. 加载持久化查询文档
-	die(executor.LoadDocuments("./queries"))
-
-	// 3. HTTP服务：POST /graphql 查询变更，GET /graphql 订阅WebSocket升级
+	// 2. HTTP服务：POST /graphql 查询变更，GET /graphql 订阅WebSocket升级
 	app := fiber.New()
 	// 演示服务端作用域注入。生产应从认证声明读取，不能信任客户端Header。
 	app.Use(func(c fiber.Ctx) error {

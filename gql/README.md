@@ -54,6 +54,35 @@ fmt.Println(snapshot.Fingerprint(), snapshot.Capabilities())
 要保留历史全开放边界时，必须给 `NewMetadata` 显式传入
 `gql.LegacyTrustedBoundaryPolicy()`，启动时会输出迁移告警。
 
+### 独立服务与命名空间组合
+
+`Executor` 和 `Gateway` 实现同一个传输无关执行契约。标准库 HTTP、SSE、manifest 与
+健康检查只是薄适配器，因此嵌入 Fiber、Gin、gRPC 或命令行时无需改变执行内核：
+
+```go
+mux.Handle("/graphql", transport.NewHTTPHandler(engine))
+mux.Handle("/graphql/stream", transport.NewSubscriptionHandler(engine)) // 仅在有 CDC 时挂载
+mux.Handle("/gql/manifest", transport.NewManifestHandler("accounts", engine))
+mux.Handle("/health/gql", transport.NewHealthHandler(engine))
+
+gateway, err := gql.NewGateway("public-api",
+    gql.Namespace{Name: "accounts", EndpointID: "accounts", Endpoint: accounts},
+    gql.Namespace{Name: "orders", EndpointID: "orders", Endpoint: orders},
+)
+```
+
+组合后的 Query 以 namespace 对象呈现；Mutation 使用带 namespace 的顶层字段并保持
+GraphQL 规定的串行顺序。不同 namespace Query 并行，同 namespace 选择只下发一次。
+child 的 object/input/enum/interface/union 会确定性改名，scalar/directive 仅在契约一致时
+共享；返回值还会按公共 Schema 重新完成，额外字段、错误路径和 `__typename` 不会泄漏
+child 内部名字。`Gateway.Refresh` 只有在完整新拓扑校验成功后才原子换代，失败继续服务
+旧 snapshot；执行中的请求固定使用启动时的 child fingerprint。
+
+远程组合使用 `transport.NewRemoteEndpoint`，只接受启动时配置的 HTTPS 地址，禁止跳转，
+并校验 endpoint identity、manifest、snapshot fingerprint、响应大小和返回类型。身份通过
+短期签名 delegation envelope 传播，child 仍必须按自己的 policy 再授权；客户端伪造
+tenant/role header 不构成可信身份。
+
 ## 查询能力
 
 - 过滤：`where: { name: { eq/ne/gt/ge/lt/le/in/like/iLike/regex/iRegex/is/hasKey... } }`，
@@ -443,6 +472,11 @@ services:
 - 复制连接缺省复用主连接 DSN，可用 `subscription.dsn` 单独指定
 - 断线自动退避重连，重连后广播唤醒补偿期间可能错过的变更
 
+订阅是 **latest-state** 语义，不是 durable event log：每次连接先发送当前查询结果，
+CDC 只负责触发重查，慢消费者只保留最新结果。断线重连会重新读取当前状态，但不提供
+历史事件 offset 或 exactly-once replay；需要审计事件流时应把 outbox/事件表作为显式
+GraphQL 实体，或实现带持久 offset 契约的 `Endpoint.Subscribe`，不能把临时复制槽当事件存储。
+
 ## 数据库 schema
 
 元数据按 `schema.schema`（缺省 `public`）加载，生成 SQL 中所有基表引用
@@ -466,6 +500,9 @@ services:
 - 订阅 WebSocket 实现 graphql-transport-ws 完整状态机：未 `connection_init` 即
   subscribe 关 4401，init 超时 4408、重复 init 4429、重复订阅 ID 4409——
   鉴权握手不可绕过
+- `builder.Observe(observer)` 仅在 Build 前安装。观测事件只有
+  `execute/plan/authorize/database/handler`、耗时和稳定错误码，不包含 query、variables、
+  token、cursor、tenant 或 user；observer panic 会被隔离，关闭时热路径约 2ns、零分配
 
 ## 性能要点
 
@@ -539,4 +576,5 @@ schema、能力、自省三者严格一致，没有任何方向的偏差：
   复合自引用外键不生成递归字段；中间表识别限单列外键约束
 
 设计细节见 [`../doc/gql-rework-plan.md`](../doc/gql-rework-plan.md) 与
-[`../doc/pgsql-template-design.md`](../doc/pgsql-template-design.md)。
+[`../doc/pgsql-template-design.md`](../doc/pgsql-template-design.md)。升级与滚动发布见
+[`MIGRATION.md`](MIGRATION.md)。

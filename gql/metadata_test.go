@@ -98,8 +98,12 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 	ctx := context.Background()
 
 	// 创建PostgreSQL容器请求
+	image := os.Getenv("GQL_TEST_POSTGRES_IMAGE")
+	if image == "" {
+		image = "postgres:15-alpine"
+	}
 	req := testcontainers.ContainerRequest{
-		Image:        "postgres:15-alpine",
+		Image:        image,
 		ExposedPorts: []string{"5432/tcp"},
 		// CDC订阅依赖逻辑复制（生产部署同样只需此启动参数，pgoutput为内置插件）
 		Cmd: []string{"postgres", "-c", "wal_level=logical"},

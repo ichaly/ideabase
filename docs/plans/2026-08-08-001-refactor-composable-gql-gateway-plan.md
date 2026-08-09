@@ -524,7 +524,7 @@ flowchart TB
 
 ---
 
-- [ ] U7. **实现标准语义的 namespace composition**
+- [x] U7. **实现标准语义的 namespace composition**
 
 **Goal:** 组合本地或远程 Engine 为一个可自省的 Gateway，解决全局类型冲突、并行 Query、顺序 Mutation、身份传播、错误路径和 snapshot 热更新。
 
@@ -546,7 +546,7 @@ flowchart TB
 - Mutation 不采用有副作用的嵌套 namespace 对象；生成顶层带 namespace 的字段或单命令字段以保持规范串行。跨实例失败返回明确 partial-commit metadata，不重放已提交 Mutation。
 - nullable 顶层 Mutation 字段发生 execution error 后，后续字段仍按 GraphQL 标准继续串行；只有 Non-Null 错误冒泡到 Mutation 根时才停止尚未执行字段。响应列出已提交 namespace，网络中断导致提交状态未知时返回 `INDETERMINATE_COMMIT`。
 - 身份通过进程内可信上下文或短期签名 delegation envelope 传播；envelope 包含 issuer/audience/subject/tenant/受控 claims/policy+key epoch/expiry/not-before/request+operation id/delegation depth，子实例重新授权且权限取 gateway grant 与 child policy 交集。
-- Subscription 公共操作与 child 操作都执行标准单根字段约束；内部 source feed 可共享，授权后的 payload 绝不跨 subscriber 共享。每个事件按 subject/claims/current revision 独立过滤、裁剪和 completion；resume token 签名并绑定 tenant、subject、coordinate、revision、offset、expiry。
+- Subscription 公共操作与 child 操作都执行标准单根字段约束；内部 source feed 可共享，授权后的 payload 绝不跨 subscriber 共享。CDC 查询订阅明确采用 latest-state 而不是 event-log 语义：重连重新读取当前状态，不虚构 offset/exactly-once。只有未来显式声明 durable replay capability 的事件源才允许发行绑定 tenant、subject、coordinate、revision、offset、expiry 的签名 resume token。
 
 **Execution note:** 使用两个同名类型 child 和可控 barrier/故障 Endpoint 的黑盒测试先行。
 
@@ -569,7 +569,7 @@ flowchart TB
 
 ---
 
-- [ ] U8. **拆分运行时适配并补生产治理**
+- [x] U8. **拆分运行时适配并补生产治理**
 
 **Goal:** 将核心 Engine 与 GORM/Fiber/HTTP/CDC 解耦，提供嵌入和独立运行入口，并补 timeout、SQLSTATE、成本、背压、可观测和订阅公开契约。
 
@@ -605,7 +605,7 @@ flowchart TB
 **Test scenarios:**
 - HTTP：POST JSON、Accept、GET Query、GET Mutation 405、解析/验证/执行错误分层符合策略。
 - Capability：无 notifier 时 Schema 无 Subscription；配置后公共 Subscribe 与 WS 使用同一执行链。
-- Capability：无任何 executable subscription source 时 Schema 无 Subscription；source 可以是 CDC/Notifier、显式 Subscription Handler 或可订阅 child。
+- Capability：无任何 executable subscription source 时 Schema 无 Subscription；当前 source 是单引擎 CDC/Notifier 或实现 `Endpoint.Subscribe` 的可订阅 child。普通字段 Resolver 不伪装成流式 source。
 - Reliability：statement timeout、lock timeout、serialization/deadlock、连接断开、remote deadline 返回稳定 code 且事务状态正确。
 - Security：日志/span/metric 不包含 token、变量或高基数 identity；订阅重连不跨 tenant/role。
 - Backpressure：过大变量、batch、response、fan-out、并发和成本在预算边界稳定拒绝。
@@ -615,7 +615,7 @@ flowchart TB
 
 ---
 
-- [ ] U9. **建立真实复杂验收、性能门禁与迁移闭环**
+- [x] U9. **建立真实复杂验收、性能门禁与迁移闭环**
 
 **Goal:** 用真实 PostgreSQL、多租户、多实例、下游兼容和持续基准证明完整引擎；删除被新内核替代的重复代码，完成文档和迁移。
 
@@ -657,6 +657,14 @@ flowchart TB
 - Compatibility：Go 1.25/1.26、支持的 PostgreSQL 版本和 Fiber 稳定 adapter 进入测试矩阵；不在存在已知安全修复缺口的 pgx 版本上发布。
 
 **Verification:** 所有 requirements 有自动化证据；文档、Schema、运行行为与性能报告一致；没有待办式生产阻断项或隐藏能力。
+
+**Completion evidence (2026-08-09):** `go test ./gql/...`、完整 `-race`、`go vet` 与
+`git diff --check` 通过；Go 1.25.0/1.26.3 均完成全模块编译；PostgreSQL 15 默认集成矩阵
+通过，16/17/18 真实容器分别通过 catalog 加载；GraphQL-over-HTTP audit 61 项 0 failure
+（1 项旧草案状态码 warning，当前草案采用 422）；兼容基准 simple 22 alloc、1.88–1.93µs，
+nested 51 alloc、4.51–4.82µs，均在冻结预算内；Gateway warm query 约 7.9µs/75 alloc，
+关闭 Observer 约 2.1ns/0 alloc。fish-ai-api 独立 worktree 的 GQL/Bot/service 普通、race、
+vet 通过；脱离 go.work 使用旧 pseudo-version 的失败已作为发布顺序写入 `MIGRATION.md`。
 
 ---
 

@@ -77,11 +77,7 @@ func (my *Executor) Capabilities() ([]Capability, error) {
 	if err != nil {
 		return nil, err
 	}
-	capabilities := snapshot.Capabilities()
-	for i := range capabilities {
-		capabilities[i].Requires = append([]string(nil), capabilities[i].Requires...)
-	}
-	return capabilities, nil
+	return snapshot.Capabilities(), nil
 }
 
 // HealthReport is a read-only runtime readiness view.
