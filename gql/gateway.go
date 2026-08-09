@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"sort"
 	"strconv"
@@ -98,11 +99,7 @@ func (my *gatewayRevision) Subscribe(ctx context.Context, query string, variable
 	return my.state.subscribe(ctx, query, variables, operationName)
 }
 func (my *gatewayRevision) topology() (map[string]struct{}, int) {
-	ids := make(map[string]struct{}, len(my.state.topologyIDs))
-	for id := range my.state.topologyIDs {
-		ids[id] = struct{}{}
-	}
-	return ids, my.state.depth
+	return maps.Clone(my.state.topologyIDs), my.state.depth
 }
 
 // NewGateway 冻结确定性的命名空间拓扑与有效Schema。
@@ -233,11 +230,7 @@ func (my *Gateway) topology() (map[string]struct{}, int) {
 	if state == nil {
 		return nil, 0
 	}
-	ids := make(map[string]struct{}, len(state.topologyIDs))
-	for id := range state.topologyIDs {
-		ids[id] = struct{}{}
-	}
-	return ids, state.depth
+	return maps.Clone(state.topologyIDs), state.depth
 }
 
 func (my *Gateway) Snapshot() (*Snapshot, error) {

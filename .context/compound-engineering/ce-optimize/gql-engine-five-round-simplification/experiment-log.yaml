@@ -160,16 +160,42 @@ experiments:
       observer_disabled_ns: 2.126
     primary_delta: "-9"
     learnings: Reusing an existing inlineable linear scan reduces policy branching without changing gateway allocations or measured latency.
+  - iteration: 5
+    batch: 5
+    hypothesis: Replace duplicate topology snapshot loops with the standard-library map clone algorithm.
+    category: gateway-transport
+    outcome: kept
+    changes:
+      - file: gql/gateway.go
+        summary: Reused maps.Clone for both gateway and pinned-revision topology snapshots.
+    gates:
+      unit_tests_passed: 1
+      race_tests_passed: 1
+      vet_passed: 1
+      staticcheck_findings: 7
+      api_compatibility_passed: 1
+      simple_compile_allocs: 22
+      nested_compile_allocs: 51
+      gateway_warm_allocs: 75
+      observer_disabled_allocs: 0
+    gates_passed: true
+    diagnostics:
+      production_go_lines: 22137
+      production_go_files: 76
+      production_functions: 890
+      production_branch_tokens: 3692
+      test_go_lines: 14673
+      simple_compile_ns: 2021
+      nested_compile_ns: 4895
+      gateway_warm_ns: 8634
+      observer_disabled_ns: 2.107
+    primary_delta: "-7"
+    learnings: maps.Clone preserves ownership isolation while replacing two copies of the same lifecycle algorithm.
 
 best:
-  iteration: 4
+  iteration: 5
   metrics:
-    production_go_lines: 22144
+    production_go_lines: 22137
   total_judge_cost_usd: 0
 
-hypothesis_backlog:
-  - description: Consolidate gateway and transport lifecycle paths.
-    category: gateway-transport
-    priority: high
-    dep_status: not_applicable
-    required_deps: []
+hypothesis_backlog: []
