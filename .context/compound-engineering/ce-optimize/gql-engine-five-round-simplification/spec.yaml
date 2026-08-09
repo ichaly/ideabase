@@ -1,0 +1,103 @@
+name: gql-engine-five-round-simplification
+description: >-
+  Run five serial simplification rounds over the GraphQL database gateway,
+  minimizing production Go source while preserving behavior, public contracts,
+  correctness, readability, and performance.
+
+metric:
+  primary:
+    type: hard
+    name: production_go_lines
+    direction: minimize
+    baseline: 22190
+  degenerate_gates:
+    - name: unit_tests_passed
+      check: "== 1"
+      description: All package tests must pass.
+    - name: race_tests_passed
+      check: "== 1"
+      description: The race-enabled package suite must pass.
+    - name: vet_passed
+      check: "== 1"
+      description: go vet must report no failure.
+    - name: staticcheck_findings
+      check: "<= 11"
+      description: Existing production-only staticcheck debt may decrease but no new finding is allowed.
+    - name: api_compatibility_passed
+      check: "== 1"
+      description: Existing exported Go API and schema conformance tests must remain compatible.
+    - name: simple_compile_allocs
+      check: "<= 22"
+      description: The simple compiler hot path may not allocate more than the established budget.
+    - name: nested_compile_allocs
+      check: "<= 51"
+      description: The nested compiler hot path may not allocate more than the established budget.
+    - name: gateway_warm_allocs
+      check: "<= 75"
+      description: The warm gateway path may not allocate more than the established budget.
+    - name: observer_disabled_allocs
+      check: "== 0"
+      description: Disabled observability must stay allocation-free.
+  diagnostics:
+    - name: production_go_files
+    - name: production_functions
+    - name: production_branch_tokens
+    - name: test_go_lines
+    - name: simple_compile_ns
+    - name: nested_compile_ns
+    - name: gateway_warm_ns
+    - name: observer_disabled_ns
+
+measurement:
+  command: bash .context/compound-engineering/ce-optimize/gql-engine-five-round-simplification/measure.sh
+  timeout_seconds: 1200
+  output_format: json
+  working_directory: .
+  stability:
+    mode: repeat
+    repeat_count: 3
+    aggregation: median
+    noise_threshold: 0
+
+scope:
+  mutable:
+    - gql/
+  immutable:
+    - .context/compound-engineering/ce-optimize/gql-engine-five-round-simplification/measure.sh
+    - gql/testdata/
+    - gql/go.mod
+    - gql/go.sum
+    - gql/README.md
+    - gql/**/*_test.go
+
+execution:
+  mode: serial
+  backend: worktree
+  max_concurrent: 1
+
+parallel:
+  port_strategy: none
+
+dependencies:
+  approved: []
+
+constraints:
+  - Complete exactly five sequential rounds; measure and review each round before starting the next.
+  - Preserve all existing GraphQL, SQL, policy, tenancy, audit, pagination, subscription, federation, and custom Resolver behavior.
+  - Preserve backward compatibility of exported Go APIs, GraphQL schema, validation, errors, and generated SQL unless an existing conformance test explicitly permits normalization.
+  - Keep one canonical implementation path per capability; remove aliases or alternatives only when they are private and behaviorally redundant.
+  - Do not delete, weaken, skip, or rewrite tests to improve the score.
+  - Do not minify source, compress statements into dense one-liners, hide code in generated artifacts, or trade readability for physical line count.
+  - Prefer tables, loops, small data structures, and existing helpers over repeated branches, but avoid reflection or abstraction that worsens hot-path performance.
+  - Do not add dependencies without explicit approval; reuse the standard library and already-pinned modules first.
+  - Allocation gates are hard; runtime diagnostics must not regress by more than 10 percent from the approved median baseline without a demonstrated environment explanation.
+  - Every accepted round must reduce production Go lines and pass all gates; otherwise revert that round and choose a different simplification.
+  - Commit each accepted round separately on the optimization branch; do not push.
+
+stopping:
+  max_iterations: 5
+  max_hours: 12
+  plateau_iterations: 5
+  target_reached: false
+
+max_runner_up_merges_per_batch: 0
