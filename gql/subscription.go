@@ -225,7 +225,7 @@ func (my *Executor) leave(key string, f *feed, ch chan gqlReply) {
 func (my *Executor) expireFeed(f *feed, err error) {
 	my.feedMu.Lock()
 	defer my.feedMu.Unlock()
-	reply := gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
+	reply := gqlReply{Errors: gqlErrors(err)}
 	for ch := range f.subs {
 		push(ch, reply)
 		close(ch)
@@ -262,7 +262,7 @@ func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]i
 		if ctx.Err() != nil {
 			return r, false
 		}
-		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
+		r.Errors = gqlErrors(err)
 		data = []byte(err.Error()) // 错误同样参与指纹：持续故障只推送一次，恢复或换错才再推
 	}
 
@@ -281,7 +281,7 @@ func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]i
 	// 懒解包残留的原始字节段就地物化，维持Data全map契约
 	result, warnings, err := my.unpack(ctx, plan, data, variables)
 	if err != nil {
-		r.Errors = gqlerror.List{gqlerror.Wrap(err)}
+		r.Errors = gqlErrors(err)
 		return r, true
 	}
 	materialize(result)

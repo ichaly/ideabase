@@ -742,7 +742,7 @@ func (my *Executor) executeRootResolvers(ctx context.Context, entry *planEntry, 
 		err = execute(ctx)
 	}
 	if err != nil && len(executionErrors) == 0 {
-		reply := gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
+		reply := gqlReply{Errors: gqlErrors(err)}
 		if operation.Operation == ast.Mutation {
 			return reply.mutationCommit(ctx, "rolled_back")
 		}
