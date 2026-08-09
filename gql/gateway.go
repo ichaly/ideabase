@@ -27,6 +27,7 @@ const (
 	gatewayMaxRootFields    = 64
 	gatewayMaxFanout        = 32
 	gatewayMaxChildResponse = 8 << 20
+	gatewayTypeKey          = "__gql_gateway_type"
 )
 
 // Endpoint 是命名空间组合所需的最小传输无关契约。
@@ -354,7 +355,7 @@ func (my *gatewayState) forwardSubscription(ctx context.Context, events chan<- [
 				events <- frame
 				return
 			}
-			rewriteTypenames(child.Data, field.SelectionSet, contract)
+			rewriteTypenames(my.schema, child.Data, field.SelectionSet, contract)
 			definition := my.schema.Subscription.Fields.ForName(field.Name)
 			value, completionErrors, _ := completeEndpointValue(my.schema, child.Data, definition.Type, field.SelectionSet, nil, child.Errors)
 			child.Errors = append(child.Errors, completionErrors...)
@@ -573,7 +574,7 @@ func (my *gatewayState) executeQueryGroup(ctx context.Context, operation *ast.Op
 	}
 	for index, entry := range entries {
 		key := responseKey(entry.field)
-		rewriteTypenames(data[index], entry.field.SelectionSet, contract)
+		rewriteTypenames(my.schema, data[index], entry.field.SelectionSet, contract)
 		definition := my.schema.Query.Fields.ForName(entry.field.Name)
 		value, completionErrors, _ := completeEndpointValue(my.schema, data[index], definition.Type, entry.field.SelectionSet, nil, errors[index])
 		errors[index] = append(errors[index], completionErrors...)
@@ -666,7 +667,7 @@ func (my *gatewayState) executeMutation(ctx context.Context, operation *ast.Oper
 			if child.Data == nil {
 				child.Data = make(map[string]any)
 			}
-			rewriteTypenames(child.Data, ast.SelectionSet{field}, contract)
+			rewriteTypenames(my.schema, child.Data, ast.SelectionSet{field}, contract)
 			definition := my.schema.Mutation.Fields.ForName(field.Name)
 			completed, completionErrors, _ := completeEndpointValue(my.schema, child.Data[key], definition.Type, field.SelectionSet, ast.Path{ast.PathName(key)}, child.Errors)
 			child.Data[key] = completed
@@ -768,8 +769,82 @@ func childOperation(kind ast.Operation, set ast.SelectionSet, definitions ast.Va
 		out.WriteString(")")
 	}
 	out.WriteString(" ")
-	writeSelectionSet(&out, set)
+	writeGatewaySelectionSet(&out, set, reverse)
 	return out.String(), childVariables
+}
+
+func writeGatewaySelectionSet(out *strings.Builder, set ast.SelectionSet, reverse map[string]string) {
+	out.WriteString("{")
+	for _, selection := range set {
+		switch node := selection.(type) {
+		case *ast.Field:
+			out.WriteString(" ")
+			if node.Alias != "" && node.Alias != node.Name {
+				out.WriteString(node.Alias)
+				out.WriteString(": ")
+			}
+			out.WriteString(node.Name)
+			if len(node.Arguments) > 0 {
+				out.WriteString("(")
+				for index, argument := range node.Arguments {
+					if index > 0 {
+						out.WriteString(", ")
+					}
+					out.WriteString(argument.Name)
+					out.WriteString(": ")
+					out.WriteString(argument.Value.String())
+				}
+				out.WriteString(")")
+			}
+			if len(node.SelectionSet) > 0 {
+				out.WriteString(" ")
+				writeGatewaySelectionSet(out, node.SelectionSet, reverse)
+			}
+		case *ast.InlineFragment:
+			out.WriteString(" ...")
+			if node.TypeCondition != "" {
+				out.WriteString(" on ")
+				if child := reverse[node.TypeCondition]; child != "" {
+					out.WriteString(child)
+				} else {
+					out.WriteString(node.TypeCondition)
+				}
+			}
+			out.WriteString(" ")
+			writeGatewaySelectionSet(out, node.SelectionSet, reverse)
+		}
+	}
+	if hasInlineFragment(set) {
+		out.WriteString(" ")
+		out.WriteString(gatewayTypeAlias(set))
+		out.WriteString(": __typename")
+	}
+	out.WriteString(" }")
+}
+
+func hasInlineFragment(set ast.SelectionSet) bool {
+	for _, selection := range set {
+		if _, ok := selection.(*ast.InlineFragment); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func gatewayTypeAlias(set ast.SelectionSet) string {
+	for alias := gatewayTypeKey; ; alias += "_" {
+		conflict := false
+		for _, selection := range set {
+			field, ok := selection.(*ast.Field)
+			if ok && responseKey(field) == alias {
+				conflict = true
+				break
+			}
+		}
+		if !conflict {
+			return alias
+		}
+	}
 }
 
 func writeChildType(out *strings.Builder, typ *ast.Type, reverse map[string]string) {
@@ -883,32 +958,48 @@ func setPublicLocation(err *gqlerror.Error, field *ast.Field) {
 	}
 }
 
-func rewriteTypenames(value any, set ast.SelectionSet, contract *namespaceContract) {
+func rewriteTypenames(schema *ast.Schema, value any, set ast.SelectionSet, contract *namespaceContract) {
 	switch value := value.(type) {
 	case []any:
 		for _, item := range value {
-			rewriteTypenames(item, set, contract)
+			rewriteTypenames(schema, item, set, contract)
 		}
 	case map[string]any:
+		runtimeType := ""
+		if alias := gatewayTypeAlias(set); hasInlineFragment(set) {
+			if name, ok := value[alias].(string); ok {
+				runtimeType = publicTypename(contract, name)
+				value[alias] = runtimeType
+			}
+		}
 		for _, selection := range set {
-			field, ok := selection.(*ast.Field)
-			if !ok {
-				continue
-			}
-			key := responseKey(field)
-			if field.Name == "__typename" {
-				if name, ok := value[key].(string); ok {
-					if name == "Query" {
-						value[key] = contract.prefix + "Query"
-					} else {
-						value[key] = contract.prefix + name
+			switch node := selection.(type) {
+			case *ast.Field:
+				key := responseKey(node)
+				if node.Name == "__typename" {
+					if name, ok := value[key].(string); ok {
+						value[key] = publicTypename(contract, name)
 					}
+					continue
 				}
-				continue
+				rewriteTypenames(schema, value[key], node.SelectionSet, contract)
+			case *ast.InlineFragment:
+				if typeConditionApplies(schema, node.TypeCondition, runtimeType) {
+					rewriteTypenames(schema, value, node.SelectionSet, contract)
+				}
 			}
-			rewriteTypenames(value[key], field.SelectionSet, contract)
 		}
 	}
+}
+
+func publicTypename(contract *namespaceContract, name string) string {
+	if name == "Query" {
+		return contract.prefix + name
+	}
+	if contract.publicToChild[name] != "" { // Already rewritten by an overlapping fragment.
+		return name
+	}
+	return contract.prefix + name
 }
 
 // completeEndpointValue projects untrusted child JSON through the public
@@ -955,26 +1046,71 @@ func completeEndpointValue(schema *ast.Schema, value any, typ *ast.Type, set ast
 	}
 	out := make(map[string]any, len(set))
 	var errors gqlerror.List
+	runtimeType := ""
+	if hasInlineFragment(set) {
+		alias := gatewayTypeAlias(set)
+		var ok bool
+		runtimeType, ok = object[alias].(string)
+		definition := schema.Types[runtimeType]
+		if !ok || definition == nil || definition.Kind != ast.Object {
+			return invalidEndpointValue(path, typ, known)
+		}
+	}
 	for _, selection := range set {
-		field, ok := selection.(*ast.Field)
-		if !ok {
-			continue
+		switch node := selection.(type) {
+		case *ast.Field:
+			key := responseKey(node)
+			fieldPath := gatewayAppendPath(path, ast.PathName(key))
+			if node.Name == "__typename" {
+				name, ok := object[key].(string)
+				definition := schema.Types[name]
+				if !ok || definition == nil || definition.Kind != ast.Object {
+					return invalidEndpointValue(fieldPath, ast.NonNullNamedType("String", nil), known)
+				}
+			}
+			fieldType := (*ast.Type)(nil)
+			if node.Definition != nil {
+				fieldType = node.Definition.Type
+			} else if node.Name == "__typename" {
+				fieldType = ast.NonNullNamedType("String", nil)
+			}
+			completed, fieldErrors, violation := completeEndpointValue(schema, object[key], fieldType, node.SelectionSet, fieldPath, known)
+			errors = append(errors, fieldErrors...)
+			if violation {
+				return nil, errors, typ != nil && typ.NonNull
+			}
+			out[key] = completed
+		case *ast.InlineFragment:
+			if !typeConditionApplies(schema, node.TypeCondition, runtimeType) {
+				continue
+			}
+			completed, fragmentErrors, violation := completeEndpointValue(schema, object, typ, node.SelectionSet, path, known)
+			errors = append(errors, fragmentErrors...)
+			if violation {
+				return nil, errors, typ != nil && typ.NonNull
+			}
+			fragment, ok := completed.(map[string]any)
+			if !ok {
+				return nil, errors, typ != nil && typ.NonNull
+			}
+			for key, value := range fragment {
+				out[key] = value
+			}
 		}
-		key := responseKey(field)
-		fieldType := (*ast.Type)(nil)
-		if field.Definition != nil {
-			fieldType = field.Definition.Type
-		} else if field.Name == "__typename" {
-			fieldType = ast.NonNullNamedType("String", nil)
-		}
-		completed, fieldErrors, violation := completeEndpointValue(schema, object[key], fieldType, field.SelectionSet, gatewayAppendPath(path, ast.PathName(key)), known)
-		errors = append(errors, fieldErrors...)
-		if violation {
-			return nil, errors, typ != nil && typ.NonNull
-		}
-		out[key] = completed
 	}
 	return out, errors, false
+}
+
+func typeConditionApplies(schema *ast.Schema, condition, runtimeType string) bool {
+	if condition == "" || condition == runtimeType {
+		return true
+	}
+	for _, possible := range schema.PossibleTypes[condition] {
+		if possible.Name == runtimeType {
+			return true
+		}
+	}
+	return false
 }
 
 func coerceEndpointScalar(schema *ast.Schema, typ *ast.Type, value any) (any, bool) {

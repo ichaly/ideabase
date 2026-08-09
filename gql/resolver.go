@@ -1058,13 +1058,14 @@ func collectVariables(set ast.SelectionSet, used map[string]bool) {
 		}
 	}
 	for _, s := range set {
-		f, ok := s.(*ast.Field)
-		if !ok {
-			continue
+		switch node := s.(type) {
+		case *ast.Field:
+			for _, argument := range node.Arguments {
+				walk(argument.Value)
+			}
+			collectVariables(node.SelectionSet, used)
+		case *ast.InlineFragment:
+			collectVariables(node.SelectionSet, used)
 		}
-		for _, a := range f.Arguments {
-			walk(a.Value)
-		}
-		collectVariables(f.SelectionSet, used)
 	}
 }

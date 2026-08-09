@@ -61,7 +61,7 @@ func TestNormalizeSelectionMergesFieldsAfterFragmentsAndDirectives(t *testing.T)
 	require.Equal(t, []string{"id", "name", "email"}, fieldNames(selection[0].(*ast.Field).SelectionSet), "fragment中的name仍应保留")
 }
 
-func TestNormalizeSelectionPreservesOrderAndDoesNotFlattenInterfaceConditions(t *testing.T) {
+func TestNormalizeSelectionPreservesAbstractTypeConditions(t *testing.T) {
 	schema := loadFrontendSchema(t, `
 		interface Node { id: ID }
 		type User implements Node { id: ID, name: String }
@@ -70,8 +70,11 @@ func TestNormalizeSelectionPreservesOrderAndDoesNotFlattenInterfaceConditions(t 
 	`)
 	doc, errs := gqlparser.LoadQuery(schema, `query { node { id ... on User { name } } }`)
 	require.Empty(t, errs)
-	_, err := normalizeSelectionWithSchema(doc.Operations[0].SelectionSet, doc.Fragments, nil, schema)
-	require.Error(t, err)
+	selection, err := normalizeSelectionWithSchema(doc.Operations[0].SelectionSet, doc.Fragments, nil, schema)
+	require.NoError(t, err)
+	node := selection[0].(*ast.Field)
+	require.Equal(t, "id", node.SelectionSet[0].(*ast.Field).Name)
+	require.Equal(t, "User", node.SelectionSet[1].(*ast.InlineFragment).TypeCondition)
 
 	schema = loadFrontendSchema(t, `
 		type User { id: ID, name: String, email: String }
@@ -80,7 +83,7 @@ func TestNormalizeSelectionPreservesOrderAndDoesNotFlattenInterfaceConditions(t 
 	`)
 	doc, errs = gqlparser.LoadQuery(schema, `{ user { email id } }`)
 	require.Empty(t, errs)
-	selection, err := normalizeSelectionWithSchema(doc.Operations[0].SelectionSet, nil, nil, schema)
+	selection, err = normalizeSelectionWithSchema(doc.Operations[0].SelectionSet, nil, nil, schema)
 	require.NoError(t, err)
 	require.Equal(t, []string{"email", "id"}, fieldNames(selection[0].(*ast.Field).SelectionSet))
 }

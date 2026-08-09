@@ -76,6 +76,13 @@ func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 			if err != nil {
 				return nil, err
 			}
+			if node.ObjectDefinition != nil && node.ObjectDefinition.IsAbstractType() && fragment.TypeCondition != "" {
+				out = append(out, &ast.InlineFragment{
+					TypeCondition: fragment.TypeCondition, SelectionSet: expanded,
+					ObjectDefinition: node.ObjectDefinition, Position: node.Position,
+				})
+				continue
+			}
 			out = append(out, expanded...)
 			continue
 		case *ast.InlineFragment:
@@ -102,9 +109,12 @@ func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 			case *ast.Field:
 				node.SelectionSet = expanded
 			case *ast.InlineFragment:
-				// Type conditions are already validated by gqlparser; the SQL
-				// compiler consumes the same flattened field shape as named
-				// fragments, so inline fragments disappear at this boundary.
+				if node.TypeCondition != "" && node.ObjectDefinition != nil && node.ObjectDefinition.IsAbstractType() {
+					node.SelectionSet = expanded
+					node.Directives = nil
+					out = append(out, node)
+					continue
+				}
 				out = append(out, expanded...)
 				continue
 			}
@@ -126,11 +136,11 @@ func validateFragmentCondition(fragment, parent *ast.Definition) error {
 	if fragment == nil {
 		return nil
 	}
-	if fragment.Kind != ast.Object {
-		return fmt.Errorf("不支持在%s类型条件下展平fragment %q", fragment.Kind, fragment.Name)
+	if !fragment.IsCompositeType() {
+		return fmt.Errorf("fragment类型条件必须是复合类型: %q", fragment.Name)
 	}
-	if parent != nil && parent.Kind != ast.Object {
-		return fmt.Errorf("不支持在%s结果上展平fragment %q", parent.Kind, fragment.Name)
+	if parent != nil && !parent.IsCompositeType() {
+		return fmt.Errorf("fragment父类型必须是复合类型: %q", parent.Name)
 	}
 	return nil
 }
@@ -139,12 +149,12 @@ func validateInlineCondition(fragment *ast.InlineFragment, schema *ast.Schema) e
 	if fragment.TypeCondition == "" {
 		return nil
 	}
-	if fragment.ObjectDefinition != nil && fragment.ObjectDefinition.Kind != ast.Object {
-		return fmt.Errorf("不支持在%s结果上展平inline fragment", fragment.ObjectDefinition.Kind)
+	if fragment.ObjectDefinition != nil && !fragment.ObjectDefinition.IsCompositeType() {
+		return fmt.Errorf("inline fragment父类型必须是复合类型")
 	}
 	if schema != nil {
-		if def := schema.Types[fragment.TypeCondition]; def == nil || def.Kind != ast.Object {
-			return fmt.Errorf("不支持在%s类型条件下展平inline fragment", fragment.TypeCondition)
+		if def := schema.Types[fragment.TypeCondition]; def == nil || !def.IsCompositeType() {
+			return fmt.Errorf("inline fragment类型条件无效: %s", fragment.TypeCondition)
 		}
 	}
 	return nil

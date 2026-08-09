@@ -25,6 +25,14 @@ const gatewaySubscriptionSchema = gatewayChildSchema + `
 type Subscription { changed: User!, removed: User }
 `
 
+const gatewayAbstractSchema = `
+interface Node { id: ID! }
+type User implements Node { id: ID!, name: String! }
+type Team implements Node { id: ID!, slug: String! }
+union SearchResult = User | Team
+type Query { node: Node!, search: [SearchResult!]! }
+`
+
 type gatewayEndpoint struct {
 	id       string
 	snapshot *Snapshot
@@ -94,6 +102,67 @@ func TestGatewayRejectsInvalidChildEnumWithoutBubblingNullableField(t *testing.T
 		"data":{"crm":{"user":{"id":"1","status":null}}},
 		"errors":[{"message":"endpoint returned a value with the wrong shape","path":["crm","user","status"],"locations":[{"line":1,"column":19}],"extensions":{"code":"BAD_GATEWAY_RESPONSE"}}]
 	}`, string(body))
+}
+
+func TestGatewayComposesAndExecutesAbstractTypes(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayAbstractSchema, func(_ context.Context, query string, _ map[string]any) ([]byte, error) {
+		require.Contains(t, query, "... on User")
+		require.Contains(t, query, "... on Team")
+		require.Contains(t, query, "... on Node")
+		require.Contains(t, query, gatewayTypeKey+": __typename")
+		require.NotContains(t, query, "Crm_User")
+		return []byte(`{"data":{
+			"node":{"__gql_gateway_type":"User","id":"1","name":"Ada","slug":"must-not-leak"},
+			"search":[
+				{"__gql_gateway_type":"User","__typename":"User","id":"1","name":"Ada","slug":"must-not-leak"},
+				{"__gql_gateway_type":"Team","__typename":"Team","id":"2","name":"must-not-leak","slug":"core"}
+			]
+		}}`), nil
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	schema, err := gateway.Schema()
+	require.NoError(t, err)
+	require.Contains(t, schema, "interface Crm_Node")
+	require.Contains(t, schema, "union Crm_SearchResult = Crm_User | Crm_Team")
+	require.Contains(t, schema, "type Crm_User implements Crm_Node")
+	body, err := gateway.Execute(context.Background(), `{
+		crm {
+			node { id ...UserFields ... on Crm_Team { slug } }
+			search { __typename ... on Crm_Node { id } ... on Crm_User { name } ... on Crm_Team { slug } }
+		}
+	}
+	fragment UserFields on Crm_User { name }
+	`, nil)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":{"crm":{
+		"node":{"id":"1","name":"Ada"},
+		"search":[{"__typename":"Crm_User","id":"1","name":"Ada"},{"__typename":"Crm_Team","id":"2","slug":"core"}]
+	}}}`, string(body))
+}
+
+func TestGatewayAbstractTypeDiscriminatorCannotCollideWithClientAlias(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayAbstractSchema, func(_ context.Context, query string, _ map[string]any) ([]byte, error) {
+		require.Contains(t, query, gatewayTypeKey+"_: __typename")
+		return []byte(`{"data":{"node":{"__gql_gateway_type":"1","__gql_gateway_type_":"User","name":"Ada"}}}`), nil
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	body, err := gateway.Execute(context.Background(), `{ crm { node { __gql_gateway_type: id ... on Crm_User { name } } } }`, nil)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":{"crm":{"node":{"__gql_gateway_type":"1","name":"Ada"}}}}`, string(body))
+}
+
+func TestGatewayRejectsMissingAbstractDiscriminator(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayAbstractSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+		return []byte(`{"data":{"node":{"id":"1","name":"Ada"}}}`), nil
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	body, err := gateway.Execute(context.Background(), `{ crm { node { id ... on Crm_User { name } } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "BAD_GATEWAY_RESPONSE")
+	require.Contains(t, string(body), `"crm":null`)
 }
 
 func TestGatewayCoercesIntegerIDFromChild(t *testing.T) {

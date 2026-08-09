@@ -107,11 +107,6 @@ func importNamespace(namespace Namespace) (*namespaceContract, map[string]*ast.D
 			return nil, nil, nil, fmt.Errorf("namespace %s暂不支持自定义directive @%s", namespace.Name, name)
 		}
 	}
-	for name, definition := range child.Types {
-		if !definition.BuiltIn && (definition.Kind == ast.Interface || definition.Kind == ast.Union) {
-			return nil, nil, nil, fmt.Errorf("namespace %s包含尚不可执行的抽象类型 %s", namespace.Name, name)
-		}
-	}
 	prefix := strcase.ToCamel(namespace.Name) + "_"
 	toChild := make(map[string]string)
 	rename := make(map[string]string)
