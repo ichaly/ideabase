@@ -96,19 +96,47 @@ experiments:
       observer_disabled_ns: 2.101
     primary_delta: "-9"
     learnings: Standard-library slice algorithms express startup ordering exactly while reducing branches and leaving request-path allocations unchanged.
+  - iteration: 3
+    batch: 3
+    hypothesis: Use one inlineable direction function for keyset ordering and cursor contract serialization.
+    category: compiler
+    outcome: kept
+    changes:
+      - file: gql/compiler/pgsql/cursor.go
+        summary: Reused one direction mapping in page ordering and cursor signatures.
+      - file: gql/compiler/pgsql/sort.go
+        summary: Added the canonical boolean-to-sort-token mapping.
+    gates:
+      unit_tests_passed: 1
+      race_tests_passed: 1
+      vet_passed: 1
+      staticcheck_findings: 7
+      api_compatibility_passed: 1
+      simple_compile_allocs: 22
+      nested_compile_allocs: 51
+      gateway_warm_allocs: 75
+      observer_disabled_allocs: 0
+    gates_passed: true
+    diagnostics:
+      production_go_lines: 22153
+      production_go_files: 76
+      production_functions: 890
+      production_branch_tokens: 3697
+      test_go_lines: 14673
+      simple_compile_ns: 2069
+      nested_compile_ns: 4845
+      gateway_warm_ns: 7879
+      observer_disabled_ns: 2.107
+    primary_delta: "-4"
+    learnings: A tiny inlineable value mapping can remove repeated branches from a hot compiler path without changing its allocation budget.
 
 best:
-  iteration: 2
+  iteration: 3
   metrics:
-    production_go_lines: 22157
+    production_go_lines: 22153
   total_judge_cost_usd: 0
 
 hypothesis_backlog:
-  - description: Deduplicate PostgreSQL compiler operation shapes and shared rendering branches.
-    category: compiler
-    priority: high
-    dep_status: not_applicable
-    required_deps: []
   - description: Collapse resolver and executor orchestration onto existing canonical paths.
     category: execution
     priority: high

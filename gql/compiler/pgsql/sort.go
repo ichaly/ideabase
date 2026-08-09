@@ -20,6 +20,13 @@ var directions = map[string]string{
 	"DESC_NULLS_LAST":  "DESC NULLS LAST",
 }
 
+func sortDirection(desc bool) string {
+	if desc {
+		return "DESC"
+	}
+	return "ASC"
+}
+
 // buildOrderBy 构建ORDER BY子句；entries由调用方解析（sortEntries），
 // lead为前置列（DISTINCT ON要求排序以去重列开头）
 func (my *Dialect) buildOrderBy(ctx *compiler.Context, sc scope, entries []*ast.ChildValue, lead, tail []string) error {

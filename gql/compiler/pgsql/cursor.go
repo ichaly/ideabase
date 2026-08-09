@@ -137,10 +137,7 @@ func (my *pager) order(i int) string {
 	if my.last {
 		desc = !desc
 	}
-	if desc {
-		return "DESC"
-	}
-	return "ASC"
+	return sortDirection(desc)
 }
 
 // buildKeyset 边界条件展开：k1>v1 OR (k1=v1 AND k2>v2) ...（方向按键序与翻页方向决定）
@@ -222,11 +219,7 @@ func (my *Dialect) cursorParams(ctx *compiler.Context, p *pager) ([]string, erro
 func cursorSort(keys []pageKey) []string {
 	out := make([]string, len(keys))
 	for i, key := range keys {
-		direction := "ASC"
-		if key.desc {
-			direction = "DESC"
-		}
-		out[i] = key.column + ":" + direction
+		out[i] = key.column + ":" + sortDirection(key.desc)
 	}
 	return out
 }
@@ -236,11 +229,7 @@ func cursorSortMatches(expected []string, keys []pageKey) bool {
 		return false
 	}
 	for i, key := range keys {
-		direction := "ASC"
-		if key.desc {
-			direction = "DESC"
-		}
-		if expected[i] != key.column+":"+direction {
+		if expected[i] != key.column+":"+sortDirection(key.desc) {
 			return false
 		}
 	}
