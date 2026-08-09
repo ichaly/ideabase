@@ -12,6 +12,7 @@ type planKey struct {
 	operation string
 	query     string
 	shape     string
+	view      string
 }
 
 // planEntry 缓存值：恒存operation（变量声明的唯一事实源，入参解码用）；

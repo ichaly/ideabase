@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -336,46 +337,54 @@ func (p *ProtocolPolicyProvider) Decide(_ context.Context, request PolicyRequest
 		return d, err
 	}
 	d := PolicyDecision{Allow: true, PolicyRevision: request.Identity.PolicyRevision(), Fields: make(map[FieldUse][]string)}
-	var selectFields []string
-	for _, action := range request.Actions {
-		allowed := false
-		for _, role := range roles {
-			permission := byRole[role]
-			if permission == nil {
-				continue
-			}
-			switch action {
-			case "select":
-				allowed = len(permission.Select) > 0
-			case "insert":
-				allowed = len(permission.Insert) > 0
-			case "update":
-				allowed = len(permission.Update) > 0
-			case "delete":
-				allowed = permission.Delete
-			case "restore":
-				allowed = permission.Restore
-			case "purge":
-				allowed = permission.Purge
-			case "aggregate":
-				allowed = permission.Aggregate
-			default:
-				return PolicyDecision{}, fmt.Errorf("unsupported policy action %q", action)
-			}
-			if allowed {
-				break
-			}
-		}
-		if !allowed {
-			d, err := NormalizeDecision(request, PolicyDecision{})
-			return d, err
+	allowsAction := func(permission *protocol.Permission, action string) (bool, error) {
+		switch action {
+		case protocol.OP_SELECT:
+			return len(permission.Select) > 0, nil
+		case protocol.OP_INSERT:
+			return len(permission.Insert) > 0, nil
+		case protocol.OP_UPDATE:
+			return len(permission.Update) > 0, nil
+		case protocol.OP_DELETE:
+			return permission.Delete, nil
+		case protocol.OP_RESTORE:
+			return permission.Restore, nil
+		case protocol.OP_PURGE:
+			return permission.Purge, nil
+		case protocol.OP_AGGREGATE:
+			return permission.Aggregate, nil
+		default:
+			return false, fmt.Errorf("unsupported policy action %q", action)
 		}
 	}
+	authorizedRoles := make([]string, 0, len(roles))
 	for _, role := range roles {
 		permission := byRole[role]
 		if permission == nil {
 			continue
 		}
+		authorized := true
+		for _, action := range request.Actions {
+			allowed, err := allowsAction(permission, action)
+			if err != nil {
+				return PolicyDecision{}, err
+			}
+			if !allowed {
+				authorized = false
+				break
+			}
+		}
+		if authorized {
+			authorizedRoles = append(authorizedRoles, role)
+		}
+	}
+	if len(authorizedRoles) == 0 {
+		d, err := NormalizeDecision(request, PolicyDecision{})
+		return d, err
+	}
+	var selectFields []string
+	for _, role := range authorizedRoles {
+		permission := byRole[role]
 		selectFields = append(selectFields, permission.Select...)
 		branch := RolePolicyBranch{Role: role}
 		for _, predicate := range permission.Filter {
@@ -395,18 +404,53 @@ func (p *ProtocolPolicyProvider) Decide(_ context.Context, request PolicyRequest
 			d.Fields[use] = append([]string(nil), selectFields...)
 		}
 	}
-	for _, role := range roles {
-		if permission := byRole[role]; permission != nil {
-			d.Fields[FieldUseWrite] = append(d.Fields[FieldUseWrite], permission.Insert...)
-			d.Fields[FieldUseWrite] = append(d.Fields[FieldUseWrite], permission.Update...)
-		}
-	}
+	d.Fields[FieldUseWrite] = policyWriteFields(request.Actions, authorizedRoles, byRole)
 	for _, use := range request.FieldUses {
+		if use == FieldUseWrite {
+			if _, ok := d.Fields[use]; !ok {
+				d.Fields[use] = nil
+			}
+			continue
+		}
 		if _, ok := d.Fields[use]; !ok {
 			d.Fields[use] = append([]string(nil), selectFields...)
 		}
 	}
 	return NormalizeDecision(request, d)
+}
+
+// policyWriteFields unions grants across roles but intersects the actions of
+// one operation. An upsert input is executable on both INSERT and UPDATE
+// branches, so exposing a field granted on only one branch would be a write
+// escalation when the other branch runs.
+func policyWriteFields(actions, roles []string, permissions map[string]*protocol.Permission) []string {
+	var result []string
+	first := true
+	for _, action := range actions {
+		if action != protocol.OP_INSERT && action != protocol.OP_UPDATE {
+			continue
+		}
+		var fields []string
+		for _, role := range roles {
+			permission := permissions[role]
+			if action == protocol.OP_INSERT {
+				fields = append(fields, permission.Insert...)
+			} else {
+				fields = append(fields, permission.Update...)
+			}
+		}
+		fields = uniqueStrings(fields)
+		if first {
+			result, first = fields, false
+			continue
+		}
+		allowed := make(map[string]struct{}, len(fields))
+		for _, field := range fields {
+			allowed[field] = struct{}{}
+		}
+		result = slices.DeleteFunc(result, func(field string) bool { _, ok := allowed[field]; return !ok })
+	}
+	return result
 }
 
 type OperationPolicyProvider func(context.Context, PolicyRequest) (PolicyDecision, error)

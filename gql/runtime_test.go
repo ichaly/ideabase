@@ -30,7 +30,7 @@ func TestExecutorRuntimeSubscribeEmitsJSONAndClosesOnCancel(t *testing.T) {
 	executor.cdc = runtimeTestNotifier{}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	events, err := executor.Subscribe(ctx, `{ users { total } }`, nil, "")
+	events, err := executor.Subscribe(ctx, `subscription { users { total } }`, nil, "")
 	require.NoError(t, err)
 	select {
 	case body, ok := <-events:
@@ -55,7 +55,7 @@ func TestExecutorRuntimeSubscribeRejectsWithoutCDC(t *testing.T) {
 		source.close()
 	}
 	executor.cdc = nil
-	_, err := executor.Subscribe(context.Background(), `{ users { total } }`, nil, "")
+	_, err := executor.Subscribe(context.Background(), `subscription { users { total } }`, nil, "")
 	require.Error(t, err)
 	require.False(t, executor.SubscriptionAvailable())
 }

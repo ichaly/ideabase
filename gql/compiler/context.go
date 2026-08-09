@@ -33,6 +33,25 @@ type Context struct {
 	cursorRoot        string
 }
 
+// OperationSpec is the canonical execution contract for a root operation.
+// The compiler consumes this contract instead of inferring mutation semantics
+// from a GraphQL field name.
+type OperationSpec struct {
+	Class     *protocol.Class
+	Actions   []string
+	Operation string
+	Bulk      bool
+	Result    bool
+	Single    bool
+}
+
+// OperationProvider resolves an exact schema coordinate to its operation
+// contract. Implementations live outside compiler to keep the package
+// independent from the gql metadata package.
+type OperationProvider interface {
+	LookupOperation(string) (OperationSpec, bool)
+}
+
 // Slot 表示SQL参数槽位：字面量值或变量引用
 // 变量引用在执行期解析，使编译产物可按查询文本缓存复用
 type Slot struct {
@@ -209,6 +228,18 @@ func (my *Context) GetClass(className string) (*protocol.Class, bool) {
 		return nil, false
 	}
 	return my.hoster.GetNode(className)
+}
+
+// LookupOperation returns the canonical operation for an exact coordinate.
+func (my *Context) LookupOperation(coordinate string) (OperationSpec, bool) {
+	if my.hoster == nil {
+		return OperationSpec{}, false
+	}
+	provider, ok := my.hoster.(OperationProvider)
+	if !ok {
+		return OperationSpec{}, false
+	}
+	return provider.LookupOperation(coordinate)
 }
 
 // Args 返回参数列表（按当前变量表解析所有槽位）

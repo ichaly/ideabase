@@ -76,7 +76,7 @@ func TestRendererMutationInputsOnlyExposeExecutableRelationDepth(t *testing.T) {
 	}})
 	schema := governanceSchema(t, user, post)
 	require.Contains(t, schema, "createUsers(input: [UserCreateRowInput!]!): [User!]!")
-	require.Contains(t, schema, "upsertUsers(input: [UserCreateRowInput!]!")
+	require.Contains(t, schema, "upsertUsers(input: [UserUpsertRowInput!]!")
 	require.Contains(t, schema, "updateUsers(where: UserWhereInput!, input: UserUpdateRowInput!): UserMutationResult!")
 	require.Contains(t, schema, "posts: PostCreateRelationInput")
 	require.NotContains(t, schemaType(schema, "UserCreateRowInput"), "posts:")

@@ -41,6 +41,9 @@ type Renderer struct {
 
 // NewRenderer 创建新的Schema渲染器
 func NewRenderer(meta *Metadata) *Renderer {
+	if meta.operations == nil {
+		meta.operations = buildOperationCatalog(meta)
+	}
 	return &Renderer{
 		meta: meta,
 		sb:   &strings.Builder{},
@@ -51,7 +54,6 @@ func NewRenderer(meta *Metadata) *Renderer {
 func (my *Renderer) Render() (string, error) {
 	// 复用构造时分配的构建器（支持重复Generate）
 	my.sb.Reset()
-
 	// 添加schema版本和说明
 	my.writeLine("# ", DESC_SCHEMA_TITLE)
 	my.writeLine("# 版本: ", my.meta.Version, "\n")
@@ -553,6 +555,14 @@ func (my *Renderer) renderInput() error {
 			my.writeLine("# ", className, "创建输入")
 			my.writeMutationInput(className, protocol.SUFFIX_CREATE_INPUT, class, createFields, protocol.OP_INSERT, true)
 			my.writeMutationInput(className, protocol.SUFFIX_CREATE_ROW_INPUT, class, createFields, protocol.OP_INSERT, false)
+			if my.allows(class, protocol.OP_UPDATE) && len(class.ConflictTargets()) > 0 {
+				upsertFields := slices.DeleteFunc(append([]string(nil), createFields...), func(name string) bool {
+					return !slices.Contains(updateFields, name)
+				})
+				if len(upsertFields) > 0 {
+					my.writeMutationInput(className, protocol.SUFFIX_UPSERT_ROW_INPUT, class, upsertFields, protocol.OP_INSERT, false)
+				}
+			}
 		}
 
 		if my.allows(class, protocol.OP_UPDATE) && len(updateFields) > 0 {
@@ -716,6 +726,7 @@ func (my *Renderer) renderSort() error {
 // renderQuery 渲染查询根类型与订阅根类型（订阅镜像实体查询字段）
 func (my *Renderer) renderQuery() error {
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_QUERY, " ", SEPARATOR_LINE, "\n")
+	operationExists := func(parent, name string) bool { _, ok := my.meta.operations[parent+"."+name]; return ok }
 
 	// 实体查询字段渲染闭包，Query与Subscription共用
 	writeEntityField := func(className string) {
@@ -785,11 +796,10 @@ func (my *Renderer) renderQuery() error {
 	var names []string
 	var selectNames []string
 	my.eachTableClass(func(className string, _ *protocol.Class) {
-		class := my.meta.Nodes[className]
-		if my.allows(class, protocol.OP_SELECT) {
+		if operationExists("Query", queryField(className)) {
 			selectNames = append(selectNames, className)
 		}
-		if my.allows(class, protocol.OP_SELECT) || my.allows(class, protocol.OP_AGGREGATE) {
+		if operationExists("Query", queryField(className)) || operationExists("Query", strcase.ToLowerCamel(className)+protocol.SUFFIX_STATS) {
 			names = append(names, className)
 		}
 	})
@@ -798,15 +808,15 @@ func (my *Renderer) renderQuery() error {
 	my.writeLine("type Query {")
 	for _, className := range names {
 		class := my.meta.Nodes[className]
-		if my.allows(class, protocol.OP_SELECT) {
+		if operationExists("Query", queryField(className)) {
 			writeEntityField(className)
-			if len(class.PrimaryKeyFields()) > 0 {
+			if operationExists("Query", strcase.ToLowerCamel(className)+protocol.SUFFIX_CONNECTION) {
 				writeConnectionField(className)
 			}
 		}
 
 		// 统计查询
-		if !my.allows(class, protocol.OP_AGGREGATE) {
+		if !operationExists("Query", strcase.ToLowerCamel(className)+protocol.SUFFIX_STATS) {
 			continue
 		}
 		my.writeLine("  # ", className, "统计")
@@ -837,9 +847,9 @@ func (my *Renderer) renderQuery() error {
 	my.writeLine("# 订阅根类型")
 	my.writeLine("type Subscription {")
 	for _, className := range names {
-		if my.allows(my.meta.Nodes[className], protocol.OP_SELECT) {
+		if operationExists("Subscription", queryField(className)) {
 			writeEntityField(className)
-			if len(my.meta.Nodes[className].PrimaryKeyFields()) > 0 {
+			if operationExists("Subscription", strcase.ToLowerCamel(className)+protocol.SUFFIX_CONNECTION) {
 				writeConnectionField(className)
 			}
 		}
@@ -854,19 +864,19 @@ func (my *Renderer) renderQuery() error {
 
 // renderMutation 渲染变更根类型
 func (my *Renderer) renderMutation() error {
-	var hasMutation bool
-	my.eachTableClass(func(_ string, class *protocol.Class) {
-		if (my.allows(class, protocol.OP_INSERT) && len(my.writableFields(class, protocol.OP_INSERT)) > 0) ||
-			(my.allows(class, protocol.OP_UPDATE) && len(my.writableFields(class, protocol.OP_UPDATE)) > 0) ||
-			my.allows(class, protocol.OP_DELETE) || (my.allows(class, protocol.OP_RESTORE) && class.SoftDelete != nil) || my.allowsPurge(class) {
+	operationExists := func(name string) bool { _, ok := my.meta.operations["Mutation."+name]; return ok }
+	hasMutation := false
+	for coordinate := range my.meta.operations {
+		if strings.HasPrefix(coordinate, "Mutation.") {
 			hasMutation = true
+			break
 		}
-	})
+	}
 	if !hasMutation {
 		return nil
 	}
 	my.eachTableClass(func(className string, class *protocol.Class) {
-		if !((my.allows(class, protocol.OP_UPDATE) && len(my.writableFields(class, protocol.OP_UPDATE)) > 0) || my.allows(class, protocol.OP_DELETE) || (my.allows(class, protocol.OP_RESTORE) && class.SoftDelete != nil) || my.allowsPurge(class)) {
+		if !operationExists(protocol.UPDATE+className) && !operationExists(protocol.DELETE+className) && !operationExists("restore"+className+protocol.SUFFIX_BY_PK) && !operationExists(protocol.PURGE+className+protocol.SUFFIX_BY_PK) {
 			return
 		}
 		my.writeLine("type ", className, protocol.SUFFIX_MUTATION_RESULT, " {")
@@ -882,7 +892,7 @@ func (my *Renderer) renderMutation() error {
 	my.eachTableClass(func(className string, class *protocol.Class) {
 
 		// 无可写字段的类（如纯主键表）不生成创建/更新操作
-		if my.allows(class, protocol.OP_INSERT) && len(my.writableFields(class, protocol.OP_INSERT)) > 0 {
+		if operationExists(protocol.CREATE + className) {
 			plural := inflection.Plural(className)
 
 			my.writeLine("  # ", class.Name, "创建")
@@ -899,7 +909,7 @@ func (my *Renderer) renderMutation() error {
 				}...))
 			}
 
-			if my.allows(class, protocol.OP_UPDATE) && len(my.writableFields(class, protocol.OP_UPDATE)) > 0 && len(class.ConflictTargets()) > 0 {
+			if operationExists(protocol.UPSERT + plural) {
 				my.writeLine("  # ", class.Name, "插入或更新（按on列冲突，缺省主键）")
 				onType := className + "ConflictTarget"
 				defaultTarget := "PRIMARY"
@@ -908,13 +918,13 @@ func (my *Renderer) renderMutation() error {
 					defaultTarget = ""
 				}
 				my.writeField(protocol.UPSERT+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-					{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_ROW_INPUT + "!]!"},
+					{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_UPSERT_ROW_INPUT + "!]!"},
 					{Name: protocol.ON, Type: onType, Default: defaultTarget},
 				}...))
 			}
 
 		}
-		if my.allows(class, protocol.OP_UPDATE) && len(my.writableFields(class, protocol.OP_UPDATE)) > 0 {
+		if operationExists(protocol.UPDATE + className) {
 			batchPlural := inflection.Plural(className)
 			if batchPlural == className {
 				batchPlural += protocol.SUFFIX_MANY
@@ -930,7 +940,7 @@ func (my *Renderer) renderMutation() error {
 			my.writeField(protocol.UPDATE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}, {Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_ROW_INPUT + "!"}}...))
 		}
 
-		if my.allows(class, protocol.OP_DELETE) {
+		if operationExists(protocol.DELETE + className) {
 			batchPlural := inflection.Plural(className)
 			if batchPlural == className {
 				batchPlural += protocol.SUFFIX_MANY
@@ -943,7 +953,7 @@ func (my *Renderer) renderMutation() error {
 			}
 			my.writeField(protocol.DELETE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
 		}
-		if my.allows(class, protocol.OP_RESTORE) && class.SoftDelete != nil {
+		if operationExists("restore"+inflection.Plural(className)) || operationExists("restore"+className+protocol.SUFFIX_BY_PK) {
 			batchPlural := inflection.Plural(className)
 			if batchPlural == className {
 				batchPlural += protocol.SUFFIX_MANY
@@ -953,7 +963,7 @@ func (my *Renderer) renderMutation() error {
 			}
 			my.writeField("restore"+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
 		}
-		if my.allowsPurge(class) {
+		if operationExists(protocol.PURGE+inflection.Plural(className)) || operationExists(protocol.PURGE+className+protocol.SUFFIX_BY_PK) {
 			batchPlural := inflection.Plural(className)
 			if batchPlural == className {
 				batchPlural += protocol.SUFFIX_MANY

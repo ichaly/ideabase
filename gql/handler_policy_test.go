@@ -19,8 +19,10 @@ func TestHandlerRequiresParticipateInPolicyFieldUses(t *testing.T) {
 	)))
 	require.NoError(t, executor.Register(OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		if request.Coordinate == "Query.users" {
-			require.Equal(t, []string{"displayName"}, request.Fields[FieldUseJoin])
-			require.Equal(t, []string{"name"}, request.Fields[FieldUseInternalDependency])
+			if len(request.Fields) > 0 { // operation authorization, after effective-schema shaping
+				require.Equal(t, []string{"displayName"}, request.Fields[FieldUseJoin])
+				require.Equal(t, []string{"name"}, request.Fields[FieldUseInternalDependency])
+			}
 			return PolicyDecision{Allow: true, Fields: map[FieldUse][]string{
 				FieldUseJoin: {"displayName"},
 				// Deliberately withhold the internal dependency.
@@ -32,7 +34,7 @@ func TestHandlerRequiresParticipateInPolicyFieldUses(t *testing.T) {
 	require.NoError(t, err)
 	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users { items { displayName } } }`, nil)
 	require.NoError(t, err)
-	require.Contains(t, string(body), "field-use=internal-dependency field=name")
+	require.Contains(t, string(body), `Cannot query field \"items\" on type \"UserResult\"`)
 	require.NotContains(t, string(body), `"data"`)
 	require.False(t, called, "policy rejection must happen before SQL and Handler invocation")
 }

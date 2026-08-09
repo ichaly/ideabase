@@ -9,7 +9,39 @@ import (
 	"time"
 
 	core "github.com/ichaly/ideabase/gql"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
+
+func newArtifact(t *testing.T, schema string) *core.Snapshot {
+	t.Helper()
+	parsed, err := gqlparser.LoadSchema(&ast.Source{Name: "fixture.graphql", Input: schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var capabilities []core.Capability
+	for _, root := range []*ast.Definition{parsed.Query, parsed.Mutation, parsed.Subscription} {
+		if root == nil {
+			continue
+		}
+		for _, field := range root.Fields {
+			var args []core.Argument
+			for _, arg := range field.Arguments {
+				args = append(args, core.Argument{Name: arg.Name, Type: arg.Type.String()})
+			}
+			capabilities = append(capabilities, core.Capability{Coordinate: root.Name + "." + field.Name, Parent: root.Name, Name: field.Name, Type: field.Type.String(), Arguments: args, Handler: core.HandlerRemote})
+		}
+	}
+	fingerprint, err := core.ArtifactFingerprint(schema, capabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := core.NewSnapshotArtifact(schema, fingerprint, capabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
 
 type runtimeEndpoint struct {
 	snapshot       *core.Snapshot
@@ -46,7 +78,7 @@ func (my *runtimeEndpoint) Execute(ctx context.Context, _ string, _ map[string]a
 }
 
 func TestRemoteEndpointAcceptsPartialGraphQLResponseStatus(t *testing.T) {
-	snapshot, _ := core.NewSnapshotArtifact("type Query { hello: String }", "partial-v1", nil)
+	snapshot := newArtifact(t, "type Query { hello: String }")
 	endpoint := &runtimeEndpoint{snapshot: snapshot, body: []byte(`{"data":{"hello":null},"errors":[{"message":"failed","path":["hello"]}]}`)}
 	mux := http.NewServeMux()
 	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
@@ -66,10 +98,7 @@ func TestRemoteEndpointAcceptsPartialGraphQLResponseStatus(t *testing.T) {
 }
 
 func TestRemoteEndpointLoadsManifestAndDelegatesIdentity(t *testing.T) {
-	snapshot, err := core.NewSnapshotArtifact("type Query { hello: String! }", "revision-1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	snapshot := newArtifact(t, "type Query { hello: String! }")
 	endpoint := &runtimeEndpoint{snapshot: snapshot}
 	key := []byte("0123456789abcdef0123456789abcdef")
 	serverCodec, err := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute})
@@ -94,7 +123,7 @@ func TestRemoteEndpointLoadsManifestAndDelegatesIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded, err := remote.Snapshot()
-	if err != nil || loaded.Fingerprint() != "revision-1" {
+	if err != nil || loaded.Fingerprint() != snapshot.Fingerprint() {
 		t.Fatalf("snapshot = %#v, %v", loaded, err)
 	}
 	identity, err := core.NewIdentity(core.IdentityInput{Tenant: "tenant", Subject: "user", Roles: []string{"reader"}})
@@ -123,7 +152,7 @@ func TestRemoteEndpointLoadsManifestAndDelegatesIdentity(t *testing.T) {
 }
 
 func TestRemoteEndpointHealthMatchesManifestSnapshot(t *testing.T) {
-	snapshot, _ := core.NewSnapshotArtifact("type Query { hello: String }", "health-v1", nil)
+	snapshot := newArtifact(t, "type Query { hello: String }")
 	endpoint := &healthyRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}}
 	mux := http.NewServeMux()
 	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
@@ -138,13 +167,13 @@ func TestRemoteEndpointHealthMatchesManifestSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report, err := remote.Health(context.Background()); err != nil || !report.Ready || report.SnapshotFingerprint != "health-v1" {
+	if report, err := remote.Health(context.Background()); err != nil || !report.Ready || report.SnapshotFingerprint != snapshot.Fingerprint() {
 		t.Fatalf("remote health = %#v, %v", report, err)
 	}
 }
 
 func TestRemoteEndpointRejectsHealthManifestWithoutHealthURL(t *testing.T) {
-	snapshot, _ := core.NewSnapshotArtifact("type Query { hello: String }", "health-v1", nil)
+	snapshot := newArtifact(t, "type Query { hello: String }")
 	endpoint := &healthyRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}}
 	server := httptest.NewServer(NewManifestHandler("child", endpoint))
 	defer server.Close()
@@ -157,7 +186,7 @@ func TestRemoteEndpointRejectsHealthManifestWithoutHealthURL(t *testing.T) {
 }
 
 func TestRemoteEndpointRefreshKeepsLastKnownGoodManifest(t *testing.T) {
-	snapshot, _ := core.NewSnapshotArtifact("type Query { hello: String }", "good", nil)
+	snapshot := newArtifact(t, "type Query { hello: String }")
 	endpoint := &runtimeEndpoint{snapshot: snapshot}
 	mux := http.NewServeMux()
 	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
@@ -169,7 +198,7 @@ func TestRemoteEndpointRefreshKeepsLastKnownGoodManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	endpoint.snapshot, _ = core.NewSnapshotArtifact("type Query { broken: String }", "bad", nil)
+	endpoint.snapshot = newArtifact(t, "type Query { broken: String }")
 	badMux := http.NewServeMux()
 	badMux.Handle("/manifest", NewManifestHandler("different-id", endpoint))
 	badServer := httptest.NewServer(badMux)
@@ -179,19 +208,16 @@ func TestRemoteEndpointRefreshKeepsLastKnownGoodManifest(t *testing.T) {
 		t.Fatal("invalid manifest refresh succeeded")
 	}
 	got, _ := remote.Snapshot()
-	if got.Fingerprint() != "good" {
+	if got.Fingerprint() != snapshot.Fingerprint() {
 		t.Fatalf("LKG fingerprint = %s", got.Fingerprint())
 	}
 }
 
 func TestRemoteGatewaySubscriptionUsesSignedSSEStream(t *testing.T) {
-	snapshot, err := core.NewSnapshotArtifact(`
+	snapshot := newArtifact(t, `
 		type Query { hello: String }
 		type Subscription { changed: String! }
-	`, "subscription-v1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	`)
 	frames := make(chan []byte, 1)
 	frames <- []byte(`{"data":{"changed":"ready"}}`)
 	close(frames)
@@ -233,13 +259,10 @@ func TestRemoteGatewaySubscriptionUsesSignedSSEStream(t *testing.T) {
 }
 
 func TestRemoteEndpointRejectsSubscriptionManifestWithoutExecutableStream(t *testing.T) {
-	snapshot, err := core.NewSnapshotArtifact(`
+	snapshot := newArtifact(t, `
 		type Query { hello: String }
 		type Subscription { changed: String }
-	`, "subscription-v1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	`)
 	frames := make(chan []byte)
 	endpoint := &subscriptionRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}, events: frames}
 	mux := http.NewServeMux()
@@ -247,7 +270,7 @@ func TestRemoteEndpointRejectsSubscriptionManifestWithoutExecutableStream(t *tes
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	_, err = NewRemoteEndpoint(context.Background(), RemoteOptions{
+	_, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
 		EndpointID: "child", ManifestURL: server.URL + "/manifest", ExecuteURL: server.URL + "/graphql", AllowHTTP: true,
 	})
 	if err == nil {
@@ -256,20 +279,17 @@ func TestRemoteEndpointRejectsSubscriptionManifestWithoutExecutableStream(t *tes
 }
 
 func TestRemoteEndpointRejectsFalseSubscriptionCapability(t *testing.T) {
-	snapshot, err := core.NewSnapshotArtifact(`
+	snapshot := newArtifact(t, `
 		type Query { hello: String }
 		type Subscription { changed: String }
-	`, "subscription-v1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	`)
 	endpoint := &runtimeEndpoint{snapshot: snapshot}
 	mux := http.NewServeMux()
 	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	_, err = NewRemoteEndpoint(context.Background(), RemoteOptions{
+	_, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
 		EndpointID: "child", ManifestURL: server.URL + "/manifest", ExecuteURL: server.URL + "/graphql",
 		SubscribeURL: server.URL + "/subscribe", AllowHTTP: true,
 	})
@@ -279,7 +299,7 @@ func TestRemoteEndpointRejectsFalseSubscriptionCapability(t *testing.T) {
 }
 
 func TestSubscriptionHandlerLimitsEventFrames(t *testing.T) {
-	snapshot, _ := core.NewSnapshotArtifact("type Query { hello: String }", "frame-limit", nil)
+	snapshot := newArtifact(t, "type Query { hello: String }")
 	frames := make(chan []byte, 1)
 	frames <- []byte(`{"data":{"value":"` + strings.Repeat("x", 64) + `"}}`)
 	close(frames)

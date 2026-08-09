@@ -30,6 +30,7 @@ const (
 	SUFFIX_HAVING_INPUT          = "HavingInput" // 每实体的having入参类型后缀
 	SUFFIX_CREATE_INPUT          = "CreateInput"
 	SUFFIX_CREATE_ROW_INPUT      = "CreateRowInput"
+	SUFFIX_UPSERT_ROW_INPUT      = "UpsertRowInput"
 	SUFFIX_UPDATE_INPUT          = "UpdateInput"
 	SUFFIX_UPDATE_ROW_INPUT      = "UpdateRowInput"
 	SUFFIX_CREATE_RELATION_INPUT = "CreateRelationInput"

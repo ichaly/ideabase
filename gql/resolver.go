@@ -813,17 +813,38 @@ func (my *Executor) resolveRootField(ctx context.Context, operation *ast.Operati
 	if err != nil {
 		return nil, warnings, err
 	}
-	// Entity requery already applies aliases, nested selections and nullability
-	// through the normal SQL path; projecting it again by field.Name would lose
-	// alias keys. Direct map/struct/list results still need the helper below.
-	if projected {
-		return result, warnings, nil
+	// Both direct resolver values and entity requery values pass through the
+	// same GraphQL completion path. The projected flag only describes how the
+	// value was obtained; it must not bypass nullability or shape validation.
+	parentType := "Query"
+	if field.ObjectDefinition != nil && field.ObjectDefinition.Name != "" {
+		parentType = field.ObjectDefinition.Name
 	}
-	objectType := ""
-	if field.Definition != nil && field.Definition.Type != nil {
-		objectType = field.Definition.Type.Name()
+	if operation.Operation == ast.Mutation {
+		parentType = "Mutation"
 	}
-	return projectRootResult(result, field.SelectionSet, objectType), warnings, nil
+	var resultType *ast.Type
+	if field.Definition != nil {
+		resultType = field.Definition.Type
+	}
+	if !projected {
+		objectType := ""
+		if resultType != nil {
+			objectType = resultType.Name()
+		}
+		result = projectRootResult(result, field.SelectionSet, objectType)
+	}
+	completed, completionErrors, violation := completeValue(my.schema, result,
+		resultType, field.SelectionSet, nil, warnings,
+		completionOptions{mode: completionLocal, parentType: parentType, fieldName: field.Name})
+	if !violation && len(completionErrors) > 0 {
+		completionErrors = rootFieldExecutionErrors(field, completionErrors, "RESOLVER_ERROR", false)
+	}
+	warnings = append(warnings, completionErrors...)
+	if violation {
+		return nil, warnings, &nonNullResolverError{errors: warnings}
+	}
+	return completed, warnings, nil
 }
 
 // projectRootResult applies the client's selection to values returned directly

@@ -9,9 +9,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1088,99 +1086,7 @@ func publicTypename(contract *namespaceContract, name string) string {
 // selection and reapplies GraphQL Non-Null bubbling before it crosses the
 // namespace boundary.
 func completeEndpointValue(schema *ast.Schema, value any, typ *ast.Type, set ast.SelectionSet, path ast.Path, known gqlerror.List) (any, gqlerror.List, bool) {
-	if value == nil {
-		if typ != nil && typ.NonNull {
-			if endpointErrorCovers(known, path) {
-				return nil, nil, true
-			}
-			err := gqlerror.ErrorPathf(path, "endpoint returned null for non-null field")
-			err.Extensions = map[string]any{"code": "BAD_GATEWAY_RESPONSE"}
-			return nil, gqlerror.List{err}, true
-		}
-		return nil, nil, false
-	}
-	if typ != nil && typ.Elem != nil {
-		items, ok := value.([]any)
-		if !ok {
-			return invalidEndpointValue(path, typ, known)
-		}
-		out := make([]any, len(items))
-		var errors gqlerror.List
-		for index, item := range items {
-			completed, itemErrors, violation := completeEndpointValue(schema, item, typ.Elem, set, gatewayAppendPath(path, ast.PathIndex(index)), known)
-			errors = append(errors, itemErrors...)
-			if violation {
-				return nil, errors, typ.NonNull
-			}
-			out[index] = completed
-		}
-		return out, errors, false
-	}
-	if len(set) == 0 {
-		if completed, ok := coerceEndpointScalar(schema, typ, value); ok {
-			return completed, nil, false
-		}
-		return invalidEndpointValue(path, typ, known)
-	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		return invalidEndpointValue(path, typ, known)
-	}
-	out := make(map[string]any, len(set))
-	var errors gqlerror.List
-	runtimeType := ""
-	if hasInlineFragment(set) {
-		alias := gatewayTypeAlias(set)
-		var ok bool
-		runtimeType, ok = object[alias].(string)
-		definition := schema.Types[runtimeType]
-		if !ok || definition == nil || definition.Kind != ast.Object {
-			return invalidEndpointValue(path, typ, known)
-		}
-	}
-	for _, selection := range set {
-		switch node := selection.(type) {
-		case *ast.Field:
-			key := responseKey(node)
-			fieldPath := gatewayAppendPath(path, ast.PathName(key))
-			if node.Name == "__typename" {
-				name, ok := object[key].(string)
-				definition := schema.Types[name]
-				if !ok || definition == nil || definition.Kind != ast.Object {
-					return invalidEndpointValue(fieldPath, ast.NonNullNamedType("String", nil), known)
-				}
-			}
-			fieldType := (*ast.Type)(nil)
-			if node.Definition != nil {
-				fieldType = node.Definition.Type
-			} else if node.Name == "__typename" {
-				fieldType = ast.NonNullNamedType("String", nil)
-			}
-			completed, fieldErrors, violation := completeEndpointValue(schema, object[key], fieldType, node.SelectionSet, fieldPath, known)
-			errors = append(errors, fieldErrors...)
-			if violation {
-				return nil, errors, typ != nil && typ.NonNull
-			}
-			out[key] = completed
-		case *ast.InlineFragment:
-			if !typeConditionApplies(schema, node.TypeCondition, runtimeType) {
-				continue
-			}
-			completed, fragmentErrors, violation := completeEndpointValue(schema, object, typ, node.SelectionSet, path, known)
-			errors = append(errors, fragmentErrors...)
-			if violation {
-				return nil, errors, typ != nil && typ.NonNull
-			}
-			fragment, ok := completed.(map[string]any)
-			if !ok {
-				return nil, errors, typ != nil && typ.NonNull
-			}
-			for key, value := range fragment {
-				out[key] = value
-			}
-		}
-	}
-	return out, errors, false
+	return completeValue(schema, value, typ, set, path, known, completionOptions{mode: completionRemote})
 }
 
 func typeConditionApplies(schema *ast.Schema, condition, runtimeType string) bool {
@@ -1193,95 +1099,4 @@ func typeConditionApplies(schema *ast.Schema, condition, runtimeType string) boo
 		}
 	}
 	return false
-}
-
-func coerceEndpointScalar(schema *ast.Schema, typ *ast.Type, value any) (any, bool) {
-	if typ == nil {
-		return value, true
-	}
-	switch typ.NamedType {
-	case "String":
-		_, ok := value.(string)
-		return value, ok
-	case "ID":
-		if _, ok := value.(string); ok {
-			return value, true
-		}
-		if integer, ok := endpointInteger(value); ok {
-			return strconv.FormatInt(integer, 10), true
-		}
-		return nil, false
-	case "Int":
-		integer, ok := endpointInteger(value)
-		return value, ok && integer >= math.MinInt32 && integer <= math.MaxInt32
-	case "Float":
-		number, ok := endpointFloat(value)
-		return value, ok && !math.IsInf(number, 0) && !math.IsNaN(number)
-	case "Boolean":
-		_, ok := value.(bool)
-		return value, ok
-	}
-	definition := schema.Types[typ.NamedType]
-	if definition == nil || definition.Kind != ast.Enum {
-		return value, true // Custom scalar serialization belongs to its declaring endpoint.
-	}
-	name, ok := value.(string)
-	return value, ok && definition.EnumValues.ForName(name) != nil
-}
-
-func endpointInteger(value any) (int64, bool) {
-	switch value := value.(type) {
-	case stdjson.Number:
-		integer, err := value.Int64()
-		return integer, err == nil
-	case int:
-		return int64(value), true
-	case int32:
-		return int64(value), true
-	case int64:
-		return value, true
-	default:
-		return 0, false
-	}
-}
-
-func endpointFloat(value any) (float64, bool) {
-	switch value := value.(type) {
-	case stdjson.Number:
-		number, err := value.Float64()
-		return number, err == nil
-	case float64:
-		return value, true
-	case float32:
-		return float64(value), true
-	default:
-		integer, ok := endpointInteger(value)
-		return float64(integer), ok
-	}
-}
-
-func invalidEndpointValue(path ast.Path, typ *ast.Type, known gqlerror.List) (any, gqlerror.List, bool) {
-	if endpointErrorCovers(known, path) {
-		return nil, nil, typ != nil && typ.NonNull
-	}
-	err := gqlerror.ErrorPathf(path, "endpoint returned a value with the wrong shape")
-	err.Extensions = map[string]any{"code": "BAD_GATEWAY_RESPONSE"}
-	return nil, gqlerror.List{err}, typ != nil && typ.NonNull
-}
-
-func endpointErrorCovers(errors gqlerror.List, path ast.Path) bool {
-	want := path.String()
-	for _, err := range errors {
-		have := err.Path.String()
-		if have == want || (want != "" && strings.HasPrefix(have, want+".")) || (want != "" && strings.HasPrefix(have, want+"[")) {
-			return true
-		}
-	}
-	return false
-}
-
-func gatewayAppendPath(path ast.Path, element ast.PathElement) ast.Path {
-	out := make(ast.Path, len(path), len(path)+1)
-	copy(out, path)
-	return append(out, element)
 }

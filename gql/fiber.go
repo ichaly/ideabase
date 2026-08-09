@@ -49,7 +49,8 @@ func (my *Executor) Handler(c fiber.Ctx) error {
 }
 
 // SubscribeHandler 处理 GraphQL 订阅的 WebSocket 升级（graphql-transport-ws 子协议）。
-// 升级前提取行级作用域并透传（升级后请求 ctx 不可用，否则订阅丢失隔离）。
+// 升级前保存完整宿主上下文；升级后请求 ctx 不可用，但认证身份、路由和 scope
+// 仍由 UpgradeContext 传入的 context 保持。
 func (my *Executor) SubscribeHandler(c fiber.Ctx) error {
-	return my.Upgrade(c.RequestCtx(), scopeValues(c.Context()))
+	return my.UpgradeContext(c.RequestCtx(), c.Context())
 }

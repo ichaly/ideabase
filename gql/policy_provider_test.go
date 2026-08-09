@@ -71,7 +71,7 @@ func TestBuiltinPolicyProviderKeepsStablePerRoleBranches(t *testing.T) {
 	require.Len(t, first.RoleBranches, 2)
 	require.Len(t, first.RoleBranches[1].RowPredicates, 2, "同一角色的filter保持AND分组")
 	require.Len(t, first.RoleBranches[1].Check, 1)
-	require.ElementsMatch(t, []string{"name"}, first.Fields[FieldUseWrite])
+	require.Empty(t, first.Fields[FieldUseWrite], "select决策不得携带未请求的写权限")
 
 	permissions["users"]["owner"].Select[0] = "mutated"
 	require.NotContains(t, decide([]string{"owner"}).Fields[FieldUseSelect], "mutated")

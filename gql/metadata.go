@@ -14,6 +14,7 @@ import (
 
 	"github.com/huandu/go-clone"
 	"github.com/iancoleman/strcase"
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -338,6 +339,31 @@ func (my *Metadata) cloneCatalog() {
 	}
 }
 
+// freeze returns the executor-owned catalog. Builders and loaders may keep
+// their Metadata value, but serving never shares its mutable maps or classes.
+func (my *Metadata) freeze() *Metadata {
+	frozen := *my
+	if my.cfg != nil {
+		frozen.cfg = clone.Slowly(my.cfg).(*internal.Config)
+	}
+	frozen.Nodes = make(map[string]*protocol.Class, len(my.Nodes))
+	for key, class := range my.Nodes {
+		frozen.Nodes[key] = class
+	}
+	frozen.Routines = make(map[string]*protocol.Routine, len(my.Routines))
+	for key, routine := range my.Routines {
+		frozen.Routines[key] = routine
+	}
+	frozen.cloneCatalog()
+	frozen.codecs = append([]Codec(nil), my.codecs...)
+	frozen.index = make(map[string]Codec, len(my.index))
+	for name, codec := range my.index {
+		frozen.index[name] = codec
+	}
+	frozen.operations = buildOperationCatalog(&frozen)
+	return &frozen
+}
+
 // eachClass 按类名有序遍历主名类（跳过表名/别名索引）
 func (my *Metadata) eachClass(fn func(class *protocol.Class)) {
 	for _, className := range utl.SortKeys(my.Nodes) {
@@ -651,6 +677,24 @@ func (my *Metadata) MaxCost() uint64 {
 func (my *Metadata) GetNode(name string) (*protocol.Class, bool) {
 	n, ok := my.Nodes[name]
 	return n, ok
+}
+
+// LookupOperation implements compiler.OperationProvider. Coordinates are
+// looked up exactly in the immutable operation catalog; mutation meaning is
+// never recovered from a field-name prefix by the SQL compiler.
+func (my *Metadata) LookupOperation(coordinate string) (compiler.OperationSpec, bool) {
+	capability, ok := my.operations[coordinate]
+	if !ok || capability.class == nil || len(capability.actions) == 0 || capability.operation == "" {
+		return compiler.OperationSpec{}, false
+	}
+	return compiler.OperationSpec{
+		Class:     capability.class,
+		Actions:   append([]string(nil), capability.actions...),
+		Operation: capability.operation,
+		Bulk:      capability.bulk,
+		Result:    capability.result,
+		Single:    capability.single,
+	}, true
 }
 
 func (my *Metadata) SetVersion(version string) {

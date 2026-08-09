@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/fasthttp/websocket"
 	"github.com/valyala/fasthttp"
+	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
@@ -48,12 +50,22 @@ func (my *Executor) subscribe(ctx context.Context, query string, variables map[s
 	if variables == nil && strings.IndexByte(query, '$') >= 0 {
 		variables = make(map[string]interface{})
 	}
-	if my.cdc == nil {
-		return nil, fmt.Errorf("订阅不可用：当前数据库没有注册CDC唤醒源或DSN不可用")
-	}
-	plan, err := my.plan(query, operationName, variables)
+	view, err := my.effectiveSchema(ctx)
 	if err != nil {
 		return nil, err
+	}
+	plan, err := my.planWithView(view, query, operationName, variables)
+	if err != nil {
+		return nil, err
+	}
+	// subscribe is deliberately narrower than execute: once planning has
+	// selected an operation, reject Query and Mutation before authorization,
+	// CDC watch creation, or the first stream fetch.
+	if plan.operation == nil || plan.operation.Operation != ast.Subscription {
+		return nil, fmt.Errorf("订阅入口只接受subscription操作")
+	}
+	if my.cdc == nil {
+		return nil, fmt.Errorf("订阅不可用：当前数据库没有注册CDC唤醒源或DSN不可用")
 	}
 	if plan.policyNeeded {
 		if err := my.authorize(ctx, plan.operation, variables); err != nil {
@@ -312,17 +324,42 @@ const (
 
 var upgrader = websocket.FastHTTPUpgrader{
 	Subprotocols:    []string{"graphql-transport-ws"},
-	CheckOrigin:     func(*fasthttp.RequestCtx) bool { return true },
+	CheckOrigin:     subscriptionOriginAllowedByHost,
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
 }
 
-// Upgrade 框架无关的订阅入口：将连接升级为 graphql-transport-ws WebSocket。
-// scope 为升级前提取的行级作用域（升级后请求ctx不可用，否则订阅丢失隔离）。
-// 仅依赖 fasthttp（fiber 亦跑在 fasthttp 上，WS 无法退回 net/http）；fiber 绑定见 fiber.go。
+func subscriptionOriginAllowedByHost(ctx *fasthttp.RequestCtx) bool {
+	origin := strings.TrimSpace(string(ctx.Request.Header.Peek("Origin")))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, string(ctx.Host()))
+}
+
+// Upgrade 是保留兼容性的 scope-only facade。新宿主应使用 UpgradeContext，
+// 以便在升级前把认证上下文（Identity、PinnedRoute、revocation 等）绑定到会话。
 func (my *Executor) Upgrade(rc *fasthttp.RequestCtx, scope map[string]any) error {
+	return my.UpgradeContext(rc, WithScope(context.Background(), scope))
+}
+
+// UpgradeContext 将完整的宿主认证上下文带入 WebSocket 会话。升级后
+// fasthttp 请求上下文不可再作为认证状态来源，因此只从 ctx 派生取消信号，
+// 不重建 context.Background()+scope。
+func (my *Executor) UpgradeContext(rc *fasthttp.RequestCtx, ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Detach from fasthttp's request cancellation/value carrier before the
+	// upgrader takes ownership of the request context. Values remain intact,
+	// while the socket gets its own cancellation scope in serveSocket.
+	ctx = context.WithoutCancel(ctx)
 	return upgrader.Upgrade(rc, func(conn *websocket.Conn) {
-		my.serveSocket(conn, scope)
+		my.serveSocket(conn, ctx)
 	})
 }
 
@@ -353,9 +390,10 @@ func closeSocket(conn *websocket.Conn, code int, reason string) {
 // serveSocket 连接读循环：init/ack、subscribe、complete、ping/pong。
 // 协议状态机（graphql-transport-ws）：subscribe必须在init/ack之后（否则4401），
 // init超时4408、重复init4429、重复订阅ID4409——鉴权握手不可绕过
-// scope 为HTTP升级阶段提取的行级作用域，注入连接ctx供订阅查询隔离
-func (my *Executor) serveSocket(conn *websocket.Conn, scope map[string]any) {
-	ctx, cancel := context.WithCancel(WithScope(context.Background(), scope))
+// ctx 为HTTP升级阶段认证完成的完整上下文；只派生连接取消信号，保留
+// Identity、PinnedRoute、scope 以及宿主挂载的 revocation/policy 状态。
+func (my *Executor) serveSocket(conn *websocket.Conn, ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	session := &socketSession{conn: conn, subs: make(map[string]context.CancelFunc)}

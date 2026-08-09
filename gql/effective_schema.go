@@ -125,6 +125,7 @@ func incompatibleArguments(coordinate string, before, after ast.ArgumentDefiniti
 
 type effectiveView struct {
 	artifact SchemaArtifact
+	schema   *ast.Schema
 	intro    *intro.Handler
 }
 
@@ -163,15 +164,20 @@ func (my *Executor) effectiveIntrospection(ctx context.Context) (*intro.Handler,
 }
 
 func (my *Executor) effectiveSchema(ctx context.Context) (*effectiveView, error) {
+	_, err := my.Snapshot()
+	if err != nil {
+		return nil, err
+	}
 	provider, identity, builtin, err := my.effectivePolicy(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if provider == nil {
-		return &effectiveView{artifact: SchemaArtifact{Schema: my.snapshot.Schema(), Fingerprint: my.snapshot.Fingerprint(), StructuralFingerprint: my.snapshot.Fingerprint()}, intro: my.intro}, nil
+		return my.baseView, nil
 	}
 	key := my.effectiveSchemaKey(ctx, identity)
-	if identity.PolicyRevision() != 0 {
+	cacheable := builtin || identity.PolicyRevision() != 0
+	if cacheable {
 		my.effectiveMu.Lock()
 		cached := my.effective[key]
 		my.effectiveMu.Unlock()
@@ -188,6 +194,7 @@ func (my *Executor) effectiveSchema(ctx context.Context) (*effectiveView, error)
 		return nil, err
 	}
 	allowed := make(map[string]map[FieldUse][]string)
+	writes := make(map[string]map[string][]string)
 	denied := make(map[string]bool)
 	var signatures []string
 	for _, capability := range my.snapshot.Capabilities() {
@@ -212,7 +219,10 @@ func (my *Executor) effectiveSchema(ctx context.Context) (*effectiveView, error)
 			return nil, fmt.Errorf("policy %s revision mismatch", capability.Coordinate)
 		}
 		class, governed := my.metadata.GetNode(capability.Resource)
-		if governed && allowed[class.Name] == nil {
+		// nil means the provider does not shape fields; a non-nil map is an
+		// explicit shape, including an empty deny-all shape.
+		hasFieldShape := decision.Fields != nil
+		if governed && hasFieldShape && allowed[class.Name] == nil {
 			allowed[class.Name] = make(map[FieldUse][]string)
 		}
 		signatures = append(signatures, decision.PermissionSignature+":"+decision.ShapeSignature)
@@ -223,7 +233,7 @@ func (my *Executor) effectiveSchema(ctx context.Context) (*effectiveView, error)
 		if capability.Handler != HandlerSQL && hasRowPolicy(decision) && !capability.PolicyAware {
 			return nil, fmt.Errorf("policy %s requires a policy-aware handler", capability.Coordinate)
 		}
-		if governed {
+		if governed && hasFieldShape {
 			if err := ValidateDecisionCatalog(class, decision); err != nil {
 				return nil, err
 			}
@@ -241,7 +251,19 @@ func (my *Executor) effectiveSchema(ctx context.Context) (*effectiveView, error)
 				allowed[class.Name] = uses
 			}
 			for use, fields := range decision.Fields {
-				uses[use] = append(uses[use], fields...)
+				if use != FieldUseWrite {
+					uses[use] = append(uses[use], fields...)
+				}
+			}
+			if len(decision.Fields[FieldUseWrite]) > 0 {
+				if writes[class.Name] == nil {
+					writes[class.Name] = make(map[string][]string)
+				}
+				for _, action := range capability.Actions {
+					if action == protocol.OP_INSERT || action == protocol.OP_UPDATE {
+						writes[class.Name][action] = append(writes[class.Name][action], decision.Fields[FieldUseWrite]...)
+					}
+				}
 			}
 		}
 	}
@@ -253,7 +275,7 @@ func (my *Executor) effectiveSchema(ctx context.Context) (*effectiveView, error)
 	}
 	for resource, uses := range allowed {
 		class, _ := my.metadata.GetNode(resource)
-		filterEffectiveTypes(schema, class, uses)
+		filterEffectiveTypes(schema, class, uses, writes[resource])
 	}
 	if err := pruneEffectiveSchema(schema); err != nil {
 		return nil, err
@@ -265,8 +287,8 @@ func (my *Executor) effectiveSchema(ctx context.Context) (*effectiveView, error)
 	view := &effectiveView{artifact: SchemaArtifact{
 		Schema: source, Fingerprint: digest(source), StructuralFingerprint: my.snapshot.Fingerprint(),
 		PermissionSignature: permission, PolicyRevision: identity.PolicyRevision(), RouteRevision: route.Revision,
-	}, intro: intro.New(schema)}
-	if identity.PolicyRevision() != 0 {
+	}, schema: schema, intro: intro.New(schema)}
+	if cacheable {
 		my.effectiveMu.Lock()
 		if my.effective == nil || len(my.effective) >= 128 {
 			my.effective = make(map[string]*effectiveView)
@@ -295,25 +317,32 @@ func (my *Executor) effectivePolicy(ctx context.Context) (PolicyProvider, Identi
 		}
 		return my.policy, identity, false, nil
 	}
-	permissions := make(map[string]map[string]*protocol.Permission)
-	for _, name := range sortedNodeNames(my.metadata) {
-		class := my.metadata.Nodes[name]
-		if class != nil && name == class.Name && class.Permissions != nil {
-			permissions[class.Name] = class.Permissions
-		}
-	}
-	if len(permissions) == 0 {
+	if my.builtinPolicy == nil {
 		return nil, Identity{}, false, nil
 	}
 	if identity, ok := IdentityFromContext(ctx); ok {
-		return NewProtocolPolicyProvider(permissions), identity, true, nil
+		return my.builtinPolicy, identity, true, nil
 	}
 	roles := Roles(ctx)
 	if len(roles) == 0 {
 		return nil, Identity{}, true, fmt.Errorf("verified role is required for effective schema")
 	}
 	identity, err := NewIdentity(IdentityInput{Tenant: "legacy", Subject: "legacy", Roles: roles})
-	return NewProtocolPolicyProvider(permissions), identity, true, err
+	return my.builtinPolicy, identity, true, err
+}
+
+func metadataPolicy(metadata *Metadata) *ProtocolPolicyProvider {
+	permissions := make(map[string]map[string]*protocol.Permission)
+	for _, name := range sortedNodeNames(metadata) {
+		class := metadata.Nodes[name]
+		if class != nil && name == class.Name && class.Permissions != nil {
+			permissions[class.Name] = class.Permissions
+		}
+	}
+	if len(permissions) == 0 {
+		return nil
+	}
+	return NewProtocolPolicyProvider(permissions)
 }
 
 func (my *Executor) effectiveSchemaKey(ctx context.Context, identity Identity) string {
@@ -325,7 +354,7 @@ func (my *Executor) effectiveSchemaKey(ctx context.Context, identity Identity) s
 	}, "\x00"))
 }
 
-func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[FieldUse][]string) {
+func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[FieldUse][]string, writes map[string][]string) {
 	if class == nil {
 		return
 	}
@@ -352,10 +381,11 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 		}
 	}
 	filterEffectiveFields(schema.Types[class.Name], class, output, false)
-	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_CREATE_INPUT], class, uses[FieldUseWrite], false)
-	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_CREATE_ROW_INPUT], class, uses[FieldUseWrite], false)
-	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPDATE_INPUT], class, uses[FieldUseWrite], false)
-	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPDATE_ROW_INPUT], class, uses[FieldUseWrite], false)
+	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_CREATE_INPUT], class, writes[protocol.OP_INSERT], false)
+	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_CREATE_ROW_INPUT], class, writes[protocol.OP_INSERT], false)
+	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPSERT_ROW_INPUT], class, policyWriteIntersection(writes), false)
+	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPDATE_INPUT], class, writes[protocol.OP_UPDATE], false)
+	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPDATE_ROW_INPUT], class, writes[protocol.OP_UPDATE], false)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_WHERE_INPUT], class, uses[FieldUseFilter], true)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_SORT_INPUT], class, uses[FieldUseOrder], true)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_KEY_INPUT], class, uses[FieldUseFilter], true)
@@ -368,6 +398,20 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 	if !filterEffectiveEnum(schema.Types[class.Name+protocol.SUFFIX_GROUP_FIELD], class, uses[FieldUseGroup]) {
 		removeFieldArgument(schema.Types["Query"], strcase.ToLowerCamel(class.Name)+protocol.SUFFIX_STATS, protocol.GROUP_BY)
 	}
+}
+
+func policyWriteIntersection(writes map[string][]string) []string {
+	allowed := make(map[string]struct{}, len(writes[protocol.OP_UPDATE]))
+	for _, field := range writes[protocol.OP_UPDATE] {
+		allowed[field] = struct{}{}
+	}
+	var fields []string
+	for _, field := range uniqueStrings(writes[protocol.OP_INSERT]) {
+		if _, ok := allowed[field]; ok {
+			fields = append(fields, field)
+		}
+	}
+	return fields
 }
 
 func filterEffectiveEnum(definition *ast.Definition, class *protocol.Class, allowed []string) bool {
@@ -421,6 +465,44 @@ func removeSchemaField(fields ast.FieldList, name string) ast.FieldList {
 // from an executable root. Keeping them would make __type reveal operations
 // that the identity cannot invoke and can leave invalid empty input objects.
 func pruneEffectiveSchema(schema *ast.Schema) error {
+	// Shape denial can empty a type. Remove that type and every field whose
+	// contract references it, repeating until the remaining graph is closed.
+	// This keeps introspection executable without inventing placeholder fields.
+	for changed := true; changed; {
+		changed = false
+		for name, definition := range schema.Types {
+			if definition.BuiltIn || definition == schema.Query || definition == schema.Mutation || definition == schema.Subscription {
+				continue
+			}
+			empty := (definition.Kind == ast.Object || definition.Kind == ast.Interface || definition.Kind == ast.InputObject) && len(definition.Fields) == 0 ||
+				definition.Kind == ast.Enum && len(definition.EnumValues) == 0 || definition.Kind == ast.Union && len(definition.Types) == 0
+			if empty {
+				delete(schema.Types, name)
+				changed = true
+			}
+		}
+		for _, definition := range schema.Types {
+			fields := definition.Fields[:0]
+			for _, field := range definition.Fields {
+				valid := schema.Types[field.Type.Name()] != nil
+				arguments := field.Arguments[:0]
+				for _, argument := range field.Arguments {
+					if schema.Types[argument.Type.Name()] != nil {
+						arguments = append(arguments, argument)
+					} else if argument.Type.NonNull {
+						valid = false
+					}
+				}
+				if valid {
+					field.Arguments = arguments
+					fields = append(fields, field)
+				} else {
+					changed = true
+				}
+			}
+			definition.Fields = fields
+		}
+	}
 	if schema.Query == nil || len(schema.Query.Fields) == 0 {
 		return fmt.Errorf("effective schema has no query capability")
 	}
@@ -470,9 +552,6 @@ func pruneEffectiveSchema(schema *ast.Schema) error {
 		if !reachable[name] && !definition.BuiltIn {
 			delete(schema.Types, name)
 			continue
-		}
-		if reachable[name] && (definition.Kind == ast.Object || definition.Kind == ast.Interface || definition.Kind == ast.InputObject) && len(definition.Fields) == 0 {
-			return fmt.Errorf("effective schema type %s has no visible fields", name)
 		}
 	}
 	for name, definitions := range schema.PossibleTypes {

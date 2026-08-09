@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -71,7 +70,7 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 		seen[m.class.Table] = true
 		ctx.MarkTable(m.class.Table)
 
-		if m.op != protocol.DELETE || m.result || m.single {
+		if (m.op != protocol.DELETE || m.result || m.single) && len(field.SelectionSet) > 0 {
 			unitField := field
 			if m.result {
 				unitField = nil
@@ -195,32 +194,24 @@ func (my *Dialect) buildMutationResultJSON(ctx *compiler.Context, m *mutation) {
 	ctx.Write(`)`)
 }
 
-// parseMutation 解析变更字段：createUser单条 / createUsers批量 / upsertUsers / updateX / deleteX
+// parseMutation resolves mutation meaning from the exact operation catalog
+// coordinate. Field names are presentation only and carry no SQL semantics.
 func parseMutation(ctx *compiler.Context, field *ast.Field) (*mutation, error) {
-	for _, op := range []string{protocol.CREATE, protocol.UPSERT, protocol.UPDATE, protocol.DELETE, protocol.OP_RESTORE, protocol.PURGE} {
-		if !strings.HasPrefix(field.Name, op) {
-			continue
-		}
-		name := strings.TrimPrefix(field.Name, op)
-		byPK := strings.HasSuffix(name, protocol.SUFFIX_BY_PK)
-		if byPK {
-			name = strings.TrimSuffix(name, protocol.SUFFIX_BY_PK)
-		}
-		many := strings.HasSuffix(name, protocol.SUFFIX_MANY)
-		if many {
-			name = strings.TrimSuffix(name, protocol.SUFFIX_MANY)
-		}
-		if class, ok := ctx.GetClass(name); ok {
-			// upsert只渲染复数列表形态，恒为批量（不可数类名Series复数同形，
-			// 会直接命中本分支，不能按“单数命中=单条”误判成单对象读回）
-			return &mutation{field: field, class: class, op: op, bulk: op == protocol.UPSERT || many, result: many, single: byPK}, nil
-		}
-		// 复数字段=批量语义
-		if class, ok := ctx.GetClass(inflection.Singular(name)); ok {
-			return &mutation{field: field, class: class, op: op, bulk: true, result: op == protocol.UPDATE || op == protocol.DELETE || op == protocol.OP_RESTORE || op == protocol.OP_PURGE, single: byPK}, nil
-		}
+	spec, ok := ctx.LookupOperation("Mutation." + field.Name)
+	if !ok || spec.Class == nil {
+		return nil, fmt.Errorf("不支持的变更字段: %s", field.Name)
 	}
-	return nil, fmt.Errorf("不支持的变更字段: %s", field.Name)
+	if spec.Operation == "" {
+		return nil, fmt.Errorf("变更字段缺少操作定义: %s", field.Name)
+	}
+	return &mutation{
+		field:  field,
+		class:  spec.Class,
+		op:     spec.Operation,
+		bulk:   spec.Bulk,
+		result: spec.Result,
+		single: spec.Single,
+	}, nil
 }
 
 // buildInsert 构建INSERT：单条或批量多行VALUES；批量不支持关系操作

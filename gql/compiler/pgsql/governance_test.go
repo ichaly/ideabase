@@ -205,3 +205,17 @@ func (h testHoster) GetNode(name string) (*protocol.Class, bool) {
 	return nil, false
 }
 func (h testHoster) SetVersion(string) {}
+func (h testHoster) LookupOperation(coordinate string) (compiler.OperationSpec, bool) {
+	variants := map[string]compiler.OperationSpec{
+		"Mutation.updateUserByPk":   {Operation: protocol.OP_UPDATE, Single: true},
+		"Mutation.updateUsersMany":  {Operation: protocol.OP_UPDATE, Bulk: true, Result: true},
+		"Mutation.deleteUser":       {Operation: protocol.OP_DELETE},
+		"Mutation.deleteUserByPk":   {Operation: protocol.OP_DELETE, Single: true},
+		"Mutation.deleteUsersMany":  {Operation: protocol.OP_DELETE, Bulk: true, Result: true},
+		"Mutation.restoreUserByPk":  {Operation: protocol.OP_RESTORE, Single: true},
+		"Mutation.restoreUsersMany": {Operation: protocol.OP_RESTORE, Bulk: true, Result: true},
+	}
+	spec, ok := variants[coordinate]
+	spec.Class = h.class
+	return spec, ok
+}

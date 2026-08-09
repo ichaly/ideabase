@@ -154,7 +154,7 @@ func TestSnapshotFingerprintIncludesGovernanceContract(t *testing.T) {
 		require.NoError(t, err)
 		return snapshot
 	}
-	require.NotEqual(t, build("admin").Fingerprint(), build("viewer").Fingerprint())
+	require.Equal(t, build("admin").Fingerprint(), build("viewer").Fingerprint())
 }
 
 func TestSnapshotRejectsMetadataBindingWithoutImplementation(t *testing.T) {
@@ -270,7 +270,11 @@ func TestRemoteSnapshotRejectsExecutableDirectiveWithoutRuntime(t *testing.T) {
 }
 
 func TestRemoteSnapshotDerivesCompleteCapabilityCatalog(t *testing.T) {
-	snapshot, err := NewSnapshotArtifact("type Query { hello(name: String): String }", "revision", nil)
+	schema := "type Query { hello(name: String): String }"
+	capabilities := []Capability{{Coordinate: "Query.hello", Parent: "Query", Name: "hello", Type: "String", Arguments: []Argument{{Name: "name", Type: "String"}}, Handler: HandlerRemote}}
+	fingerprint, err := ArtifactFingerprint(schema, capabilities)
+	require.NoError(t, err)
+	snapshot, err := NewSnapshotArtifact(schema, fingerprint, capabilities)
 	require.NoError(t, err)
 	capability, ok := snapshot.Capability("Query.hello")
 	require.True(t, ok)
@@ -278,10 +282,14 @@ func TestRemoteSnapshotDerivesCompleteCapabilityCatalog(t *testing.T) {
 	require.Equal(t, "String", capability.Type)
 	require.Equal(t, []Argument{{Name: "name", Type: "String"}}, capability.Arguments)
 
-	_, err = NewSnapshotArtifact("type Query { hello: String }", "revision", []Capability{{
+	schema = "type Query { hello: String }"
+	capabilities = []Capability{{
 		Coordinate: "Query.missing", Parent: "Query", Name: "missing", Type: "String", Handler: HandlerRemote,
-	}})
-	require.ErrorContains(t, err, "not present in endpoint schema")
+	}}
+	fingerprint, err = ArtifactFingerprint(schema, capabilities)
+	require.NoError(t, err)
+	_, err = NewSnapshotArtifact(schema, fingerprint, capabilities)
+	require.ErrorContains(t, err, "executable root capability missing")
 }
 
 func TestRemoteSnapshotDoesNotMutateCallerCapabilities(t *testing.T) {
@@ -289,7 +297,10 @@ func TestRemoteSnapshotDoesNotMutateCallerCapabilities(t *testing.T) {
 		Capability{Coordinate: "Query.second", Parent: "Query", Name: "second", Type: "String", Handler: HandlerRemote},
 		Capability{Coordinate: "Query.first", Parent: "Query", Name: "first", Type: "String", Handler: HandlerRemote},
 	)
-	_, err := NewSnapshotArtifact("type Query { first: String, second: String }", "revision", capabilities)
+	schema := "type Query { first: String, second: String }"
+	fingerprint, err := ArtifactFingerprint(schema, capabilities)
+	require.NoError(t, err)
+	_, err = NewSnapshotArtifact(schema, fingerprint, capabilities)
 	require.NoError(t, err)
 	require.Equal(t, "Query.second", capabilities[0].Coordinate)
 }

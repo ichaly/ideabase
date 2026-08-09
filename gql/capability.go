@@ -12,7 +12,6 @@ import (
 
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -58,8 +57,10 @@ type Argument struct {
 }
 
 type operationCapability struct {
-	class   *protocol.Class
-	actions []string
+	class                *protocol.Class
+	actions              []string
+	operation            string
+	bulk, result, single bool
 }
 
 func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
@@ -67,12 +68,18 @@ func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
 	if metadata == nil {
 		return catalog
 	}
-	renderer := NewRenderer(metadata)
-	add := func(parent, name string, class *protocol.Class, action string) {
-		catalog[parent+"."+name] = operationCapability{class: class, actions: []string{action}}
+	renderer := &Renderer{meta: metadata}
+	add := func(parent, name string, class *protocol.Class, action, operation string, bulk, result, single bool) {
+		catalog[parent+"."+name] = operationCapability{
+			class: class, actions: []string{action}, operation: operation,
+			bulk: bulk, result: result, single: single,
+		}
 	}
-	addMany := func(parent, name string, class *protocol.Class, actions ...string) {
-		catalog[parent+"."+name] = operationCapability{class: class, actions: actions}
+	addMany := func(parent, name string, class *protocol.Class, operation string, bulk, result, single bool, actions ...string) {
+		catalog[parent+"."+name] = operationCapability{
+			class: class, actions: actions, operation: operation,
+			bulk: bulk, result: result, single: single,
+		}
 	}
 	for _, name := range sortedNodeNames(metadata) {
 		class := metadata.Nodes[name]
@@ -80,58 +87,63 @@ func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
 			continue
 		}
 		if renderer.allows(class, protocol.OP_SELECT) {
-			add("Query", queryField(name), class, protocol.OP_SELECT)
-			add("Subscription", queryField(name), class, protocol.OP_SELECT)
+			add("Query", queryField(name), class, protocol.OP_SELECT, protocol.OP_SELECT, false, false, false)
+			add("Subscription", queryField(name), class, protocol.OP_SELECT, protocol.OP_SELECT, false, false, false)
 			if len(class.PrimaryKeyFields()) > 0 {
 				connection := strcase.ToLowerCamel(name) + protocol.SUFFIX_CONNECTION
-				add("Query", connection, class, protocol.OP_SELECT)
-				add("Subscription", connection, class, protocol.OP_SELECT)
+				add("Query", connection, class, protocol.OP_SELECT, protocol.OP_SELECT, false, false, false)
+				add("Subscription", connection, class, protocol.OP_SELECT, protocol.OP_SELECT, false, false, false)
 			}
 		}
 		if renderer.allows(class, protocol.OP_AGGREGATE) {
-			add("Query", strcase.ToLowerCamel(name)+protocol.SUFFIX_STATS, class, protocol.OP_AGGREGATE)
+			add("Query", strcase.ToLowerCamel(name)+protocol.SUFFIX_STATS, class, protocol.OP_AGGREGATE, protocol.OP_AGGREGATE, false, false, false)
 		}
-		create := renderer.allows(class, protocol.OP_INSERT) && len(renderer.writableFields(class, protocol.OP_INSERT)) > 0
-		update := renderer.allows(class, protocol.OP_UPDATE) && len(renderer.writableFields(class, protocol.OP_UPDATE)) > 0
+		insertFields := renderer.writableFields(class, protocol.OP_INSERT)
+		updateFields := renderer.writableFields(class, protocol.OP_UPDATE)
+		create := renderer.allows(class, protocol.OP_INSERT) && len(insertFields) > 0
+		update := renderer.allows(class, protocol.OP_UPDATE) && len(updateFields) > 0
 		plural := inflection.Plural(name)
 		batch := plural
 		if batch == name {
 			batch += protocol.SUFFIX_MANY
 		}
 		if create {
-			add("Mutation", protocol.CREATE+name, class, protocol.OP_INSERT)
+			add("Mutation", protocol.CREATE+name, class, protocol.OP_INSERT, protocol.CREATE, false, false, false)
 			if plural != name {
-				add("Mutation", protocol.CREATE+plural, class, protocol.OP_INSERT)
+				add("Mutation", protocol.CREATE+plural, class, protocol.OP_INSERT, protocol.CREATE, true, false, false)
 			}
-			if update && len(class.ConflictTargets()) > 0 {
-				addMany("Mutation", protocol.UPSERT+plural, class, protocol.OP_INSERT, protocol.OP_UPDATE)
+			upsertFields := slices.DeleteFunc(append([]string(nil), insertFields...), func(name string) bool {
+				return !slices.Contains(updateFields, name)
+			})
+			if update && len(upsertFields) > 0 && len(class.ConflictTargets()) > 0 {
+				addMany("Mutation", protocol.UPSERT+plural, class, protocol.UPSERT, true, false, false, protocol.OP_INSERT, protocol.OP_UPDATE)
 			}
 		}
 		if update {
-			add("Mutation", protocol.UPDATE+name, class, protocol.OP_UPDATE)
+			add("Mutation", protocol.UPDATE+name, class, protocol.OP_UPDATE, protocol.OP_UPDATE, false, false, false)
 			if len(class.PrimaryKeyFields()) > 0 {
-				add("Mutation", protocol.UPDATE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_UPDATE)
+				add("Mutation", protocol.UPDATE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_UPDATE, protocol.OP_UPDATE, false, false, true)
 			}
-			add("Mutation", protocol.UPDATE+batch, class, protocol.OP_UPDATE)
+			add("Mutation", protocol.UPDATE+batch, class, protocol.OP_UPDATE, protocol.OP_UPDATE, true, true, false)
 		}
 		if renderer.allows(class, protocol.OP_DELETE) {
-			add("Mutation", protocol.DELETE+name, class, protocol.OP_DELETE)
+			add("Mutation", protocol.DELETE+name, class, protocol.OP_DELETE, protocol.OP_DELETE, false, false, false)
 			if len(class.PrimaryKeyFields()) > 0 {
-				add("Mutation", protocol.DELETE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_DELETE)
+				add("Mutation", protocol.DELETE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_DELETE, protocol.OP_DELETE, false, false, true)
 			}
-			add("Mutation", protocol.DELETE+batch, class, protocol.OP_DELETE)
+			add("Mutation", protocol.DELETE+batch, class, protocol.OP_DELETE, protocol.OP_DELETE, true, true, false)
 		}
 		if renderer.allows(class, protocol.OP_RESTORE) && class.SoftDelete != nil {
 			if len(class.PrimaryKeyFields()) > 0 {
-				add("Mutation", "restore"+name+protocol.SUFFIX_BY_PK, class, protocol.OP_RESTORE)
+				add("Mutation", "restore"+name+protocol.SUFFIX_BY_PK, class, protocol.OP_RESTORE, protocol.OP_RESTORE, false, false, true)
 			}
-			add("Mutation", "restore"+batch, class, protocol.OP_RESTORE)
+			add("Mutation", "restore"+batch, class, protocol.OP_RESTORE, protocol.OP_RESTORE, true, true, false)
 		}
 		if renderer.allowsPurge(class) {
 			if len(class.PrimaryKeyFields()) > 0 {
-				add("Mutation", protocol.PURGE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_PURGE)
+				add("Mutation", protocol.PURGE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_PURGE, protocol.OP_PURGE, false, false, true)
 			}
-			add("Mutation", protocol.PURGE+batch, class, protocol.OP_PURGE)
+			add("Mutation", protocol.PURGE+batch, class, protocol.OP_PURGE, protocol.OP_PURGE, true, true, false)
 		}
 	}
 	return catalog
@@ -160,7 +172,10 @@ func NewSnapshotArtifact(schema, fingerprint string, capabilities []Capability) 
 		return nil, err
 	}
 	capabilities = append([]Capability(nil), capabilities...)
-	capabilities = completeCapabilities(parsed, capabilities, HandlerRemote, "endpoint")
+	if err := validateRootCapabilities(parsed, capabilities); err != nil {
+		return nil, err
+	}
+	capabilities = completeCapabilities(parsed, capabilities, HandlerProjection, "endpoint")
 	index := make(map[string]Capability, len(capabilities))
 	for _, capability := range capabilities {
 		if capability.Coordinate == "" || index[capability.Coordinate].Coordinate != "" {
@@ -183,7 +198,14 @@ func NewSnapshotArtifact(schema, fingerprint string, capabilities []Capability) 
 	for i, capability := range capabilities {
 		copy[i] = cloneCapability(capability)
 	}
-	return &Snapshot{schema: schema, fingerprint: fingerprint, capabilities: copy, index: index}, nil
+	computed, err := ArtifactFingerprint(schema, copy)
+	if err != nil {
+		return nil, fmt.Errorf("endpoint fingerprint: %w", err)
+	}
+	if fingerprint != computed {
+		return nil, fmt.Errorf("endpoint fingerprint mismatch: advertised %s, computed %s", fingerprint, computed)
+	}
+	return &Snapshot{schema: schema, fingerprint: computed, capabilities: copy, index: index}, nil
 }
 
 func (my *Snapshot) Schema() string      { return my.schema }
@@ -237,6 +259,63 @@ func completeCapabilities(schema *ast.Schema, capabilities []Capability, fallbac
 	return capabilities
 }
 
+func validateRootCapabilities(schema *ast.Schema, capabilities []Capability) error {
+	provided := make(map[string]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		provided[capability.Coordinate] = struct{}{}
+	}
+	for _, root := range []*ast.Definition{schema.Query, schema.Mutation, schema.Subscription} {
+		if root == nil {
+			continue
+		}
+		for _, field := range root.Fields {
+			coordinate := root.Name + "." + field.Name
+			if strings.HasPrefix(field.Name, "__") {
+				continue
+			}
+			if _, ok := provided[coordinate]; !ok {
+				return fmt.Errorf("endpoint executable root capability missing: %s", coordinate)
+			}
+		}
+	}
+	return nil
+}
+
+// ArtifactFingerprint computes the stable identity of a schema artifact.
+// Metadata and transport details are deliberately excluded: producers and
+// consumers must derive the same value from the public artifact contract.
+func ArtifactFingerprint(schema string, capabilities []Capability) (string, error) {
+	parsed, err := gqlparser.LoadSchema(&ast.Source{Name: "artifact.graphql", Input: schema})
+	if err != nil {
+		return "", err
+	}
+	canonical := schemaWithoutComments(formatSchema(parsed))
+	capabilities = completeCapabilities(parsed, append([]Capability(nil), capabilities...), HandlerProjection, "endpoint")
+	ordered := make([]Capability, len(capabilities))
+	for i, capability := range capabilities {
+		ordered[i] = cloneCapability(capability)
+		if ordered[i].Arguments == nil {
+			ordered[i].Arguments = []Argument{}
+		}
+		if ordered[i].Actions == nil {
+			ordered[i].Actions = []string{}
+		}
+		if ordered[i].Requires == nil {
+			ordered[i].Requires = []string{}
+		}
+	}
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Coordinate < ordered[j].Coordinate })
+	contract, err := stdjson.Marshal(struct {
+		Schema       string
+		Capabilities []Capability
+	}{canonical, ordered})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(contract)
+	return fmt.Sprintf("%x", digest), nil
+}
+
 func buildSnapshot(executor *Executor) (*Snapshot, error) {
 	if err := validateExecutableDirectives(executor.schema); err != nil {
 		return nil, err
@@ -272,13 +351,12 @@ func buildSnapshot(executor *Executor) (*Snapshot, error) {
 		}
 	}
 	sort.Slice(capabilities, func(i, j int) bool { return capabilities[i].Coordinate < capabilities[j].Coordinate })
-	contract, err := snapshotContract(executor, schema, capabilities)
+	fingerprint, err := ArtifactFingerprint(schema, capabilities)
 	if err != nil {
 		return nil, err
 	}
-	fingerprint := sha256.Sum256(contract)
 	return &Snapshot{
-		schema: schema, fingerprint: fmt.Sprintf("%x", fingerprint),
+		schema: schema, fingerprint: fingerprint,
 		capabilities: capabilities, index: index,
 	}, nil
 }
@@ -326,53 +404,6 @@ func formatSchema(schema *ast.Schema) string {
 	var out bytes.Buffer
 	formatter.NewFormatter(&out).FormatSchema(schema)
 	return out.String()
-}
-
-func snapshotContract(executor *Executor, schema string, capabilities []Capability) ([]byte, error) {
-	classes := make([]*protocol.Class, 0)
-	for _, name := range sortedNodeNames(executor.metadata) {
-		class := executor.metadata.Nodes[name]
-		if class != nil && name == class.Name {
-			classes = append(classes, class)
-		}
-	}
-	routines := make([]*protocol.Routine, 0, len(executor.metadata.Routines))
-	for _, key := range utl.SortKeys(executor.metadata.Routines) {
-		routines = append(routines, executor.metadata.Routines[key])
-	}
-	runtime := struct {
-		Dialect       string
-		Schema        string
-		DefaultLimit  int
-		MaxDepth      int
-		MaxTokens     int
-		MaxCost       uint64
-		Introspection bool
-		PersistedOnly bool
-		SearchMode    string
-		SearchConfig  string
-	}{}
-	if executor.compiler != nil && executor.compiler.dialect != nil {
-		runtime.Dialect = executor.compiler.dialect.Name()
-	}
-	if executor.metadata != nil && executor.metadata.cfg != nil {
-		cfg := executor.metadata.cfg
-		runtime.Schema = cfg.Schema.Schema
-		runtime.DefaultLimit = cfg.Schema.DefaultLimit
-		runtime.MaxDepth = cfg.Schema.MaxDepth
-		runtime.MaxTokens = cfg.Schema.MaxTokens
-		runtime.MaxCost = cfg.Schema.MaxCost
-		runtime.Introspection = cfg.Schema.Introspection
-		runtime.PersistedOnly = cfg.Schema.PersistedOnly
-		runtime.SearchMode, runtime.SearchConfig = executor.metadata.SearchMode()
-	}
-	return stdjson.Marshal(struct {
-		Schema       string
-		Capabilities []Capability
-		Classes      []*protocol.Class
-		Routines     []*protocol.Routine
-		Runtime      any
-	}{schemaWithoutComments(schema), capabilities, classes, routines, runtime})
 }
 
 func sortedNodeNames(metadata *Metadata) []string {

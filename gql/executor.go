@@ -123,11 +123,13 @@ type Executor struct {
 	finalizeOnce      sync.Once
 	snapshot          *Snapshot
 	snapshotErr       error
+	baseView          *effectiveView
 	validation        *validatorrules.Rules // 快照自有验证规则，不修改gqlparser全局状态
 	tenantRouter      *TenantRouter
 	tenantSources     map[string]*Executor
 	revocation        *RevocationBarrier
 	policy            PolicyProvider
+	builtinPolicy     *ProtocolPolicyProvider
 	rls               bool
 	effectiveMu       sync.Mutex
 	effective         map[string]*effectiveView
@@ -245,7 +247,17 @@ func (my *Executor) Snapshot() (*Snapshot, error) {
 		return my.snapshot, my.snapshotErr
 	}
 	my.finalizeOnce.Do(func() {
+		if my.policy == nil {
+			my.builtinPolicy = metadataPolicy(my.metadata)
+		}
 		my.snapshot, my.snapshotErr = buildSnapshot(my)
+		if my.snapshotErr == nil {
+			fingerprint := my.snapshot.Fingerprint()
+			my.baseView = &effectiveView{
+				artifact: SchemaArtifact{Schema: my.snapshot.Schema(), Fingerprint: fingerprint, StructuralFingerprint: fingerprint},
+				schema:   my.schema, intro: my.intro,
+			}
+		}
 		my.frozen.Store(true)
 	})
 	return my.snapshot, my.snapshotErr
@@ -282,11 +294,27 @@ func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, 
 	if m != nil && m.legacyTrusted {
 		log.Warn().Msg("已启用LegacyTrustedBoundaryPolicy；该兼容边界不适用于多租户生产服务")
 	}
-	data, err := loadSchema(m, r)
+	if d != nil {
+		// Runtime search capability is catalog data. Detect it before freezing so
+		// renderer, compiler, cursor fingerprint and executor see one value.
+		if mode := strings.TrimSpace(m.cfg.Search.Mode); mode != "" {
+			m.SetSearchMode(mode, m.cfg.Search.Config)
+		} else if detect, ok := searchDetectors[d.Name()]; ok {
+			m.SetSearchMode(detect(d))
+		} else {
+			m.SetSearchMode("ilike", "")
+		}
+	}
+	catalog := m.freeze()
+	compiled, err := c.freeze(catalog)
 	if err != nil {
 		return nil, err
 	}
-	return newExecutor(d, m, c, data)
+	data, err := loadSchema(catalog, NewRenderer(catalog))
+	if err != nil {
+		return nil, err
+	}
+	return newExecutor(d, catalog, compiled, data)
 }
 
 func newExecutor(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Executor, error) {
@@ -319,14 +347,6 @@ func newExecutor(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Executor, 
 	executor.schema = s
 
 	if d != nil {
-		// 全文搜索能力：配置优先，否则按驱动从注册表探测（无探测器的数据库降级ilike）
-		if mode := strings.TrimSpace(m.cfg.Search.Mode); mode != "" {
-			executor.metadata.SetSearchMode(mode, m.cfg.Search.Config)
-		} else if detect, ok := searchDetectors[d.Name()]; ok {
-			executor.metadata.SetSearchMode(detect(d))
-		} else {
-			executor.metadata.SetSearchMode("ilike", "")
-		}
 		// 订阅唤醒源：按驱动名从注册表选取CDC实现（复制连接延迟到首个订阅时建立）
 		if factory, ok := notifiers[d.Name()]; ok {
 			if source, err := factory(d, m.cfg.Subscription); err == nil {
@@ -582,18 +602,18 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 	// 获取执行计划（缓存命中零解析）；缓存未命中时解析一次，
 	// 顶层选择集含__schema/__type则路由到自省投影，否则编译为SQL
 	done := my.startPhase(ctx, PhasePlan)
-	plan, err := my.plan(query, operationName, variables)
+	view, err := my.effectiveSchema(ctx)
+	if err != nil {
+		r.Errors = gqlErrors(err)
+		return r
+	}
+	plan, err := my.planWithView(view, query, operationName, variables)
 	if done != nil {
 		done(observationErrorCode(err))
 	}
 	if err != nil {
 		if introErr, ok := err.(*introQuery); ok {
-			handler, viewErr := my.effectiveIntrospection(ctx)
-			if viewErr != nil {
-				r.Errors = gqlErrors(viewErr)
-				return r
-			}
-			data, ierr := handler.Introspect(introErr.operation, variables)
+			data, ierr := view.intro.Introspect(introErr.operation, variables)
 			if ierr != nil {
 				r.Errors = gqlErrors(ierr)
 			} else {
@@ -934,30 +954,37 @@ func (my *introQuery) Error() string { return "自省查询不支持此入口" }
 // plan 获取执行计划：普通查询命中缓存零解析；volatile命中仅重做SQL构建；
 // 冷查询每个请求独立校验变量，编译经singleflight收敛；自省经introQuery带出。
 func (my *Executor) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
+	return my.planWithView(&effectiveView{schema: my.schema, intro: my.intro}, query, operationName, variables)
+}
+
+func (my *Executor) planWithView(view *effectiveView, query, operationName string, variables map[string]interface{}) (*Plan, error) {
+	if view == nil || view.schema == nil {
+		return nil, fmt.Errorf("effective schema is unavailable")
+	}
 	// Directive results are part of the selection shape. Evaluate them before
 	// lookup and partition the cache by that shape so true/false cannot alias.
 	if hasConditionalDirective(query) {
-		operation, err := my.parse(query, operationName, variables)
+		operation, err := my.parseWithView(view, query, operationName, variables)
 		if err != nil {
 			return nil, err
 		}
-		key := planKey{operation: operationName, query: query, shape: selectionShape(operation.SelectionSet)}
+		key := planKey{operation: operationName, query: query, shape: selectionShape(operation.SelectionSet), view: view.artifact.Fingerprint + "\x00" + view.artifact.PermissionSignature}
 		if entry, ok := my.cache.Get(key); ok {
 			if err := my.validateMaxCost(operation, variables); err != nil {
 				return nil, err
 			}
-			return my.preparedPlan(entry, variables)
+			return my.preparedPlan(view, entry, variables)
 		}
-		entry, plan, err := my.miss(key, operation, variables)
+		entry, plan, err := my.miss(view, key, operation, variables)
 		if err != nil || plan != nil {
 			return plan, err
 		}
-		return my.preparedPlan(entry, variables)
+		return my.preparedPlan(view, entry, variables)
 	}
-	key := planKey{operation: operationName, query: query}
+	key := planKey{operation: operationName, query: query, view: view.artifact.Fingerprint + "\x00" + view.artifact.PermissionSignature}
 	entry, ok := my.cache.Get(key)
 	if !ok {
-		flightKey := operationName + "\x00" + query
+		flightKey := key.view + "\x00" + operationName + "\x00" + query
 		var lead *Plan // 仅领跑者闭包置位：变量已解码、编译产物直接执行，无二次开销
 		leader, firstRan := false, false
 		value, err, _ := my.flight.Do(flightKey, func() (interface{}, error) {
@@ -966,7 +993,7 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 			if strings.IndexByte(query, '$') >= 0 {
 				attempt = cloneVariables(variables) // 失败领跑者不污染自身重试入参
 			}
-			entry, plan, err := my.miss(key, nil, attempt)
+			entry, plan, err := my.miss(view, key, nil, attempt)
 			lead = plan
 			leader = err == nil
 			if leader {
@@ -979,7 +1006,7 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 		if err != nil {
 			if introspection, ok := err.(*introQuery); ok {
 				if !firstRan {
-					if _, ownErr := coerceVariables(my.schema, introspection.operation, variables); ownErr != nil {
+					if _, ownErr := coerceVariables(view.schema, introspection.operation, variables); ownErr != nil {
 						return nil, ownErr
 					}
 				}
@@ -987,13 +1014,13 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 			}
 			// 请求值错误不得从领跑者传播；各请求先校验自身，
 			// 通过者再以第二个flight收敛编译。正常冷查询仍只解析一次。
-			operation, ownErr := my.parse(query, operationName, variables)
+			operation, ownErr := my.parseWithView(view, query, operationName, variables)
 			if ownErr != nil {
 				return nil, ownErr
 			}
 			retryAttempt := cloneVariables(variables)
 			value, err, _ = my.flight.Do("retry\x00"+flightKey, func() (interface{}, error) {
-				entry, plan, compileErr := my.miss(key, operation, retryAttempt)
+				entry, plan, compileErr := my.miss(view, key, operation, retryAttempt)
 				lead = plan
 				if compileErr == nil {
 					assignVariables(variables, retryAttempt)
@@ -1007,7 +1034,7 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 				// cursor等volatile编译错误仍可能与值相关，最后用
 				// 当前请求独立确认，不返回其他请求的错误。
 				finalAttempt := cloneVariables(variables)
-				entry, lead, err = my.miss(key, operation, finalAttempt)
+				entry, lead, err = my.miss(view, key, operation, finalAttempt)
 				if err != nil {
 					return nil, err
 				}
@@ -1022,26 +1049,26 @@ func (my *Executor) plan(query, operationName string, variables map[string]inter
 			entry = value.(*planEntry)
 		}
 		if leader {
-			return my.preparedPlan(entry, variables)
+			return my.preparedPlan(view, entry, variables)
 		}
 	}
-	return my.cachedPlan(entry, variables)
+	return my.cachedPlan(view, entry, variables)
 }
 
-func (my *Executor) cachedPlan(entry *planEntry, variables map[string]interface{}) (*Plan, error) {
+func (my *Executor) cachedPlan(view *effectiveView, entry *planEntry, variables map[string]interface{}) (*Plan, error) {
 	// 收口：任何消费（Resolver分发/执行/volatile重编译）前统一做变量
 	// coercion，再还原codec入参。缓存命中也必须先过请求级校验。
-	if _, err := coerceVariables(my.schema, entry.operation, variables); err != nil {
+	if _, err := coerceVariables(view.schema, entry.operation, variables); err != nil {
 		return nil, err
 	}
 	if err := my.validateMaxCost(entry.operation, variables); err != nil {
 		return nil, err
 	}
-	return my.preparedPlan(entry, variables)
+	return my.preparedPlan(view, entry, variables)
 }
 
-func (my *Executor) preparedPlan(entry *planEntry, variables map[string]interface{}) (*Plan, error) {
-	decodeVariables(my.schema, entry.operation.VariableDefinitions, variables, my.metadata)
+func (my *Executor) preparedPlan(view *effectiveView, entry *planEntry, variables map[string]interface{}) (*Plan, error) {
+	decodeVariables(view.schema, entry.operation.VariableDefinitions, variables, my.metadata)
 	if entry.rootResolver {
 		return nil, &rootResolverQuery{entry: entry}
 	}
@@ -1062,10 +1089,10 @@ func (my *Executor) preparedPlan(entry *planEntry, variables map[string]interfac
 
 // miss 缓存未命中的singleflight领跑者：落缓存条目并带回本次
 // 编译计划；重试路径可传入已校验operation，正常路径在flight内解析。
-func (my *Executor) miss(key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
+func (my *Executor) miss(view *effectiveView, key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
 	if operation == nil {
 		var err error
-		operation, err = my.parse(key.query, key.operation, variables)
+		operation, err = my.parseWithView(view, key.query, key.operation, variables)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1098,13 +1125,17 @@ func (my *Executor) miss(key planKey, operation *ast.OperationDefinition, variab
 		return nil, nil, fmt.Errorf("执行器未配置数据库或编译器")
 	}
 	// 领跑者在此解码入参并编译（跟随者在命中路径自行解码），两侧各解码一次
-	decodeVariables(my.schema, operation.VariableDefinitions, variables, my.metadata)
+	decodeVariables(view.schema, operation.VariableDefinitions, variables, my.metadata)
 	return my.compile(key, operation, introspection, variables)
 }
 
 // parse 解析校验查询并选定操作，fragment就地展开为纯字段选择集
 func (my *Executor) parse(query, operationName string, variables map[string]interface{}) (*ast.OperationDefinition, error) {
-	doc, errs := loadQuery(my.schema, query, my.metadata.MaxTokens(), my.validation)
+	return my.parseWithView(&effectiveView{schema: my.schema, intro: my.intro}, query, operationName, variables)
+}
+
+func (my *Executor) parseWithView(view *effectiveView, query, operationName string, variables map[string]interface{}) (*ast.OperationDefinition, error) {
+	doc, errs := loadQuery(view.schema, query, my.metadata.MaxTokens(), my.validation)
 	if len(errs) > 0 {
 		return nil, errs
 	}
@@ -1115,12 +1146,12 @@ func (my *Executor) parse(query, operationName string, variables map[string]inte
 		}
 		operation = doc.Operations[0]
 	}
-	coerced, err := coerceVariables(my.schema, operation, variables)
+	coerced, err := coerceVariables(view.schema, operation, variables)
 	if err != nil {
 		return nil, err
 	}
 	variables = coerced
-	selection, err := normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, variables, my.schema)
+	selection, err := normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, variables, view.schema)
 	if err != nil {
 		return nil, err
 	}
@@ -1132,7 +1163,7 @@ func (my *Executor) parse(query, operationName string, variables map[string]inte
 	}
 	// 字段参数的codec字面量解析期一次还原；变量默认值保持
 	// 原始GraphQL形态，每个请求物化后由decodeVariables仅转换一次。
-	decodeLiterals(my.schema, operation.SelectionSet, my.metadata)
+	decodeLiterals(view.schema, operation.SelectionSet, my.metadata)
 	return operation, nil
 }
 
