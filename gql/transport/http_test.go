@@ -57,6 +57,7 @@ func TestPOSTRejectsTrailingJSONAndWrongMediaTypes(t *testing.T) {
 	for name, r := range map[string]*http.Request{
 		"trailing":     req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"} {}`),
 		"content type": req(http.MethodPost, "text/plain", "application/graphql-response+json", `{"query":"{x}"}`),
+		"charset":      req(http.MethodPost, "application/json;charset=iso-8859-1", "application/graphql-response+json", `{"query":"{x}"}`),
 		"accept":       req(http.MethodPost, "application/json", "text/plain", `{"query":"{x}"}`),
 		"zero quality": req(http.MethodPost, "application/json", "application/graphql-response+json;q=0.00", `{"query":"{x}"}`),
 	} {
@@ -67,6 +68,16 @@ func TestPOSTRejectsTrailingJSONAndWrongMediaTypes(t *testing.T) {
 				t.Fatalf("status = %d", w.Code)
 			}
 		})
+	}
+}
+
+func TestRejectsInvalidEndpointGraphQLResponse(t *testing.T) {
+	for _, body := range []string{`not-json`, `{}`, `{"data":null}`, `{"errors":[]}`} {
+		w := httptest.NewRecorder()
+		NewHandler(&testEndpoint{body: []byte(body)}).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
+		if w.Code != http.StatusInternalServerError || w.Header().Get("Content-Type") == responseType {
+			t.Fatalf("invalid endpoint response %q = %d/%q", body, w.Code, w.Header().Get("Content-Type"))
+		}
 	}
 }
 
@@ -96,12 +107,43 @@ func TestGETAllowsQueryButRejectsMutation(t *testing.T) {
 	}
 }
 
-func TestExecutionErrorKeepsGraphQLBody(t *testing.T) {
+func TestRequestErrorUses422AndKeepsGraphQLBody(t *testing.T) {
 	ep := &testEndpoint{body: []byte(`{"errors":[{"message":"failed"}]}`), err: io.ErrUnexpectedEOF}
 	w := httptest.NewRecorder()
 	NewHandler(ep).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
-	if w.Code != http.StatusOK || w.Body.String() != string(ep.body) {
+	if w.Code != http.StatusUnprocessableEntity || w.Body.String() != string(ep.body) {
 		t.Fatalf("response = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestPartialExecutionUses294AndKeepsGraphQLBody(t *testing.T) {
+	ep := &testEndpoint{body: []byte(`{"data":null,"errors":[{"message":"failed"}]}`)}
+	w := httptest.NewRecorder()
+	NewHandler(ep).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
+	if w.Code != 294 || w.Body.String() != string(ep.body) {
+		t.Fatalf("response = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestMalformedDocumentAndRequestShapeFailBeforeExecution(t *testing.T) {
+	tests := []struct {
+		name, body string
+		status     int
+	}{
+		{name: "document syntax", body: `{"query":"{"}`, status: http.StatusBadRequest},
+		{name: "missing query", body: `{}`, status: http.StatusUnprocessableEntity},
+		{name: "variables shape", body: `{"query":"{x}","variables":[]}`, status: http.StatusUnprocessableEntity},
+		{name: "ambiguous operation", body: `{"query":"query A{x} query B{x}"}`, status: http.StatusUnprocessableEntity},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ep := &testEndpoint{}
+			w := httptest.NewRecorder()
+			NewHandler(ep).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", test.body))
+			if w.Code != test.status || ep.ctx != nil {
+				t.Fatalf("response/called = %d/%v", w.Code, ep.ctx != nil)
+			}
+		})
 	}
 }
 

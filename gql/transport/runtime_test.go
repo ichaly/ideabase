@@ -14,6 +14,7 @@ type runtimeEndpoint struct {
 	snapshot       *core.Snapshot
 	identity       core.Identity
 	commitMetadata bool
+	body           []byte
 }
 
 type subscriptionRuntime struct {
@@ -31,7 +32,30 @@ func (my *runtimeEndpoint) Snapshot() (*core.Snapshot, error) { return my.snapsh
 func (my *runtimeEndpoint) Execute(ctx context.Context, _ string, _ map[string]any) ([]byte, error) {
 	my.identity, _ = core.IdentityFromContext(ctx)
 	my.commitMetadata = core.MutationCommitMetadataRequested(ctx)
+	if my.body != nil {
+		return my.body, nil
+	}
 	return []byte(`{"data":{"hello":"world"}}`), nil
+}
+
+func TestRemoteEndpointAcceptsPartialGraphQLResponseStatus(t *testing.T) {
+	snapshot, _ := core.NewSnapshotArtifact("type Query { hello: String }", "partial-v1", nil)
+	endpoint := &runtimeEndpoint{snapshot: snapshot, body: []byte(`{"data":{"hello":null},"errors":[{"message":"failed","path":["hello"]}]}`)}
+	mux := http.NewServeMux()
+	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	mux.Handle("/graphql", NewHandler(endpoint))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
+		EndpointID: "child", ManifestURL: server.URL + "/manifest", ExecuteURL: server.URL + "/graphql", AllowHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := remote.Execute(context.Background(), `{ hello }`, nil)
+	if err != nil || string(body) != string(endpoint.body) {
+		t.Fatalf("partial response = %s, %v", body, err)
+	}
 }
 
 func TestRemoteEndpointLoadsManifestAndDelegatesIdentity(t *testing.T) {

@@ -2,6 +2,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -75,6 +76,7 @@ type request struct {
 	Query         string         `json:"query"`
 	OperationName string         `json:"operationName,omitempty"`
 	Variables     map[string]any `json:"variables,omitempty"`
+	Extensions    map[string]any `json:"extensions,omitempty"`
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -89,8 +91,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req request
 	switch r.Method {
 	case http.MethodPost:
-		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil || mediaType != "application/json" {
+		if !isJSONContentType(r.Header.Get("Content-Type")) {
 			http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 			return
 		}
@@ -98,6 +99,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {
 				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			var typeErr *json.UnmarshalTypeError
+			if errors.As(err, &typeErr) {
+				http.Error(w, "invalid GraphQL request parameters", http.StatusUnprocessableEntity)
 				return
 			}
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -110,17 +116,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if raw := r.URL.Query().Get("variables"); raw != "" {
 			err = decodeJSON([]byte(raw), &req.Variables)
 		}
+		if err == nil {
+			if raw := r.URL.Query().Get("extensions"); raw != "" {
+				err = decodeJSON([]byte(raw), &req.Extensions)
+			}
+		}
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if req.Query == "" {
-			http.Error(w, "query is required", http.StatusBadRequest)
-			return
-		}
-		if kind, valid := operationKind(req.Query, req.OperationName); valid && kind != ast.Query {
-			w.Header().Set("Allow", "POST")
-			http.Error(w, "GET only allows query operations", http.StatusMethodNotAllowed)
+			var typeErr *json.UnmarshalTypeError
+			if errors.As(err, &typeErr) {
+				http.Error(w, "invalid GraphQL request parameters", http.StatusUnprocessableEntity)
+			} else {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+			}
 			return
 		}
 	default:
@@ -128,7 +135,16 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if req.Query == "" {
+		http.Error(w, "query is required", http.StatusUnprocessableEntity)
+		return
+	}
 	ctx := r.Context()
+	if h.options.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, h.options.Timeout)
+		defer cancel()
+	}
 	if r.Header.Get("GQL-Mutation-Commit") == "1" {
 		ctx = core.WithMutationCommitMetadata(ctx)
 	}
@@ -158,10 +174,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if h.options.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, h.options.Timeout)
-		defer cancel()
+	kind, status, operationErr := requestOperation(req.Query, req.OperationName)
+	if operationErr != nil {
+		writeGraphQLRequestError(w, status, operationErr)
+		return
+	}
+	if r.Method == http.MethodGet && kind != ast.Query {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "GET only allows query operations", http.StatusMethodNotAllowed)
+		return
 	}
 	var body []byte
 	var err error
@@ -171,8 +192,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body, err = h.endpoint.Execute(ctx, req.Query, req.Variables)
 	}
 	if len(body) != 0 {
-		writeGraphQL(w, body)
-		return
+		if writeGraphQL(w, body) {
+			return
+		}
+		err = fmt.Errorf("endpoint returned an invalid GraphQL response")
 	}
 	if err != nil {
 		writeGraphQLError(w, http.StatusInternalServerError, err)
@@ -239,24 +262,65 @@ func acceptsGraphQL(value string) bool {
 	return false
 }
 
-func operationKind(query, operationName string) (ast.Operation, bool) {
+func isJSONContentType(value string) bool {
+	mediaType, params, err := mime.ParseMediaType(value)
+	if err != nil || mediaType != "application/json" {
+		return false
+	}
+	charset := strings.ToLower(params["charset"])
+	return charset == "" || charset == "utf-8" || charset == "utf8"
+}
+
+func requestOperation(query, operationName string) (ast.Operation, int, error) {
 	doc, err := parser.ParseQuery(&ast.Source{Input: query})
 	if err != nil {
-		return "", false
+		return "", http.StatusBadRequest, err
 	}
 	op := doc.Operations.ForName(operationName)
 	if op == nil && operationName == "" && len(doc.Operations) == 1 {
 		op = doc.Operations[0]
 	}
 	if op == nil {
-		return "", false
+		return "", http.StatusUnprocessableEntity, fmt.Errorf("operation cannot be determined")
 	}
-	return op.Operation, true
+	return op.Operation, 0, nil
 }
 
-func writeGraphQL(w http.ResponseWriter, body []byte) {
+func writeGraphQL(w http.ResponseWriter, body []byte) bool {
+	var response map[string]json.RawMessage
+	if err := decodeJSON(body, &response); err != nil {
+		return false
+	}
+	_, data := response["data"]
+	rawErrors, errors := response["errors"]
+	if !data && !errors {
+		return false
+	}
+	if errors {
+		var list []json.RawMessage
+		if err := json.Unmarshal(rawErrors, &list); err != nil || len(list) == 0 {
+			return false
+		}
+	}
+	if data && !errors && string(bytes.TrimSpace(response["data"])) == "null" {
+		return false
+	}
+	status := http.StatusOK
+	if data && errors {
+		status = 294
+	} else if !data {
+		status = http.StatusUnprocessableEntity
+	}
 	w.Header().Set("Content-Type", responseType)
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+	return true
+}
+
+func writeGraphQLRequestError(w http.ResponseWriter, status int, err error) {
+	body, _ := json.Marshal(map[string]any{"errors": []map[string]string{{"message": err.Error()}}})
+	w.Header().Set("Content-Type", responseType)
+	w.WriteHeader(status)
 	_, _ = w.Write(body)
 }
 

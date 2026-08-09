@@ -246,12 +246,9 @@ func (my *RemoteEndpoint) executeOperation(ctx context.Context, query string, va
 		return nil, fmt.Errorf("remote execute unavailable: %w", err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("remote execute status %d", response.StatusCode)
-	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType != responseType {
-		return nil, fmt.Errorf("remote execute content type %q", mediaType)
+		return nil, fmt.Errorf("remote execute status %d content type %q", response.StatusCode, mediaType)
 	}
 	return readLimited(response.Body, my.maxResponse)
 }
