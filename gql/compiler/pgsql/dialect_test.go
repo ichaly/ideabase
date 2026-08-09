@@ -94,7 +94,7 @@ func (my *_DialectSuite) SetupSuite() {
 	my.meta = meta
 	my.dialect = &Dialect{}
 
-	schemaStr, err := gql.NewRenderer(meta).Generate()
+	schemaStr, err := gql.NewRenderer(meta).Render()
 	my.Require().NoError(err, "生成GraphQL schema失败")
 
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "schema-test.graphql", Input: schemaStr})
@@ -148,7 +148,7 @@ func (my *_DialectSuite) newSuite(overrides map[string]interface{}) (*gql.Metada
 
 	meta, err := gql.NewMetadata(k, nil)
 	my.Require().NoError(err)
-	schemaStr, err := gql.NewRenderer(meta).Generate()
+	schemaStr, err := gql.NewRenderer(meta).Render()
 	my.Require().NoError(err)
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "alt.graphql", Input: schemaStr})
 	my.Require().NoError(err)

@@ -86,7 +86,7 @@ func TestRendererRejectsLossyDatabaseEnumLabel(t *testing.T) {
 	}}})
 	meta := createMockMetadata(t)
 	meta.Nodes = map[string]*protocol.Class{class.Name: class}
-	_, err := NewRenderer(meta).Generate()
+	_, err := NewRenderer(meta).Render()
 	require.ErrorContains(t, err, "非法GraphQL值")
 }
 

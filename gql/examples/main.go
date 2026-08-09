@@ -117,9 +117,9 @@ func demoDSN() string {
 	return cmp.Or(os.Getenv("DEMO_DSN"), "host=localhost port=5433 user=demo password=demo dbname=demo sslmode=disable")
 }
 
-// buildExecutor 用统一入口装配完整引擎；Builder 是元数据、编译器与执行器的唯一组装点。
+// buildEngine 用统一入口装配完整引擎；Builder 是元数据、编译器与运行时的唯一组装点。
 // main与性能测试共用，保证基准跑的就是demo实际装配
-func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
+func buildEngine(db *gorm.DB) (*gql.Engine, error) {
 	// 配置：数据侧声明（搜索列等）——生产中可放config.yml，键名一致；
 	// resolver等行为侧声明走注册（NewResolver/NewBatch），不进配置
 	k, err := std.NewKonfig()
@@ -149,7 +149,14 @@ func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
 		gql.WithIDGenerator("virtual", func() (any, error) {
 			return "v_" + strconv.FormatInt(time.Now().UnixNano(), 36), nil
 		}),
-	).TrustedLocal()
+	)
+	if err = builder.Policy(gql.OperationPolicyProvider(func(context.Context, gql.PolicyRequest) (gql.PolicyDecision, error) {
+		return gql.PolicyDecision{Allow: true, Fields: map[gql.FieldUse][]string{
+			gql.FieldUseSelect: {"*"}, gql.FieldUseFilter: {"*"}, gql.FieldUseWrite: {"*"}, gql.FieldUseReturn: {"*"},
+		}}, nil
+	})); err != nil {
+		return nil, err
+	}
 	// 普通/批量/根字段Resolver与远程关系使用同一个注册入口。
 	if err = builder.Register(signResolver(), greetingResolver(), serverInfoResolver(), echoResolver(), reputationRemote()); err != nil {
 		return nil, err
@@ -171,14 +178,24 @@ func buildExecutor(db *gorm.DB) (*gql.Executor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return engine.Executor, nil
+	return engine, nil
+}
+
+func demoContext(ctx context.Context, tenant int) context.Context {
+	identity, err := gql.NewIdentity(gql.IdentityInput{
+		Tenant: strconv.Itoa(tenant), Subject: "demo-user", Roles: []string{"demo"},
+	})
+	if err != nil {
+		panic(err) // fixed demo values always satisfy the identity contract
+	}
+	return gql.WithScope(gql.WithIdentity(ctx, identity), map[string]any{"tenant": tenant})
 }
 
 func main() {
 	// 1. 数据库连接 + 引擎装配
 	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
 	die(err)
-	executor, err := buildExecutor(db)
+	engine, err := buildEngine(db)
 	die(err)
 
 	// 2. HTTP服务：POST /graphql 查询变更，GET /graphql 订阅WebSocket升级
@@ -189,10 +206,10 @@ func main() {
 		if tenant == 0 {
 			tenant = 1
 		}
-		c.SetContext(gql.WithScope(c.Context(), map[string]any{"tenant": tenant}))
+		c.SetContext(demoContext(c.Context(), tenant))
 		return c.Next()
 	})
-	executor.Bind(app.Group(executor.Path()))
+	engine.Bind(app.Group(engine.Path()))
 
 	fmt.Println("GraphQL服务: http://localhost:8080/graphql （示例见 examples/README.md）")
 	die(app.Listen(":8080"))

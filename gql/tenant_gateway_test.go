@@ -32,8 +32,9 @@ func tenantTestEngine(t *testing.T, value string, calls *atomic.Int32) *Engine {
 			calls.Add(1)
 			return value, nil
 		},
+		Access("test", "read"),
 	)
-	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal()
+	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 	require.NoError(t, builder.Register(resolver))
 	engine, err := builder.Build()
 	require.NoError(t, err)
@@ -112,9 +113,9 @@ func TestTenantGatewayRejectsUnknownSourceAndSchemaDrift(t *testing.T) {
 
 func TestTenantGatewayRejectsCapabilityDriftWithSameSchema(t *testing.T) {
 	build := func(cost uint32) *Engine {
-		builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal()
+		builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 		require.NoError(t, builder.Register(NewResolver[Root, struct{}, string]("Query", "tenantName", "",
-			func(context.Context, Root, struct{}) (string, error) { return "tenant", nil }, Cost(cost))))
+			func(context.Context, Root, struct{}) (string, error) { return "tenant", nil }, Cost(cost), Access("test", "read"))))
 		engine, err := builder.Build()
 		require.NoError(t, err)
 		t.Cleanup(engine.Close)
@@ -135,7 +136,7 @@ func TestTenantGatewayReportsChildSubscriptionCapability(t *testing.T) {
 		"a": {DataSource: "db"},
 	}})
 	require.NoError(t, err)
-	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": {Executor: executor}})
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": executor})
 	require.NoError(t, err)
 	require.True(t, executor.SubscriptionAvailable())
 	require.True(t, gateway.SubscriptionAvailable(), "dispatcher capability must match its public subscription schema")
@@ -148,7 +149,7 @@ func TestTenantGatewayHealthChecksRoutedDatasource(t *testing.T) {
 		"a": {DataSource: "db"},
 	}})
 	require.NoError(t, err)
-	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": {Executor: executor}})
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": executor})
 	require.NoError(t, err)
 	report, err := gateway.Health(context.Background())
 	require.NoError(t, err)
@@ -163,7 +164,10 @@ func TestTenantGatewayHealthChecksRoutedDatasource(t *testing.T) {
 
 func TestTenantGatewaySharedTableRequiresTenantScopeOrExplicitGlobal(t *testing.T) {
 	build := func(loader sharedTenantLoader) *Engine {
-		builder := New(snapshotKonfig(t), nil, snapshotOptions(loader)...).TrustedLocal()
+		builder := New(snapshotKonfig(t), nil, snapshotOptions(loader)...)
+		if !loader.scoped {
+			builder = builder.testAllowAllPolicy()
+		}
 		engine, err := builder.Build()
 		require.NoError(t, err)
 		return engine

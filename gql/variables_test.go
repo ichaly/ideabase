@@ -69,7 +69,7 @@ func TestHTTPVariablesPreserveJSONNumberKind(t *testing.T) {
 	type args struct {
 		N int `json:"n"`
 	}
-	require.NoError(t, executor.Register(NewResolver[Root, args, int]("Query", "echoHTTP", "", func(_ context.Context, _ Root, in args) (int, error) {
+	require.NoError(t, executor.register(NewResolver[Root, args, int]("Query", "echoHTTP", "", func(_ context.Context, _ Root, in args) (int, error) {
 		return in.N, nil
 	})))
 	app := fiber.New()
@@ -123,7 +123,7 @@ func TestVariableValidationRunsBeforeCachedResolver(t *testing.T) {
 		N int `json:"n"`
 	}
 	calls := 0
-	require.NoError(t, executor.Register(NewResolver[Root, args, int]("Query", "echo", "", func(_ context.Context, _ Root, in args) (int, error) {
+	require.NoError(t, executor.register(NewResolver[Root, args, int]("Query", "echo", "", func(_ context.Context, _ Root, in args) (int, error) {
 		calls++
 		return in.N, nil
 	})))
@@ -144,7 +144,7 @@ func TestColdFlightDoesNotPropagateAnotherRequestsVariableError(t *testing.T) {
 	type args struct {
 		N int `json:"n"`
 	}
-	require.NoError(t, executor.Register(NewResolver[Root, args, int]("Query", "echoFlight", "", func(_ context.Context, _ Root, in args) (int, error) {
+	require.NoError(t, executor.register(NewResolver[Root, args, int]("Query", "echoFlight", "", func(_ context.Context, _ Root, in args) (int, error) {
 		return in.N, nil
 	})))
 	query := `query Echo($n: Int!) { echoFlight(n: $n) }`
@@ -230,7 +230,7 @@ func TestVariableDefaultCodecRunsOnceOnColdAndWarmPlans(t *testing.T) {
 	require.NoError(t, err)
 	metadata := &Metadata{}
 	metadata.setCodecs([]Codec{suffixCodec{}})
-	executor := &Executor{schema: schema, metadata: metadata}
+	executor := &Engine{schema: schema, metadata: metadata}
 	query := `query($value: Token = "raw") { echoToken(value: $value) }`
 
 	cold := map[string]any{}

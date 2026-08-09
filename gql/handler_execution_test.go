@@ -13,7 +13,7 @@ func TestHandlerRequiresProjectsDependenciesAndStripsThemFromResponse(t *testing
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	var received atomic.Bool
-	require.NoError(t, executor.Register(NewResolver[Source, struct{}, string]("User", "displayName", "", func(_ context.Context, source Source, _ struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Source, struct{}, string]("User", "displayName", "", func(_ context.Context, source Source, _ struct{}) (string, error) {
 		received.Store(source["name"] == "Alice" && source["email"] == "alice@example.com")
 		return source["name"].(string) + " <" + source["email"].(string) + ">", nil
 	}, Result("String"), Requires("name", "email"))))
@@ -35,13 +35,13 @@ func TestHandlerRejectsUnknownRequiresForEntityAndRoot(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 
-	err := executor.Register(NewResolver[Source, struct{}, string]("User", "brokenDependency", "", func(context.Context, Source, struct{}) (string, error) {
+	err := executor.register(NewResolver[Source, struct{}, string]("User", "brokenDependency", "", func(context.Context, Source, struct{}) (string, error) {
 		return "", nil
 	}, Result("String"), Requires("doesNotExist")))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "依赖未知列字段")
 
-	err = executor.Register(NewResolver[Root, struct{}, string]("Query", "brokenRootDependency", "", func(context.Context, Root, struct{}) (string, error) {
+	err = executor.register(NewResolver[Root, struct{}, string]("Query", "brokenRootDependency", "", func(context.Context, Root, struct{}) (string, error) {
 		return "", nil
 	}, Result("String"), Requires("id")))
 	require.Error(t, err)
@@ -51,7 +51,7 @@ func TestHandlerRejectsUnknownRequiresForEntityAndRoot(t *testing.T) {
 func TestHandlerTimeoutReportsStableTimeoutCode(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.Register(
+	require.NoError(t, executor.register(
 		NewResolver[Root, struct{}, string]("Query", "cooperativeTimeout", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) {
 			<-ctx.Done()
 			return "", ctx.Err()
@@ -74,7 +74,7 @@ func TestHandlerBatchMaxBatchRejectsBeforeInvocation(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	var calls atomic.Int32
-	require.NoError(t, executor.Register(NewBatch("Post", "limitedLabel", "", func(_ context.Context, sources []Source, _ struct{}) ([]string, error) {
+	require.NoError(t, executor.register(NewBatch("Post", "limitedLabel", "", func(_ context.Context, sources []Source, _ struct{}) ([]string, error) {
 		calls.Add(1)
 		return make([]string, len(sources)), nil
 	}, Result("String"), MaxBatch(1))))
@@ -102,7 +102,7 @@ func TestHandlerBatchMaxBatchRejectsBeforeInvocation(t *testing.T) {
 func TestHandlerRetrySafeRequiresIdempotencyKey(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	err := executor.Register(NewResolver[Root, struct{}, string]("Query", "unsafeRetry", "", func(context.Context, Root, struct{}) (string, error) {
+	err := executor.register(NewResolver[Root, struct{}, string]("Query", "unsafeRetry", "", func(context.Context, Root, struct{}) (string, error) {
 		return "", nil
 	}, Result("String"), RetrySafe("")))
 	require.Error(t, err)
@@ -117,7 +117,7 @@ func TestHandlerExecutionContextContainsTrustedRequestView(t *testing.T) {
 	var view ExecutionContext
 	var found bool
 	var executionDB, executionTx any
-	require.NoError(t, executor.Register(NewResolver[Root, struct{}, string]("Mutation", "inspectExecution", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Mutation", "inspectExecution", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) {
 		view, found = ExecutionContextFromContext(ctx)
 		executionDB, executionTx = DB(ctx), Tx(ctx)
 		if !found || view.Identity().Subject() != "user-a" || view.SnapshotFingerprint() == "" || executionDB == nil || executionDB != executionTx {
@@ -137,7 +137,7 @@ func TestHandlerExecutionContextContainsTrustedRequestView(t *testing.T) {
 	require.NotSame(t, db, executionDB)
 }
 
-func (my *Executor) mustSnapshotFingerprint(t *testing.T) string {
+func (my *Engine) mustSnapshotFingerprint(t *testing.T) string {
 	t.Helper()
 	snapshot, err := my.Snapshot()
 	require.NoError(t, err)

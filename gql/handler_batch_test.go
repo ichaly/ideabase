@@ -12,7 +12,7 @@ func TestBatchHandlerDeduplicatesEquivalentAliasesPerRequest(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	var calls atomic.Int32
-	require.NoError(t, executor.Register(NewBatch(
+	require.NoError(t, executor.register(NewBatch(
 		"User", "batchLabel", "",
 		func(_ context.Context, sources []Source, _ struct{}) ([]string, error) {
 			calls.Add(1)

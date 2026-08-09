@@ -49,18 +49,17 @@ snapshot, _ := engine.Snapshot()
 fmt.Println(snapshot.Fingerprint(), snapshot.Capabilities())
 ```
 
-新 Builder 默认 fail-closed：任一数据库实体没有 `permissions` 都会拒绝启动。只在明确
-可信的本地工具/测试中使用 `gql.New(k, db).TrustedLocal()`。旧构造链仍兼容；非开发模式
-要保留历史全开放边界时，必须给 `NewMetadata` 显式传入
-`gql.LegacyTrustedBoundaryPolicy()`，启动时会输出迁移告警。
+Builder 是唯一装配入口。每个 Engine 必须通过 `Builder.Policy` 或 metadata
+`permissions` 获得唯一 PolicyProvider；两者冲突或两者都缺失时 Build 失败并保持
+fail-closed。Build 后 Engine 只提供执行、快照、健康检查和订阅接口。
 
 ### 独立服务与命名空间组合
 
-`Executor` 和 `Gateway` 实现同一个传输无关执行契约。标准库 HTTP、SSE、manifest 与
+`Engine` 和 `Gateway` 实现同一个传输无关执行契约。标准库 HTTP、SSE、manifest 与
 健康检查只是薄适配器，因此嵌入 Fiber、Gin、gRPC 或命令行时无需改变执行内核：
 
 ```go
-mux.Handle("/graphql", transport.NewHTTPHandler(engine))
+mux.Handle("/graphql", transport.NewHandler(engine))
 mux.Handle("/graphql/stream", transport.NewSubscriptionHandler(engine)) // 仅在有 CDC 时挂载
 mux.Handle("/gql/manifest", transport.NewManifestHandler("accounts", engine))
 mux.Handle("/health/gql", transport.NewHealthHandler(engine))
@@ -368,14 +367,17 @@ metadata:
             - { column: tenant_id, operator: eq, context: tenant }
 ```
 
-认证层同时注入作用域与角色；角色只接受服务端上下文，不能由 GraphQL variables 伪造：
+认证层注入作用域与完整身份；角色随服务端签发的 Identity 传递，不能由 GraphQL variables 伪造：
 
 ```go
 ctx := gql.WithScope(ctx, map[string]any{
     "tenant": claims.Tenant,
     "userId": claims.UserId,
 })
-ctx = gql.WithRole(ctx, claims.Role)
+identity, _ := gql.NewIdentity(gql.IdentityInput{
+    Tenant: claims.Tenant, Subject: claims.Subject, Roles: claims.Roles,
+})
+ctx = gql.WithIdentity(ctx, identity)
 ```
 
 规则语义：
@@ -388,7 +390,7 @@ ctx = gql.WithRole(ctx, claims.Role)
   不进入写入 Input；`*_at` 使用数据库时钟，`*_by` 来自可信 Identity actor
 - `where` 是客户端无法移除的固定条件，覆盖根查询、嵌套、统计与变更
 - `read_only` 不进入写入 input；`insert_preset` / `update_preset` 由服务端强制写入
-- `permissions` 未配置时兼容旧行为；一旦配置，未匹配角色默认拒绝
+- 每个 Engine 必须配置一个显式 `PolicyProvider`，或由非空 `permissions` 自动生成；两者同时存在或同时缺失都拒绝启动
 - `select` / `insert` / `update` 是字段白名单，`*` 表示全部，空列表表示拒绝；
   filter/sort/distinct/groupBy/having/search 同样受读取字段白名单约束
 - `filter` 在 SQL 中限制可见/可改行；`check` 在发 SQL 前逐行验证新值，批量任一行失败则整次拒绝

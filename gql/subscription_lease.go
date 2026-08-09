@@ -44,24 +44,21 @@ func subscriptionLeaseFromContext(ctx context.Context) (subscriptionLease, bool)
 	return lease, ok
 }
 
-// ConfigureSubscriptionLease sets a periodic reauthorization interval for an executor.
-func ConfigureSubscriptionLease(executor *Executor, interval time.Duration) error {
-	if executor == nil {
-		return fmt.Errorf("executor is nil")
+// ConfigureSubscriptionLease sets a periodic reauthorization interval for an Engine.
+func ConfigureSubscriptionLease(engine *Engine, interval time.Duration) error {
+	if engine == nil {
+		return fmt.Errorf("engine is nil")
 	}
 	if interval <= 0 {
 		return fmt.Errorf("subscription lease interval must be positive")
 	}
-	if err := executor.mutable("ConfigureSubscriptionLease"); err != nil {
-		return err
-	}
-	executor.subscriptionLease = interval
+	engine.subscriptionLease = interval
 	return nil
 }
 
-func configuredSubscriptionLease(executor *Executor) time.Duration {
-	if executor != nil && executor.subscriptionLease > 0 {
-		return executor.subscriptionLease
+func configuredSubscriptionLease(engine *Engine) time.Duration {
+	if engine != nil && engine.subscriptionLease > 0 {
+		return engine.subscriptionLease
 	}
 	return defaultSubscriptionLeaseInterval
 }

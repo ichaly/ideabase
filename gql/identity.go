@@ -27,11 +27,6 @@ type IdentityInput struct {
 	RequestID       string
 }
 
-// IdentityConfig and IdentityParams are descriptive aliases for integrations
-// that prefer those names.
-type IdentityConfig = IdentityInput
-type IdentityParams = IdentityInput
-
 func NewIdentity(input IdentityInput) (Identity, error) {
 	if input.Tenant == "" {
 		return Identity{}, fmt.Errorf("identity tenant is required")

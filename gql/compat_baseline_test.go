@@ -97,7 +97,7 @@ func argumentContract(argument *ast.ArgumentDefinition) string {
 }
 
 func TestCompatGeneratedSDLContract(t *testing.T) {
-	raw, err := NewRenderer(createMockMetadata(t)).Generate()
+	raw, err := NewRenderer(createMockMetadata(t)).Render()
 	require.NoError(t, err)
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "compat.graphql", Input: raw})
 	require.NoError(t, err)

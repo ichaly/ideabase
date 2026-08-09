@@ -19,13 +19,11 @@ import (
 
 // mutation 单个变更操作：op + 目标实体 + 可选读回单元（delete返回计数无单元）
 type mutation struct {
-	field  *ast.Field
-	class  *protocol.Class
-	op     string
-	bulk   bool // 复数字段：批量语义，读回为数组
-	result bool // MutationResult 包装（affectedCount + returning）
-	single bool // ByPk 单对象读回；legacy delete 保持 count
-	unit   *unit
+	field *ast.Field
+	class *protocol.Class
+	op    string
+	shape compiler.OperationShape
+	unit  *unit
 }
 
 // paramWriter 把一个参数值写入SQL（占位符+槽位）
@@ -70,9 +68,9 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 		seen[m.class.Table] = true
 		ctx.MarkTable(m.class.Table)
 
-		if (m.op != protocol.DELETE || m.result || m.single) && len(field.SelectionSet) > 0 {
+		if (m.op != protocol.DELETE || m.shape.Result() || m.shape.Single()) && len(field.SelectionSet) > 0 {
 			unitField := field
-			if m.result {
+			if m.shape.Result() {
 				unitField = nil
 				for _, selected := range compiler.FieldsOf(field.SelectionSet) {
 					if selected.Name == "returning" {
@@ -87,7 +85,7 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 				m.unit = nil
 			} else {
 				kind := shapeSingle
-				if m.bulk {
+				if m.shape.Bulk() {
 					kind = shapeList
 				}
 				m.unit = &unit{field: unitField, class: m.class, shape: kind, index: ctx.NextIndex(), readback: true}
@@ -150,7 +148,7 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 			continue
 		}
 		ctx.Write(`'`, m.field.Alias, `', `)
-		if m.result {
+		if m.shape.Result() {
 			my.buildMutationResultJSON(ctx, m)
 		} else if m.unit == nil {
 			ctx.Write(`(SELECT COUNT(*) FROM `).Quote(m.class.Table).Write(`)`)
@@ -205,12 +203,10 @@ func parseMutation(ctx *compiler.Context, field *ast.Field) (*mutation, error) {
 		return nil, fmt.Errorf("变更字段缺少操作定义: %s", field.Name)
 	}
 	return &mutation{
-		field:  field,
-		class:  spec.Class,
-		op:     spec.Operation,
-		bulk:   spec.Bulk,
-		result: spec.Result,
-		single: spec.Single,
+		field: field,
+		class: spec.Class,
+		op:    spec.Operation,
+		shape: spec.Shape,
 	}, nil
 }
 
@@ -220,7 +216,7 @@ func (my *Dialect) buildInsert(ctx *compiler.Context, m *mutation) ([]relationOp
 	if err != nil {
 		return nil, err
 	}
-	if !m.bulk && len(rows) > 1 {
+	if !m.shape.Bulk() && len(rows) > 1 {
 		return nil, fmt.Errorf("%s是单条创建，批量请用%s%s", m.field.Name, m.op, inflection.Plural(m.class.Name))
 	}
 	var ops []relationOp
@@ -230,7 +226,7 @@ func (my *Dialect) buildInsert(ctx *compiler.Context, m *mutation) ([]relationOp
 				return nil, fmt.Errorf("创建时不支持disconnect（无可解除的既有关系）")
 			}
 		}
-		if m.bulk && len(row.ops) > 0 {
+		if m.shape.Bulk() && len(row.ops) > 0 {
 			return nil, fmt.Errorf("批量创建不支持关系操作（无法确定挂接到哪一行）")
 		}
 		ops = append(ops, row.ops...)
@@ -469,7 +465,7 @@ func (my *Dialect) buildUpdate(ctx *compiler.Context, m *mutation) ([]relationOp
 		return nil, fmt.Errorf("%s的input必须是单个对象", m.field.Name)
 	}
 	row := rows[0]
-	if len(row.ops) > 0 && (m.bulk || !hasKeyArgument(m.field.Arguments)) {
+	if len(row.ops) > 0 && (m.shape.Bulk() || !hasKeyArgument(m.field.Arguments)) {
 		return nil, fmt.Errorf("携带关系操作的更新必须用主键定位单行")
 	}
 

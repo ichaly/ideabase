@@ -11,7 +11,7 @@ import (
 func TestHandlerOperationalContractIsPartOfSnapshot(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.Register(NewBatch(
+	require.NoError(t, executor.register(NewBatch(
 		"User", "contractField", "",
 		func(context.Context, []Source, struct{}) ([]string, error) { return nil, nil },
 		Result("String"), Requires("id"), Timeout(time.Second), MaxBatch(17), RetrySafe("request-id"),

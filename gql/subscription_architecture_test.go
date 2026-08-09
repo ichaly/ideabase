@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Executor.subscribe is a subscription-only entry point.  In particular, a
+// Engine.subscribe is a subscription-only entry point.  In particular, a
 // rejected query or mutation must not install a CDC feed (or start the first
 // SQL fetch in its stream goroutine).
 func TestSubscribeRejectsNonSubscriptionBeforeFeedCreation(t *testing.T) {

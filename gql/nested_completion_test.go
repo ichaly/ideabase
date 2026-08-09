@@ -16,7 +16,7 @@ func TestNullableNestedResolverErrorKeepsRowsAndReportsListIndex(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	var calls atomic.Int32
-	require.NoError(t, executor.Register(NewResolver[Source, struct{}, string]("User", "risky", "", func(context.Context, Source, struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Source, struct{}, string]("User", "risky", "", func(context.Context, Source, struct{}) (string, error) {
 		if calls.Add(1) == 1 {
 			return "", errors.New("nested boom")
 		}
@@ -44,7 +44,7 @@ func TestNullableNestedResolverErrorKeepsRowsAndReportsListIndex(t *testing.T) {
 func TestNonNullNestedResolverBubblesThroughGeneratedNonNullQuery(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.Register(NewResolver[Source, struct{}, string]("User", "requiredValue", "", func(context.Context, Source, struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Source, struct{}, string]("User", "requiredValue", "", func(context.Context, Source, struct{}) (string, error) {
 		return "", errors.New("required boom")
 	}, Result("String!"))))
 	seedNestedCompletionUsers(t, executor)
@@ -75,7 +75,7 @@ func TestNonNullCompletionStopsAtNullableAncestor(t *testing.T) {
 	require.Equal(t, "kept", data["sibling"])
 }
 
-func seedNestedCompletionUsers(t *testing.T, executor *Executor) {
+func seedNestedCompletionUsers(t *testing.T, executor *Engine) {
 	t.Helper()
 	reply := executor.run(context.Background(), `mutation {
 		first: createUser(input: { name: "Nested A", email: "nested-a@example.com" }) { id }

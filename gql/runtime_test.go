@@ -106,7 +106,7 @@ func TestExecutorHealthReportsDatabaseFailure(t *testing.T) {
 }
 
 func TestExecutorHealthWithoutDatabaseStillReportsSnapshot(t *testing.T) {
-	executor := &Executor{}
+	executor := &Engine{}
 	report, err := executor.Health(context.Background())
 	require.Error(t, err)
 	require.False(t, report.Ready)

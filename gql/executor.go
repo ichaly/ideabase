@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
@@ -26,8 +25,23 @@ import (
 	"gorm.io/gorm"
 )
 
-// planCacheSize 执行计划LRU缓存容量（NewExecutor与Register重建共用）
+// planCacheSize 执行计划LRU缓存容量（newEngine与启动期装配重建共用）
 const planCacheSize = 512
+
+func configureSearchMode(metadata *Metadata, database *gorm.DB) {
+	if metadata == nil || database == nil || metadata.cfg == nil {
+		return
+	}
+	if mode := strings.TrimSpace(metadata.cfg.Search.Mode); mode != "" {
+		metadata.SetSearchMode(mode, metadata.cfg.Search.Config)
+		return
+	}
+	if detect, ok := searchDetectors[database.Name()]; ok {
+		metadata.SetSearchMode(detect(database))
+		return
+	}
+	metadata.SetSearchMode("ilike", "")
+}
 
 // 请求和结果类型定义
 type (
@@ -100,10 +114,10 @@ func (my gqlReply) mutationCommit(ctx context.Context, state string) gqlReply {
 	return my
 }
 
-// Executor GraphQL执行器
+// Engine GraphQL执行器
 // 负责解析GraphQL查询、编译为SQL并执行查询，支持多种数据库方言
 // 可作为Fiber插件集成到Web服务中，提供标准的GraphQL API
-type Executor struct {
+type Engine struct {
 	intro             *intro.Handler      // 自省处理器，处理__schema和__type查询
 	schema            *ast.Schema         // GraphQL模式定义
 	database          *gorm.DB            // 数据库连接，用于执行生成的SQL
@@ -115,21 +129,20 @@ type Executor struct {
 	feedMu            sync.Mutex          // 保护feeds及各feed的订阅者集合
 	feeds             map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
 	resolvers         map[string]Resolver // 自定义字段解析器注册表
-	source            string              // 原始schema文本，Register合并注册声明时重建的基底
+	source            string              // 原始schema文本，启动期注册声明合并时重建的基底
 	documents         map[string]string   // 持久化查询文档：操作名 -> 查询文本
 	remotes           map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
 	cdc               notifier            // CDC唤醒源（按数据库驱动从注册表选取）
-	frozen            atomic.Bool         // 首次执行后冻结注册表（rebuild与serving不互斥，运行期注册即数据竞争）
 	finalizeOnce      sync.Once
 	snapshot          *Snapshot
 	snapshotErr       error
 	baseView          *effectiveView
 	validation        *validatorrules.Rules // 快照自有验证规则，不修改gqlparser全局状态
 	tenantRouter      *TenantRouter
-	tenantSources     map[string]*Executor
+	tenantSources     map[string]*Engine
 	revocation        *RevocationBarrier
 	policy            PolicyProvider
-	builtinPolicy     *ProtocolPolicyProvider
+	policyBuiltin     bool
 	rls               bool
 	effectiveMu       sync.Mutex
 	effective         map[string]*effectiveView
@@ -138,7 +151,7 @@ type Executor struct {
 }
 
 // options 读取schema级选项（元数据未配置时为零值安全默认）
-func (my *Executor) options() internal.SchemaConfig {
+func (my *Engine) options() internal.SchemaConfig {
 	if my.metadata == nil || my.metadata.cfg == nil {
 		return internal.SchemaConfig{Introspection: true}
 	}
@@ -147,20 +160,19 @@ func (my *Executor) options() internal.SchemaConfig {
 
 // Close 释放后台资源：CDC复制连接与重连循环退出；
 // 存续的共享订阅流不再被唤醒，随各订阅者ctx结束
-func (my *Executor) Close() {
+func (my *Engine) Close() {
 	if my.cdc != nil {
 		my.cdc.close()
 	}
 }
 
-// Register 统一注册入口：Resolver/Remote 按实现的接口路由到对应注册表，
-// 字段级声明挂载进宿主实体并重建schema。仅限启动期调用：
-// 重建schema/自省/计划缓存的过程不与并发请求互斥，首次执行后冻结报错
-func (my *Executor) Register(items ...any) error {
-	if err := my.mutable("Register"); err != nil {
-		return err
-	}
+// register 是 Builder 唯一使用的启动期装配入口：Resolver/Remote 按实现路由
+// 到注册表，字段声明挂载进宿主实体并重建 schema。
+func (my *Engine) register(items ...any) error {
 	for _, item := range items {
+		if _, ok := item.(PolicyProvider); ok {
+			return fmt.Errorf("PolicyProvider必须通过Builder.Policy设置")
+		}
 		if handler, ok := item.(Handler); ok {
 			if err := validateHandler(handler); err != nil {
 				return err
@@ -194,12 +206,8 @@ func (my *Executor) Register(items ...any) error {
 	return my.rebuild()
 }
 
-// Replace 显式替换schema已有字段的默认实现。默认数据库CRUD仍保持零代码快路径，
-// 只有被替换的coordinate才进入Resolver分发。
-func (my *Executor) Replace(resolver Resolver) error {
-	if err := my.mutable("Replace"); err != nil {
-		return err
-	}
+// replace 显式替换 schema 已有字段的默认实现。
+func (my *Engine) replace(resolver Resolver) error {
 	d := resolver.Define()
 	if !d.Existing {
 		return fmt.Errorf("resolver %s必须使用Existing选项声明覆盖已有字段", resolver.Name())
@@ -220,11 +228,8 @@ func (my *Executor) Replace(resolver Resolver) error {
 	return my.rebuild()
 }
 
-// Wrap 用强类型中间件增强已注册Resolver，先注册的包装位于内层；仅限启动期。
-func (my *Executor) Wrap(coordinate string, middleware ResolverMiddleware) error {
-	if err := my.mutable("Wrap"); err != nil {
-		return err
-	}
+// wrap 用强类型中间件增强已注册 Resolver；仅限 Builder 启动期装配。
+func (my *Engine) wrap(coordinate string, middleware ResolverMiddleware) error {
 	resolver, ok := my.resolvers[coordinate]
 	if !ok {
 		return fmt.Errorf("resolver未注册: %s", coordinate)
@@ -234,22 +239,12 @@ func (my *Executor) Wrap(coordinate string, middleware ResolverMiddleware) error
 	return nil
 }
 
-func (my *Executor) mutable(operation string) error {
-	if my.frozen.Load() {
-		return fmt.Errorf("注册表已冻结：%s仅限启动期调用", operation)
-	}
-	return nil
-}
-
-// Snapshot 返回执行器实际使用的不可变Schema/Handler契约，并冻结启动期注册表。
-func (my *Executor) Snapshot() (*Snapshot, error) {
+// Snapshot 返回 Engine 实际使用的不可变 Schema/Handler 契约。
+func (my *Engine) Snapshot() (*Snapshot, error) {
 	if my.tenantRouter != nil {
 		return my.snapshot, my.snapshotErr
 	}
 	my.finalizeOnce.Do(func() {
-		if my.policy == nil {
-			my.builtinPolicy = metadataPolicy(my.metadata)
-		}
 		my.snapshot, my.snapshotErr = buildSnapshot(my)
 		if my.snapshotErr == nil {
 			fingerprint := my.snapshot.Fingerprint()
@@ -258,67 +253,14 @@ func (my *Executor) Snapshot() (*Snapshot, error) {
 				schema:   my.schema, intro: my.intro,
 			}
 		}
-		my.frozen.Store(true)
 	})
 	return my.snapshot, my.snapshotErr
 }
 
-// 构造函数和初始化方法
+// 构造函数和初始化方法只由 Builder 调用。
 
-// NewExecutor 创建一个新的GraphQL执行器实例
-// 参数:
-//   - d: 数据库连接(gorm.DB)
-//   - r: GraphQL模式渲染器
-//   - m: 数据库元数据
-//
-// 返回:
-//   - 执行器实例和可能的错误
-//
-// 使用示例:
-//
-//	renderer := gql.NewRenderer(metadata)
-//	executor, err := gql.NewExecutor(db, renderer, metadata)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-func NewExecutor(d *gorm.DB, r *Renderer, m *Metadata, c *Compiler) (*Executor, error) {
-	if m == nil || r == nil {
-		return nil, fmt.Errorf("缺少Metadata或Renderer")
-	}
-	trusted := m.legacyTrusted
-	if m.cfg == nil || !m.cfg.IsDebug() {
-		if err := requirePolicies(m, trusted, "LegacyTrustedBoundaryPolicy"); err != nil {
-			return nil, err
-		}
-	}
-	if m != nil && m.legacyTrusted {
-		log.Warn().Msg("已启用LegacyTrustedBoundaryPolicy；该兼容边界不适用于多租户生产服务")
-	}
-	if d != nil {
-		// Runtime search capability is catalog data. Detect it before freezing so
-		// renderer, compiler, cursor fingerprint and executor see one value.
-		if mode := strings.TrimSpace(m.cfg.Search.Mode); mode != "" {
-			m.SetSearchMode(mode, m.cfg.Search.Config)
-		} else if detect, ok := searchDetectors[d.Name()]; ok {
-			m.SetSearchMode(detect(d))
-		} else {
-			m.SetSearchMode("ilike", "")
-		}
-	}
-	catalog := m.freeze()
-	compiled, err := c.freeze(catalog)
-	if err != nil {
-		return nil, err
-	}
-	data, err := loadSchema(catalog, NewRenderer(catalog))
-	if err != nil {
-		return nil, err
-	}
-	return newExecutor(d, catalog, compiled, data)
-}
-
-func newExecutor(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Executor, error) {
-	executor := &Executor{
+func newEngine(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Engine, error) {
+	executor := &Engine{
 		database:    d,
 		metadata:    m,
 		compiler:    c,
@@ -365,7 +307,7 @@ func disableUnsupportedDirectives(schema *ast.Schema) {
 	delete(schema.Directives, "defer")
 }
 
-func synchronizeSubscriptionSchema(executor *Executor, schema *ast.Schema) {
+func synchronizeSubscriptionSchema(executor *Engine, schema *ast.Schema) {
 	if executor.cdc != nil || schema.Subscription == nil {
 		return
 	}
@@ -375,20 +317,6 @@ func synchronizeSubscriptionSchema(executor *Executor, schema *ast.Schema) {
 
 // loadSchema 解析schema来源：schema.file配置 > renderer现场生成
 func loadSchema(m *Metadata, r *Renderer) (string, error) {
-	if data, ok, err := schemaFile(m); ok || err != nil {
-		if err != nil {
-			return "", err
-		}
-		generated, err := r.Render()
-		if err != nil {
-			return "", err
-		}
-		return data, validateSchemaArtifact(generated, data)
-	}
-	return r.Generate()
-}
-
-func renderSchema(m *Metadata, r *Renderer) (string, error) {
 	if data, ok, err := schemaFile(m); ok || err != nil {
 		if err != nil {
 			return "", err
@@ -419,10 +347,7 @@ func schemaFile(m *Metadata) (string, bool, error) {
 // LoadDocuments 从目录加载.graphql操作文档（持久化查询）
 // 操作按名注册，可通过 runOperation 按名执行；编译缓存尽力预热
 // 目录是可选的：不存在则跳过（无持久化查询不影响服务启动）
-func (my *Executor) LoadDocuments(dir string) error {
-	if my.frozen.Load() {
-		return fmt.Errorf("注册表已冻结：LoadDocuments仅限启动期调用")
-	}
+func (my *Engine) loadDocuments(dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil
 	}
@@ -439,7 +364,7 @@ func (my *Executor) LoadDocuments(dir string) error {
 }
 
 // loadDocument 解析并注册文档中的命名操作
-func (my *Executor) loadDocument(content string) error {
+func (my *Engine) loadDocument(content string) error {
 	doc, errs := loadQuery(my.schema, content, my.metadata.MaxTokens(), my.validation)
 	if len(errs) > 0 {
 		return errs
@@ -474,13 +399,10 @@ func (my *Executor) loadDocument(content string) error {
 		}
 		key := planKey{operation: operation.Name, query: content}
 		if my.needsRootExecution(operation) {
-			roleNeeded, policyNeeded := operationGovernanceNeeds(my.metadata, operation)
 			my.cache.Put(key, &planEntry{
 				operation:    operation,
 				intro:        introspection,
 				rootResolver: true,
-				roleNeeded:   roleNeeded,
-				policyNeeded: policyNeeded,
 			})
 			continue
 		}
@@ -492,7 +414,7 @@ func (my *Executor) loadDocument(content string) error {
 }
 
 // runOperation 按操作名执行已加载文档中的持久化查询
-func (my *Executor) runOperation(ctx context.Context, operationName string, variables map[string]interface{}) gqlReply {
+func (my *Engine) runOperation(ctx context.Context, operationName string, variables map[string]interface{}) gqlReply {
 	query, ok := my.documents[operationName]
 	if !ok {
 		return gqlReply{Errors: gqlerror.List{gqlerror.Errorf("未找到名为'%s'的持久化操作", operationName)}}
@@ -504,8 +426,8 @@ func (my *Executor) runOperation(ctx context.Context, operationName string, vari
 
 // Path 实现Plugin接口的Path方法，返回插件的基础路径
 // 返回: GraphQL API的基础路径 ("/graphql")
-// 此方法使Executor能够作为Fiber的插件集成
-func (my *Executor) Path() string {
+// 此方法使Engine能够作为Fiber的插件集成
+func (my *Engine) Path() string {
 	return "/graphql"
 }
 
@@ -514,11 +436,11 @@ func (my *Executor) Path() string {
 // Execute 执行单个GraphQL操作并返回可直接写入HTTP响应的标准GraphQL JSON。
 // 数据库生成的JSON在无Resolver时原样直通，不构造map/slice对象树；GraphQL字段错误
 // 编码在响应体的errors中，返回的error仅表示响应序列化失败。
-func (my *Executor) Execute(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
+func (my *Engine) Execute(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
 	return my.executeBytes(ctx, query, variables, "")
 }
 
-func (my *Executor) executeBytes(ctx context.Context, query string, variables map[string]interface{}, operationName string) ([]byte, error) {
+func (my *Engine) executeBytes(ctx context.Context, query string, variables map[string]interface{}, operationName string) ([]byte, error) {
 	done := my.startPhase(ctx, PhaseExecute)
 	reply := my.execute(ctx, query, variables, operationName)
 	body, err := reply.MarshalJSON()
@@ -529,7 +451,7 @@ func (my *Executor) executeBytes(ctx context.Context, query string, variables ma
 }
 
 // queryData 仅供根Resolver回查和持久化操作内部消费；普通调用统一走Execute字节响应。
-func (my *Executor) queryData(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
+func (my *Engine) queryData(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	r := my.execute(ctx, query, variables, operationName)
 	if raw := r.raw; raw != nil {
 		r.Data, r.raw = map[string]interface{}{}, nil
@@ -576,7 +498,7 @@ func materialize(v interface{}) interface{} {
 }
 
 // execute 执行核心：无resolver的成功结果以直通字节形态返回（raw）
-func (my *Executor) execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) (r gqlReply) {
+func (my *Engine) execute(ctx context.Context, query string, variables map[string]interface{}, operationName string) (r gqlReply) {
 	mutationState := ""
 	defer func() {
 		if mutationState != "" {
@@ -630,15 +552,6 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 				}
 				r.Errors = gqlErrors(err)
 				return r
-			}
-			if rootErr.entry.policyNeeded {
-				if authErr := my.authorize(ctx, rootErr.entry.operation, variables); authErr != nil {
-					if done != nil {
-						done(observationErrorCode(authErr))
-					}
-					r.Errors = gqlErrors(authErr)
-					return r
-				}
 			}
 			if done != nil {
 				done("SUCCESS")
@@ -721,15 +634,10 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 	return r
 }
 
-func (my *Executor) govern(ctx context.Context, plan *Plan, variables map[string]interface{}) (_ context.Context, result *Plan, err error) {
+func (my *Engine) govern(ctx context.Context, plan *Plan, variables map[string]interface{}) (_ context.Context, result *Plan, err error) {
 	done := my.startPhase(ctx, PhaseAuthorize)
 	if done != nil {
 		defer func() { done(observationErrorCode(err)) }()
-	}
-	if plan.policyNeeded {
-		if err = my.authorize(ctx, plan.operation, variables); err != nil {
-			return ctx, plan, err
-		}
 	}
 	if ctx, err = my.authorizeProvider(ctx, plan.operation, variables); err != nil {
 		return ctx, plan, err
@@ -743,8 +651,8 @@ func (my *Executor) govern(ctx context.Context, plan *Plan, variables map[string
 // fetch 执行计划：单条SQL返回单行单列的__root JSON原始字节。
 // ID加解密的出参编码挂在此唯一出口：直通响应、resolver解包、订阅推送、
 // 根Resolver回查全部经此取数，下游看到的字节里ID已是shortId
-func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, error) {
-	scope := scopeWithRole(ctx, scopeValues(ctx), plan.roleNeeded || len(plan.policyRoles) > 0)
+func (my *Engine) fetch(ctx context.Context, plan *Plan, variables map[string]interface{}) ([]byte, error) {
+	scope := scopeValues(ctx)
 	if plan.cursor {
 		scope = scopeWithCursor(ctx, scope)
 	}
@@ -796,7 +704,7 @@ func (my *Executor) fetch(ctx context.Context, plan *Plan, variables map[string]
 // 只解码resolver绑定路径覆盖的分支（宿主对象全量），路径外分支保留原始字节，
 // 序列化期直通输出——免解码、免数字收敛、免重序列化。
 // 第二返回值为非致命警告（如远程取数失败），随响应errors返回但不影响data
-func (my *Executor) unpack(ctx context.Context, plan *Plan, data []byte, variables map[string]interface{}) (map[string]interface{}, gqlerror.List, error) {
+func (my *Engine) unpack(ctx context.Context, plan *Plan, data []byte, variables map[string]interface{}) (map[string]interface{}, gqlerror.List, error) {
 	var result map[string]interface{}
 	if len(data) == 0 {
 		result = map[string]interface{}{}
@@ -953,11 +861,11 @@ func (my *introQuery) Error() string { return "自省查询不支持此入口" }
 
 // plan 获取执行计划：普通查询命中缓存零解析；volatile命中仅重做SQL构建；
 // 冷查询每个请求独立校验变量，编译经singleflight收敛；自省经introQuery带出。
-func (my *Executor) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
+func (my *Engine) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
 	return my.planWithView(&effectiveView{schema: my.schema, intro: my.intro}, query, operationName, variables)
 }
 
-func (my *Executor) planWithView(view *effectiveView, query, operationName string, variables map[string]interface{}) (*Plan, error) {
+func (my *Engine) planWithView(view *effectiveView, query, operationName string, variables map[string]interface{}) (*Plan, error) {
 	if view == nil || view.schema == nil {
 		return nil, fmt.Errorf("effective schema is unavailable")
 	}
@@ -1055,7 +963,7 @@ func (my *Executor) planWithView(view *effectiveView, query, operationName strin
 	return my.cachedPlan(view, entry, variables)
 }
 
-func (my *Executor) cachedPlan(view *effectiveView, entry *planEntry, variables map[string]interface{}) (*Plan, error) {
+func (my *Engine) cachedPlan(view *effectiveView, entry *planEntry, variables map[string]interface{}) (*Plan, error) {
 	// 收口：任何消费（Resolver分发/执行/volatile重编译）前统一做变量
 	// coercion，再还原codec入参。缓存命中也必须先过请求级校验。
 	if _, err := coerceVariables(view.schema, entry.operation, variables); err != nil {
@@ -1067,7 +975,7 @@ func (my *Executor) cachedPlan(view *effectiveView, entry *planEntry, variables 
 	return my.preparedPlan(view, entry, variables)
 }
 
-func (my *Executor) preparedPlan(view *effectiveView, entry *planEntry, variables map[string]interface{}) (*Plan, error) {
+func (my *Engine) preparedPlan(view *effectiveView, entry *planEntry, variables map[string]interface{}) (*Plan, error) {
 	decodeVariables(view.schema, entry.operation.VariableDefinitions, variables, my.metadata)
 	if entry.rootResolver {
 		return nil, &rootResolverQuery{entry: entry}
@@ -1082,14 +990,12 @@ func (my *Executor) preparedPlan(view *effectiveView, entry *planEntry, variable
 	}
 	plan.resolvers, plan.paths = entry.resolvers, entry.paths
 	plan.intro = entry.intro
-	plan.roleNeeded = entry.roleNeeded
-	plan.policyNeeded = entry.policyNeeded
 	return plan, nil
 }
 
 // miss 缓存未命中的singleflight领跑者：落缓存条目并带回本次
 // 编译计划；重试路径可传入已校验operation，正常路径在flight内解析。
-func (my *Executor) miss(view *effectiveView, key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
+func (my *Engine) miss(view *effectiveView, key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
 	if operation == nil {
 		var err error
 		operation, err = my.parseWithView(view, key.query, key.operation, variables)
@@ -1110,13 +1016,10 @@ func (my *Executor) miss(view *effectiveView, key planKey, operation *ast.Operat
 		}
 	}
 	if len(operation.SelectionSet) == 0 || my.needsRootExecution(operation) {
-		roleNeeded, policyNeeded := operationGovernanceNeeds(my.metadata, operation)
 		entry := &planEntry{
 			operation:    operation,
 			intro:        introspection,
 			rootResolver: true,
-			roleNeeded:   roleNeeded,
-			policyNeeded: policyNeeded,
 		}
 		my.cache.Put(key, entry)
 		return entry, nil, nil
@@ -1130,32 +1033,16 @@ func (my *Executor) miss(view *effectiveView, key planKey, operation *ast.Operat
 }
 
 // parse 解析校验查询并选定操作，fragment就地展开为纯字段选择集
-func (my *Executor) parse(query, operationName string, variables map[string]interface{}) (*ast.OperationDefinition, error) {
+func (my *Engine) parse(query, operationName string, variables map[string]interface{}) (*ast.OperationDefinition, error) {
 	return my.parseWithView(&effectiveView{schema: my.schema, intro: my.intro}, query, operationName, variables)
 }
 
-func (my *Executor) parseWithView(view *effectiveView, query, operationName string, variables map[string]interface{}) (*ast.OperationDefinition, error) {
-	doc, errs := loadQuery(view.schema, query, my.metadata.MaxTokens(), my.validation)
-	if len(errs) > 0 {
-		return nil, errs
-	}
-	operation := doc.Operations.ForName(operationName)
-	if operation == nil {
-		if operationName != "" || len(doc.Operations) != 1 {
-			return nil, fmt.Errorf("未找到名为'%s'的操作（多操作查询必须提供operationName）", operationName)
-		}
-		operation = doc.Operations[0]
-	}
-	coerced, err := coerceVariables(view.schema, operation, variables)
+func (my *Engine) parseWithView(view *effectiveView, query, operationName string, variables map[string]interface{}) (*ast.OperationDefinition, error) {
+	prepared, err := prepareFrontend(view.schema, query, operationName, variables, my.metadata.MaxTokens(), my.validation)
 	if err != nil {
 		return nil, err
 	}
-	variables = coerced
-	selection, err := normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, variables, view.schema)
-	if err != nil {
-		return nil, err
-	}
-	operation.SelectionSet = selection
+	operation := prepared.operation
 	// 统一前端深度护栏：在路由到 SQL、根 Resolver 或自省 Handler 前拒绝
 	// 超深选择集；Compiler 内的同一检查作为 defense-in-depth 保留。
 	if err := my.validateMaxDepth(operation); err != nil {
@@ -1167,7 +1054,7 @@ func (my *Executor) parseWithView(view *effectiveView, query, operationName stri
 	return operation, nil
 }
 
-func (my *Executor) validateMaxDepth(operation *ast.OperationDefinition) error {
+func (my *Engine) validateMaxDepth(operation *ast.OperationDefinition) error {
 	if operation == nil || my.metadata == nil {
 		return nil
 	}
@@ -1179,7 +1066,7 @@ func (my *Executor) validateMaxDepth(operation *ast.OperationDefinition) error {
 	return nil
 }
 
-func (my *Executor) validateMaxCost(operation *ast.OperationDefinition, variables map[string]interface{}) error {
+func (my *Engine) validateMaxCost(operation *ast.OperationDefinition, variables map[string]interface{}) error {
 	if my.metadata == nil || my.metadata.MaxCost() == 0 {
 		return nil
 	}
@@ -1196,7 +1083,7 @@ func (my *Executor) validateMaxCost(operation *ast.OperationDefinition, variable
 
 // OperationCost reports the normalized operation cost without enforcing the
 // configured budget; it shares parse/coercion/selection normalization.
-func (my *Executor) OperationCost(query, operationName string, variables map[string]interface{}) (uint64, error) {
+func (my *Engine) OperationCost(query, operationName string, variables map[string]interface{}) (uint64, error) {
 	attempt := cloneVariables(variables)
 	operation, err := my.parse(query, operationName, attempt)
 	if err != nil {
@@ -1211,7 +1098,7 @@ func (my *Executor) OperationCost(query, operationName string, variables map[str
 
 // compile 编译并缓存：resolver绑定与codec路径树在此一次性收集（均只依赖AST）；
 // volatile计划SQL不可复用但AST与两类产物可以——缓存供后续请求免解析重收集
-func (my *Executor) compile(key planKey, operation, introspection *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
+func (my *Engine) compile(key planKey, operation, introspection *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
 	plan, err := my.compiler.Compile(operation, variables)
 	if err != nil {
 		return nil, nil, err
@@ -1219,7 +1106,7 @@ func (my *Executor) compile(key planKey, operation, introspection *ast.Operation
 	plan.resolvers = collectBindings(my.metadata, operation)
 	plan.paths = collectCodecPaths(operation.SelectionSet, my.metadata)
 	plan.intro = introspection
-	entry := &planEntry{operation: operation, intro: introspection, resolvers: plan.resolvers, paths: plan.paths, roleNeeded: plan.roleNeeded, policyNeeded: plan.policyNeeded}
+	entry := &planEntry{operation: operation, intro: introspection, resolvers: plan.resolvers, paths: plan.paths}
 	if !plan.Volatile() {
 		entry.plan = plan
 	}
@@ -1262,7 +1149,7 @@ func splitIntrospection(operation *ast.OperationDefinition) (*ast.OperationDefin
 	return &dataOperation, &introOperation
 }
 
-func (my *Executor) mergeIntrospection(ctx context.Context, data map[string]interface{}, operation *ast.OperationDefinition, variables map[string]interface{}) error {
+func (my *Engine) mergeIntrospection(ctx context.Context, data map[string]interface{}, operation *ast.OperationDefinition, variables map[string]interface{}) error {
 	handler, err := my.effectiveIntrospection(ctx)
 	if err != nil {
 		return err

@@ -57,7 +57,7 @@ func RetrySafe(idempotencyKey string) Option {
 // MaxBatch 限制一次Batch Resolver接收的最大宿主数；0表示使用引擎默认。
 func MaxBatch(size int) Option { return func(my *Define) { my.MaxBatch = size } }
 
-// Existing 声明Resolver绑定schema已有字段，只能通过Executor.Replace显式注册。
+// Existing 声明 Resolver 绑定 schema 已有字段，只能通过 Builder.Replace 显式装配。
 func Existing() Option { return func(my *Define) { my.Existing = true } }
 
 // decode 入参json往返解码进强类型struct并校验validate标签

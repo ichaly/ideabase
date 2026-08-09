@@ -30,7 +30,7 @@ func TestHandlerDerivesNestedInputAndOutputTypes(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 
-	require.NoError(t, executor.Register(NewResolver(
+	require.NoError(t, executor.register(NewResolver(
 		"Query", "typedHandler", "typed handler",
 		func(_ context.Context, _ Root, input HandlerNestedArgs) (HandlerPayload, error) {
 			return HandlerPayload{

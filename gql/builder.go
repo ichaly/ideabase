@@ -3,13 +3,11 @@ package gql
 import (
 	"fmt"
 
-	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
 	"gorm.io/gorm"
 )
 
-// Builder assembles one immutable Engine. New applications use this entry;
-// legacy constructors remain compatibility facades over the same components.
+// Builder is the sole assembly path for one immutable Engine.
 type Builder struct {
 	k         *std.Konfig
 	database  *gorm.DB
@@ -19,7 +17,7 @@ type Builder struct {
 	wraps     []resolverWrap
 	documents []string
 	observer  Observer
-	trusted   bool
+	policy    PolicyProvider
 	built     bool
 }
 
@@ -42,17 +40,31 @@ func New(k *std.Konfig, database *gorm.DB, options ...MetadataOption) *Builder {
 	return &Builder{k: k, database: database, metadata: options}
 }
 
-// TrustedLocal explicitly opts into the legacy trusted-boundary policy.
-// Production multi-tenant engines should configure per-class permissions.
-func (my *Builder) TrustedLocal() *Builder {
-	my.trusted = true
-	return my
+// Policy installs the sole policy provider for this engine. It must be set
+// before Build; policy providers are runtime dependencies, not registrations.
+func (my *Builder) Policy(provider PolicyProvider) error {
+	if my.built {
+		return fmt.Errorf("builder已冻结：Policy仅限Build前调用")
+	}
+	if provider == nil {
+		return fmt.Errorf("PolicyProvider不能为空")
+	}
+	if my.policy != nil {
+		return fmt.Errorf("PolicyProvider只能设置一次")
+	}
+	my.policy = provider
+	return nil
 }
 
 // Register adds Resolver/Batch/Remote handlers before Build.
 func (my *Builder) Register(items ...any) error {
 	if my.built {
 		return fmt.Errorf("builder已冻结：Register仅限Build前调用")
+	}
+	for _, item := range items {
+		if _, ok := item.(PolicyProvider); ok {
+			return fmt.Errorf("PolicyProvider必须通过Builder.Policy设置")
+		}
 	}
 	my.items = append(my.items, items...)
 	return nil
@@ -85,12 +97,6 @@ func (my *Builder) LoadDocuments(dirs ...string) error {
 	return nil
 }
 
-// Engine is the immutable public runtime. Executor is embedded for API
-// compatibility while Snapshot exposes its exact schema/capability contract.
-type Engine struct {
-	*Executor
-}
-
 // Build assembles metadata, compiler, schema, handlers and the immutable
 // snapshot once. A failed build never returns a partially usable Engine.
 func (my *Builder) Build() (*Engine, error) {
@@ -105,26 +111,33 @@ func (my *Builder) Build() (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := requirePolicies(metadata, my.trusted, "TrustedLocal"); err != nil {
-		return nil, err
+	if my.policy != nil && hasMetadataPermissions(metadata) {
+		return nil, fmt.Errorf("显式PolicyProvider与metadata permissions不能同时配置")
 	}
-	if my.trusted {
-		log.Warn().Msg("已启用TrustedLocal；该边界不适用于多租户生产服务")
+	provider := my.policy
+	if provider == nil {
+		provider = metadataPolicy(metadata)
 	}
+	if provider == nil {
+		return nil, fmt.Errorf("Engine policy provider or metadata permissions is required")
+	}
+	configureSearchMode(metadata, my.database)
 	compiler, err := NewCompiler(metadata, nil)
 	if err != nil {
 		return nil, err
 	}
 	renderer := NewRenderer(metadata)
-	schema, err := renderSchema(metadata, renderer)
+	schema, err := loadSchema(metadata, renderer)
 	if err != nil {
 		return nil, err
 	}
-	executor, err := newExecutor(my.database, metadata, compiler, schema)
+	executor, err := newEngine(my.database, metadata, compiler, schema)
 	if err != nil {
 		return nil, err
 	}
 	executor.observer = my.observer
+	executor.policy = provider
+	executor.policyBuiltin = my.policy == nil
 	ready := false
 	defer func() {
 		if !ready {
@@ -132,28 +145,28 @@ func (my *Builder) Build() (*Engine, error) {
 		}
 	}()
 	if len(my.items) > 0 {
-		if err := executor.Register(my.items...); err != nil {
+		if err := executor.register(my.items...); err != nil {
 			return nil, err
 		}
 	}
 	for _, resolver := range my.replaces {
 		if resolver == nil {
-			return nil, fmt.Errorf("Replace不接受nil Resolver")
+			return nil, fmt.Errorf("replace不接受nil Resolver")
 		}
-		if err := executor.Replace(resolver); err != nil {
+		if err := executor.replace(resolver); err != nil {
 			return nil, err
 		}
 	}
 	for _, wrap := range my.wraps {
 		if wrap.middleware == nil {
-			return nil, fmt.Errorf("Wrap不接受nil Middleware: %s", wrap.coordinate)
+			return nil, fmt.Errorf("wrap不接受nil Middleware: %s", wrap.coordinate)
 		}
-		if err := executor.Wrap(wrap.coordinate, wrap.middleware); err != nil {
+		if err := executor.wrap(wrap.coordinate, wrap.middleware); err != nil {
 			return nil, err
 		}
 	}
 	for _, dir := range my.documents {
-		if err := executor.LoadDocuments(dir); err != nil {
+		if err := executor.loadDocuments(dir); err != nil {
 			return nil, err
 		}
 	}
@@ -162,20 +175,5 @@ func (my *Builder) Build() (*Engine, error) {
 		return nil, err
 	}
 	ready = true
-	return &Engine{Executor: executor}, nil
-}
-
-func requirePolicies(metadata *Metadata, trusted bool, optIn string) error {
-	if metadata == nil || trusted {
-		return nil
-	}
-	for name, class := range metadata.Nodes {
-		if class == nil || name != class.Name || class.Table == "" {
-			continue
-		}
-		if len(class.Permissions) == 0 {
-			return fmt.Errorf("实体%s缺少policy；仅可信边界可显式使用%s", class.Name, optIn)
-		}
-	}
-	return nil
+	return executor, nil
 }

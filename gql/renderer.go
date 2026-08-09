@@ -2,8 +2,6 @@ package gql
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -13,7 +11,6 @@ import (
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
-	"github.com/rs/zerolog/log"
 )
 
 // 分隔线和描述常量
@@ -52,7 +49,7 @@ func NewRenderer(meta *Metadata) *Renderer {
 
 // Render 纯函数式生成完整GraphQL schema，不写文件。
 func (my *Renderer) Render() (string, error) {
-	// 复用构造时分配的构建器（支持重复Generate）
+	// 复用构造时分配的构建器（支持重复 Render）
 	my.sb.Reset()
 	// 添加schema版本和说明
 	my.writeLine("# ", DESC_SCHEMA_TITLE)
@@ -86,18 +83,6 @@ func (my *Renderer) Render() (string, error) {
 	return my.sb.String(), nil
 }
 
-// Generate 保留旧调用方的生成并落盘语义；新Engine构建使用Render。
-func (my *Renderer) Generate() (string, error) {
-	content, err := my.Render()
-	if err != nil {
-		return "", err
-	}
-	if err := my.saveToFile(content); err != nil {
-		return "", fmt.Errorf("保存schema文件失败: %w", err)
-	}
-	return content, nil
-}
-
 // writeLine 写入一行文本（自动添加换行符）
 // 支持可变参数，避免字符串相加操作，提高性能
 func (my *Renderer) writeLine(parts ...string) {
@@ -111,21 +96,6 @@ func (my *Renderer) write(parts ...string) {
 	for _, part := range parts {
 		my.sb.WriteString(part)
 	}
-}
-
-// saveToFile 将生成的Schema保存到文件
-func (my *Renderer) saveToFile(content string) error {
-	// 写入文件
-	filename := filepath.Join(my.meta.cfg.Root, "cfg/schema.graphql")
-	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
-		return fmt.Errorf("创建schema目录失败: %w", err)
-	}
-	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
-		return fmt.Errorf("写入schema文件失败: %w", err)
-	}
-
-	log.Info().Str("path", filename).Msg("Schema文件已生成")
-	return nil
 }
 
 // renderScalars 渲染标量类型（含codec带来的自定义标量，如Phone）
@@ -241,10 +211,10 @@ func (my *Renderer) renderEnums() error {
 			my.writeLine("}")
 			my.writeLine()
 		}
-		if my.allows(class, protocol.OP_SELECT) {
+		if catalogAllows(class, protocol.OP_SELECT) {
 			writeColumns(protocol.SUFFIX_DISTINCT_FIELD)
 		}
-		if my.allows(class, protocol.OP_AGGREGATE) {
+		if catalogAllows(class, protocol.OP_AGGREGATE) {
 			writeColumns(protocol.SUFFIX_GROUP_FIELD)
 		}
 		keys := class.ConflictTargets()
@@ -285,33 +255,6 @@ func (my *Renderer) eachTableClass(fn func(className string, class *protocol.Cla
 
 // allows reports whether an operation is exposed for a class. Empty Operations
 // preserves the legacy schema (all operations enabled).
-func (my *Renderer) allows(class *protocol.Class, operation string) bool {
-	if class.ReadOnly && operation != protocol.OP_SELECT && operation != protocol.OP_AGGREGATE {
-		return false
-	}
-	if len(class.Operations) == 0 {
-		return true
-	}
-	for _, candidate := range class.Operations {
-		if strings.EqualFold(candidate, operation) {
-			return true
-		}
-	}
-	return false
-}
-
-func (my *Renderer) allowsPurge(class *protocol.Class) bool {
-	if class == nil || class.ReadOnly || class.SoftDelete == nil {
-		return false
-	}
-	for _, operation := range class.Operations {
-		if strings.EqualFold(operation, protocol.OP_PURGE) {
-			return true
-		}
-	}
-	return false
-}
-
 // eachField 按名有序遍历类的主名字段（跳过列名索引）
 func (my *Renderer) eachField(class *protocol.Class, fn func(fieldName string, field *protocol.Field)) {
 	for _, fieldName := range utl.SortKeys(class.Fields) {
@@ -323,18 +266,7 @@ func (my *Renderer) eachField(class *protocol.Class, fn func(fieldName string, f
 
 // hiddenField 字段是否随中间表隐藏：自身是中间表字段，或引用了隐藏的中间表类型
 func (my *Renderer) hiddenField(field *protocol.Field) bool {
-	if my.meta.cfg.Metadata.ShowThrough {
-		return false
-	}
-	if field.IsThrough {
-		return true
-	}
-	refType := field.Type
-	if field.Relation != nil && field.Relation.TargetClass != "" {
-		refType = field.Relation.TargetClass
-	}
-	refClass, ok := my.meta.Nodes[refType]
-	return ok && refClass.IsThrough
+	return fieldHidden(my.meta, field)
 }
 
 // renderTypes 渲染所有实体类型定义
@@ -472,31 +404,6 @@ func auditColumn(column string) bool {
 }
 
 // writableFields 返回类的可写字段名（排除主键、时间戳、虚拟与中间表字段）
-func (my *Renderer) writableFields(class *protocol.Class, operation string) []string {
-	// 作用域列由服务端强制填充，不进可写输入（客户端碰不到，也避免必填冲突）
-	scoped := make(map[string]bool, len(class.Scope))
-	for _, s := range class.Scope {
-		scoped[s.Column] = true
-	}
-	names := make([]string, 0, len(class.Fields))
-	my.eachField(class, func(fieldName string, field *protocol.Field) {
-		// 跳过无列字段（关系/resolver）、自动生成字段（主键/时间戳）、虚拟字段、中间表字段、作用域列
-		catalogBacked := field.Catalog != nil && field.Catalog.Type.Kind != ""
-		generatedPrimary := field.IsPrimary && (!catalogBacked || class.IDGenerator != "" && class.IDGenerator != "database")
-		if field.Virtual || field.Column == "" ||
-			generatedPrimary || scoped[field.Column] ||
-			field.ReadOnly || (field.Catalog != nil && field.Catalog.Generation != nil) ||
-			(operation == protocol.OP_INSERT && field.InsertPreset != nil) ||
-			(operation == protocol.OP_UPDATE && field.UpdatePreset != nil) ||
-			auditColumn(field.Column) ||
-			(field.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
-			return
-		}
-		names = append(names, fieldName)
-	})
-	return names
-}
-
 // writeRelationOps 输入类型中的列表关系操作字段（connect/disconnect原子挂接）
 func (my *Renderer) writeRelationOps(class *protocol.Class, operation string) {
 	my.eachField(class, func(fieldName string, field *protocol.Field) {
@@ -549,23 +456,27 @@ func (my *Renderer) renderInput() error {
 			my.writeLine()
 		}
 		// 无可写字段的类（如纯主键表）不生成输入类型
-		createFields := my.writableFields(class, protocol.OP_INSERT)
-		updateFields := my.writableFields(class, protocol.OP_UPDATE)
-		if my.allows(class, protocol.OP_INSERT) && len(createFields) > 0 {
+		createFields := writableFields(my.meta, class, protocol.OP_INSERT)
+		updateFields := writableFields(my.meta, class, protocol.OP_UPDATE)
+		plural := inflection.Plural(className)
+		createOperation := my.operationExists("Mutation", protocol.CREATE+className) ||
+			my.operationExists("Mutation", protocol.CREATE+plural)
+		updateOperation := my.operationExists("Mutation", protocol.UPDATE+className)
+		if createOperation && len(createFields) > 0 {
 			my.writeLine("# ", className, "创建输入")
 			my.writeMutationInput(className, protocol.SUFFIX_CREATE_INPUT, class, createFields, protocol.OP_INSERT, true)
 			my.writeMutationInput(className, protocol.SUFFIX_CREATE_ROW_INPUT, class, createFields, protocol.OP_INSERT, false)
-			if my.allows(class, protocol.OP_UPDATE) && len(class.ConflictTargets()) > 0 {
-				upsertFields := slices.DeleteFunc(append([]string(nil), createFields...), func(name string) bool {
-					return !slices.Contains(updateFields, name)
-				})
-				if len(upsertFields) > 0 {
-					my.writeMutationInput(className, protocol.SUFFIX_UPSERT_ROW_INPUT, class, upsertFields, protocol.OP_INSERT, false)
-				}
+		}
+		if my.operationExists("Mutation", protocol.UPSERT+plural) && len(createFields) > 0 && len(class.ConflictTargets()) > 0 {
+			upsertFields := slices.DeleteFunc(append([]string(nil), createFields...), func(name string) bool {
+				return !slices.Contains(updateFields, name)
+			})
+			if len(upsertFields) > 0 {
+				my.writeMutationInput(className, protocol.SUFFIX_UPSERT_ROW_INPUT, class, upsertFields, protocol.OP_INSERT, false)
 			}
 		}
 
-		if my.allows(class, protocol.OP_UPDATE) && len(updateFields) > 0 {
+		if updateOperation && len(updateFields) > 0 {
 			my.writeLine("# ", className, "更新输入")
 			my.writeMutationInput(className, protocol.SUFFIX_UPDATE_INPUT, class, updateFields, protocol.OP_UPDATE, true)
 			my.writeMutationInput(className, protocol.SUFFIX_UPDATE_ROW_INPUT, class, updateFields, protocol.OP_UPDATE, false)
@@ -577,8 +488,8 @@ func (my *Renderer) renderInput() error {
 		if !my.relationInputAllowed(class) {
 			return
 		}
-		connectable := my.allows(class, protocol.OP_UPDATE)
-		creatable := my.allows(class, protocol.OP_INSERT) && len(my.writableFields(class, protocol.OP_INSERT)) > 0
+		connectable := my.hasMutationOperation(class, protocol.OP_UPDATE)
+		creatable := my.hasMutationOperation(class, protocol.OP_INSERT)
 		if my.relationInputUsed(className, protocol.OP_INSERT) {
 			my.writeLine("# ", className, "创建关系操作")
 			my.writeLine("input ", className, protocol.SUFFIX_CREATE_RELATION_INPUT, " {")
@@ -612,7 +523,7 @@ func (my *Renderer) renderInput() error {
 func (my *Renderer) relationInputUsed(target, operation string) bool {
 	used := false
 	my.eachTableClass(func(_ string, class *protocol.Class) {
-		if used || !my.allows(class, operation) || len(my.writableFields(class, operation)) == 0 {
+		if used || !my.hasMutationOperation(class, operation) || len(writableFields(my.meta, class, operation)) == 0 {
 			return
 		}
 		my.eachField(class, func(_ string, field *protocol.Field) {
@@ -623,8 +534,24 @@ func (my *Renderer) relationInputUsed(target, operation string) bool {
 }
 
 func (my *Renderer) relationInputAllowed(class *protocol.Class) bool {
-	return len(class.PrimaryKeyFields()) == 1 && (my.allows(class, protocol.OP_UPDATE) ||
-		my.allows(class, protocol.OP_INSERT) && len(my.writableFields(class, protocol.OP_INSERT)) > 0)
+	return len(class.PrimaryKeyFields()) == 1 && (my.hasMutationOperation(class, protocol.OP_UPDATE) ||
+		my.hasMutationOperation(class, protocol.OP_INSERT))
+}
+
+func (my *Renderer) operationExists(parent, name string) bool {
+	_, ok := my.meta.operations[parent+"."+name]
+	return ok
+}
+
+func (my *Renderer) hasMutationOperation(class *protocol.Class, operation string) bool {
+	if class == nil {
+		return false
+	}
+	name := protocol.UPDATE + class.Name
+	if operation == protocol.OP_INSERT {
+		name = protocol.CREATE + class.Name
+	}
+	return my.operationExists("Mutation", name)
 }
 
 // renderFilter 渲染基础过滤器类型
@@ -726,7 +653,7 @@ func (my *Renderer) renderSort() error {
 // renderQuery 渲染查询根类型与订阅根类型（订阅镜像实体查询字段）
 func (my *Renderer) renderQuery() error {
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_QUERY, " ", SEPARATOR_LINE, "\n")
-	operationExists := func(parent, name string) bool { _, ok := my.meta.operations[parent+"."+name]; return ok }
+	operationExists := my.operationExists
 
 	// 实体查询字段渲染闭包，Query与Subscription共用
 	writeEntityField := func(className string) {
@@ -864,7 +791,7 @@ func (my *Renderer) renderQuery() error {
 
 // renderMutation 渲染变更根类型
 func (my *Renderer) renderMutation() error {
-	operationExists := func(name string) bool { _, ok := my.meta.operations["Mutation."+name]; return ok }
+	operationExists := func(name string) bool { return my.operationExists("Mutation", name) }
 	hasMutation := false
 	for coordinate := range my.meta.operations {
 		if strings.HasPrefix(coordinate, "Mutation.") {
@@ -876,7 +803,13 @@ func (my *Renderer) renderMutation() error {
 		return nil
 	}
 	my.eachTableClass(func(className string, class *protocol.Class) {
-		if !operationExists(protocol.UPDATE+className) && !operationExists(protocol.DELETE+className) && !operationExists("restore"+className+protocol.SUFFIX_BY_PK) && !operationExists(protocol.PURGE+className+protocol.SUFFIX_BY_PK) {
+		batch := inflection.Plural(className)
+		if batch == className {
+			batch += protocol.SUFFIX_MANY
+		}
+		if !operationExists(protocol.UPDATE+className) && !operationExists(protocol.DELETE+className) && !operationExists("restore"+className+protocol.SUFFIX_BY_PK) && !operationExists(protocol.PURGE+className+protocol.SUFFIX_BY_PK) &&
+			!operationExists(protocol.UPDATE+batch) && !operationExists(protocol.DELETE+batch) &&
+			!operationExists("restore"+batch) && !operationExists(protocol.PURGE+batch) {
 			return
 		}
 		my.writeLine("type ", className, protocol.SUFFIX_MUTATION_RESULT, " {")
@@ -892,37 +825,32 @@ func (my *Renderer) renderMutation() error {
 	my.eachTableClass(func(className string, class *protocol.Class) {
 
 		// 无可写字段的类（如纯主键表）不生成创建/更新操作
+		plural := inflection.Plural(className)
 		if operationExists(protocol.CREATE + className) {
-			plural := inflection.Plural(className)
-
 			my.writeLine("  # ", class.Name, "创建")
 			my.writeField(protocol.CREATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
 				{Name: protocol.INPUT, Type: className + protocol.SUFFIX_CREATE_INPUT + "!"},
 			}...))
-
-			// 不可数类名（Series/News）复数同形，批量字段与单条重名会让schema加载失败；
-			// 只保留单条create，批量写入走upsert（upsert仅复数形态无冲突）
-			if plural != className {
-				my.writeLine("  # ", class.Name, "批量创建")
-				my.writeField(protocol.CREATE+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-					{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_ROW_INPUT + "!]!"},
-				}...))
+		}
+		// 不可数类名（Series/News）复数同形，catalog不会生成批量字段。
+		if plural != className && operationExists(protocol.CREATE+plural) {
+			my.writeLine("  # ", class.Name, "批量创建")
+			my.writeField(protocol.CREATE+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+				{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_CREATE_ROW_INPUT + "!]!"},
+			}...))
+		}
+		if operationExists(protocol.UPSERT + plural) {
+			my.writeLine("  # ", class.Name, "插入或更新（按on列冲突，缺省主键）")
+			onType := className + "ConflictTarget"
+			defaultTarget := "PRIMARY"
+			if _, ok := class.PrimaryConflictTarget(); !ok {
+				onType += "!"
+				defaultTarget = ""
 			}
-
-			if operationExists(protocol.UPSERT + plural) {
-				my.writeLine("  # ", class.Name, "插入或更新（按on列冲突，缺省主键）")
-				onType := className + "ConflictTarget"
-				defaultTarget := "PRIMARY"
-				if _, ok := class.PrimaryConflictTarget(); !ok {
-					onType += "!"
-					defaultTarget = ""
-				}
-				my.writeField(protocol.UPSERT+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-					{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_UPSERT_ROW_INPUT + "!]!"},
-					{Name: protocol.ON, Type: onType, Default: defaultTarget},
-				}...))
-			}
-
+			my.writeField(protocol.UPSERT+plural, "["+className+"!]", renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
+				{Name: protocol.INPUT, Type: "[" + className + protocol.SUFFIX_UPSERT_ROW_INPUT + "!]!"},
+				{Name: protocol.ON, Type: onType, Default: defaultTarget},
+			}...))
 		}
 		if operationExists(protocol.UPDATE + className) {
 			batchPlural := inflection.Plural(className)
@@ -935,9 +863,13 @@ func (my *Renderer) renderMutation() error {
 			my.writeField(protocol.UPDATE+className, className, renderer.NonNull(), renderer.WithArgs(args...))
 			if key := my.keyArguments(className, class, true); len(key) > 0 {
 				key = append(key, renderer.Argument{Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_INPUT + "!"})
-				my.writeField(protocol.UPDATE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
+				if operationExists(protocol.UPDATE + className + protocol.SUFFIX_BY_PK) {
+					my.writeField(protocol.UPDATE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
+				}
 			}
-			my.writeField(protocol.UPDATE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}, {Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_ROW_INPUT + "!"}}...))
+			if operationExists(protocol.UPDATE + batchPlural) {
+				my.writeField(protocol.UPDATE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}, {Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_ROW_INPUT + "!"}}...))
+			}
 		}
 
 		if operationExists(protocol.DELETE + className) {
@@ -948,30 +880,36 @@ func (my *Renderer) renderMutation() error {
 			my.writeLine("  # ", class.Name, "删除")
 			args := append(my.keyArguments(className, class, false), renderer.Argument{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT})
 			my.writeField(protocol.DELETE+className, protocol.SCALAR_INT, renderer.NonNull(), renderer.WithArgs(args...))
-			if key := my.keyArguments(className, class, true); len(key) > 0 {
+			if key := my.keyArguments(className, class, true); len(key) > 0 && operationExists(protocol.DELETE+className+protocol.SUFFIX_BY_PK) {
 				my.writeField(protocol.DELETE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
 			}
-			my.writeField(protocol.DELETE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
+			if operationExists(protocol.DELETE + batchPlural) {
+				my.writeField(protocol.DELETE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
+			}
 		}
 		if operationExists("restore"+inflection.Plural(className)) || operationExists("restore"+className+protocol.SUFFIX_BY_PK) {
 			batchPlural := inflection.Plural(className)
 			if batchPlural == className {
 				batchPlural += protocol.SUFFIX_MANY
 			}
-			if key := my.keyArguments(className, class, true); len(key) > 0 {
+			if key := my.keyArguments(className, class, true); len(key) > 0 && operationExists("restore"+className+protocol.SUFFIX_BY_PK) {
 				my.writeField("restore"+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
 			}
-			my.writeField("restore"+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
+			if operationExists("restore" + batchPlural) {
+				my.writeField("restore"+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
+			}
 		}
 		if operationExists(protocol.PURGE+inflection.Plural(className)) || operationExists(protocol.PURGE+className+protocol.SUFFIX_BY_PK) {
 			batchPlural := inflection.Plural(className)
 			if batchPlural == className {
 				batchPlural += protocol.SUFFIX_MANY
 			}
-			if key := my.keyArguments(className, class, true); len(key) > 0 {
+			if key := my.keyArguments(className, class, true); len(key) > 0 && operationExists(protocol.PURGE+className+protocol.SUFFIX_BY_PK) {
 				my.writeField(protocol.PURGE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
 			}
-			my.writeField(protocol.PURGE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
+			if operationExists(protocol.PURGE + batchPlural) {
+				my.writeField(protocol.PURGE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
+			}
 		}
 	})
 
@@ -1056,7 +994,7 @@ func (my *Renderer) renderStats() error {
 
 	// 每实体统计类型 + having入参：key为分组键，count恒有，标量列按类别挂聚合
 	my.eachTableClass(func(className string, class *protocol.Class) {
-		if !my.allows(class, protocol.OP_AGGREGATE) {
+		if !catalogAllows(class, protocol.OP_AGGREGATE) {
 			return
 		}
 		my.writeLine("# ", className, "统计结果")
@@ -1110,7 +1048,7 @@ func (my *Renderer) renderPaging() error {
 		}
 		my.writeLine("}")
 		my.writeLine("")
-		if my.allows(class, protocol.OP_SELECT) && len(class.PrimaryKeyFields()) > 0 {
+		if catalogAllows(class, protocol.OP_SELECT) && len(class.PrimaryKeyFields()) > 0 {
 			my.writeLine("# ", className, "连接分页边")
 			my.writeLine("type ", className, protocol.SUFFIX_EDGE, " {")
 			my.writeField("node", className, renderer.NonNull())

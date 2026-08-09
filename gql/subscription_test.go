@@ -138,7 +138,7 @@ func TestSubscribeScope(t *testing.T) {
 	require.NoError(t, err)
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 
 	// 租户2 预存数据——租户1 的订阅不应看到

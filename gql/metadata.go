@@ -49,9 +49,8 @@ type Metadata struct {
 	Version  string                       `json:"version"`
 
 	// 全文搜索能力（启动探测或配置指定）
-	searchMode    string
-	searchConfig  string
-	legacyTrusted bool
+	searchMode   string
+	searchConfig string
 
 	// 标量编解码器：slice保留注册序（认领优先级），index供热路径按名查找
 	codecs     []Codec
@@ -83,7 +82,6 @@ type metadataOptions struct {
 	optionalLoaders map[string]bool
 	codecs          []Codec
 	generators      map[string]protocol.IDGenerator
-	legacyTrusted   bool
 }
 
 // LoaderError identifies a metadata loader failure without losing its cause.
@@ -115,12 +113,6 @@ func WithIDGenerator(name string, generate protocol.IDGenerator) MetadataOption 
 			opts.generators[name] = generate
 		}
 	}
-}
-
-// LegacyTrustedBoundaryPolicy explicitly preserves the historical open-access
-// NewExecutor boundary. It is intended only for migration of trusted services.
-func LegacyTrustedBoundaryPolicy() MetadataOption {
-	return func(opts *metadataOptions) { opts.legacyTrusted = true }
 }
 
 // WithLoader 添加或替换Loader
@@ -215,7 +207,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 		Nodes:    make(map[string]*protocol.Class),
 		Routines: make(map[string]*protocol.Routine),
 		Version:  time.Now().Format("20060102150405"),
-		// 配置显式指定的搜索模式立即生效；为空时由NewExecutor启动探测补全
+		// 配置显式指定的搜索模式立即生效；为空时由newEngine启动探测补全
 		searchMode:   cfg.Search.Mode,
 		searchConfig: cfg.Search.Config,
 	}
@@ -258,7 +250,6 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 		return nil, fmt.Errorf("加载器 %s 在显式配置 metadata.file 时不允许配置为 optional", metadata.LoaderFile)
 	}
 	my.setCodecs(options.codecs)
-	my.legacyTrusted = options.legacyTrusted
 	// 按优先级排序
 	loaders := options.loaders
 	sort.Slice(loaders, func(i, j int) bool { return loaders[i].Priority() < loaders[j].Priority() })
@@ -339,7 +330,7 @@ func (my *Metadata) cloneCatalog() {
 	}
 }
 
-// freeze returns the executor-owned catalog. Builders and loaders may keep
+// freeze returns the Engine-owned catalog. Builders and loaders may keep
 // their Metadata value, but serving never shares its mutable maps or classes.
 func (my *Metadata) freeze() *Metadata {
 	frozen := *my
@@ -626,7 +617,7 @@ type (
 	FieldConfig = internal.FieldConfig
 )
 
-// SetSearchMode 记录探测/配置得到的全文搜索能力（NewExecutor启动时写入）
+// SetSearchMode 记录探测/配置得到的全文搜索能力（newEngine启动时写入）
 func (my *Metadata) SetSearchMode(mode, config string) {
 	my.searchMode, my.searchConfig = mode, config
 }
@@ -689,11 +680,8 @@ func (my *Metadata) LookupOperation(coordinate string) (compiler.OperationSpec, 
 	}
 	return compiler.OperationSpec{
 		Class:     capability.class,
-		Actions:   append([]string(nil), capability.actions...),
 		Operation: capability.operation,
-		Bulk:      capability.bulk,
-		Result:    capability.result,
-		Single:    capability.single,
+		Shape:     capability.shape,
 	}, true
 }
 

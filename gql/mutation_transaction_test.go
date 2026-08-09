@@ -60,7 +60,7 @@ func TestMutationRootPlansOnlyCacheNonVolatileFields(t *testing.T) {
 }
 
 func TestRootExecutionKeepsDefaultFastPaths(t *testing.T) {
-	executor := &Executor{resolvers: map[string]Resolver{}}
+	executor := &Engine{resolvers: map[string]Resolver{}}
 	field := func(name string) *ast.Field { return &ast.Field{Name: name} }
 
 	require.False(t, executor.needsRootExecution(&ast.OperationDefinition{
@@ -87,7 +87,7 @@ func TestMutationFailureRollsBackEarlierRootFields(t *testing.T) {
 			}
 			return false, errors.New("stop mutation")
 		})
-	require.NoError(t, executor.Register(fail))
+	require.NoError(t, executor.register(fail))
 
 	reply := executor.run(context.Background(), `mutation {
 		createUser(input: { name: "Rollback", email: "rollback@x.com" }) { id }
@@ -116,7 +116,7 @@ func TestMutationResolverSharesTransactionWithDefaultFields(t *testing.T) {
 				"INSERT INTO users(name, email) VALUES(?, ?)", "Resolver", "resolver-tx@x.com",
 			).Error
 		})
-	require.NoError(t, executor.Register(seed))
+	require.NoError(t, executor.register(seed))
 
 	reply := executor.run(context.Background(), `mutation {
 		seedUser
@@ -130,7 +130,7 @@ func TestMutationResolverSharesTransactionWithDefaultFields(t *testing.T) {
 func TestMutationResolverWithoutDatabase(t *testing.T) {
 	resolver := NewResolver("Mutation", "pingMutation", "纯计算mutation",
 		func(context.Context, Root, struct{}) (string, error) { return "pong", nil })
-	executor := &Executor{resolvers: map[string]Resolver{resolver.Name(): resolver}}
+	executor := &Engine{resolvers: map[string]Resolver{resolver.Name(): resolver}}
 	operation := &ast.OperationDefinition{
 		Operation: ast.Mutation,
 		SelectionSet: ast.SelectionSet{&ast.Field{
@@ -176,7 +176,7 @@ func TestPersistedRootPlanPrewarmKeepsGovernanceFlags(t *testing.T) {
 	}
 	resolver := NewResolver("Mutation", "pingMutation", "测试持久化根计划治理标记",
 		func(context.Context, Root, struct{}) (string, error) { return "pong", nil })
-	require.NoError(t, executor.Register(resolver))
+	require.NoError(t, executor.register(resolver))
 
 	content := `mutation PersistedGoverned($email: String!) {
 		createUser(input: { name: "Alice", email: $email }) { id }
@@ -187,8 +187,6 @@ func TestPersistedRootPlanPrewarmKeepsGovernanceFlags(t *testing.T) {
 	entry, ok := executor.cache.Get(planKey{operation: "PersistedGoverned", query: content})
 	require.True(t, ok)
 	require.True(t, entry.rootResolver)
-	require.True(t, entry.policyNeeded, "持久化根计划必须保留policyNeeded")
-	require.True(t, entry.roleNeeded, "持久化根计划必须保留roleNeeded")
 }
 
 func TestNestedMutationReusesOuterTransaction(t *testing.T) {
@@ -210,7 +208,7 @@ func TestNestedMutationReusesOuterTransaction(t *testing.T) {
 		func(context.Context, Root, struct{}) (bool, error) {
 			return false, errors.New("rollback outer mutation")
 		})
-	require.NoError(t, executor.Register(nested, fail))
+	require.NoError(t, executor.register(nested, fail))
 
 	reply := executor.run(context.Background(), `mutation {
 		nestedMutation

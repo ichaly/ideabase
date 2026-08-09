@@ -12,25 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 注册表(map)无锁,Register/rebuild与serving并发即数据竞争:
-// 首次执行后冻结,运行期注册须明确报错而非静默竞争
-func TestRegisterFrozenAfterServing(t *testing.T) {
-	executor, _, cleanup := newTestExecutor(t, nil)
-	defer cleanup()
-	ctx := context.Background()
-
-	require.NoError(t, executor.Register(NewResolver("User", "early", "启动期注册",
-		func(_ context.Context, _ Source, _ struct{}) (string, error) { return "ok", nil })))
-
-	reply := executor.run(ctx, `query { users { total } }`, nil, "")
-	require.Empty(t, reply.Errors)
-
-	err := executor.Register(NewResolver("User", "late", "运行期注册",
-		func(_ context.Context, _ Source, _ struct{}) (string, error) { return "", nil }))
-	require.Error(t, err, "首次执行后注册必须报错")
-	require.Contains(t, err.Error(), "冻结")
-}
-
 // schema.introspection=false 时自省查询必须拒绝(生产对外暴露的安全开关)
 func TestIntrospectionDisabled(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.introspection", false) })

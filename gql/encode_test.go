@@ -133,7 +133,7 @@ func TestEncodeIdBytes_Equivalence(t *testing.T) {
 }
 
 // setupEncodeExecutor 注册内置ID codec的执行器，extra 追加业务codec
-func setupEncodeExecutor(t *testing.T, extra ...Codec) (*Executor, func()) {
+func setupEncodeExecutor(t *testing.T, extra ...Codec) (*Engine, func()) {
 	executor, _, cleanup := newTestExecutor(t, nil, WithCodecs(append([]Codec{NewIdCodec()}, extra...)...))
 	return executor, cleanup
 }

@@ -34,11 +34,11 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("tenant datasource engines are required")
 	}
-	targets := make(map[string]*Executor, len(sources))
+	targets := make(map[string]*Engine, len(sources))
 	var canonical *Snapshot
 	for _, name := range sortedTenantSources(sources) {
 		engine := sources[name]
-		if name == "" || engine == nil || engine.Executor == nil {
+		if name == "" || engine == nil {
 			return nil, fmt.Errorf("tenant datasource %q is invalid", name)
 		}
 		snapshot, err := engine.Snapshot()
@@ -52,7 +52,7 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 		} else if !reflect.DeepEqual(snapshot.Capabilities(), canonical.Capabilities()) {
 			return nil, fmt.Errorf("tenant datasource %q capability drift", name)
 		}
-		targets[name] = engine.Executor
+		targets[name] = engine
 	}
 	for tenant, route := range router.routes {
 		target := targets[route.DataSource]
@@ -104,9 +104,12 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 			target.rls = true
 		}
 	}
-	dispatcher := &Executor{tenantRouter: router, tenantSources: targets, revocation: config.revocation, snapshot: canonical}
-	dispatcher.frozen.Store(true)
-	return &Engine{Executor: dispatcher}, nil
+	first := targets[sortedTenantSources(targets)[0]]
+	dispatcher := &Engine{
+		tenantRouter: router, tenantSources: targets, revocation: config.revocation,
+		snapshot: canonical, policy: first.policy, policyBuiltin: first.policyBuiltin,
+	}
+	return dispatcher, nil
 }
 
 func sortedTenantSources[T any](sources map[string]T) []string {
@@ -154,7 +157,7 @@ func validateSharedTenantScope(metadata *Metadata) error {
 	return nil
 }
 
-func (my *Executor) tenantDispatch(ctx context.Context) (*Executor, context.Context, error) {
+func (my *Engine) tenantDispatch(ctx context.Context) (*Engine, context.Context, error) {
 	if my.tenantRouter == nil {
 		return my, ctx, nil
 	}

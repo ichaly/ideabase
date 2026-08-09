@@ -17,7 +17,7 @@ import (
 
 // newTestExecutor 基于真实PostgreSQL构建完整执行器（各测试的唯一构造入口）；
 // tweak 在元数据构建前调整配置，opts 传递元数据选项（如WithCodecs）
-func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOption) (*Executor, *gorm.DB, func()) {
+func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOption) (*Engine, *gorm.DB, func()) {
 	db, cleanup := setupTestDatabase(t)
 
 	k, err := std.NewKonfig()
@@ -36,20 +36,20 @@ func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOpti
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err, "创建编译器失败")
 
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err, "创建执行器失败")
 
 	return executor, db, cleanup
 }
 
 // setupTestExecutor 默认配置的执行器
-func setupTestExecutor(t *testing.T) (*Executor, func()) {
+func setupTestExecutor(t *testing.T) (*Engine, func()) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	return executor, cleanup
 }
 
 // run 是测试侧的对象化辅助：生产API只返回字节，需要断言Data时由测试自行解码。
-func (my *Executor) run(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
+func (my *Engine) run(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	body, err := my.executeBytes(ctx, query, variables, operationName)
 	if err != nil {
 		return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
@@ -298,7 +298,7 @@ func TestExecutorSearch(t *testing.T) {
 	require.NoError(t, err)
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 
 	// 官方镜像无jieba：应探测出trigram（contrib自动启用）
@@ -590,7 +590,7 @@ func TestExecutorDocuments(t *testing.T) {
 		}
 	`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "user.graphql"), []byte(document), 0644))
-	require.NoError(t, executor.LoadDocuments(dir), "加载操作文档失败")
+	require.NoError(t, executor.loadDocuments(dir), "加载操作文档失败")
 
 	// 按名执行变更与查询
 	reply := executor.runOperation(ctx, "AddUser", map[string]interface{}{
@@ -629,7 +629,7 @@ func TestExecutorScope(t *testing.T) {
 	require.NoError(t, err, "加载元数据失败")
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 
 	require.NoError(t, db.Exec(`INSERT INTO users (name, email, tenant_id) VALUES
@@ -726,7 +726,7 @@ func TestExecutorScopeRelation(t *testing.T) {
 	require.NoError(t, err)
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 
 	// 租户1 的 post 与 tag1，租户2 的 tag2

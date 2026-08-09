@@ -14,8 +14,43 @@ import (
 	validatorrules "github.com/vektah/gqlparser/v2/validator/rules"
 )
 
+// preparedOperation is the immutable request frontend result shared by every
+// execution entry point. The selection tree is normalized and variables are
+// coerced before a caller may cache, cost, authorize, or execute it.
+type preparedOperation struct {
+	operation *ast.OperationDefinition
+	variables map[string]any
+}
+
+// prepareFrontend parses, validates, selects, coerces, and normalizes one
+// operation. Caches may retain the operation tree, but request variables are
+// always produced afresh by this boundary.
+func prepareFrontend(schema *ast.Schema, source, operationName string, variables map[string]any, maxTokens int, rules *validatorrules.Rules) (*preparedOperation, error) {
+	doc, errs := loadQuery(schema, source, maxTokens, rules)
+	if len(errs) > 0 {
+		return nil, errs
+	}
+	operation := doc.Operations.ForName(operationName)
+	if operation == nil {
+		if operationName != "" || len(doc.Operations) != 1 {
+			return nil, fmt.Errorf("未找到名为'%s'的操作（多操作查询必须提供operationName）", operationName)
+		}
+		operation = doc.Operations[0]
+	}
+	coerced, err := coerceVariables(schema, operation, variables)
+	if err != nil {
+		return nil, err
+	}
+	selection, err := normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, coerced, schema)
+	if err != nil {
+		return nil, err
+	}
+	operation.SelectionSet = selection
+	return &preparedOperation{operation: operation, variables: coerced}, nil
+}
+
 // loadQuery is the sole executable-document parser. The rule set belongs to
-// the Executor snapshot, and the lexer stops oversized documents before the
+// the Engine snapshot, and the lexer stops oversized documents before the
 // validator, planner, SQL, or user code can observe them.
 func loadQuery(schema *ast.Schema, source string, maxTokens int, rules *validatorrules.Rules) (*ast.QueryDocument, gqlerror.List) {
 	doc, err := parser.ParseQueryWithTokenLimit(&ast.Source{Name: "query.graphql", Input: source}, maxTokens)

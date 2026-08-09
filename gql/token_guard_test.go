@@ -36,7 +36,7 @@ func TestTokenLimitRejectsBeforeResolverAndPersistedRegistration(t *testing.T) {
 	})
 	defer cleanup()
 	var calls atomic.Int32
-	require.NoError(t, executor.Register(NewResolver[Root, struct{}, string]("Query", "weighted", "", func(context.Context, Root, struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Query", "weighted", "", func(context.Context, Root, struct{}) (string, error) {
 		calls.Add(1)
 		return "ok", nil
 	})))

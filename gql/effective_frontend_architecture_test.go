@@ -15,7 +15,7 @@ import (
 func TestExecutionValidatesAgainstEffectiveSchema(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.Register(OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		fields := request.Fields
 		if request.Resource == "User" {
 			fields = make(map[FieldUse][]string, len(request.FieldUses))
@@ -24,7 +24,7 @@ func TestExecutionValidatesAgainstEffectiveSchema(t *testing.T) {
 			}
 		}
 		return PolicyDecision{Allow: true, Fields: fields, PolicyRevision: 7}, nil
-	})))
+	}))
 	identity, err := NewIdentity(IdentityInput{Tenant: "tenant", Subject: "reader", PolicyRevision: 7})
 	require.NoError(t, err)
 
@@ -37,9 +37,9 @@ func TestExecutionValidatesAgainstEffectiveSchema(t *testing.T) {
 func TestEffectiveSchemaSeparatesCreateUpdateAndUpsertInputs(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.Register(NewProtocolPolicyProvider(map[string]map[string]*protocol.Permission{
+	installTestPolicy(t, executor, NewProtocolPolicyProvider(map[string]map[string]*protocol.Permission{
 		"User": {"writer": {Select: []string{"id", "name", "email"}, Insert: []string{"name"}, Update: []string{"name", "email"}}},
-	})))
+	}))
 	identity, err := NewIdentity(IdentityInput{Tenant: "tenant", Subject: "writer", Roles: []string{"writer"}, PolicyRevision: 9})
 	require.NoError(t, err)
 

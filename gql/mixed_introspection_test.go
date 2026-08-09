@@ -25,7 +25,7 @@ func TestIntrospectionCanMixWithDataField(t *testing.T) {
 func TestIntrospectionCanMixWithRootResolver(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.Register(NewResolver[Root, struct{}, string]("Query", "health", "", func(context.Context, Root, struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Query", "health", "", func(context.Context, Root, struct{}) (string, error) {
 		return "ok", nil
 	})))
 
@@ -71,7 +71,7 @@ func TestDisabledIntrospectionRejectsMixedQueryBeforeDataExecution(t *testing.T)
 	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.introspection", false) })
 	defer cleanup()
 	var calls atomic.Int32
-	require.NoError(t, executor.Register(NewResolver[Root, struct{}, string]("Query", "health", "", func(context.Context, Root, struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Query", "health", "", func(context.Context, Root, struct{}) (string, error) {
 		calls.Add(1)
 		return "ok", nil
 	})))

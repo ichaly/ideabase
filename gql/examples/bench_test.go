@@ -1,4 +1,4 @@
-// 端到端性能基准：复用demo实际装配（buildExecutor），打真实PostgreSQL。
+// 端到端性能基准：复用demo实际装配（buildEngine），打真实PostgreSQL。
 // 前提与e2e一致——demo数据库需在运行（docker compose up -d，暴露5433）；
 // 不可达时跳过。运行：go test -bench=. -benchmem -run=^$
 package main
@@ -15,8 +15,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// benchExecutor 连demo库并装配引擎；库不可达则跳过基准
-func benchExecutor(b *testing.B) *gql.Executor {
+// benchEngine 连demo库并装配引擎；库不可达则跳过基准
+func benchEngine(b *testing.B) *gql.Engine {
 	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
 	if err != nil {
 		b.Skipf("demo数据库不可用（docker compose up -d）: %v", err)
@@ -24,7 +24,7 @@ func benchExecutor(b *testing.B) *gql.Executor {
 	if sqlDB, err := db.DB(); err != nil || sqlDB.Ping() != nil {
 		b.Skip("demo数据库无法连接（docker compose up -d）")
 	}
-	executor, err := buildExecutor(db)
+	executor, err := buildEngine(db)
 	if err != nil {
 		b.Fatalf("引擎装配失败: %v", err)
 	}
@@ -33,8 +33,12 @@ func benchExecutor(b *testing.B) *gql.Executor {
 
 // runQuery 经公开 HTTP 入口端到端跑一条查询并校验无错（计划缓存首次后命中，测稳态吞吐）
 func runQuery(b *testing.B, query string) {
-	executor := benchExecutor(b)
+	executor := benchEngine(b)
 	app := fiber.New()
+	app.Use(func(c fiber.Ctx) error {
+		c.SetContext(demoContext(c.Context(), 1))
+		return c.Next()
+	})
 	executor.Bind(app.Group(executor.Path()))
 	body := `{"query":` + strconv.Quote(query) + `}`
 	do := func() {

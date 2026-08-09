@@ -65,7 +65,7 @@ func benchCompiler(b *testing.B) (*gql.Compiler, *ast.Schema) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	schemaStr, err := gql.NewRenderer(meta).Generate()
+	schemaStr, err := gql.NewRenderer(meta).Render()
 	if err != nil {
 		b.Fatal(err)
 	}

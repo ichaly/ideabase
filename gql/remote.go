@@ -26,7 +26,7 @@ type remoteJob struct {
 	sources  []map[string]any
 	values   map[any]any
 	err      error
-	executor *Executor
+	executor *Engine
 }
 
 // fetch 收集去重键并批量取数。容错语义：数据源未注册或Fetch失败时

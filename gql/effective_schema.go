@@ -12,6 +12,7 @@ import (
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
+	validatorrules "github.com/vektah/gqlparser/v2/validator/rules"
 )
 
 type SchemaArtifact struct {
@@ -30,7 +31,7 @@ type SchemaProfile struct {
 
 // GenerateSchemaProfile materializes a named, versioned codegen artifact for
 // the supplied trusted identity.
-func (my *Executor) GenerateSchemaProfile(ctx context.Context, name string) (SchemaProfile, error) {
+func (my *Engine) GenerateSchemaProfile(ctx context.Context, name string) (SchemaProfile, error) {
 	if strings.TrimSpace(name) == "" {
 		return SchemaProfile{}, fmt.Errorf("schema profile name is required")
 	}
@@ -45,7 +46,7 @@ func (profile SchemaProfile) ValidateOperation(query string) error {
 	if err != nil {
 		return err
 	}
-	_, errors := gqlparser.LoadQuery(schema, query)
+	_, errors := gqlparser.LoadQueryWithRules(schema, query, validatorrules.NewDefaultRules())
 	if len(errors) > 0 {
 		return errors
 	}
@@ -137,7 +138,7 @@ var allFieldUses = []FieldUse{
 
 // EffectiveSchema returns the exact identity-specific schema artifact used by
 // introspection. Runtime authorization remains mandatory on every handler.
-func (my *Executor) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) {
+func (my *Engine) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) {
 	if my.tenantRouter != nil {
 		target, routed, err := my.tenantDispatch(ctx)
 		if err != nil {
@@ -155,7 +156,7 @@ func (my *Executor) EffectiveSchema(ctx context.Context) (SchemaArtifact, error)
 	return view.artifact, nil
 }
 
-func (my *Executor) effectiveIntrospection(ctx context.Context) (*intro.Handler, error) {
+func (my *Engine) effectiveIntrospection(ctx context.Context) (*intro.Handler, error) {
 	view, err := my.effectiveSchema(ctx)
 	if err != nil {
 		return nil, err
@@ -163,7 +164,7 @@ func (my *Executor) effectiveIntrospection(ctx context.Context) (*intro.Handler,
 	return view.intro, nil
 }
 
-func (my *Executor) effectiveSchema(ctx context.Context) (*effectiveView, error) {
+func (my *Engine) effectiveSchema(ctx context.Context) (*effectiveView, error) {
 	_, err := my.Snapshot()
 	if err != nil {
 		return nil, err
@@ -309,33 +310,34 @@ func removeSchemaArgument(arguments ast.ArgumentDefinitionList, name string) ast
 	return out
 }
 
-func (my *Executor) effectivePolicy(ctx context.Context) (PolicyProvider, Identity, bool, error) {
+func (my *Engine) effectivePolicy(ctx context.Context) (PolicyProvider, Identity, bool, error) {
 	if my.policy != nil {
 		identity, ok := IdentityFromContext(ctx)
 		if !ok {
 			return nil, Identity{}, false, fmt.Errorf("verified identity is required for effective schema")
 		}
-		return my.policy, identity, false, nil
+		return my.policy, identity, my.policyBuiltin, nil
 	}
-	if my.builtinPolicy == nil {
-		return nil, Identity{}, false, nil
-	}
-	if identity, ok := IdentityFromContext(ctx); ok {
-		return my.builtinPolicy, identity, true, nil
-	}
-	roles := Roles(ctx)
-	if len(roles) == 0 {
-		return nil, Identity{}, true, fmt.Errorf("verified role is required for effective schema")
-	}
-	identity, err := NewIdentity(IdentityInput{Tenant: "legacy", Subject: "legacy", Roles: roles})
-	return my.builtinPolicy, identity, true, err
+	return nil, Identity{}, false, nil
 }
 
-func metadataPolicy(metadata *Metadata) *ProtocolPolicyProvider {
+func hasMetadataPermissions(metadata *Metadata) bool {
+	if metadata == nil {
+		return false
+	}
+	for name, class := range metadata.Nodes {
+		if class != nil && name == class.Name && len(class.Permissions) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func metadataPolicy(metadata *Metadata) PolicyProvider {
 	permissions := make(map[string]map[string]*protocol.Permission)
 	for _, name := range sortedNodeNames(metadata) {
 		class := metadata.Nodes[name]
-		if class != nil && name == class.Name && class.Permissions != nil {
+		if class != nil && name == class.Name && len(class.Permissions) > 0 {
 			permissions[class.Name] = class.Permissions
 		}
 	}
@@ -345,7 +347,7 @@ func metadataPolicy(metadata *Metadata) *ProtocolPolicyProvider {
 	return NewProtocolPolicyProvider(permissions)
 }
 
-func (my *Executor) effectiveSchemaKey(ctx context.Context, identity Identity) string {
+func (my *Engine) effectiveSchemaKey(ctx context.Context, identity Identity) string {
 	claims, _ := stdjson.Marshal(identity.Claims())
 	route, _ := PinnedRoute(ctx)
 	return digest(strings.Join([]string{

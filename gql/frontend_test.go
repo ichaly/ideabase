@@ -14,7 +14,7 @@ func TestMergedRootFieldExecutesOnce(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	var calls atomic.Int32
-	require.NoError(t, executor.Register(NewResolver[Root, struct{}, string]("Query", "health", "", func(context.Context, Root, struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Query", "health", "", func(context.Context, Root, struct{}) (string, error) {
 		calls.Add(1)
 		return "ok", nil
 	})))
@@ -102,6 +102,24 @@ func TestNormalizeSelectionSkipsUnsupportedTypeConditionBeforeFlattening(t *test
 	selection, err := normalizeSelectionWithSchema(doc.Operations[0].SelectionSet, nil, map[string]any{"skip": true}, schema)
 	require.NoError(t, err)
 	require.Equal(t, []string{"id"}, fieldNames(selection[0].(*ast.Field).SelectionSet))
+}
+
+func TestPrepareFrontendSharesCoercionAndSelectionNormalization(t *testing.T) {
+	schema := loadFrontendSchema(t, `
+		type User { id: ID, name: String }
+		type Query { user: User }
+		schema { query: Query }
+	`)
+	prepared, err := prepareFrontend(schema, `query Read($show: Boolean!) {
+		user { ...UserFields }
+	}
+	fragment UserFields on User { id name @include(if: $show) }
+	`, "Read", map[string]any{"show": true}, 256, nil)
+	require.NoError(t, err)
+	require.Equal(t, "Read", prepared.operation.Name)
+	require.Equal(t, true, prepared.variables["show"])
+	user := prepared.operation.SelectionSet[0].(*ast.Field)
+	require.Equal(t, []string{"id", "name"}, fieldNames(user.SelectionSet))
 }
 
 func loadFrontendSchema(t *testing.T, input string) *ast.Schema {

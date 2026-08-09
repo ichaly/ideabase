@@ -9,9 +9,9 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
-// SubscriptionAvailable reports whether the executor has an executable CDC
+// SubscriptionAvailable reports whether the Engine has an executable CDC
 // source for subscriptions.
-func (my *Executor) SubscriptionAvailable() bool {
+func (my *Engine) SubscriptionAvailable() bool {
 	if my == nil {
 		return false
 	}
@@ -32,7 +32,7 @@ func (my *Executor) SubscriptionAvailable() bool {
 // Subscribe exposes the transport-neutral subscription stream as JSON bytes.
 // Each item is a complete GraphQL response and the returned channel is closed
 // when the source ends or ctx is cancelled.
-func (my *Executor) Subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan []byte, error) {
+func (my *Engine) Subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan []byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -73,8 +73,8 @@ func marshalSubscriptionReply(reply gqlReply) []byte {
 	return body
 }
 
-// Schema returns the frozen SDL contract used by this executor.
-func (my *Executor) Schema() (string, error) {
+// Schema returns the frozen SDL contract used by this Engine.
+func (my *Engine) Schema() (string, error) {
 	snapshot, err := my.Snapshot()
 	if err != nil {
 		return "", err
@@ -83,12 +83,12 @@ func (my *Executor) Schema() (string, error) {
 }
 
 // ExecuteOperation executes one named operation from a multi-operation document.
-func (my *Executor) ExecuteOperation(ctx context.Context, query string, variables map[string]any, operationName string) ([]byte, error) {
+func (my *Engine) ExecuteOperation(ctx context.Context, query string, variables map[string]any, operationName string) ([]byte, error) {
 	return my.executeBytes(ctx, query, variables, operationName)
 }
 
-// Capabilities returns a deep copy of the frozen execution catalog.
-func (my *Executor) Capabilities() ([]Capability, error) {
+// Capabilities returns a deep copy of the frozen Engine catalog.
+func (my *Engine) Capabilities() ([]Capability, error) {
 	snapshot, err := my.Snapshot()
 	if err != nil {
 		return nil, err
@@ -108,8 +108,8 @@ type HealthReport struct {
 }
 
 // Health verifies the immutable contract and database connectivity. CDC is
-// reported as a capability and never makes an otherwise healthy executor fail.
-func (my *Executor) Health(ctx context.Context) (HealthReport, error) {
+// reported as a capability and never makes an otherwise healthy Engine fail.
+func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -145,7 +145,7 @@ func (my *Executor) Health(ctx context.Context) (HealthReport, error) {
 	return report, nil
 }
 
-func (my *Executor) tenantHealth(ctx context.Context) (HealthReport, error) {
+func (my *Engine) tenantHealth(ctx context.Context) (HealthReport, error) {
 	report := HealthReport{Ready: true, SnapshotOK: my.snapshot != nil, DatabaseOK: true, CDCConfigured: true, SubscriptionAvailable: true}
 	if my.snapshot != nil {
 		report.SnapshotFingerprint = my.snapshot.Fingerprint()

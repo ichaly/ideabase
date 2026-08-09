@@ -26,7 +26,7 @@ import (
 type notifier interface {
 	watch(tables []string) (*watcher, error)
 	unwatch(w *watcher)
-	close() // 停止监听并释放连接（Executor.Close调用，须幂等）
+	close() // 停止监听并释放连接（Engine.Close调用，须幂等）
 }
 
 // notifiers 唤醒源工厂注册表（key=gorm驱动名），在各实现文件的init中登记

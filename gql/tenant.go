@@ -115,13 +115,3 @@ func PinnedRoute(ctx context.Context) (TenantRoute, bool) {
 	route, ok := ctx.Value(pinnedRouteKey{}).(TenantRoute)
 	return route, ok
 }
-
-func WithPinnedRoute(ctx context.Context, route TenantRoute) context.Context {
-	return PinRoute(ctx, route)
-}
-
-func WithTenantRoute(ctx context.Context, route TenantRoute) context.Context {
-	return PinRoute(ctx, route)
-}
-
-func TenantRouteFromContext(ctx context.Context) (TenantRoute, bool) { return PinnedRoute(ctx) }

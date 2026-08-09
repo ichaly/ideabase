@@ -29,7 +29,7 @@ type Observer interface {
 	Observe(context.Context, Observation)
 }
 
-func (my *Executor) startPhase(ctx context.Context, phase Phase) func(string) {
+func (my *Engine) startPhase(ctx context.Context, phase Phase) func(string) {
 	if my == nil || my.observer == nil {
 		return nil
 	}

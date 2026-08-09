@@ -3,6 +3,8 @@ package gql
 import (
 	"context"
 	"fmt"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -509,6 +511,31 @@ func TestGatewayRunsNamespacesInParallelAndBatchesOneNamespace(t *testing.T) {
 	require.JSONEq(t, `{"data":{"crm":{"first":{"id":"1"},"second":{"id":"2"}},"erp":{"first":{"id":"1"},"second":{"id":"2"}}}}`, string(body))
 	require.Equal(t, int32(1), crm.calls.Load())
 	require.Equal(t, int32(1), erp.calls.Load())
+}
+
+func TestGatewaySingleNamespaceExecutesInline(t *testing.T) {
+	caller := gatewayGoroutineID()
+	var childGoroutine atomic.Int64
+	child := newGatewayEndpoint("crm", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+		childGoroutine.Store(gatewayGoroutineID())
+		return []byte(`{"data":{"user":{"id":"1"}}}`), nil
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	_, err = gateway.Execute(context.Background(), `{ crm { user { id } } }`, nil)
+	require.NoError(t, err)
+	require.Equal(t, caller, childGoroutine.Load(), "single namespace execution should stay on the caller goroutine")
+}
+
+func gatewayGoroutineID() int64 {
+	stack := make([]byte, 64)
+	n := runtime.Stack(stack, false)
+	fields := strings.Fields(string(stack[:n]))
+	if len(fields) < 2 {
+		return 0
+	}
+	id, _ := strconv.ParseInt(fields[1], 10, 64)
+	return id
 }
 
 func TestGatewayBatchesRepeatedNamespaceAliasesIntoOneChildOperation(t *testing.T) {

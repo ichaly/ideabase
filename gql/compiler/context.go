@@ -33,16 +33,33 @@ type Context struct {
 	cursorRoot        string
 }
 
+// OperationShape identifies the executable shape of a built-in mutation.
+// Keeping shape in one small enum avoids making every caller reconstruct the
+// same bulk/result/single boolean combination.
+type OperationShape uint8
+
+const (
+	ShapeSingle OperationShape = iota
+	ShapeBulk
+	ShapeBulkResult
+	ShapeSingleByPK
+)
+
+func (shape OperationShape) Bulk() bool { return shape == ShapeBulk || shape == ShapeBulkResult }
+
+func (shape OperationShape) Result() bool {
+	return shape == ShapeBulkResult
+}
+
+func (shape OperationShape) Single() bool { return shape == ShapeSingleByPK }
+
 // OperationSpec is the canonical execution contract for a root operation.
 // The compiler consumes this contract instead of inferring mutation semantics
 // from a GraphQL field name.
 type OperationSpec struct {
 	Class     *protocol.Class
-	Actions   []string
 	Operation string
-	Bulk      bool
-	Result    bool
-	Single    bool
+	Shape     OperationShape
 }
 
 // OperationProvider resolves an exact schema coordinate to its operation

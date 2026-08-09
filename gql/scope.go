@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/ichaly/ideabase/gql/compiler"
-	"github.com/ichaly/ideabase/gql/protocol"
 )
 
 // 行级作用域（租户/属主隔离）：值经请求上下文注入，不进 schema，对客户端透明。
@@ -12,7 +11,6 @@ import (
 // 列与上下文键的对应，编译期强制 AND 进 WHERE，执行期从此处取值填参数。
 
 type scopeKey struct{}
-type roleKey struct{}
 type identityKey struct{}
 
 // WithIdentity attaches one host-verified immutable identity to a request.
@@ -23,31 +21,6 @@ func WithIdentity(ctx context.Context, identity Identity) context.Context {
 func IdentityFromContext(ctx context.Context) (Identity, bool) {
 	identity, ok := ctx.Value(identityKey{}).(Identity)
 	return identity, ok
-}
-
-// WithRole attaches the authenticated role; roles must not come from GraphQL variables.
-func WithRole(ctx context.Context, role string) context.Context {
-	return context.WithValue(ctx, roleKey{}, role)
-}
-
-// Role returns the authenticated role when present.
-func Role(ctx context.Context) (string, bool) {
-	if identity, ok := IdentityFromContext(ctx); ok && len(identity.roles) > 0 {
-		return identity.roles[0], true
-	}
-	role, ok := ctx.Value(roleKey{}).(string)
-	return role, ok && role != ""
-}
-func roleValue(ctx context.Context) string { role, _ := Role(ctx); return role }
-
-func Roles(ctx context.Context) []string {
-	if identity, ok := IdentityFromContext(ctx); ok {
-		return identity.Roles()
-	}
-	if role, ok := Role(ctx); ok {
-		return []string{role}
-	}
-	return nil
 }
 
 // WithScope 把行级作用域值注入请求上下文（认证中间件调用）。
@@ -77,19 +50,6 @@ func scopeValues(ctx context.Context) map[string]any {
 	scope["actor"] = identity.Actor()
 	scope["requestId"] = identity.RequestID()
 	return scope
-}
-
-func scopeWithRole(ctx context.Context, scope map[string]any, needed bool) map[string]any {
-	if !needed {
-		return scope
-	}
-	values := make(map[string]any, len(scope)+1)
-	for k, v := range scope {
-		values[k] = v
-	}
-	values[protocol.CONTEXT_ROLE] = roleValue(ctx)
-	values[protocol.CONTEXT_ROLES] = Roles(ctx)
-	return values
 }
 
 func scopeWithCursor(ctx context.Context, scope map[string]any) map[string]any {

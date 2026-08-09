@@ -25,7 +25,7 @@ func TestPostgresArrayMutationRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 
 	reply := executor.run(context.Background(), `mutation {

@@ -15,7 +15,7 @@ func TestMaxDepthRejectsRootResolverBeforeInvocation(t *testing.T) {
 	})
 	defer cleanup()
 	var calls atomic.Int32
-	require.NoError(t, executor.Register(NewResolver[Root, struct{}, map[string]any]("Query", "deep", "", func(context.Context, Root, struct{}) (map[string]any, error) {
+	require.NoError(t, executor.register(NewResolver[Root, struct{}, map[string]any]("Query", "deep", "", func(context.Context, Root, struct{}) (map[string]any, error) {
 		calls.Add(1)
 		return map[string]any{"child": map[string]any{"value": "ok"}}, nil
 	}, Result("Deep"), Extra(`type Deep { child: Deep, value: String }`))))
@@ -40,7 +40,7 @@ func TestMaxDepthRejectsPersistedRootResolverBeforePrewarm(t *testing.T) {
 	})
 	defer cleanup()
 	var calls atomic.Int32
-	require.NoError(t, executor.Register(NewResolver[Root, struct{}, map[string]any]("Query", "deep", "", func(context.Context, Root, struct{}) (map[string]any, error) {
+	require.NoError(t, executor.register(NewResolver[Root, struct{}, map[string]any]("Query", "deep", "", func(context.Context, Root, struct{}) (map[string]any, error) {
 		calls.Add(1)
 		return map[string]any{"child": map[string]any{"value": "ok"}}, nil
 	}, Result("Deep"), Extra(`type Deep { child: Deep, value: String }`))))
@@ -57,7 +57,7 @@ func TestPersistedDepthIgnoresConditionallySkippedFields(t *testing.T) {
 		k.Set("schema.max-depth", 2)
 	})
 	defer cleanup()
-	require.NoError(t, executor.Register(NewResolver[Root, struct{}, map[string]any]("Query", "deep", "", func(context.Context, Root, struct{}) (map[string]any, error) {
+	require.NoError(t, executor.register(NewResolver[Root, struct{}, map[string]any]("Query", "deep", "", func(context.Context, Root, struct{}) (map[string]any, error) {
 		return map[string]any{"child": map[string]any{"value": "ok"}}, nil
 	}, Result("Deep"), Extra(`type Deep { child: Deep, value: String }`))))
 

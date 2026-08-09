@@ -49,7 +49,7 @@ func TestGovernanceUpsertConflictUsesUpdatePolicy(t *testing.T) {
 	defer ctx.Release()
 	m := &mutation{field: &ast.Field{Name: "upsertUsers", Arguments: ast.ArgumentList{{
 		Name: protocol.INPUT, Value: &ast.Value{Kind: ast.ListValue, Children: []*ast.ChildValue{{Value: &ast.Value{Kind: ast.ObjectValue, Children: []*ast.ChildValue{{Name: "name", Value: &ast.Value{Kind: ast.StringValue, Raw: "x"}}}}}}},
-	}}}, class: c, op: protocol.UPSERT, bulk: true}
+	}}}, class: c, op: protocol.UPSERT, shape: compiler.ShapeBulk}
 	require.NoError(t, (&Dialect{}).buildUpsert(ctx, m))
 	require.Contains(t, ctx.String(), `DO UPDATE SET`)
 	require.Contains(t, ctx.String(), `WHERE`)
@@ -71,13 +71,12 @@ func TestGovernanceMutationFormsAndSoftDelete(t *testing.T) {
 	ctx := compiler.NewContext(testHoster{class: c}, `"`, nil)
 	defer ctx.Release()
 	for _, tc := range []struct {
-		name         string
-		bulk, result bool
-	}{{"updateUserByPk", false, false}, {"updateUsersMany", true, true}, {"deleteUserByPk", false, false}, {"deleteUsersMany", true, true}, {"restoreUserByPk", false, false}, {"restoreUsersMany", true, true}} {
+		name string
+		kind compiler.OperationShape
+	}{{"updateUserByPk", compiler.ShapeSingleByPK}, {"updateUsersMany", compiler.ShapeBulkResult}, {"deleteUserByPk", compiler.ShapeSingleByPK}, {"deleteUsersMany", compiler.ShapeBulkResult}, {"restoreUserByPk", compiler.ShapeSingleByPK}, {"restoreUsersMany", compiler.ShapeBulkResult}} {
 		m, err := parseMutation(ctx, &ast.Field{Name: tc.name})
 		require.NoError(t, err)
-		require.Equal(t, tc.bulk, m.bulk, tc.name)
-		require.Equal(t, tc.result, m.result, tc.name)
+		require.Equal(t, tc.kind, m.shape, tc.name)
 	}
 	field := &ast.Field{Name: "deleteUser", Arguments: ast.ArgumentList{{Name: protocol.ID, Value: &ast.Value{Raw: "1", Kind: ast.IntValue}}}}
 	m, err := parseMutation(ctx, field)
@@ -123,7 +122,7 @@ func TestGovernanceMutationResultSelectionDriven(t *testing.T) {
 		&ast.Field{Name: "affectedCount", Alias: "affectedCount"},
 		&ast.Field{Name: "returning", Alias: "rows"},
 	}}
-	m := &mutation{field: field, class: c, result: true}
+	m := &mutation{field: field, class: c, shape: compiler.ShapeBulkResult}
 	d.buildMutationResultJSON(ctx, m)
 	require.Equal(t, `JSONB_BUILD_OBJECT('affectedCount', (SELECT COUNT(*) FROM "users"), 'rows', '[]')`, ctx.String())
 }
@@ -207,13 +206,13 @@ func (h testHoster) GetNode(name string) (*protocol.Class, bool) {
 func (h testHoster) SetVersion(string) {}
 func (h testHoster) LookupOperation(coordinate string) (compiler.OperationSpec, bool) {
 	variants := map[string]compiler.OperationSpec{
-		"Mutation.updateUserByPk":   {Operation: protocol.OP_UPDATE, Single: true},
-		"Mutation.updateUsersMany":  {Operation: protocol.OP_UPDATE, Bulk: true, Result: true},
+		"Mutation.updateUserByPk":   {Operation: protocol.OP_UPDATE, Shape: compiler.ShapeSingleByPK},
+		"Mutation.updateUsersMany":  {Operation: protocol.OP_UPDATE, Shape: compiler.ShapeBulkResult},
 		"Mutation.deleteUser":       {Operation: protocol.OP_DELETE},
-		"Mutation.deleteUserByPk":   {Operation: protocol.OP_DELETE, Single: true},
-		"Mutation.deleteUsersMany":  {Operation: protocol.OP_DELETE, Bulk: true, Result: true},
-		"Mutation.restoreUserByPk":  {Operation: protocol.OP_RESTORE, Single: true},
-		"Mutation.restoreUsersMany": {Operation: protocol.OP_RESTORE, Bulk: true, Result: true},
+		"Mutation.deleteUserByPk":   {Operation: protocol.OP_DELETE, Shape: compiler.ShapeSingleByPK},
+		"Mutation.deleteUsersMany":  {Operation: protocol.OP_DELETE, Shape: compiler.ShapeBulkResult},
+		"Mutation.restoreUserByPk":  {Operation: protocol.OP_RESTORE, Shape: compiler.ShapeSingleByPK},
+		"Mutation.restoreUsersMany": {Operation: protocol.OP_RESTORE, Shape: compiler.ShapeBulkResult},
 	}
 	spec, ok := variants[coordinate]
 	spec.Class = h.class

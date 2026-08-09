@@ -120,7 +120,7 @@ func TestPurgeOnlyPhysicallyDeletesSoftDeletedRows(t *testing.T) {
 	ctx := compiler.NewContext(testHoster{class: class}, `"`, nil)
 	defer ctx.Release()
 	field := &ast.Field{Name: "purgeUserByPk", Arguments: ast.ArgumentList{{Name: protocol.ID, Value: &ast.Value{Raw: "1", Kind: ast.IntValue}}}}
-	require.NoError(t, (&Dialect{}).buildPurge(ctx, &mutation{field: field, class: class, op: protocol.OP_PURGE, single: true}))
+	require.NoError(t, (&Dialect{}).buildPurge(ctx, &mutation{field: field, class: class, op: protocol.OP_PURGE, shape: compiler.ShapeSingleByPK}))
 	require.Contains(t, ctx.String(), `DELETE FROM "users"`)
 	require.Contains(t, ctx.String(), `"users"."deleted_at" IS NOT NULL`)
 	require.NotContains(t, ctx.String(), `UPDATE "users"`)
@@ -131,7 +131,7 @@ func TestPurgeAuditIsAtomicAndContainsNoRequestVariables(t *testing.T) {
 	ctx := compiler.NewContext(testHoster{class: class}, `"`, nil)
 	defer ctx.Release()
 	field := &ast.Field{Name: "purgeUserByPk", Arguments: ast.ArgumentList{{Name: protocol.ID, Value: &ast.Value{Raw: "1", Kind: ast.IntValue}}}}
-	m := &mutation{field: field, class: class, op: protocol.OP_PURGE, single: true}
+	m := &mutation{field: field, class: class, op: protocol.OP_PURGE, shape: compiler.ShapeSingleByPK}
 	require.NoError(t, (&Dialect{}).buildPurge(ctx, m))
 	ctx.Write(`)`)
 	(&Dialect{}).buildPurgeAudit(ctx, m)

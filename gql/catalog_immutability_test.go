@@ -6,14 +6,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Executor owns one immutable catalog. Mutating the builder metadata after
+// Engine owns one immutable catalog. Mutating the builder metadata after
 // construction must not change planning, rendering, policy, or fingerprints.
-func TestExecutorFreezesMetadataCatalog(t *testing.T) {
+func TestEngineFreezesMetadataCatalog(t *testing.T) {
 	meta := createMockMetadata(t)
-	meta.legacyTrusted = true
 	compiler, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(nil, NewRenderer(meta), meta, compiler)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
 	require.NoError(t, err)
 
 	meta.Nodes["User"].Table = "forged_users"

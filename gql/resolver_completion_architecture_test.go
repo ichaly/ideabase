@@ -21,9 +21,9 @@ func TestNullableRootResolverCompletionErrorHasFullPath(t *testing.T) {
 	meta := emptyMetadata(t)
 	compiler, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(nil, NewRenderer(meta), meta, compiler)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
 	require.NoError(t, err)
-	require.NoError(t, executor.Register(NewResolver("Query", "badInt", "", func(context.Context, Root, struct{}) (any, error) {
+	require.NoError(t, executor.register(NewResolver("Query", "badInt", "", func(context.Context, Root, struct{}) (any, error) {
 		return "not-an-int", nil
 	}, Result("Int"))))
 
@@ -49,9 +49,9 @@ func TestRootResolverSuccessRunsGraphQLCompletion(t *testing.T) {
 	meta := emptyMetadata(t)
 	compiler, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(nil, NewRenderer(meta), meta, compiler)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
 	require.NoError(t, err)
-	require.NoError(t, executor.Register(nullSuccessResolver{}))
+	require.NoError(t, executor.register(nullSuccessResolver{}))
 
 	body, err := executor.Execute(context.Background(), `{ requiredValue }`, nil)
 	require.NoError(t, err)

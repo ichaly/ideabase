@@ -45,21 +45,19 @@ func (my *Compiler) freeze(m *Metadata) (*Compiler, error) {
 // Plan 编译产物：SQL + 参数槽位 + 变量默认值 + resolver绑定
 // 非volatile的计划可按查询文本缓存，执行期仅需解析参数槽位
 type Plan struct {
-	operation    *ast.OperationDefinition
-	intro        *ast.OperationDefinition
-	SQL          string
-	slots        []compiler.Slot
-	defaults     map[string]interface{}
-	volatile     bool
-	resolvers    []binding
-	tables       []string   // 涉及的表集合，订阅按表变更唤醒
-	paths        codecPaths // 选择集中codec字段路径树，出参流式转换用（executor首次编译时固化）
-	roleNeeded   bool
-	policyNeeded bool
-	policyRoles  []string
-	policyScope  map[string]any
-	cursor       bool
-	audit        bool
+	operation   *ast.OperationDefinition
+	intro       *ast.OperationDefinition
+	SQL         string
+	slots       []compiler.Slot
+	defaults    map[string]interface{}
+	volatile    bool
+	resolvers   []binding
+	tables      []string   // 涉及的表集合，订阅按表变更唤醒
+	paths       codecPaths // 选择集中codec字段路径树，出参流式转换用（executor首次编译时固化）
+	policyRoles []string
+	policyScope map[string]any
+	cursor      bool
+	audit       bool
 }
 
 // Volatile 编译产物是否依赖变量内容（如整体input变量），不可缓存
@@ -138,7 +136,7 @@ func (my *Compiler) Compile(operation *ast.OperationDefinition, variables map[st
 	return my.compile(operation, variables, true)
 }
 
-// compile 可跳过治理探测；Executor 的 volatile 缓存命中已持有首次探测结果，
+// compile 可跳过治理探测；Engine 的 volatile 缓存命中已持有首次探测结果，
 // 重编 SQL 时复用 planEntry 标记，避免再次遍历 AST。
 func (my *Compiler) compile(operation *ast.OperationDefinition, variables map[string]interface{}, inspectGovernance bool) (*Plan, error) {
 	// 深度护栏：嵌套LATERAL单元无上限时深选择集可编译出巨大SQL树（代价攻击面）
@@ -175,9 +173,6 @@ func (my *Compiler) compile(operation *ast.OperationDefinition, variables map[st
 		tables:    ctx.Tables(),
 		cursor:    ctx.UsesCursor(),
 		audit:     ctx.UsesAudit(),
-	}
-	if inspectGovernance {
-		plan.roleNeeded, plan.policyNeeded = operationGovernanceNeeds(my.meta, operation)
 	}
 	for _, def := range operation.VariableDefinitions {
 		if def.DefaultValue == nil {

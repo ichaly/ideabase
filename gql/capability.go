@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/iancoleman/strcase"
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -57,10 +59,10 @@ type Argument struct {
 }
 
 type operationCapability struct {
-	class                *protocol.Class
-	actions              []string
-	operation            string
-	bulk, result, single bool
+	class     *protocol.Class
+	actions   []string
+	operation string
+	shape     compiler.OperationShape
 }
 
 func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
@@ -68,85 +70,137 @@ func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
 	if metadata == nil {
 		return catalog
 	}
-	renderer := &Renderer{meta: metadata}
-	add := func(parent, name string, class *protocol.Class, action, operation string, bulk, result, single bool) {
-		catalog[parent+"."+name] = operationCapability{
-			class: class, actions: []string{action}, operation: operation,
-			bulk: bulk, result: result, single: single,
-		}
-	}
-	addMany := func(parent, name string, class *protocol.Class, operation string, bulk, result, single bool, actions ...string) {
-		catalog[parent+"."+name] = operationCapability{
-			class: class, actions: actions, operation: operation,
-			bulk: bulk, result: result, single: single,
-		}
+	add := func(parent, name string, class *protocol.Class, shape compiler.OperationShape, operation string, actions ...string) {
+		catalog[parent+"."+name] = operationCapability{class: class, actions: actions, operation: operation, shape: shape}
 	}
 	for _, name := range sortedNodeNames(metadata) {
 		class := metadata.Nodes[name]
 		if class == nil || name != class.Name || class.Table == "" || class.Hidden {
 			continue
 		}
-		if renderer.allows(class, protocol.OP_SELECT) {
-			add("Query", queryField(name), class, protocol.OP_SELECT, protocol.OP_SELECT, false, false, false)
-			add("Subscription", queryField(name), class, protocol.OP_SELECT, protocol.OP_SELECT, false, false, false)
+		if catalogAllows(class, protocol.OP_SELECT) {
+			add("Query", queryField(name), class, compiler.ShapeSingle, protocol.OP_SELECT, protocol.OP_SELECT)
+			add("Subscription", queryField(name), class, compiler.ShapeSingle, protocol.OP_SELECT, protocol.OP_SELECT)
 			if len(class.PrimaryKeyFields()) > 0 {
 				connection := strcase.ToLowerCamel(name) + protocol.SUFFIX_CONNECTION
-				add("Query", connection, class, protocol.OP_SELECT, protocol.OP_SELECT, false, false, false)
-				add("Subscription", connection, class, protocol.OP_SELECT, protocol.OP_SELECT, false, false, false)
+				add("Query", connection, class, compiler.ShapeSingle, protocol.OP_SELECT, protocol.OP_SELECT)
+				add("Subscription", connection, class, compiler.ShapeSingle, protocol.OP_SELECT, protocol.OP_SELECT)
 			}
 		}
-		if renderer.allows(class, protocol.OP_AGGREGATE) {
-			add("Query", strcase.ToLowerCamel(name)+protocol.SUFFIX_STATS, class, protocol.OP_AGGREGATE, protocol.OP_AGGREGATE, false, false, false)
+		if catalogAllows(class, protocol.OP_AGGREGATE) {
+			add("Query", strcase.ToLowerCamel(name)+protocol.SUFFIX_STATS, class, compiler.ShapeSingle, protocol.OP_AGGREGATE, protocol.OP_AGGREGATE)
 		}
-		insertFields := renderer.writableFields(class, protocol.OP_INSERT)
-		updateFields := renderer.writableFields(class, protocol.OP_UPDATE)
-		create := renderer.allows(class, protocol.OP_INSERT) && len(insertFields) > 0
-		update := renderer.allows(class, protocol.OP_UPDATE) && len(updateFields) > 0
+		insertFields := writableFields(metadata, class, protocol.OP_INSERT)
+		updateFields := writableFields(metadata, class, protocol.OP_UPDATE)
+		create := catalogAllows(class, protocol.OP_INSERT) && len(insertFields) > 0
+		update := catalogAllows(class, protocol.OP_UPDATE) && len(updateFields) > 0
 		plural := inflection.Plural(name)
 		batch := plural
 		if batch == name {
 			batch += protocol.SUFFIX_MANY
 		}
 		if create {
-			add("Mutation", protocol.CREATE+name, class, protocol.OP_INSERT, protocol.CREATE, false, false, false)
+			add("Mutation", protocol.CREATE+name, class, compiler.ShapeSingle, protocol.CREATE, protocol.OP_INSERT)
 			if plural != name {
-				add("Mutation", protocol.CREATE+plural, class, protocol.OP_INSERT, protocol.CREATE, true, false, false)
+				add("Mutation", protocol.CREATE+plural, class, compiler.ShapeBulk, protocol.CREATE, protocol.OP_INSERT)
 			}
 			upsertFields := slices.DeleteFunc(append([]string(nil), insertFields...), func(name string) bool {
 				return !slices.Contains(updateFields, name)
 			})
 			if update && len(upsertFields) > 0 && len(class.ConflictTargets()) > 0 {
-				addMany("Mutation", protocol.UPSERT+plural, class, protocol.UPSERT, true, false, false, protocol.OP_INSERT, protocol.OP_UPDATE)
+				add("Mutation", protocol.UPSERT+plural, class, compiler.ShapeBulk, protocol.UPSERT, protocol.OP_INSERT, protocol.OP_UPDATE)
 			}
 		}
 		if update {
-			add("Mutation", protocol.UPDATE+name, class, protocol.OP_UPDATE, protocol.OP_UPDATE, false, false, false)
+			add("Mutation", protocol.UPDATE+name, class, compiler.ShapeSingle, protocol.OP_UPDATE, protocol.OP_UPDATE)
 			if len(class.PrimaryKeyFields()) > 0 {
-				add("Mutation", protocol.UPDATE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_UPDATE, protocol.OP_UPDATE, false, false, true)
+				add("Mutation", protocol.UPDATE+name+protocol.SUFFIX_BY_PK, class, compiler.ShapeSingleByPK, protocol.OP_UPDATE, protocol.OP_UPDATE)
 			}
-			add("Mutation", protocol.UPDATE+batch, class, protocol.OP_UPDATE, protocol.OP_UPDATE, true, true, false)
+			add("Mutation", protocol.UPDATE+batch, class, compiler.ShapeBulkResult, protocol.OP_UPDATE, protocol.OP_UPDATE)
 		}
-		if renderer.allows(class, protocol.OP_DELETE) {
-			add("Mutation", protocol.DELETE+name, class, protocol.OP_DELETE, protocol.OP_DELETE, false, false, false)
+		if catalogAllows(class, protocol.OP_DELETE) {
+			add("Mutation", protocol.DELETE+name, class, compiler.ShapeSingle, protocol.OP_DELETE, protocol.OP_DELETE)
 			if len(class.PrimaryKeyFields()) > 0 {
-				add("Mutation", protocol.DELETE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_DELETE, protocol.OP_DELETE, false, false, true)
+				add("Mutation", protocol.DELETE+name+protocol.SUFFIX_BY_PK, class, compiler.ShapeSingleByPK, protocol.OP_DELETE, protocol.OP_DELETE)
 			}
-			add("Mutation", protocol.DELETE+batch, class, protocol.OP_DELETE, protocol.OP_DELETE, true, true, false)
+			add("Mutation", protocol.DELETE+batch, class, compiler.ShapeBulkResult, protocol.OP_DELETE, protocol.OP_DELETE)
 		}
-		if renderer.allows(class, protocol.OP_RESTORE) && class.SoftDelete != nil {
+		if catalogAllows(class, protocol.OP_RESTORE) && class.SoftDelete != nil {
 			if len(class.PrimaryKeyFields()) > 0 {
-				add("Mutation", "restore"+name+protocol.SUFFIX_BY_PK, class, protocol.OP_RESTORE, protocol.OP_RESTORE, false, false, true)
+				add("Mutation", "restore"+name+protocol.SUFFIX_BY_PK, class, compiler.ShapeSingleByPK, protocol.OP_RESTORE, protocol.OP_RESTORE)
 			}
-			add("Mutation", "restore"+batch, class, protocol.OP_RESTORE, protocol.OP_RESTORE, true, true, false)
+			add("Mutation", "restore"+batch, class, compiler.ShapeBulkResult, protocol.OP_RESTORE, protocol.OP_RESTORE)
 		}
-		if renderer.allowsPurge(class) {
+		if operationAllowedPurge(class) {
 			if len(class.PrimaryKeyFields()) > 0 {
-				add("Mutation", protocol.PURGE+name+protocol.SUFFIX_BY_PK, class, protocol.OP_PURGE, protocol.OP_PURGE, false, false, true)
+				add("Mutation", protocol.PURGE+name+protocol.SUFFIX_BY_PK, class, compiler.ShapeSingleByPK, protocol.OP_PURGE, protocol.OP_PURGE)
 			}
-			add("Mutation", protocol.PURGE+batch, class, protocol.OP_PURGE, protocol.OP_PURGE, true, true, false)
+			add("Mutation", protocol.PURGE+batch, class, compiler.ShapeBulkResult, protocol.OP_PURGE, protocol.OP_PURGE)
 		}
 	}
 	return catalog
+}
+
+func catalogAllows(class *protocol.Class, operation string) bool {
+	if class == nil || class.ReadOnly && operation != protocol.OP_SELECT && operation != protocol.OP_AGGREGATE {
+		return false
+	}
+	return len(class.Operations) == 0 || operationAllowedInList(class.Operations, operation)
+}
+
+func operationAllowedPurge(class *protocol.Class) bool {
+	return class != nil && !class.ReadOnly && class.SoftDelete != nil && operationAllowedInList(class.Operations, protocol.OP_PURGE)
+}
+
+func operationAllowedInList(operations []string, operation string) bool {
+	for _, candidate := range operations {
+		if strings.EqualFold(candidate, operation) {
+			return true
+		}
+	}
+	return false
+}
+
+func fieldHidden(metadata *Metadata, field *protocol.Field) bool {
+	if metadata == nil || metadata.cfg == nil || metadata.cfg.Metadata.ShowThrough || field == nil {
+		return false
+	}
+	if field.IsThrough {
+		return true
+	}
+	refType := field.Type
+	if field.Relation != nil && field.Relation.TargetClass != "" {
+		refType = field.Relation.TargetClass
+	}
+	refClass := metadata.Nodes[refType]
+	return refClass != nil && refClass.IsThrough
+}
+
+func writableFields(metadata *Metadata, class *protocol.Class, operation string) []string {
+	var scoped map[string]bool
+	if len(class.Scope) > 0 {
+		scoped = make(map[string]bool, len(class.Scope))
+		for _, rule := range class.Scope {
+			scoped[rule.Column] = true
+		}
+	}
+	names := make([]string, 0, len(class.Fields))
+	for _, fieldName := range utl.SortKeys(class.Fields) {
+		field := class.Fields[fieldName]
+		if field == nil || fieldName != field.Name {
+			continue
+		}
+		catalogBacked := field.Catalog != nil && field.Catalog.Type.Kind != ""
+		generatedPrimary := field.IsPrimary && (!catalogBacked || class.IDGenerator != "" && class.IDGenerator != "database")
+		if field.Virtual || field.Column == "" || generatedPrimary || scoped[field.Column] || field.ReadOnly ||
+			(field.Catalog != nil && field.Catalog.Generation != nil) ||
+			(operation == protocol.OP_INSERT && field.InsertPreset != nil) ||
+			(operation == protocol.OP_UPDATE && field.UpdatePreset != nil) || auditColumn(field.Column) || fieldHidden(metadata, field) {
+			continue
+		}
+		names = append(names, fieldName)
+	}
+	return names
 }
 
 // Snapshot is the immutable schema and capability view used by an Engine.
@@ -316,20 +370,20 @@ func ArtifactFingerprint(schema string, capabilities []Capability) (string, erro
 	return fmt.Sprintf("%x", digest), nil
 }
 
-func buildSnapshot(executor *Executor) (*Snapshot, error) {
-	if err := validateExecutableDirectives(executor.schema); err != nil {
+func buildSnapshot(engine *Engine) (*Snapshot, error) {
+	if err := validateExecutableDirectives(engine.schema); err != nil {
 		return nil, err
 	}
-	schema := formatSchema(executor.schema)
-	capabilities := make([]Capability, 0, len(executor.schema.Types)*4)
+	schema := formatSchema(engine.schema)
+	capabilities := make([]Capability, 0, len(engine.schema.Types)*4)
 	index := make(map[string]Capability)
 
-	for _, parent := range sortedDefinitions(executor.schema) {
+	for _, parent := range sortedDefinitions(engine.schema) {
 		if parent.Kind != ast.Object && parent.Kind != ast.Interface {
 			continue
 		}
 		for _, field := range parent.Fields {
-			capability, err := executor.fieldCapability(parent, field)
+			capability, err := engine.fieldCapability(parent, field)
 			if err != nil {
 				return nil, err
 			}
@@ -340,12 +394,12 @@ func buildSnapshot(executor *Executor) (*Snapshot, error) {
 			capabilities = append(capabilities, capability)
 		}
 	}
-	for name := range executor.resolvers {
+	for name := range engine.resolvers {
 		if capability, ok := index[name]; !ok || capability.Handler != HandlerResolver {
 			return nil, fmt.Errorf("resolver没有可执行schema coordinate: %s", name)
 		}
 	}
-	for name := range executor.remotes {
+	for name := range engine.remotes {
 		if capability, ok := index[name]; !ok || capability.Handler != HandlerRemote {
 			return nil, fmt.Errorf("remote没有可执行schema coordinate: %s", name)
 		}
@@ -428,7 +482,7 @@ func sortedDefinitions(schema *ast.Schema) []*ast.Definition {
 	return definitions
 }
 
-func (my *Executor) fieldCapability(parent *ast.Definition, field *ast.FieldDefinition) (Capability, error) {
+func (my *Engine) fieldCapability(parent *ast.Definition, field *ast.FieldDefinition) (Capability, error) {
 	coordinate := parent.Name + "." + field.Name
 	capability := Capability{
 		Coordinate: coordinate, Parent: parent.Name, Name: field.Name,

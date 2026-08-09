@@ -68,7 +68,7 @@ func (my *mockPgsqlDialect) SupportsWithCTE() bool {
 
 func TestGqlParserSchema(t *testing.T) {
 	// 由mock元数据现场生成schema，避免依赖预生成文件
-	data, err := NewRenderer(createMockMetadata(t)).Generate()
+	data, err := NewRenderer(createMockMetadata(t)).Render()
 	assert.NoError(t, err)
 
 	schema, err := gqlparser.LoadSchema(&ast.Source{
@@ -86,7 +86,7 @@ func TestIntrospection(t *testing.T) {
 	if err != nil {
 		t.Skipf("跳过测试: %v", err)
 	}
-	executor, err := NewExecutor(nil, NewRenderer(meta), meta, nil)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, nil)
 	assert.NoError(t, err)
 	ctx := context.Background()
 
@@ -176,7 +176,7 @@ func TestConditionalDirectivesSkipResolverAndFragments(t *testing.T) {
 		calls++
 		return "hello", nil
 	})
-	assert.NoError(t, executor.Register(resolver))
+	assert.NoError(t, executor.register(resolver))
 
 	result := executor.run(context.Background(), `query($show: Boolean = false) {
 		greeting @include(if: $show)

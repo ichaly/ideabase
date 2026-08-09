@@ -58,7 +58,7 @@ func TestObserverPanicCannotBreakExecution(t *testing.T) {
 }
 
 func TestBuilderObserverFreezesWithBuilder(t *testing.T) {
-	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal()
+	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 	require.NoError(t, builder.Observe(&recordingObserver{}))
 	engine, err := builder.Build()
 	require.NoError(t, err)
@@ -67,7 +67,7 @@ func TestBuilderObserverFreezesWithBuilder(t *testing.T) {
 }
 
 func BenchmarkObserverDisabled(b *testing.B) {
-	executor := &Executor{}
+	executor := &Engine{}
 	ctx := context.Background()
 	b.ReportAllocs()
 	for b.Loop() {

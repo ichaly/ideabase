@@ -68,7 +68,7 @@ func TestRelationsSameTargetMultiFK(t *testing.T) {
 	assert.Nil(t, user.Fields["comments1"], "不应出现顺序后缀幽灵字段")
 
 	// schema 可加载
-	schema, err := NewRenderer(meta).Generate()
+	schema, err := NewRenderer(meta).Render()
 	require.NoError(t, err)
 	_, gqlErr := gqlparser.LoadSchema(&ast.Source{Name: "multi-fk.graphql", Input: schema})
 	require.Nil(t, gqlErr, "schema应可加载")

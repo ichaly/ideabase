@@ -22,7 +22,7 @@ type projectionRoot struct {
 func TestRootResolverProjectsMapStructListAndTypename(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.NoError(t, executor.Register(
+	require.NoError(t, executor.register(
 		NewResolver[Root, struct{}, map[string]any]("Query", "mapRoot", "", func(context.Context, Root, struct{}) (map[string]any, error) {
 			return map[string]any{
 				"child":  map[string]any{"id": 1, "hidden": "secret"},
@@ -63,7 +63,7 @@ type ProjectionChild { id: Int, name: String, hidden: String }`)),
 func TestRootResolverEntityRequeryPreservesAliases(t *testing.T) {
 	executor, db, cleanup := setupRootResolverExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.Register(newSignUpResolver(db)))
+	require.NoError(t, executor.register(newSignUpResolver(db)))
 	reply := executor.run(context.Background(), `mutation { created: signUp(name: "Projection", email: "projection@example.com") { alias: name id } }`, nil, "")
 	require.Empty(t, reply.Errors)
 	created := reply.Data["created"].(map[string]any)

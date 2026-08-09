@@ -72,11 +72,11 @@ func snapshotOptions(loader protocol.Loader) []MetadataOption {
 	}
 }
 
-func TestBuilderRequiresPolicyOrExplicitTrustedBoundary(t *testing.T) {
+func TestBuilderRequiresPolicyOrMetadataPermissions(t *testing.T) {
 	_, err := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).Build()
 	require.ErrorContains(t, err, "policy")
 
-	engine, err := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal().Build()
+	engine, err := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy().Build()
 	require.NoError(t, err)
 	require.NotNil(t, engine)
 
@@ -85,36 +85,11 @@ func TestBuilderRequiresPolicyOrExplicitTrustedBoundary(t *testing.T) {
 	require.NotNil(t, engine)
 }
 
-func TestLegacyExecutorRequiresExplicitTrustedBoundaryOutsideDebug(t *testing.T) {
-	build := func(options ...MetadataOption) error {
-		k := snapshotKonfig(t)
-		k.Set("mode", "production")
-		metaOptions := snapshotOptions(snapshotLoader{})
-		metaOptions = append(metaOptions, options...)
-		meta, err := NewMetadata(k, nil, metaOptions...)
-		if err != nil {
-			return err
-		}
-		compiler, err := NewCompiler(meta, nil)
-		if err != nil {
-			return err
-		}
-		_, err = NewExecutor(nil, NewRenderer(meta), meta, compiler)
-		return err
-	}
-
-	require.ErrorContains(t, build(), "LegacyTrustedBoundaryPolicy")
-	require.NoError(t, build(LegacyTrustedBoundaryPolicy()))
-	manual := &Metadata{Nodes: map[string]*protocol.Class{"User": {Name: "User", Table: "users"}}}
-	_, err := NewExecutor(nil, NewRenderer(manual), manual, nil)
-	require.ErrorContains(t, err, "LegacyTrustedBoundaryPolicy")
-}
-
 func TestBuilderBuildsFrozenConformantSnapshot(t *testing.T) {
 	resolver := NewResolver[Root, struct{}, string]("Query", "greeting", "问候",
-		func(context.Context, Root, struct{}) (string, error) { return "hello", nil },
+		func(context.Context, Root, struct{}) (string, error) { return "hello", nil }, Access("test", "read"),
 	)
-	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal()
+	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 	require.NoError(t, builder.Register(resolver))
 	engine, err := builder.Build()
 	require.NoError(t, err)
@@ -135,9 +110,9 @@ func TestBuilderBuildsFrozenConformantSnapshot(t *testing.T) {
 	require.NotEmpty(t, capabilities)
 	capabilities[0].Coordinate = "mutated"
 	require.NotEqual(t, "mutated", snapshot.Capabilities()[0].Coordinate)
-	require.ErrorContains(t, engine.Register(resolver), "冻结")
+	require.ErrorContains(t, builder.Register(resolver), "冻结")
 
-	secondBuilder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal()
+	secondBuilder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 	require.NoError(t, secondBuilder.Register(resolver))
 	second, err := secondBuilder.Build()
 	require.NoError(t, err)
@@ -164,20 +139,20 @@ func TestSnapshotRejectsMetadataBindingWithoutImplementation(t *testing.T) {
 
 func TestLegacyAndBuilderShareSnapshotFinalization(t *testing.T) {
 	resolver := NewResolver[Root, struct{}, string]("Query", "greeting", "问候",
-		func(context.Context, Root, struct{}) (string, error) { return "hello", nil },
+		func(context.Context, Root, struct{}) (string, error) { return "hello", nil }, Access("test", "read"),
 	)
 	meta, err := NewMetadata(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...)
 	require.NoError(t, err)
 	compiler, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	legacy, err := NewExecutor(nil, NewRenderer(meta), meta, compiler)
+	legacy, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
 	require.NoError(t, err)
-	require.NoError(t, legacy.Register(resolver))
+	require.NoError(t, legacy.register(resolver))
 	legacySnapshot, err := legacy.Snapshot()
 	require.NoError(t, err)
-	require.ErrorContains(t, legacy.Register(resolver), "冻结")
+	// Direct construction is test-only; lifecycle mutation is deliberately private.
 
-	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal()
+	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 	require.NoError(t, builder.Register(resolver))
 	engine, err := builder.Build()
 	require.NoError(t, err)
@@ -191,9 +166,9 @@ func TestBuilderSupportsReplaceAndWrapBeforeFreeze(t *testing.T) {
 		"Query", "users", "replace generated query",
 		func(context.Context, Root, struct{}) (map[string]interface{}, error) {
 			return map[string]interface{}{"items": []interface{}{}, "total": 0}, nil
-		}, Existing(), Result("UserResult!"),
+		}, Existing(), Result("UserResult!"), Access("test", "read"),
 	)
-	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal()
+	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 	require.NoError(t, builder.Replace(replacement))
 	require.NoError(t, builder.Wrap("Query.users", NewResolverMiddleware[
 		Root, struct{}, map[string]interface{},
@@ -221,9 +196,9 @@ func TestBuilderLoadsDocumentsBeforeFreeze(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "greeting.graphql"), []byte("query Greeting { greeting }"), 0o600))
 	resolver := NewResolver[Root, struct{}, string]("Query", "greeting", "问候",
-		func(context.Context, Root, struct{}) (string, error) { return "hello", nil },
+		func(context.Context, Root, struct{}) (string, error) { return "hello", nil }, Access("test", "read"),
 	)
-	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal()
+	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 	require.NoError(t, builder.Register(resolver))
 	require.NoError(t, builder.LoadDocuments(dir))
 	engine, err := builder.Build()
@@ -238,7 +213,7 @@ func TestBuilderRejectsSchemaFieldWithoutHandler(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("type Query { ghost: String }"), 0o600))
 	k.Set("schema.file", path)
 
-	_, err := New(k, nil, snapshotOptions(snapshotLoader{})...).TrustedLocal().Build()
+	_, err := New(k, nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy().Build()
 	require.ErrorContains(t, err, "schema artifact")
 }
 
@@ -251,12 +226,12 @@ func TestBuilderRejectsExternalSchemaShapeDrift(t *testing.T) {
 		"type User { id: ID!, name: String }"), 0o600))
 	k.Set("schema.file", path)
 
-	_, err := New(k, nil, snapshotOptions(snapshotLoader{})...).TrustedLocal().Build()
+	_, err := New(k, nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy().Build()
 	require.ErrorContains(t, err, "schema artifact")
 }
 
 func TestBuilderRejectsExecutableDirectiveWithoutRuntime(t *testing.T) {
-	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal()
+	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 	require.NoError(t, builder.Register(NewResolver[Root, struct{}, string]("Query", "hello", "",
 		func(context.Context, Root, struct{}) (string, error) { return "hello", nil },
 		Extra("directive @upper on FIELD"))))
@@ -309,7 +284,7 @@ func TestBuilderRenderingHasNoImplicitFileWrite(t *testing.T) {
 	root := t.TempDir()
 	k := snapshotKonfig(t)
 	k.Set("app.root", root)
-	_, err := New(k, nil, snapshotOptions(snapshotLoader{})...).TrustedLocal().Build()
+	_, err := New(k, nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy().Build()
 	require.NoError(t, err)
 	_, err = os.Stat(filepath.Join(root, "cfg", "schema.graphql"))
 	require.ErrorIs(t, err, os.ErrNotExist)

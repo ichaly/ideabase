@@ -21,6 +21,7 @@ type completionOptions struct {
 	mode       completionMode
 	parentType string
 	fieldName  string
+	typename   func(string) string
 }
 
 // completeValue is the single response completion path for local resolvers and
@@ -82,6 +83,10 @@ func completeValue(schema *ast.Schema, value any, typ *ast.Type, set ast.Selecti
 		alias := gatewayTypeAlias(set)
 		var valid bool
 		runtimeType, valid = object[alias].(string)
+		if options.typename != nil {
+			runtimeType = options.typename(runtimeType)
+		}
+		object[alias] = runtimeType
 		definition := schema.Types[runtimeType]
 		if !valid || definition == nil || definition.Kind != ast.Object {
 			return invalidCompletedValue(path, typ, known, options)
@@ -105,6 +110,10 @@ func completeValue(schema *ast.Schema, value any, typ *ast.Type, set ast.Selecti
 			childOptions.fieldName = node.Name
 			if node.Name == "__typename" {
 				name, valid := object[key].(string)
+				if options.typename != nil {
+					name = options.typename(name)
+				}
+				object[key] = name
 				definition := schema.Types[name]
 				if !valid || definition == nil || definition.Kind != ast.Object {
 					return invalidCompletedValue(fieldPath, fieldType, known, options)

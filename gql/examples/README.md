@@ -49,7 +49,7 @@ GQL '{"query":"mutation { echo(message: \"hello\") }"}'
 | Batch Resolver | `sign` | `main.go`, `ResolverAndRemote` |
 | Query/Mutation 根 Resolver | `serverInfo/echo` | `main.go`, `extensions.graphql` |
 | Resolver middleware | `User.greeting` 的 `[wrapped]` 前缀 | `main.go` |
-| ID 与自定义 Codec、Matcher、Baser | `id`、所有 `name` 字段 | `UpperCodec`, `buildExecutor` |
+| ID 与自定义 Codec、Matcher、Baser | `id`、所有 `name` 字段 | `UpperCodec`, `buildEngine` |
 | 自增、UUID、雪花、自定义主键 | `GeneratedPrimaryKeys` | `main.go`, `schema.sql` |
 | Remote Join | `User.reputation` | `main.go`, `ResolverAndRemote` |
 | 行级作用域 | `Post.tenant_id ↔ tenant` | `main.go`, `TenantScopedPosts` |
@@ -57,7 +57,7 @@ GQL '{"query":"mutation { echo(message: \"hello\") }"}'
 | CDC WebSocket 订阅 | `subscription { users { total } }` | `docker-compose.yml` |
 | 标准自省 | `StandardIntrospection` | `operations/extensions.graphql` |
 | 安全开关 | introspection/persisted-only/max-depth | `config.production.yml` |
-| 字节响应快路径 | `Executor.Execute` | `demo_test.go` |
+| 字节响应快路径 | `Engine.Execute` | `demo_test.go` |
 
 JSON 形式的同一矩阵见 `coverage.json`，增加或删除 README 公开能力时应同步更新。
 

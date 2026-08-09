@@ -14,7 +14,7 @@ func TestResolverPanicIsolation(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	require.NoError(t, executor.Register(
+	require.NoError(t, executor.register(
 		NewResolver("User", "boom", "panic字段",
 			func(_ context.Context, _ Source, _ struct{}) (string, error) { panic("resolver炸了") }),
 		NewBatch("User", "batchBoom", "批量panic字段",

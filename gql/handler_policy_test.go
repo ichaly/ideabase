@@ -11,13 +11,13 @@ func TestHandlerRequiresParticipateInPolicyFieldUses(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	called := false
-	require.NoError(t, executor.Register(NewResolver(
+	require.NoError(t, executor.register(NewResolver(
 		"User", "displayName", "", func(_ context.Context, source Source, _ struct{}) (string, error) {
 			called = true
 			return source["name"].(string), nil
 		}, Requires("name"),
 	)))
-	require.NoError(t, executor.Register(OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		if request.Coordinate == "Query.users" {
 			if len(request.Fields) > 0 { // operation authorization, after effective-schema shaping
 				require.Equal(t, []string{"displayName"}, request.Fields[FieldUseJoin])
@@ -29,7 +29,7 @@ func TestHandlerRequiresParticipateInPolicyFieldUses(t *testing.T) {
 			}}, nil
 		}
 		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
-	})))
+	}))
 	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
 	require.NoError(t, err)
 	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users { items { displayName } } }`, nil)

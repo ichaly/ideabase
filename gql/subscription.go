@@ -33,7 +33,7 @@ type feed struct {
 // （慢消费者不阻塞其他订阅者，未消费的旧结果被最新结果顶替）；
 // 首次立即推送当前结果；ctx取消后通道关闭
 // 依赖数据库 wal_level=logical 与连接账号的REPLICATION权限
-func (my *Executor) subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
+func (my *Engine) subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
 	if my.tenantRouter != nil {
 		target, routed, err := my.tenantDispatch(ctx)
 		if err != nil {
@@ -66,11 +66,6 @@ func (my *Executor) subscribe(ctx context.Context, query string, variables map[s
 	}
 	if my.cdc == nil {
 		return nil, fmt.Errorf("订阅不可用：当前数据库没有注册CDC唤醒源或DSN不可用")
-	}
-	if plan.policyNeeded {
-		if err := my.authorize(ctx, plan.operation, variables); err != nil {
-			return nil, err
-		}
 	}
 	if my.revocation != nil {
 		identity, ok := IdentityFromContext(ctx)
@@ -114,9 +109,6 @@ func (my *Executor) subscribe(ctx context.Context, query string, variables map[s
 	// 键在plan之后计算：codec入参已还原，等价请求（如shortId与数字ID）归并到同一feed
 	scope := scopeValues(ctx)
 	identity, _ := IdentityFromContext(ctx)
-	if len(identity.roles) == 0 {
-		identity.roles = Roles(ctx)
-	}
 	route, _ := PinnedRoute(ctx)
 	decisions, _ := ctx.Value(policyDecisionsKey{}).(map[string]PolicyDecision)
 	policySignature := ""
@@ -150,7 +142,7 @@ func (my *Executor) subscribe(ctx context.Context, query string, variables map[s
 }
 
 // stream 共享流事件循环：首查推送，之后表变更唤醒重查，变化结果扇出给全部订阅者
-func (my *Executor) stream(ctx context.Context, plan *Plan, variables map[string]interface{}, w *watcher, f *feed) {
+func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]interface{}, w *watcher, f *feed) {
 	defer my.cdc.unwatch(w)
 
 	var last uint64
@@ -217,7 +209,7 @@ func push(ch chan gqlReply, reply gqlReply) {
 }
 
 // leave 订阅者退出：关闭其通道；最后一个退出时停止共享流并摘除
-func (my *Executor) leave(key string, f *feed, ch chan gqlReply) {
+func (my *Engine) leave(key string, f *feed, ch chan gqlReply) {
 	my.feedMu.Lock()
 	if !f.subs[ch] {
 		my.feedMu.Unlock()
@@ -234,7 +226,7 @@ func (my *Executor) leave(key string, f *feed, ch chan gqlReply) {
 	my.feedMu.Unlock()
 }
 
-func (my *Executor) expireFeed(f *feed, err error) {
+func (my *Engine) expireFeed(f *feed, err error) {
 	my.feedMu.Lock()
 	defer my.feedMu.Unlock()
 	reply := gqlReply{Errors: gqlErrors(err)}
@@ -259,7 +251,7 @@ func subscriptionFeedKey(query, operation string, variables, scope map[string]an
 }
 
 // tick 表变更唤醒后重查一次：结果指纹无变化时返回false（不推送）
-func (my *Executor) tick(ctx context.Context, plan *Plan, variables map[string]interface{}, digest hash.Hash64, last *uint64) (gqlReply, bool) {
+func (my *Engine) tick(ctx context.Context, plan *Plan, variables map[string]interface{}, digest hash.Hash64, last *uint64) (gqlReply, bool) {
 	var r gqlReply
 
 	data, err := my.fetch(ctx, plan, variables)
@@ -341,16 +333,10 @@ func subscriptionOriginAllowedByHost(ctx *fasthttp.RequestCtx) bool {
 	return strings.EqualFold(parsed.Host, string(ctx.Host()))
 }
 
-// Upgrade 是保留兼容性的 scope-only facade。新宿主应使用 UpgradeContext，
-// 以便在升级前把认证上下文（Identity、PinnedRoute、revocation 等）绑定到会话。
-func (my *Executor) Upgrade(rc *fasthttp.RequestCtx, scope map[string]any) error {
-	return my.UpgradeContext(rc, WithScope(context.Background(), scope))
-}
-
 // UpgradeContext 将完整的宿主认证上下文带入 WebSocket 会话。升级后
 // fasthttp 请求上下文不可再作为认证状态来源，因此只从 ctx 派生取消信号，
 // 不重建 context.Background()+scope。
-func (my *Executor) UpgradeContext(rc *fasthttp.RequestCtx, ctx context.Context) error {
+func (my *Engine) UpgradeContext(rc *fasthttp.RequestCtx, ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -392,7 +378,7 @@ func closeSocket(conn *websocket.Conn, code int, reason string) {
 // init超时4408、重复init4429、重复订阅ID4409——鉴权握手不可绕过
 // ctx 为HTTP升级阶段认证完成的完整上下文；只派生连接取消信号，保留
 // Identity、PinnedRoute、scope 以及宿主挂载的 revocation/policy 状态。
-func (my *Executor) serveSocket(conn *websocket.Conn, ctx context.Context) {
+func (my *Engine) serveSocket(conn *websocket.Conn, ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -474,7 +460,7 @@ func (my *socketSession) reserve(id string) bool {
 
 // startSubscription 启动单个订阅：消费事件通道并推送next帧
 // 订阅ID已由调用方reserve预占，失败路径须释放占位
-func (my *Executor) startSubscription(ctx context.Context, session *socketSession, message wsMessage) {
+func (my *Engine) startSubscription(ctx context.Context, session *socketSession, message wsMessage) {
 	release := func() {
 		session.mu.Lock()
 		delete(session.subs, message.ID)

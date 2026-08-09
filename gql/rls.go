@@ -120,7 +120,7 @@ func NewRLSIdentityStatement(identity Identity) (RLSStatement, error) {
 	}, nil
 }
 
-func (my *Executor) prepareRLS(ctx context.Context, tx *gorm.DB) error {
+func (my *Engine) prepareRLS(ctx context.Context, tx *gorm.DB) error {
 	identity, ok := IdentityFromContext(ctx)
 	if !ok {
 		return fmt.Errorf("verified identity is required for RLS")

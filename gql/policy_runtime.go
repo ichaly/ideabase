@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/huandu/go-clone"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -26,7 +25,7 @@ func PolicyDecisionFromContext(ctx context.Context, coordinate string) (PolicyDe
 	return decision, err == nil
 }
 
-func (my *Executor) authorizeProvider(ctx context.Context, operation *ast.OperationDefinition, variables map[string]interface{}) (context.Context, error) {
+func (my *Engine) authorizeProvider(ctx context.Context, operation *ast.OperationDefinition, variables map[string]interface{}) (context.Context, error) {
 	if my.policy == nil || operation == nil {
 		return ctx, nil
 	}
@@ -91,7 +90,7 @@ func (my *Executor) authorizeProvider(ctx context.Context, operation *ast.Operat
 	return context.WithValue(ctx, policyDecisionsKey{}, decisions), nil
 }
 
-func (my *Executor) validatePolicyBudget(target policyTarget, decision PolicyDecision, operation *ast.OperationDefinition, variables map[string]interface{}) error {
+func (my *Engine) validatePolicyBudget(target policyTarget, decision PolicyDecision, operation *ast.OperationDefinition, variables map[string]interface{}) error {
 	if decision.Cost > 0 {
 		cost := operationCost(operation, variables, my.metadata.DefaultLimit(), my.snapshot.index)
 		if cost > uint64(decision.Cost) {
@@ -155,6 +154,106 @@ type policyTarget struct {
 	nodes      []*ast.Field
 }
 
+// policyOverlay is a request-local catalog view. Classes and fields are
+// copied only when policy compilation needs to change them; all structural
+// metadata remains shared with the frozen catalog and is treated as read-only.
+type policyOverlay struct {
+	metadata    *Metadata
+	classes     map[*protocol.Class]*protocol.Class
+	sources     map[*protocol.Class]*protocol.Class
+	aliases     map[*protocol.Class][]string
+	fieldCopies map[*protocol.Class]map[*protocol.Field]*protocol.Field
+}
+
+func newPolicyOverlay(base *Metadata) *policyOverlay {
+	overlay := *base
+	overlay.Nodes = make(map[string]*protocol.Class, len(base.Nodes))
+	o := &policyOverlay{
+		metadata:    &overlay,
+		classes:     make(map[*protocol.Class]*protocol.Class),
+		sources:     make(map[*protocol.Class]*protocol.Class),
+		aliases:     make(map[*protocol.Class][]string),
+		fieldCopies: make(map[*protocol.Class]map[*protocol.Field]*protocol.Field),
+	}
+	for key, class := range base.Nodes {
+		if class == nil {
+			continue
+		}
+		overlay.Nodes[key] = class
+		o.aliases[class] = append(o.aliases[class], key)
+	}
+	// A policy overlay is authoritative for permissions. Clear metadata
+	// permissions even for classes not selected by this operation so a reused
+	// overlay can never append the same row predicate twice.
+	for class := range o.aliases {
+		if class.Permissions != nil {
+			o.copyClass(class)
+		}
+	}
+	return o
+}
+
+func (o *policyOverlay) copyClass(source *protocol.Class) *protocol.Class {
+	if source == nil {
+		return nil
+	}
+	if copy := o.classes[source]; copy != nil {
+		return copy
+	}
+	copy := *source
+	copy.Permissions = nil
+	copy.Fields = source.Fields
+	o.classes[source] = &copy
+	o.sources[&copy] = source
+	for _, key := range o.aliases[source] {
+		o.metadata.Nodes[key] = &copy
+	}
+	return &copy
+}
+
+func (o *policyOverlay) class(source *protocol.Class) *protocol.Class {
+	if original := o.sources[source]; original != nil {
+		source = original
+	}
+	return o.copyClass(source)
+}
+
+func (o *policyOverlay) mutableField(class *protocol.Class, name string) *protocol.Field {
+	source := o.sources[class]
+	if source == nil {
+		source = class
+	}
+	class = o.copyClass(source)
+	if class == nil {
+		return nil
+	}
+	copies := o.fieldCopies[source]
+	if copies == nil {
+		fields := make(map[string]*protocol.Field, len(class.Fields))
+		for key, field := range class.Fields {
+			fields[key] = field
+		}
+		class.Fields = fields
+		copies = make(map[*protocol.Field]*protocol.Field)
+		o.fieldCopies[source] = copies
+	}
+	field := class.Fields[name]
+	if field == nil {
+		return nil
+	}
+	if copy := copies[field]; copy != nil {
+		return copy
+	}
+	copy := *field
+	copies[field] = &copy
+	for key, candidate := range class.Fields {
+		if candidate == field {
+			class.Fields[key] = &copy
+		}
+	}
+	return &copy
+}
+
 func (t *policyTarget) add(use FieldUse, name string) {
 	if name != "" {
 		t.fields[use] = append(t.fields[use], name)
@@ -171,7 +270,7 @@ func (t policyTarget) uses() []FieldUse {
 	return uses
 }
 
-func (my *Executor) policyTargets(operation *ast.OperationDefinition, variables map[string]interface{}) ([]policyTarget, error) {
+func (my *Engine) policyTargets(operation *ast.OperationDefinition, variables map[string]interface{}) ([]policyTarget, error) {
 	var targets []policyTarget
 	indexes := make(map[string]int)
 	var collect func(*ast.Field, *protocol.Class) error
@@ -307,7 +406,7 @@ func matchPolicyPredicates(class *protocol.Class, predicates []TypedPredicate, v
 	return evaluatePredicates(class, "", nil, rules, values, scope)
 }
 
-func (my *Executor) collectPolicyChildren(class *protocol.Class, set ast.SelectionSet, collect func(*ast.Field, *protocol.Class) error) error {
+func (my *Engine) collectPolicyChildren(class *protocol.Class, set ast.SelectionSet, collect func(*ast.Field, *protocol.Class) error) error {
 	for _, selection := range set {
 		field, ok := selection.(*ast.Field)
 		if !ok {
@@ -334,7 +433,7 @@ func (my *Executor) collectPolicyChildren(class *protocol.Class, set ast.Selecti
 	return nil
 }
 
-func (my *Executor) collectPolicyFields(target *policyTarget, class *protocol.Class, root *ast.Field, variables map[string]interface{}) {
+func (my *Engine) collectPolicyFields(target *policyTarget, class *protocol.Class, root *ast.Field, variables map[string]interface{}) {
 	for _, argument := range root.Arguments {
 		use := FieldUse("")
 		switch argument.Name {
@@ -421,7 +520,7 @@ func policyFieldAllowed(class *protocol.Class, allowed []string, requested strin
 	return field != nil && allowedColumn(allowed, field)
 }
 
-func (my *Executor) policyPlan(ctx context.Context, base *Plan, variables map[string]interface{}) (*Plan, error) {
+func (my *Engine) policyPlan(ctx context.Context, base *Plan, variables map[string]interface{}) (*Plan, error) {
 	decisions, _ := ctx.Value(policyDecisionsKey{}).(map[string]PolicyDecision)
 	if len(decisions) == 0 || base == nil || base.operation == nil {
 		return base, nil
@@ -436,20 +535,7 @@ func (my *Executor) policyPlan(ctx context.Context, base *Plan, variables map[st
 		plan.policyScope = my.policyDecisionScope(decisions)
 		return &plan, nil
 	}
-	overlay := *my.metadata
-	overlay.Nodes = make(map[string]*protocol.Class, len(my.metadata.Nodes))
-	cloned := make(map[*protocol.Class]*protocol.Class)
-	for key, class := range my.metadata.Nodes {
-		if class == nil {
-			continue
-		}
-		copy := cloned[class]
-		if copy == nil {
-			copy = clone.Slowly(class).(*protocol.Class)
-			cloned[class] = copy
-		}
-		overlay.Nodes[key] = copy
-	}
+	overlay := newPolicyOverlay(my.metadata)
 
 	coordinates := make([]string, 0, len(decisions))
 	for coordinate := range decisions {
@@ -461,10 +547,11 @@ func (my *Executor) policyPlan(ctx context.Context, base *Plan, variables map[st
 	for coordinateIndex, coordinate := range coordinates {
 		decision := decisions[coordinate]
 		capability, _ := my.snapshot.Capability(coordinate)
-		class, ok := overlay.GetNode(capability.Resource)
+		baseClass, ok := my.metadata.GetNode(capability.Resource)
 		if !ok {
 			continue // custom Resolver/Remote policies have no SQL catalog overlay
 		}
+		class := overlay.class(baseClass)
 		if class.Permissions == nil {
 			class.Permissions = make(map[string]*protocol.Permission)
 		}
@@ -495,12 +582,12 @@ func (my *Executor) policyPlan(ctx context.Context, base *Plan, variables map[st
 			}
 			roles = append(roles, role)
 		}
-		if err := applyPolicyPresets(class, capability.Actions, decision.Preset, scope, fmt.Sprintf("%d_p", coordinateIndex)); err != nil {
+		if err := applyPolicyPresets(overlay, class, capability.Actions, decision.Preset, scope, fmt.Sprintf("%d_p", coordinateIndex)); err != nil {
 			return nil, fmt.Errorf("policy %s: %w", coordinate, err)
 		}
 	}
-	overlay.operations = buildOperationCatalog(&overlay)
-	compiler := &Compiler{meta: &overlay, dialect: my.compiler.dialect, cursorFingerprint: my.compiler.cursorFingerprint}
+	overlay.metadata.operations = buildOperationCatalog(overlay.metadata)
+	compiler := &Compiler{meta: overlay.metadata, dialect: my.compiler.dialect, cursorFingerprint: my.compiler.cursorFingerprint}
 	plan, err := compiler.Compile(base.operation, variables)
 	if err != nil {
 		return nil, err
@@ -569,12 +656,12 @@ func appendPolicyPredicates(out []protocol.Predicate, class *protocol.Class, pre
 	return out, nil
 }
 
-func applyPolicyPresets(class *protocol.Class, actions []string, presets []TypedPredicate, scope map[string]any, prefix string) error {
+func applyPolicyPresets(overlay *policyOverlay, class *protocol.Class, actions []string, presets []TypedPredicate, scope map[string]any, prefix string) error {
 	for index, preset := range presets {
 		if preset.Operator != "eq" {
 			return fmt.Errorf("preset %s only supports eq", preset.Column)
 		}
-		field := class.Fields[preset.Column]
+		field := overlay.mutableField(class, preset.Column)
 		if field == nil || field.Column == "" {
 			return fmt.Errorf("unknown preset field %s.%s", class.Name, preset.Column)
 		}
@@ -601,7 +688,7 @@ func applyPolicyPresets(class *protocol.Class, actions []string, presets []Typed
 	return nil
 }
 
-func (my *Executor) policyDecisionScope(decisions map[string]PolicyDecision) map[string]any {
+func (my *Engine) policyDecisionScope(decisions map[string]PolicyDecision) map[string]any {
 	coordinates := make([]string, 0, len(decisions))
 	for coordinate := range decisions {
 		coordinates = append(coordinates, coordinate)

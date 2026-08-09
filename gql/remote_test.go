@@ -23,7 +23,7 @@ func TestRemoteJoin(t *testing.T) {
 	ctx := context.Background()
 
 	data := map[any]Profile{}
-	require.NoError(t, executor.Register(NewRemote("User", "profile", "用户画像", "id",
+	require.NoError(t, executor.register(NewRemote("User", "profile", "用户画像", "id",
 		func(_ context.Context, keys []any) (map[any]Profile, error) {
 			out := make(map[any]Profile, len(keys))
 			for _, k := range keys {
@@ -84,7 +84,7 @@ func TestRemoteSharedKey(t *testing.T) {
 			return out, nil
 		}
 	}
-	require.NoError(t, executor.Register(
+	require.NoError(t, executor.register(
 		NewRemote("User", "profileA", "画像A", "id", fetch("gold")),
 		NewRemote("User", "profileB", "画像B", "id", fetch("silver")),
 	))

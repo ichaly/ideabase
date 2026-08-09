@@ -13,7 +13,7 @@ import (
 func TestNullableRootResolverErrorContinuesWithPathAndLocation(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.Register(
+	require.NoError(t, executor.register(
 		NewResolver[Root, struct{}, string]("Query", "failNullable", "", func(context.Context, Root, struct{}) (string, error) { return "", errors.New("boom") }, Result("String")),
 		NewResolver[Root, struct{}, string]("Query", "okSibling", "", func(context.Context, Root, struct{}) (string, error) { return "ok", nil }, Result("String")),
 	))
@@ -32,7 +32,7 @@ func TestNullableRootResolverErrorContinuesWithPathAndLocation(t *testing.T) {
 func TestRootResolverPreservesNestedGQLErrorMetadata(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.Register(NewResolver[Root, struct{}, string]("Query", "metadataFailure", "", func(context.Context, Root, struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Query", "metadataFailure", "", func(context.Context, Root, struct{}) (string, error) {
 		return "", &gqlerror.Error{Message: "inner", Path: ast.Path{ast.PathName("nested")}, Locations: []gqlerror.Location{{Line: 9, Column: 4}}, Extensions: map[string]any{"code": "CUSTOM", "detail": "kept"}}
 	}, Result("String"))))
 	reply := executor.run(context.Background(), `{ shown: metadataFailure }`, nil, "")
@@ -48,7 +48,7 @@ func TestDefaultRootFailureUsesGenericExecutionCode(t *testing.T) {
 		Name: "users", Alias: "shown",
 		Definition: &ast.FieldDefinition{Name: "users", Type: ast.NamedType("UserResult", nil)},
 	}
-	executor := &Executor{resolvers: map[string]Resolver{}}
+	executor := &Engine{resolvers: map[string]Resolver{}}
 	reply := executor.executeRootResolvers(context.Background(), &planEntry{operation: &ast.OperationDefinition{
 		Operation: ast.Query, SelectionSet: ast.SelectionSet{field},
 	}}, nil)
@@ -61,7 +61,7 @@ func TestNonNullRootResolverErrorStopsAndMarshalsDataNull(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	called := false
-	require.NoError(t, executor.Register(
+	require.NoError(t, executor.register(
 		NewResolver[Root, struct{}, string]("Query", "failNonNull", "", func(context.Context, Root, struct{}) (string, error) { return "", errors.New("boom") }, Result("String!")),
 		NewResolver[Root, struct{}, string]("Query", "afterNonNull", "", func(context.Context, Root, struct{}) (string, error) { called = true; return "bad", nil }, Result("String")),
 	))
@@ -80,7 +80,7 @@ func TestNullableMutationRootErrorContinuesButRollsBack(t *testing.T) {
 	insert := func(ctx context.Context, name string) error {
 		return Tx(ctx).Exec("INSERT INTO users(name, email) VALUES (?, ?)", name, name+"@x").Error
 	}
-	require.NoError(t, executor.Register(
+	require.NoError(t, executor.register(
 		NewResolver[Root, struct{}, string]("Mutation", "firstWrite", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) { return "first", insert(ctx, "first") }, Result("String")),
 		NewResolver[Root, struct{}, string]("Mutation", "failWrite", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) {
 			if err := insert(ctx, "failed"); err != nil {
@@ -108,7 +108,7 @@ func TestNonNullMutationRootErrorStopsAndRollsBack(t *testing.T) {
 	insert := func(ctx context.Context, name string) error {
 		return Tx(ctx).Exec("INSERT INTO users(name, email) VALUES (?, ?)", name, name+"@x").Error
 	}
-	require.NoError(t, executor.Register(
+	require.NoError(t, executor.register(
 		NewResolver[Root, struct{}, string]("Mutation", "nnFirst", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) { return "first", insert(ctx, "nn-first") }, Result("String")),
 		NewResolver[Root, struct{}, string]("Mutation", "nnFail", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) {
 			if err := insert(ctx, "nn-fail"); err != nil {

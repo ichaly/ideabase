@@ -46,14 +46,12 @@ func TestCompleteDemoDocuments(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	executor, err := buildExecutor(db)
+	executor, err := buildEngine(db)
 	if err != nil {
 		t.Fatalf("装配完整Demo失败: %v", err)
 	}
-	if err = executor.LoadDocuments("./queries"); err != nil {
-		t.Fatalf("示例GraphQL文档与动态schema不一致: %v", err)
-	}
-	body, err := executor.Execute(context.Background(), `query { serverInfo { name version } }`, nil)
+	ctx := demoContext(context.Background(), 1)
+	body, err := executor.Execute(ctx, `query { serverInfo { name version } }`, nil)
 	if err != nil {
 		t.Fatalf("Execute字节出口失败: %v", err)
 	}
@@ -61,7 +59,6 @@ func TestCompleteDemoDocuments(t *testing.T) {
 		t.Fatalf("非标准GraphQL响应: %s", body)
 	}
 
-	ctx := gql.WithScope(context.Background(), map[string]any{"tenant": 1})
 	checks := []string{
 		`{ users { items { id name email greeting sign reputation { level title } } } }`,
 		`mutation { echo(message: "hello") }`,

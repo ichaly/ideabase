@@ -478,7 +478,7 @@ func (my *Dialect) writePredicate(ctx *compiler.Context, qualifier string, p pro
 }
 
 // fixedWhereConjuncts combines metadata row predicates and role policy. It is
-// deliberately role-independent: the executor supplies __gql_role at runtime.
+// deliberately role-independent: the Engine supplies policy roles at runtime.
 func (my *Dialect) fixedWhereConjuncts(ctx *compiler.Context, qualifier string, class *protocol.Class, operation string, skipColumn string) []func() error {
 	out := my.predicateConjuncts(ctx, qualifier, class.Where, skipColumn)
 	if class.Permissions == nil {

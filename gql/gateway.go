@@ -380,16 +380,15 @@ func (my *gatewayState) forwardSubscription(ctx context.Context, events chan<- [
 			}
 			child, err := decodeEndpointReply(body)
 			if err != nil {
-				frame, _ := marshalGatewayReply(gatewayReply{Data: map[string]any{responseKey(field): nil}, Errors: endpointProtocolError(responseKey(field), field)})
+				frame, _ := (gqlReply{Data: map[string]any{responseKey(field): nil}, Errors: endpointProtocolError(responseKey(field), field)}).MarshalJSON()
 				events <- frame
 				return
 			}
-			rewriteTypenames(my.schema, child.Data, field.SelectionSet, contract)
 			definition := my.schema.Subscription.Fields.ForName(field.Name)
-			value, completionErrors, _ := completeEndpointValue(my.schema, child.Data, definition.Type, field.SelectionSet, nil, child.Errors)
+			value, completionErrors, _ := completeEndpointValue(my.schema, child.Data, definition.Type, field.SelectionSet, nil, child.Errors, contract)
 			child.Errors = append(child.Errors, completionErrors...)
 			prefixErrors(child.Errors, responseKey(field), field)
-			frame, err := marshalGatewayReply(gatewayReply{Data: map[string]any{responseKey(field): value}, Errors: child.Errors})
+			frame, err := (gqlReply{Data: map[string]any{responseKey(field): value}, Errors: child.Errors}).MarshalJSON()
 			if err != nil {
 				return
 			}
@@ -421,15 +420,15 @@ func (my *gatewayState) execute(ctx context.Context, query string, variables map
 		ctx = context.Background()
 	}
 	if errs := validateGatewayRequest(query, variables); len(errs) > 0 {
-		return marshalGatewayReply(gatewayReply{Errors: errs})
+		return (gqlReply{Errors: errs}).MarshalJSON()
 	}
 	operation, coerced, err := my.prepareOperation(query, variables, operationName)
 	if err != nil {
-		return marshalGatewayReply(gatewayReply{Errors: gqlErrors(err)})
+		return (gqlReply{Errors: gqlErrors(err)}).MarshalJSON()
 	}
 	dataOperation, introspection := splitIntrospection(operation)
 	data := make(map[string]any)
-	var executed gatewayReply
+	var executed gqlReply
 	if dataOperation != nil {
 		switch dataOperation.Operation {
 		case ast.Query:
@@ -440,9 +439,9 @@ func (my *gatewayState) execute(ctx context.Context, query string, variables map
 			executed.Errors = gqlerror.List{gqlerror.Errorf("gateway暂不支持%s操作", dataOperation.Operation)}
 		}
 		if executed.Data == nil && len(executed.Errors) > 0 {
-			return marshalGatewayReply(executed)
+			return executed.MarshalJSON()
 		}
-		if !executed.NullData {
+		if !executed.nullData {
 			for key, value := range executed.Data {
 				data[key] = value
 			}
@@ -459,80 +458,33 @@ func (my *gatewayState) execute(ctx context.Context, query string, variables map
 		}
 	}
 	executed.Data = data
-	return marshalGatewayReply(executed)
+	return executed.MarshalJSON()
 }
 
 func (my *gatewayState) prepareOperation(query string, variables map[string]any, operationName string) (*ast.OperationDefinition, map[string]any, error) {
 	key := planKey{operation: operationName, query: query}
-	if entry, ok := my.cache.Get(key); ok {
-		coerced, err := coerceVariables(my.schema, entry.operation, cloneVariables(variables))
-		return entry.operation, coerced, err
-	}
-	doc, errs := loadQuery(my.schema, query, gatewayMaxTokens, my.validation)
-	if len(errs) > 0 {
-		return nil, nil, errs
-	}
-	operation := doc.Operations.ForName(operationName)
-	if operation == nil || (operationName == "" && len(doc.Operations) != 1) {
-		return nil, nil, fmt.Errorf("未找到名为'%s'的操作（多操作查询必须提供operationName）", operationName)
-	}
-	if hasConditionalDirective(query) {
-		coerced, err := coerceVariables(my.schema, operation, cloneVariables(variables))
-		if err != nil {
-			return nil, nil, err
+	conditional := hasConditionalDirective(query)
+	if !conditional {
+		if entry, ok := my.cache.Get(key); ok {
+			coerced, err := coerceVariables(my.schema, entry.operation, cloneVariables(variables))
+			return entry.operation, coerced, err
 		}
-		operation.SelectionSet, err = normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, coerced, my.schema)
-		if err != nil {
-			return nil, nil, err
-		}
-		if len(operation.SelectionSet) > gatewayMaxRootFields {
-			return nil, nil, gatewayLimitError("root field")
-		}
-		return operation, coerced, nil
 	}
-	selection, err := normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, nil, my.schema)
+	prepared, err := prepareFrontend(my.schema, query, operationName, cloneVariables(variables), gatewayMaxTokens, my.validation)
 	if err != nil {
 		return nil, nil, err
 	}
-	operation.SelectionSet = selection
-	if len(selection) > gatewayMaxRootFields {
+	if len(prepared.operation.SelectionSet) > gatewayMaxRootFields {
 		return nil, nil, gatewayLimitError("root field")
 	}
-	my.cache.Put(key, &planEntry{operation: operation})
-	coerced, err := coerceVariables(my.schema, operation, cloneVariables(variables))
-	return operation, coerced, err
-}
-
-type gatewayReply struct {
-	Data       map[string]any
-	Errors     gqlerror.List
-	Extensions map[string]any
-	NullData   bool
-}
-
-func marshalGatewayReply(reply gatewayReply) ([]byte, error) {
-	if reply.NullData {
-		return jsonReply.Marshal(struct {
-			Data       any            `json:"data"`
-			Errors     gqlerror.List  `json:"errors,omitempty"`
-			Extensions map[string]any `json:"extensions,omitempty"`
-		}{Data: nil, Errors: reply.Errors, Extensions: reply.Extensions})
+	if !conditional {
+		my.cache.Put(key, &planEntry{operation: prepared.operation})
 	}
-	if reply.Data == nil {
-		return jsonReply.Marshal(struct {
-			Errors     gqlerror.List  `json:"errors,omitempty"`
-			Extensions map[string]any `json:"extensions,omitempty"`
-		}{Errors: reply.Errors, Extensions: reply.Extensions})
-	}
-	return jsonReply.Marshal(struct {
-		Data       any            `json:"data,omitempty"`
-		Errors     gqlerror.List  `json:"errors,omitempty"`
-		Extensions map[string]any `json:"extensions,omitempty"`
-	}{Data: reply.Data, Errors: reply.Errors, Extensions: reply.Extensions})
+	return prepared.operation, prepared.variables, nil
 }
 
-func (my *gatewayState) executeQuery(ctx context.Context, operation *ast.OperationDefinition, variables map[string]any) gatewayReply {
-	reply := gatewayReply{Data: make(map[string]any)}
+func (my *gatewayState) executeQuery(ctx context.Context, operation *ast.OperationDefinition, variables map[string]any) gqlReply {
+	reply := gqlReply{Data: make(map[string]any)}
 	results := make([]queryResult, len(operation.SelectionSet))
 	groups := make(map[*namespaceContract][]queryEntry)
 	var wait sync.WaitGroup
@@ -552,16 +504,20 @@ func (my *gatewayState) executeQuery(ctx context.Context, operation *ast.Operati
 		groups[contract] = append(groups[contract], queryEntry{index: index, field: field})
 	}
 	if len(groups) > gatewayMaxFanout {
-		return gatewayReply{Errors: gatewayLimitError("namespace fan-out")}
+		return gqlReply{Errors: gatewayLimitError("namespace fan-out")}
 	}
-	for contract, entries := range groups {
-		wait.Add(1)
-		go func(contract *namespaceContract, entries []queryEntry) {
-			defer wait.Done()
+	if len(groups) == 1 {
+		for contract, entries := range groups {
 			my.executeQueryGroup(ctx, operation, variables, contract, entries, results)
-		}(contract, entries)
+		}
+	} else {
+		for contract, entries := range groups {
+			wait.Go(func() {
+				my.executeQueryGroup(ctx, operation, variables, contract, entries, results)
+			})
+		}
+		wait.Wait()
 	}
-	wait.Wait()
 	for _, result := range results {
 		if result.key == "" {
 			continue
@@ -632,9 +588,8 @@ func (my *gatewayState) executeQueryGroup(ctx context.Context, operation *ast.Op
 	}
 	for index, entry := range entries {
 		key := responseKey(entry.field)
-		rewriteTypenames(my.schema, data[index], entry.field.SelectionSet, contract)
 		definition := my.schema.Query.Fields.ForName(entry.field.Name)
-		value, completionErrors, _ := completeEndpointValue(my.schema, data[index], definition.Type, entry.field.SelectionSet, nil, errors[index])
+		value, completionErrors, _ := completeEndpointValue(my.schema, data[index], definition.Type, entry.field.SelectionSet, nil, errors[index], contract)
 		errors[index] = append(errors[index], completionErrors...)
 		prefixErrors(errors[index], key, entry.field)
 		results[entry.index] = queryResult{key: key, value: value, errors: errors[index]}
@@ -690,8 +645,8 @@ func cloneGraphQLError(err *gqlerror.Error) *gqlerror.Error {
 	return &copy
 }
 
-func (my *gatewayState) executeMutation(ctx context.Context, operation *ast.OperationDefinition, variables map[string]any) gatewayReply {
-	reply := gatewayReply{Data: make(map[string]any)}
+func (my *gatewayState) executeMutation(ctx context.Context, operation *ast.OperationDefinition, variables map[string]any) gqlReply {
+	reply := gqlReply{Data: make(map[string]any)}
 	committed, committedSet := make([]string, 0), make(map[string]bool)
 	indeterminate, indeterminateSet := make([]string, 0), make(map[string]bool)
 	for _, selection := range operation.SelectionSet {
@@ -725,9 +680,8 @@ func (my *gatewayState) executeMutation(ctx context.Context, operation *ast.Oper
 			if child.Data == nil {
 				child.Data = make(map[string]any)
 			}
-			rewriteTypenames(my.schema, child.Data, ast.SelectionSet{field}, contract)
 			definition := my.schema.Mutation.Fields.ForName(field.Name)
-			completed, completionErrors, _ := completeEndpointValue(my.schema, child.Data[key], definition.Type, field.SelectionSet, ast.Path{ast.PathName(key)}, child.Errors)
+			completed, completionErrors, _ := completeEndpointValue(my.schema, child.Data[key], definition.Type, field.SelectionSet, ast.Path{ast.PathName(key)}, child.Errors, contract)
 			child.Data[key] = completed
 			child.Errors = append(child.Errors, completionErrors...)
 			prefixErrors(child.Errors, "", field)
@@ -751,7 +705,7 @@ func (my *gatewayState) executeMutation(ctx context.Context, operation *ast.Oper
 		}
 		definition := my.schema.Mutation.Fields.ForName(field.Name)
 		if len(child.Errors) > 0 && definition != nil && definition.Type.NonNull && value == nil {
-			reply.NullData = true
+			reply.nullData = true
 			break
 		}
 	}
@@ -1038,55 +992,18 @@ func setPublicLocation(err *gqlerror.Error, field *ast.Field) {
 	}
 }
 
-func rewriteTypenames(schema *ast.Schema, value any, set ast.SelectionSet, contract *namespaceContract) {
-	switch value := value.(type) {
-	case []any:
-		for _, item := range value {
-			rewriteTypenames(schema, item, set, contract)
-		}
-	case map[string]any:
-		runtimeType := ""
-		if alias := gatewayTypeAlias(set); hasInlineFragment(set) {
-			if name, ok := value[alias].(string); ok {
-				runtimeType = publicTypename(contract, name)
-				value[alias] = runtimeType
-			}
-		}
-		for _, selection := range set {
-			switch node := selection.(type) {
-			case *ast.Field:
-				key := responseKey(node)
-				if node.Name == "__typename" {
-					if name, ok := value[key].(string); ok {
-						value[key] = publicTypename(contract, name)
-					}
-					continue
-				}
-				rewriteTypenames(schema, value[key], node.SelectionSet, contract)
-			case *ast.InlineFragment:
-				if typeConditionApplies(schema, node.TypeCondition, runtimeType) {
-					rewriteTypenames(schema, value, node.SelectionSet, contract)
-				}
-			}
-		}
-	}
-}
-
-func publicTypename(contract *namespaceContract, name string) string {
-	if name == "Query" {
-		return contract.prefix + name
-	}
-	if contract.publicToChild[name] != "" { // Already rewritten by an overlapping fragment.
-		return name
-	}
-	return contract.prefix + name
-}
-
 // completeEndpointValue projects untrusted child JSON through the public
 // selection and reapplies GraphQL Non-Null bubbling before it crosses the
 // namespace boundary.
-func completeEndpointValue(schema *ast.Schema, value any, typ *ast.Type, set ast.SelectionSet, path ast.Path, known gqlerror.List) (any, gqlerror.List, bool) {
-	return completeValue(schema, value, typ, set, path, known, completionOptions{mode: completionRemote})
+func completeEndpointValue(schema *ast.Schema, value any, typ *ast.Type, set ast.SelectionSet, path ast.Path, known gqlerror.List, contract *namespaceContract) (any, gqlerror.List, bool) {
+	return completeValue(schema, value, typ, set, path, known, completionOptions{mode: completionRemote, typename: contract.publicTypename})
+}
+
+func (my *namespaceContract) publicTypename(name string) string {
+	if name == "" || name != "Query" && my.publicToChild[name] != "" {
+		return name
+	}
+	return my.prefix + name
 }
 
 func typeConditionApplies(schema *ast.Schema, condition, runtimeType string) bool {

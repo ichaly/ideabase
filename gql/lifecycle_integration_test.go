@@ -32,7 +32,7 @@ func TestPurgeAndAuditOutboxSharePostgresStatement(t *testing.T) {
 	require.NoError(t, err)
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-a", Actor: "actor-a", RequestID: "request-a", PolicyRevision: 7})
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestPurgeAndAuditOutboxSharePostgresStatement(t *testing.T) {
 	k2.Set("schema.schema", "public")
 	meta2, err := NewMetadata(k2, db)
 	require.NoError(t, err)
-	schema, err := NewRenderer(meta2).Generate()
+	schema, err := NewRenderer(meta2).Render()
 	require.NoError(t, err)
 	require.NotContains(t, schema, "gqlAuditOutbox", "内部审计表不得进入公共Schema")
 }

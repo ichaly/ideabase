@@ -314,7 +314,7 @@ func appendPath(path ast.Path, segment string, index ...ast.PathElement) ast.Pat
 // resolve 按绑定填充后处理字段。远程关系绑定先行：网络取数并发（各job独立）、
 // 回填串行（宿主map非并发安全），失败字段置null并以警告随响应errors返回（不中断）；
 // resolver绑定随后：批量解析器整列表一次调用，普通解析器逐宿主并行计算
-func (my *Executor) resolve(ctx context.Context, bindings []binding, data map[string]interface{}, variables map[string]interface{}) (gqlerror.List, error) {
+func (my *Engine) resolve(ctx context.Context, bindings []binding, data map[string]interface{}, variables map[string]interface{}) (gqlerror.List, error) {
 	var warnings gqlerror.List
 	var jobs []*remoteJob
 	type batchResult struct {
@@ -554,7 +554,7 @@ type mounted interface {
 
 // mount 挂载声明为宿主实体的虚拟字段：绑定收集与SQL编译跳过据此判定；
 // 与既有字段同名直接报错（不做静默覆盖，启动即失败）
-func (my *Executor) mount(m mounted) error {
+func (my *Engine) mount(m mounted) error {
 	d := m.Define()
 	if d.Class == "Query" || d.Class == "Mutation" {
 		return nil
@@ -581,7 +581,7 @@ func (my *Executor) mount(m mounted) error {
 
 // rebuild 合并全部注册声明重建schema（Resolver/Remote共用；仅限启动期）：
 // extend片段按注册键排序保证文本稳定，附加SDL按内容去重（多个声明共享同一虚拟类型）
-func (my *Executor) rebuild() error {
+func (my *Engine) rebuild() error {
 	defines := make(map[string]Define, len(my.resolvers)+len(my.remotes))
 	for name, r := range my.resolvers {
 		defines[name] = r.Define()
@@ -658,7 +658,7 @@ func (my *rootResolverQuery) Error() string { return "根字段Resolver不支持
 
 // needsRootExecution 判断操作是否需要逐根字段协调：根Resolver和多根mutation
 // 进入协调路径；单个默认CRUD仍保留原单SQL原子快路径。
-func (my *Executor) needsRootExecution(operation *ast.OperationDefinition) bool {
+func (my *Engine) needsRootExecution(operation *ast.OperationDefinition) bool {
 	fields := 0
 	for _, s := range operation.SelectionSet {
 		f, ok := s.(*ast.Field)
@@ -682,7 +682,7 @@ func (my *Executor) needsRootExecution(operation *ast.OperationDefinition) bool 
 	return false
 }
 
-func (my *Executor) executeRootResolvers(ctx context.Context, entry *planEntry, variables map[string]interface{}) gqlReply {
+func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, variables map[string]interface{}) gqlReply {
 	operation, plans := entry.operation, &entry.rootPlans
 	typename := "Query"
 	if operation.Operation == ast.Mutation {
@@ -794,7 +794,7 @@ func rootFieldExecutionErrors(field *ast.Field, err error, code string, rolledBa
 	return result
 }
 
-func (my *Executor) resolveRootField(ctx context.Context, operation *ast.OperationDefinition, field *ast.Field, variables map[string]interface{}, parent string, plans *sync.Map) (interface{}, gqlerror.List, error) {
+func (my *Engine) resolveRootField(ctx context.Context, operation *ast.OperationDefinition, field *ast.Field, variables map[string]interface{}, parent string, plans *sync.Map) (interface{}, gqlerror.List, error) {
 	resolver := my.resolvers[parent+"."+field.Name]
 	if resolver == nil {
 		return my.executeDefaultRootField(ctx, operation, field, variables, plans)
@@ -902,7 +902,7 @@ func projectRootValue(value any, set ast.SelectionSet, objectType string) any {
 
 // executeDefaultRootField 在自定义根Resolver与默认数据库字段混排时逐字段复用原
 // SQL编译/执行链；默认-only操作仍走整份operation单SQL快路径，零额外开销。
-func (my *Executor) executeDefaultRootField(ctx context.Context, operation *ast.OperationDefinition, field *ast.Field, variables map[string]interface{}, plans *sync.Map) (interface{}, gqlerror.List, error) {
+func (my *Engine) executeDefaultRootField(ctx context.Context, operation *ast.OperationDefinition, field *ast.Field, variables map[string]interface{}, plans *sync.Map) (interface{}, gqlerror.List, error) {
 	if my.compiler == nil || my.database == nil {
 		return nil, nil, fmt.Errorf("执行器未配置数据库或编译器")
 	}
@@ -952,7 +952,7 @@ func (my *Executor) executeDefaultRootField(ctx context.Context, operation *ast.
 // enrich 回查补全：根Resolver返回实体id时，以客户端选择集合成实体查询走既有
 // 编译路径读回（计划缓存、字段级resolver、关系全部复用），对齐变更读回语义。
 // 第二返回值为回查携带的非致命警告（data与errors共存时），随最终响应errors返回
-func (my *Executor) enrich(ctx context.Context, operation *ast.OperationDefinition, f *ast.Field, variables map[string]interface{}, result interface{}) (interface{}, gqlerror.List, bool, error) {
+func (my *Engine) enrich(ctx context.Context, operation *ast.OperationDefinition, f *ast.Field, variables map[string]interface{}, result interface{}) (interface{}, gqlerror.List, bool, error) {
 	if result == nil || len(f.SelectionSet) == 0 {
 		return result, nil, false, nil
 	}
@@ -1018,7 +1018,7 @@ func (my *Executor) enrich(ctx context.Context, operation *ast.OperationDefiniti
 
 	reply := my.queryData(ctx, sb.String(), args, "")
 	if reply.Data == nil && len(reply.Errors) > 0 { // 部分错误(如远程警告)与data共存时视为成功
-		return nil, nil, false, fmt.Errorf("Resolver回查失败: %w", reply.Errors)
+		return nil, nil, false, fmt.Errorf("resolver回查失败: %w", reply.Errors)
 	}
 	wrapper, _ := reply.Data[fieldName].(map[string]interface{})
 	items, _ := wrapper[protocol.ITEMS].([]interface{})

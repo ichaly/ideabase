@@ -1,8 +1,9 @@
 # GQL Gateway 迁移
 
-本次重构保留 `NewMetadata`、`NewCompiler`、`NewRenderer`、`NewExecutor`、
-`NewResolver` 与 Fiber `Bind`。新代码优先使用 `New(...).Build()`；旧入口只是兼容层，
-不再拥有另一套执行语义。
+应用主路径统一为 `New` → `Builder` → `Policy`/metadata permissions → `Build` → `Engine`；
+低级构造器不再是运行时装配入口。
+`NewResolver` 与 Fiber `Bind`。新代码统一使用 `New(...).Build()`，运行时类型只有
+`Engine`。
 
 ## 1. 先升级引擎，再迁调用方
 
@@ -18,11 +19,9 @@ GOWORK=off go test ./internal/modules/gql/api ./internal/modules/bot/api
 
 `Builder` 默认 fail-closed。为每个生产实体声明 `operations` 与 `permissions`，由认证层
 构造 `gql.Identity`/scope；不要接受客户端传入的 tenant、role 或 actor。只在可信本地工具
-使用 `TrustedLocal`，旧构造链若确需暂时全开放必须显式传
-`LegacyTrustedBoundaryPolicy()`。
+请为本地工具也配置私有 PolicyProvider；生产代码不得绕过 fail-closed policy。
 
-推荐顺序：先部署完整权限配置与身份注入，观察拒绝指标，再移除 legacy boundary。
-回滚时顺序相反，避免旧实例读取新租户数据。
+推荐顺序：先部署完整权限配置与身份注入，观察拒绝指标，再逐步切换实例。
 
 ## 3. Resolver 复用请求事务
 

@@ -26,7 +26,7 @@ func governanceSchema(t *testing.T, classes ...*protocol.Class) string {
 		meta.Nodes[class.Name] = class
 	}
 	r := NewRenderer(meta)
-	schema, err := r.Generate()
+	schema, err := r.Render()
 	require.NoError(t, err)
 	_, err = gqlparser.LoadSchema(&ast.Source{Name: "governance.graphql", Input: schema})
 	require.NoError(t, err, "治理配置生成的 SDL 必须可被 GraphQL parser 加载")
@@ -341,7 +341,7 @@ func TestRenderer_Generate(t *testing.T) {
 	renderer := NewRenderer(meta)
 
 	// 生成schema
-	schema, err := renderer.Generate()
+	schema, err := renderer.Render()
 
 	// 验证生成成功
 	assert.NoError(t, err)
@@ -958,7 +958,7 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 
 	// 3. 生成schema
 	renderer := NewRenderer(meta)
-	schema, err := renderer.Generate()
+	schema, err := renderer.Render()
 	assert.NoError(t, err)
 	assert.NotEmpty(t, schema)
 

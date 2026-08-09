@@ -28,7 +28,7 @@ func (my *_DialectSuite) TestGeneratedPrimaryKeys() {
 		return next, nil
 	}))
 	my.Require().NoError(err)
-	schemaText, err := gql.NewRenderer(meta).Generate()
+	schemaText, err := gql.NewRenderer(meta).Render()
 	my.Require().NoError(err)
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "generated-id.graphql", Input: schemaText})
 	my.Require().NoError(err)

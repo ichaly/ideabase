@@ -20,7 +20,7 @@ import (
 	"github.com/vektah/gqlparser/v2/parser"
 )
 
-// Endpoint is the transport-neutral execution contract implemented by gql.Executor and gql.Gateway.
+// Endpoint is the transport-neutral execution contract implemented by gql.Engine and gql.Gateway.
 type Endpoint interface {
 	Execute(context.Context, string, map[string]any) ([]byte, error)
 }
@@ -64,11 +64,6 @@ func NewHandler(endpoint Endpoint, options ...Options) http.Handler {
 		opts.Timeout = defaultTimeout
 	}
 	return &handler{endpoint: endpoint, options: opts}
-}
-
-// NewHTTPHandler is an explicit alias for NewHandler.
-func NewHTTPHandler(endpoint Endpoint, options ...Options) http.Handler {
-	return NewHandler(endpoint, options...)
 }
 
 type handler struct {

@@ -313,7 +313,7 @@ func (my *_DialectSuite) TestCompositeRelation() {
 
 	meta, err := gql.NewMetadata(k, nil)
 	my.Require().NoError(err)
-	schemaStr, err := gql.NewRenderer(meta).Generate()
+	schemaStr, err := gql.NewRenderer(meta).Render()
 	my.Require().NoError(err)
 	schema, gqlErr := gqlparser.LoadSchema(&ast.Source{Name: "composite.graphql", Input: schemaStr})
 	my.Require().Nil(gqlErr)

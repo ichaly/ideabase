@@ -26,13 +26,13 @@ func TestPolicyProviderRequiresExplicitRootResolverAccess(t *testing.T) {
 	meta := emptyMetadata(t)
 	compiler, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(nil, NewRenderer(meta), meta, compiler)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
 	require.NoError(t, err)
 	provider := OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{Allow: true}, nil
 	})
-	require.NoError(t, executor.Register(provider))
-	require.NoError(t, executor.Register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
+	installTestPolicy(t, executor, provider)
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
 		return true, nil
 	})))
 	_, err = executor.Snapshot()
@@ -44,13 +44,13 @@ func TestPolicyProviderAcceptsDeclaredRootResolverAccess(t *testing.T) {
 	meta := emptyMetadata(t)
 	compiler, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(nil, NewRenderer(meta), meta, compiler)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
 	require.NoError(t, err)
 	provider := OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{Allow: true}, nil
 	})
-	require.NoError(t, executor.Register(provider))
-	require.NoError(t, executor.Register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
+	installTestPolicy(t, executor, provider)
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
 		return true, nil
 	}, Access("system", "read"))))
 	snapshot, err := executor.Snapshot()
@@ -65,7 +65,7 @@ func TestPolicyProviderDeniesBeforeRootResolver(t *testing.T) {
 	meta := emptyMetadata(t)
 	compiler, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(nil, NewRenderer(meta), meta, compiler)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
 	require.NoError(t, err)
 	called, handled := 0, false
 	provider := OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
@@ -75,8 +75,8 @@ func TestPolicyProviderDeniesBeforeRootResolver(t *testing.T) {
 		require.Equal(t, []string{"read"}, request.Actions)
 		return PolicyDecision{Allow: false}, nil
 	})
-	require.NoError(t, executor.Register(provider))
-	require.NoError(t, executor.Register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
+	installTestPolicy(t, executor, provider)
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
 		handled = true
 		return true, nil
 	}, Access("system", "read"))))
@@ -101,13 +101,13 @@ func TestPolicyProviderRejectsStaleRevisionAndUnawareHandler(t *testing.T) {
 			meta := emptyMetadata(t)
 			compiler, err := NewCompiler(meta, nil)
 			require.NoError(t, err)
-			executor, err := NewExecutor(nil, NewRenderer(meta), meta, compiler)
+			executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
 			require.NoError(t, err)
-			require.NoError(t, executor.Register(OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
+			installTestPolicy(t, executor, OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
 				return test.decision, nil
-			})))
+			}))
 			handled := false
-			require.NoError(t, executor.Register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
+			require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
 				handled = true
 				return true, nil
 			}, Access("system", "read"))))
@@ -125,12 +125,12 @@ func TestPolicyAwareResolverReceivesDefensiveDecision(t *testing.T) {
 	meta := emptyMetadata(t)
 	compiler, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(nil, NewRenderer(meta), meta, compiler)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
 	require.NoError(t, err)
-	require.NoError(t, executor.Register(OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
+	installTestPolicy(t, executor, OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{Allow: true, RowPredicates: []TypedPredicate{{Column: "id", Operator: "eq", Value: 1}}}, nil
-	})))
-	require.NoError(t, executor.Register(NewResolver("Query", "health", "", func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
+	}))
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
 		decision, ok := PolicyDecisionFromContext(ctx, "Query.health")
 		if !ok {
 			return false, nil
@@ -157,7 +157,7 @@ func TestPolicyProviderRejectsUnlistedFieldUse(t *testing.T) {
 			FieldUseSelect: {"id"}, FieldUseReturn: {"id"},
 		}}, nil
 	})
-	require.NoError(t, executor.Register(provider))
+	installTestPolicy(t, executor, provider)
 	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
 	require.NoError(t, err)
 	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users { items { id name } } }`, nil)
@@ -174,7 +174,7 @@ func TestPolicyProviderCoversNestedRelationResource(t *testing.T) {
 		seen[request.Coordinate] = request
 		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
 	})
-	require.NoError(t, executor.Register(provider))
+	installTestPolicy(t, executor, provider)
 	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
 	require.NoError(t, err)
 	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users { items { id posts { title } } } }`, nil)
@@ -197,7 +197,7 @@ func TestPolicyProviderRowPredicateIsCompiledWithRequestValue(t *testing.T) {
 			RowPredicates: []TypedPredicate{{Column: "email", Operator: "eq", Value: request.Identity.Subject()}},
 		}, nil
 	})
-	require.NoError(t, executor.Register(provider))
+	installTestPolicy(t, executor, provider)
 	query := `{ users { items { name } } }`
 	for subject, name := range map[string]string{"policy-a@x.com": "Policy A", "policy-b@x.com": "Policy B"} {
 		identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: subject})
@@ -220,7 +220,7 @@ func TestPolicyProviderCreateCheckRejectsBeforeWrite(t *testing.T) {
 			Check: []TypedPredicate{{Column: "name", Operator: "eq", Value: "Allowed"}},
 		}, nil
 	})
-	require.NoError(t, executor.Register(provider))
+	installTestPolicy(t, executor, provider)
 	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
 	require.NoError(t, err)
 	ctx := WithIdentity(context.Background(), identity)
@@ -237,15 +237,15 @@ func TestPolicyPlanCacheIsPartitionedByTenantRoute(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	seen := map[string]string{}
-	require.NoError(t, executor.Register(OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		seen[request.Identity.Tenant()] = request.Route.CacheKey
 		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
-	})))
+	}))
 	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Revision: 3, Routes: map[string]TenantRoute{
 		"a": {DataSource: "db"}, "b": {DataSource: "db"},
 	}})
 	require.NoError(t, err)
-	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": {Executor: executor}})
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": executor})
 	require.NoError(t, err)
 	for _, tenant := range []string{"a", "b"} {
 		identity, identityErr := NewIdentity(IdentityInput{Tenant: tenant, Subject: "u"})
@@ -262,7 +262,7 @@ func TestPolicyPlanCacheIsPartitionedByTenantRoute(t *testing.T) {
 func TestPolicyProviderFiltersIntrospectionAndSchemaArtifact(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.Register(OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		fields := map[FieldUse][]string{}
 		allowed := []string{"*"}
 		for _, use := range request.FieldUses {
@@ -273,7 +273,7 @@ func TestPolicyProviderFiltersIntrospectionAndSchemaArtifact(t *testing.T) {
 			fields[use] = useAllowed
 		}
 		return PolicyDecision{Allow: true, Fields: fields, PolicyRevision: 7}, nil
-	})))
+	}))
 	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u", PolicyRevision: 7})
 	require.NoError(t, err)
 	ctx := WithIdentity(context.Background(), identity)
@@ -302,9 +302,9 @@ func TestPolicyProviderFiltersIntrospectionAndSchemaArtifact(t *testing.T) {
 func TestPolicyProviderEnforcesRequestLimitBeforeSQL(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.Register(OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{Allow: true, Fields: request.Fields, Limit: 1}, nil
-	})))
+	}))
 	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
 	require.NoError(t, err)
 	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users(limit: 2) { items { id } } }`, nil)
@@ -319,14 +319,19 @@ func TestBuiltinPermissionsFilterEffectiveIntrospection(t *testing.T) {
 	user, ok := executor.metadata.GetNode("User")
 	require.True(t, ok)
 	user.Permissions = map[string]*protocol.Permission{"reader": {Select: []string{"id"}}}
-	reply := executor.run(WithRole(context.Background(), "reader"), `{ __type(name: "User") { fields { name } } }`, nil, "")
+	executor.policy = metadataPolicy(executor.metadata)
+	executor.policyBuiltin = true
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "reader", Roles: []string{"reader"}})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	reply := executor.run(ctx, `{ __type(name: "User") { fields { name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	fields := reply.Data["__type"].(map[string]any)["fields"]
 	require.Equal(t, []any{map[string]any{"name": "id"}}, fields)
-	reply = executor.run(WithRole(context.Background(), "reader"), `{ __type(name: "UserCreateInput") { name } }`, nil, "")
+	reply = executor.run(ctx, `{ __type(name: "UserCreateInput") { name } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	require.Nil(t, reply.Data["__type"])
-	artifact, err := executor.EffectiveSchema(WithRole(context.Background(), "reader"))
+	artifact, err := executor.EffectiveSchema(ctx)
 	require.NoError(t, err)
 	_, err = gqlparser.LoadSchema(&ast.Source{Name: "reader.graphql", Input: artifact.Schema})
 	require.NoError(t, err)

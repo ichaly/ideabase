@@ -80,11 +80,11 @@ func TestResolver(t *testing.T) {
 	compile, err := NewCompiler(meta, []compiler.Dialect{pgsql.NewDialect()})
 	require.NoError(t, err, "创建编译器失败")
 
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err, "创建执行器失败")
 
 	var calls int
-	require.NoError(t, executor.Register(greetResolver("User"), labelResolver(&calls)))
+	require.NoError(t, executor.register(greetResolver("User"), labelResolver(&calls)))
 
 	ctx := context.Background()
 
@@ -135,7 +135,7 @@ func TestResolver(t *testing.T) {
 func TestResolverArgs(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.NoError(t, executor.Register(NewResolver("User", "hello", "问候",
+	require.NoError(t, executor.register(NewResolver("User", "hello", "问候",
 		func(_ context.Context, source Source, args struct {
 			Lang string `json:"lang" validate:"omitempty,oneof=zh en"`
 		}) (string, error) {
@@ -179,7 +179,7 @@ func TestResolverResultSuffixClass(t *testing.T) {
 		})
 	})
 	defer cleanup()
-	require.NoError(t, executor.Register(greetResolver("ExamResult")))
+	require.NoError(t, executor.register(greetResolver("ExamResult")))
 	ctx := context.Background()
 
 	reply := executor.run(ctx, `mutation { createUser(input: { name: "E", email: "e@x.com" }) { id } }`, nil, "")
@@ -215,7 +215,7 @@ func TestFieldResolverRoots(t *testing.T) {
 		func(_ context.Context, _ Root, args pingArgs) (string, error) {
 			return "pong:" + args.Message, nil
 		})
-	require.NoError(t, executor.Register(ping))
+	require.NoError(t, executor.register(ping))
 
 	reply := executor.run(context.Background(), `query { ping(message: "hi") users { total } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
@@ -233,7 +233,7 @@ func TestFieldResolverEntity(t *testing.T) {
 		func(_ context.Context, source Source, _ struct{}) (string, error) {
 			return "@" + source["name"].(string), nil
 		})
-	require.NoError(t, executor.Register(resolver))
+	require.NoError(t, executor.register(resolver))
 
 	reply := executor.run(context.Background(), `mutation {
 		createUser(input: { name: "Alice", email: "alice@x.com" }) { name displayName }
@@ -256,8 +256,8 @@ func TestFieldResolverReplaceGenerated(t *testing.T) {
 			return map[string]any{"id": int64(99), "name": "custom:" + input.Input["name"].(string)}, nil
 		}, Existing())
 
-	require.Error(t, executor.Register(override), "已有schema字段必须显式Replace")
-	require.NoError(t, executor.Replace(override))
+	require.Error(t, executor.register(override), "已有schema字段必须显式Replace")
+	require.NoError(t, executor.replace(override))
 
 	reply := executor.run(context.Background(), `mutation {
 		createUser(input: { name: "Alice", email: "alice@x.com" }) { id name }
@@ -277,8 +277,8 @@ func TestFieldResolverWrap(t *testing.T) {
 		func(_ context.Context, _ Root, input args) (string, error) {
 			return input.Message, nil
 		})
-	require.NoError(t, executor.Register(base))
-	require.NoError(t, executor.Wrap("Query.echo",
+	require.NoError(t, executor.register(base))
+	require.NoError(t, executor.wrap("Query.echo",
 		NewResolverMiddleware(func(ctx context.Context, source Root, input args, next NextResolver[Root, args, string]) (string, error) {
 			input.Message = "wrapped:" + input.Message
 			return next(ctx, source, input)
@@ -317,7 +317,7 @@ func newSignUpResolver(db *gorm.DB) Resolver {
 }
 
 // setupRootResolverExecutor 与setupTestExecutor同构，但透出db供Resolver闭包使用
-func setupRootResolverExecutor(t *testing.T) (*Executor, *gorm.DB, func()) {
+func setupRootResolverExecutor(t *testing.T) (*Engine, *gorm.DB, func()) {
 	return newTestExecutor(t, nil)
 }
 
@@ -327,7 +327,7 @@ func TestRootResolverRoundTrip(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	require.NoError(t, executor.Register(pingResolver(), newSignUpResolver(db)))
+	require.NoError(t, executor.register(pingResolver(), newSignUpResolver(db)))
 
 	// 1. 内省可见：自定义字段与表CRUD一视同仁
 	reply := executor.run(ctx, `{ __type(name: "Mutation") { fields { name } } }`, nil, "")
@@ -372,7 +372,7 @@ func TestRootResolverTypename(t *testing.T) {
 	executor, db, cleanup := setupRootResolverExecutor(t)
 	defer cleanup()
 	ctx := context.Background()
-	require.NoError(t, executor.Register(pingResolver(), newSignUpResolver(db)))
+	require.NoError(t, executor.register(pingResolver(), newSignUpResolver(db)))
 
 	// 查询操作回填"Query"
 	reply := executor.run(ctx, `query { ping(msg: "hi") __typename }`, nil, "")
@@ -395,7 +395,7 @@ func TestRootResolverVariablePassthrough(t *testing.T) {
 	executor, db, cleanup := setupRootResolverExecutor(t)
 	defer cleanup()
 	ctx := context.Background()
-	require.NoError(t, executor.Register(newSignUpResolver(db)))
+	require.NoError(t, executor.register(newSignUpResolver(db)))
 
 	// 准备：建号并为其创建两篇文章（回查嵌套选择集有数据可过滤/排序）
 	reply := executor.run(ctx, `mutation ($n: String!, $e: String!) {

@@ -23,10 +23,8 @@ type planEntry struct {
 	intro        *ast.OperationDefinition // 与业务字段混排的自省投影
 	resolvers    []binding                // resolver绑定只依赖AST，volatile重编译复用（非volatile时plan内已含，恒存仅为构造统一）
 	paths        codecPaths               // codec路径树只依赖AST，volatile重编译复用（同上）
-	roleNeeded   bool
-	policyNeeded bool
-	rootResolver bool     // 自定义Query/Mutation根字段Resolver
-	rootPlans    sync.Map // 多根执行中按字段缓存非volatile子计划（key: *ast.Field）
+	rootResolver bool                     // 自定义Query/Mutation根字段Resolver
+	rootPlans    sync.Map                 // 多根执行中按字段缓存非volatile子计划（key: *ast.Field）
 }
 
 // planCache 执行计划LRU缓存：命中路径零解析；非volatile零编译

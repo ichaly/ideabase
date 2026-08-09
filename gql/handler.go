@@ -9,7 +9,7 @@ import (
 
 const defaultBatchLimit = 1000
 
-func (my *Executor) executionContext(ctx context.Context, selection ast.SelectionSet) context.Context {
+func (my *Engine) executionContext(ctx context.Context, selection ast.SelectionSet) context.Context {
 	fingerprint := ""
 	if my.snapshot != nil {
 		fingerprint = my.snapshot.Fingerprint()
