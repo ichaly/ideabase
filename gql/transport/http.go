@@ -88,7 +88,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "endpoint unavailable", http.StatusInternalServerError)
 		return
 	}
-	if !acceptsGraphQL(r.Header.Get("Accept")) {
+	responseMedia := negotiateGraphQL(r.Header.Get("Accept"))
+	if responseMedia == "" {
 		http.Error(w, "unsupported Accept", http.StatusNotAcceptable)
 		return
 	}
@@ -180,7 +181,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	kind, status, operationErr := requestOperation(req.Query, req.OperationName)
 	if operationErr != nil {
-		writeGraphQLRequestError(w, status, operationErr)
+		writeGraphQLRequestError(w, status, operationErr, responseMedia)
 		return
 	}
 	if r.Method == http.MethodGet && kind != ast.Query {
@@ -200,7 +201,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeGraphQLError(w, http.StatusInternalServerError, fmt.Errorf("GraphQL response exceeds configured limit"))
 			return
 		}
-		if writeGraphQL(w, body) {
+		if writeGraphQL(w, body, responseMedia) {
 			return
 		}
 		err = fmt.Errorf("endpoint returned an invalid GraphQL response")
@@ -250,10 +251,14 @@ func decodeJSON(raw []byte, dst any) error {
 	return nil
 }
 
-func acceptsGraphQL(value string) bool {
+func negotiateGraphQL(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "application/json"
+	}
+	selected, best := "", -1.0
 	for _, part := range strings.Split(value, ",") {
 		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(part))
-		if err != nil || mediaType != responseType {
+		if err != nil {
 			continue
 		}
 		quality := 1.0
@@ -263,11 +268,18 @@ func acceptsGraphQL(value string) bool {
 				continue
 			}
 		}
-		if quality > 0 {
-			return true
+		candidate := ""
+		switch mediaType {
+		case responseType:
+			candidate = responseType
+		case "application/json", "application/*", "*/*":
+			candidate = "application/json"
+		}
+		if candidate != "" && quality > 0 && quality > best {
+			selected, best = candidate, quality
 		}
 	}
-	return false
+	return selected
 }
 
 func isJSONContentType(value string) bool {
@@ -294,7 +306,7 @@ func requestOperation(query, operationName string) (ast.Operation, int, error) {
 	return op.Operation, 0, nil
 }
 
-func writeGraphQL(w http.ResponseWriter, body []byte) bool {
+func writeGraphQL(w http.ResponseWriter, body []byte, mediaType string) bool {
 	var response map[string]json.RawMessage
 	if err := decodeJSON(body, &response); err != nil {
 		return false
@@ -319,15 +331,21 @@ func writeGraphQL(w http.ResponseWriter, body []byte) bool {
 	} else if !data {
 		status = http.StatusUnprocessableEntity
 	}
-	w.Header().Set("Content-Type", responseType)
+	if mediaType == "application/json" {
+		status = http.StatusOK // Legacy JSON cannot distinguish GraphQL request and field errors via HTTP.
+	}
+	w.Header().Set("Content-Type", mediaType)
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 	return true
 }
 
-func writeGraphQLRequestError(w http.ResponseWriter, status int, err error) {
+func writeGraphQLRequestError(w http.ResponseWriter, status int, err error, mediaType string) {
 	body, _ := json.Marshal(map[string]any{"errors": []map[string]string{{"message": err.Error()}}})
-	w.Header().Set("Content-Type", responseType)
+	if mediaType == "application/json" {
+		status = http.StatusOK
+	}
+	w.Header().Set("Content-Type", mediaType)
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 }

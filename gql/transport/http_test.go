@@ -54,6 +54,26 @@ func TestPOSTExecutesJSONWithNumberAndGraphQLResponse(t *testing.T) {
 	}
 }
 
+func TestLegacyJSONAndMissingAcceptRemainCompatible(t *testing.T) {
+	for name, accept := range map[string]string{"json": "application/json", "wildcard": "*/*", "missing": ""} {
+		t.Run(name, func(t *testing.T) {
+			ep := &testEndpoint{body: []byte(`{"data":{"ok":true}}`)}
+			w := httptest.NewRecorder()
+			NewHandler(ep).ServeHTTP(w, req(http.MethodPost, "application/json", accept, `{"query":"{x}"}`))
+			if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/json" {
+				t.Fatalf("legacy response = %d/%q", w.Code, w.Header().Get("Content-Type"))
+			}
+		})
+	}
+
+	ep := &testEndpoint{body: []byte(`{"errors":[{"message":"invalid"}]}`)}
+	w := httptest.NewRecorder()
+	NewHandler(ep).ServeHTTP(w, req(http.MethodPost, "application/json", "application/json", `{"query":"{x}"}`))
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("legacy request error = %d/%q", w.Code, w.Header().Get("Content-Type"))
+	}
+}
+
 func TestPOSTRejectsTrailingJSONAndWrongMediaTypes(t *testing.T) {
 	for name, r := range map[string]*http.Request{
 		"trailing":     req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"} {}`),
