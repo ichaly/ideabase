@@ -545,3 +545,67 @@ func TestGatewayRejectsOversizedEmbeddedRequestBeforeCallingChild(t *testing.T) 
 	require.Contains(t, string(body), "LIMIT_EXCEEDED")
 	require.Zero(t, child.calls.Load())
 }
+
+func TestGatewayCachesStaticOperationAndLimitsExpandedRootFragments(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+		return []byte(`{"data":{"user":{"id":"1"}}}`), nil
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	query := `{ crm { user { id } } }`
+	for range 2 {
+		_, err = gateway.Execute(context.Background(), query, nil)
+		require.NoError(t, err)
+	}
+	_, cached := gateway.current().cache.Get(planKey{query: query})
+	require.True(t, cached)
+
+	var document strings.Builder
+	document.WriteString("query { ...Many } fragment Many on Query {")
+	for index := range gatewayMaxRootFields + 1 {
+		fmt.Fprintf(&document, " n%d: crm { user { id } }", index)
+	}
+	document.WriteString(" }")
+	body, err := gateway.Execute(context.Background(), document.String(), nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "LIMIT_EXCEEDED")
+	require.Equal(t, int32(2), child.calls.Load())
+}
+
+func TestGatewayDoesNotCacheVariableConditionalSelection(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, func(_ context.Context, query string, _ map[string]any) ([]byte, error) {
+		return []byte(`{"data":{"user":{"id":"1","name":"Ada"}}}`), nil
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	query := `query($show: Boolean!) { crm { user { id name @include(if: $show) } } }`
+	body, err := gateway.Execute(context.Background(), query, map[string]any{"show": false})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":{"crm":{"user":{"id":"1"}}}}`, string(body))
+	body, err = gateway.Execute(context.Background(), query, map[string]any{"show": true})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":{"crm":{"user":{"id":"1","name":"Ada"}}}}`, string(body))
+	_, cached := gateway.current().cache.Get(planKey{query: query})
+	require.False(t, cached)
+}
+
+func BenchmarkGatewayWarmQuery(b *testing.B) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+		return []byte(`{"data":{"user":{"id":"1"}}}`), nil
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	if err != nil {
+		b.Fatal(err)
+	}
+	query := `{ crm { user { id } } }`
+	if _, err = gateway.Execute(context.Background(), query, nil); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err = gateway.Execute(context.Background(), query, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

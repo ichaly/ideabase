@@ -66,6 +66,7 @@ type gatewayState struct {
 	schema      *ast.Schema
 	intro       *intro.Handler
 	validation  *validatorrules.Rules
+	cache       *planCache
 	snapshot    *Snapshot
 	contracts   map[string]*namespaceContract
 	mutations   map[string]*namespaceContract
@@ -191,7 +192,7 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 	snapshot := &Snapshot{schema: source, fingerprint: fmt.Sprintf("%x", fingerprint), capabilities: capabilities, index: index}
 	return &gatewayState{
 		schema: schema, intro: intro.New(schema), validation: validatorrules.NewDefaultRules(), snapshot: snapshot,
-		contracts: contracts, mutations: mutations, topologyIDs: identitySet(seen), depth: depth,
+		cache: newPlanCache(planCacheSize), contracts: contracts, mutations: mutations, topologyIDs: identitySet(seen), depth: depth,
 	}, nil
 }
 
@@ -338,21 +339,12 @@ func (my *gatewayState) subscribe(ctx context.Context, query string, variables m
 	if errs := validateGatewayRequest(query, variables); len(errs) > 0 {
 		return nil, errs
 	}
-	doc, errs := loadQuery(my.schema, query, gatewayMaxTokens, my.validation)
-	if len(errs) > 0 {
-		return nil, errs
+	operation, coerced, err := my.prepareOperation(query, variables, operationName)
+	if err != nil {
+		return nil, err
 	}
-	operation := doc.Operations.ForName(operationName)
-	if operation == nil || (operationName == "" && len(doc.Operations) != 1) || operation.Operation != ast.Subscription {
+	if operation.Operation != ast.Subscription {
 		return nil, fmt.Errorf("未找到可执行的subscription操作")
-	}
-	coerced, err := coerceVariables(my.schema, operation, cloneVariables(variables))
-	if err != nil {
-		return nil, err
-	}
-	operation.SelectionSet, err = normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, coerced, my.schema)
-	if err != nil {
-		return nil, err
 	}
 	if len(operation.SelectionSet) != 1 {
 		return nil, fmt.Errorf("subscription必须且只能选择一个namespace根字段")
@@ -439,22 +431,7 @@ func (my *gatewayState) execute(ctx context.Context, query string, variables map
 	if errs := validateGatewayRequest(query, variables); len(errs) > 0 {
 		return marshalGatewayReply(gatewayReply{Errors: errs})
 	}
-	doc, errs := loadQuery(my.schema, query, gatewayMaxTokens, my.validation)
-	if len(errs) > 0 {
-		return marshalGatewayReply(gatewayReply{Errors: errs})
-	}
-	operation := doc.Operations.ForName(operationName)
-	if operation == nil || (operationName == "" && len(doc.Operations) != 1) {
-		return marshalGatewayReply(gatewayReply{Errors: gqlerror.List{gqlerror.Errorf("未找到名为'%s'的操作（多操作查询必须提供operationName）", operationName)}})
-	}
-	coerced, err := coerceVariables(my.schema, operation, cloneVariables(variables))
-	if err != nil {
-		return marshalGatewayReply(gatewayReply{Errors: gqlErrors(err)})
-	}
-	if len(operation.SelectionSet) > gatewayMaxRootFields {
-		return marshalGatewayReply(gatewayReply{Errors: gatewayLimitError("root field")})
-	}
-	operation.SelectionSet, err = normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, coerced, my.schema)
+	operation, coerced, err := my.prepareOperation(query, variables, operationName)
 	if err != nil {
 		return marshalGatewayReply(gatewayReply{Errors: gqlErrors(err)})
 	}
@@ -491,6 +468,47 @@ func (my *gatewayState) execute(ctx context.Context, query string, variables map
 	}
 	executed.Data = data
 	return marshalGatewayReply(executed)
+}
+
+func (my *gatewayState) prepareOperation(query string, variables map[string]any, operationName string) (*ast.OperationDefinition, map[string]any, error) {
+	key := planKey{operation: operationName, query: query}
+	if entry, ok := my.cache.Get(key); ok {
+		coerced, err := coerceVariables(my.schema, entry.operation, cloneVariables(variables))
+		return entry.operation, coerced, err
+	}
+	doc, errs := loadQuery(my.schema, query, gatewayMaxTokens, my.validation)
+	if len(errs) > 0 {
+		return nil, nil, errs
+	}
+	operation := doc.Operations.ForName(operationName)
+	if operation == nil || (operationName == "" && len(doc.Operations) != 1) {
+		return nil, nil, fmt.Errorf("未找到名为'%s'的操作（多操作查询必须提供operationName）", operationName)
+	}
+	if hasConditionalDirective(query) {
+		coerced, err := coerceVariables(my.schema, operation, cloneVariables(variables))
+		if err != nil {
+			return nil, nil, err
+		}
+		operation.SelectionSet, err = normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, coerced, my.schema)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(operation.SelectionSet) > gatewayMaxRootFields {
+			return nil, nil, gatewayLimitError("root field")
+		}
+		return operation, coerced, nil
+	}
+	selection, err := normalizeSelectionWithSchema(operation.SelectionSet, doc.Fragments, nil, my.schema)
+	if err != nil {
+		return nil, nil, err
+	}
+	operation.SelectionSet = selection
+	if len(selection) > gatewayMaxRootFields {
+		return nil, nil, gatewayLimitError("root field")
+	}
+	my.cache.Put(key, &planEntry{operation: operation})
+	coerced, err := coerceVariables(my.schema, operation, cloneVariables(variables))
+	return operation, coerced, err
 }
 
 type gatewayReply struct {
