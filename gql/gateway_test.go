@@ -45,6 +45,12 @@ type gatewaySubscriptionEndpoint struct {
 	events <-chan []byte
 }
 
+type gatewayHealthyEndpoint struct{ *gatewayEndpoint }
+
+func (my *gatewayHealthyEndpoint) Health(context.Context) (HealthReport, error) {
+	return HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, SnapshotFingerprint: my.snapshot.Fingerprint()}, nil
+}
+
 func (my *gatewaySubscriptionEndpoint) Subscribe(context.Context, string, map[string]any, string) (<-chan []byte, error) {
 	return my.events, nil
 }
@@ -63,6 +69,24 @@ func TestGatewayTranslatesVariableTypesTypenamesAndPreservesNumbers(t *testing.T
 	}`, map[string]any{"input": map[string]any{"name": "new"}})
 	require.NoError(t, err)
 	require.JSONEq(t, `{"data":{"saved":{"__typename":"Crm_User","id":"1","payload":9007199254740993}}}`, string(body))
+}
+
+func TestGatewayHealthRequiresEveryExecutableChild(t *testing.T) {
+	healthy := &gatewayHealthyEndpoint{gatewayEndpoint: newGatewayEndpoint("healthy", gatewayChildSchema, nil)}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: healthy})
+	require.NoError(t, err)
+	require.True(t, gateway.HealthAvailable())
+	report, err := gateway.Health(context.Background())
+	require.NoError(t, err)
+	require.True(t, report.Ready)
+	require.Equal(t, gateway.current().snapshot.Fingerprint(), report.SnapshotFingerprint)
+
+	unhealthy := newGatewayEndpoint("unknown-health", gatewayChildSchema, nil)
+	gateway, err = NewGateway("root", Namespace{Name: "crm", Endpoint: unhealthy})
+	require.NoError(t, err)
+	require.False(t, gateway.HealthAvailable())
+	_, err = gateway.Health(context.Background())
+	require.Error(t, err)
 }
 
 func TestGatewayPrefixesChildErrorsAndKeepsNullableNamespace(t *testing.T) {

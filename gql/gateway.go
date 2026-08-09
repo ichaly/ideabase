@@ -45,6 +45,10 @@ type SubscriptionEndpoint interface {
 	Subscribe(context.Context, string, map[string]any, string) (<-chan []byte, error)
 }
 
+type HealthEndpoint interface {
+	Health(context.Context) (HealthReport, error)
+}
+
 // Namespace 将一个端点挂载到稳定的公共GraphQL名称下。
 type Namespace struct {
 	Name       string
@@ -283,6 +287,41 @@ func (my *Gateway) Capabilities() ([]Capability, error) {
 func (my *Gateway) SubscriptionAvailable() bool {
 	state := my.current()
 	return state != nil && state.schema.Subscription != nil
+}
+
+func (my *Gateway) HealthAvailable() bool {
+	state := my.current()
+	if state == nil {
+		return false
+	}
+	for _, contract := range state.contracts {
+		if source, ok := contract.endpoint.(interface{ HealthAvailable() bool }); ok {
+			if !source.HealthAvailable() {
+				return false
+			}
+			continue
+		}
+		if _, ok := contract.endpoint.(HealthEndpoint); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (my *Gateway) Health(ctx context.Context) (HealthReport, error) {
+	state := my.current()
+	if state == nil || !my.HealthAvailable() {
+		return HealthReport{}, fmt.Errorf("gateway health unavailable")
+	}
+	report := HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, SnapshotFingerprint: state.snapshot.Fingerprint()}
+	for _, contract := range state.contracts {
+		child, err := contract.endpoint.(HealthEndpoint).Health(ctx)
+		if err != nil || !child.Ready {
+			report.Ready = false
+			return report, fmt.Errorf("namespace %s is not ready", contract.name)
+		}
+	}
+	return report, nil
 }
 
 // Subscribe validates the public single-root subscription, then forwards one

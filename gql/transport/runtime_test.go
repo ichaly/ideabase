@@ -23,6 +23,12 @@ type subscriptionRuntime struct {
 	events <-chan []byte
 }
 
+type healthyRuntime struct{ *runtimeEndpoint }
+
+func (my *healthyRuntime) Health(context.Context) (core.HealthReport, error) {
+	return core.HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, SnapshotFingerprint: my.snapshot.Fingerprint()}, nil
+}
+
 func (my *subscriptionRuntime) SubscriptionAvailable() bool { return true }
 func (my *subscriptionRuntime) Subscribe(ctx context.Context, _ string, _ map[string]any, _ string) (<-chan []byte, error) {
 	my.identity, _ = core.IdentityFromContext(ctx)
@@ -113,6 +119,40 @@ func TestRemoteEndpointLoadsManifestAndDelegatesIdentity(t *testing.T) {
 	body, err = gateway.Execute(core.WithIdentity(context.Background(), identity), `{ child { hello } }`, nil)
 	if err != nil || string(body) != `{"data":{"child":{"hello":"world"}}}` {
 		t.Fatalf("gateway execute = %s, %v", body, err)
+	}
+}
+
+func TestRemoteEndpointHealthMatchesManifestSnapshot(t *testing.T) {
+	snapshot, _ := core.NewSnapshotArtifact("type Query { hello: String }", "health-v1", nil)
+	endpoint := &healthyRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}}
+	mux := http.NewServeMux()
+	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	mux.Handle("/graphql", NewHandler(endpoint))
+	mux.Handle("/health", NewHealthHandler(endpoint))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
+		EndpointID: "child", ManifestURL: server.URL + "/manifest", ExecuteURL: server.URL + "/graphql",
+		HealthURL: server.URL + "/health", AllowHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report, err := remote.Health(context.Background()); err != nil || !report.Ready || report.SnapshotFingerprint != "health-v1" {
+		t.Fatalf("remote health = %#v, %v", report, err)
+	}
+}
+
+func TestRemoteEndpointRejectsHealthManifestWithoutHealthURL(t *testing.T) {
+	snapshot, _ := core.NewSnapshotArtifact("type Query { hello: String }", "health-v1", nil)
+	endpoint := &healthyRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}}
+	server := httptest.NewServer(NewManifestHandler("child", endpoint))
+	defer server.Close()
+	_, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
+		EndpointID: "child", ManifestURL: server.URL, ExecuteURL: server.URL + "/graphql", AllowHTTP: true,
+	})
+	if err == nil {
+		t.Fatal("health manifest was accepted without HealthURL")
 	}
 }
 

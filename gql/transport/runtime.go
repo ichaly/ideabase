@@ -29,6 +29,7 @@ type Manifest struct {
 	Fingerprint  string            `json:"fingerprint"`
 	Capabilities []core.Capability `json:"capabilities"`
 	Subscription bool              `json:"subscription"`
+	Health       bool              `json:"health"`
 }
 
 type manifestEndpoint interface {
@@ -59,6 +60,13 @@ func NewManifestHandler(id string, endpoint manifestEndpoint) http.Handler {
 		if source, ok := endpoint.(interface{ SubscriptionAvailable() bool }); ok {
 			manifest.Subscription = source.SubscriptionAvailable()
 		}
+		if source, ok := endpoint.(interface{ HealthAvailable() bool }); ok {
+			manifest.Health = source.HealthAvailable()
+		} else if _, ok := endpoint.(interface {
+			Health(context.Context) (core.HealthReport, error)
+		}); ok {
+			manifest.Health = true
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ETag", `"`+snapshot.Fingerprint()+`"`)
 		_ = json.NewEncoder(w).Encode(manifest)
@@ -67,9 +75,9 @@ func NewManifestHandler(id string, endpoint manifestEndpoint) http.Handler {
 
 // RemoteOptions fixes every network boundary at startup; redirects are always denied.
 type RemoteOptions struct {
-	EndpointID, ManifestURL, ExecuteURL, SubscribeURL string
-	Client                                            *http.Client
-	Delegation                                        interface {
+	EndpointID, ManifestURL, ExecuteURL, SubscribeURL, HealthURL string
+	Client                                                       *http.Client
+	Delegation                                                   interface {
 		Sign(context.Context, string) (string, error)
 	}
 	Timeout          time.Duration
@@ -86,11 +94,13 @@ type RemoteEndpoint struct {
 	signer   interface {
 		Sign(context.Context, string) (string, error)
 	}
-	maxResponse int64
-	timeout     time.Duration
-	subscribe   string
-	available   atomic.Bool
-	snapshot    atomic.Pointer[core.Snapshot]
+	maxResponse           int64
+	timeout               time.Duration
+	subscribe             string
+	health                string
+	subscriptionAvailable atomic.Bool
+	healthAvailable       atomic.Bool
+	snapshot              atomic.Pointer[core.Snapshot]
 }
 
 type remoteRevision struct {
@@ -106,6 +116,10 @@ func (my *remoteRevision) Execute(ctx context.Context, query string, variables m
 func (my *remoteRevision) Subscribe(ctx context.Context, query string, variables map[string]any, operationName string) (<-chan []byte, error) {
 	return my.endpoint.subscribeOperation(ctx, query, variables, operationName, my.snapshot.Fingerprint())
 }
+func (my *remoteRevision) HealthAvailable() bool { return my.endpoint.HealthAvailable() }
+func (my *remoteRevision) Health(ctx context.Context) (core.HealthReport, error) {
+	return my.endpoint.Health(ctx)
+}
 
 func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpoint, error) {
 	if options.EndpointID == "" || options.ManifestURL == "" || options.ExecuteURL == "" {
@@ -114,6 +128,9 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 	urls := []string{options.ManifestURL, options.ExecuteURL}
 	if options.SubscribeURL != "" {
 		urls = append(urls, options.SubscribeURL)
+	}
+	if options.HealthURL != "" {
+		urls = append(urls, options.HealthURL)
 	}
 	for _, raw := range urls {
 		parsed, err := url.Parse(raw)
@@ -138,6 +155,7 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 	remote := &RemoteEndpoint{
 		id: options.EndpointID, manifest: options.ManifestURL, execute: options.ExecuteURL,
 		client: client, signer: options.Delegation, maxResponse: options.MaxResponseBytes, timeout: options.Timeout, subscribe: options.SubscribeURL,
+		health: options.HealthURL,
 	}
 	if err := remote.Refresh(ctx); err != nil {
 		return nil, err
@@ -147,7 +165,8 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 
 func (my *RemoteEndpoint) EndpointID() string { return my.id }
 
-func (my *RemoteEndpoint) SubscriptionAvailable() bool { return my.available.Load() }
+func (my *RemoteEndpoint) SubscriptionAvailable() bool { return my.subscriptionAvailable.Load() }
+func (my *RemoteEndpoint) HealthAvailable() bool       { return my.healthAvailable.Load() }
 
 func (my *RemoteEndpoint) Snapshot() (*core.Snapshot, error) {
 	snapshot := my.snapshot.Load()
@@ -197,12 +216,16 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 	if err != nil || (parsed.Subscription != nil) != manifest.Subscription || (manifest.Subscription && my.subscribe == "") {
 		return fmt.Errorf("remote subscription manifest is inconsistent")
 	}
+	if manifest.Health != (my.health != "") {
+		return fmt.Errorf("remote health manifest is inconsistent")
+	}
 	snapshot, err := core.NewSnapshotArtifact(manifest.Schema, manifest.Fingerprint, manifest.Capabilities)
 	if err != nil {
 		return err
 	}
 	my.snapshot.Store(snapshot)
-	my.available.Store(manifest.Subscription)
+	my.subscriptionAvailable.Store(manifest.Subscription)
+	my.healthAvailable.Store(manifest.Health)
 	return nil
 }
 
