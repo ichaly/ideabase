@@ -129,19 +129,45 @@ experiments:
       observer_disabled_ns: 2.107
     primary_delta: "-4"
     learnings: A tiny inlineable value mapping can remove repeated branches from a hot compiler path without changing its allocation budget.
+  - iteration: 4
+    batch: 4
+    hypothesis: Reuse the canonical operation membership scan inside policy authorization.
+    category: execution
+    outcome: kept
+    changes:
+      - file: gql/policy.go
+        summary: Removed a second hand-written operation membership loop.
+    gates:
+      unit_tests_passed: 1
+      race_tests_passed: 1
+      vet_passed: 1
+      staticcheck_findings: 7
+      api_compatibility_passed: 1
+      simple_compile_allocs: 22
+      nested_compile_allocs: 51
+      gateway_warm_allocs: 75
+      observer_disabled_allocs: 0
+    gates_passed: true
+    diagnostics:
+      production_go_lines: 22144
+      production_go_files: 76
+      production_functions: 890
+      production_branch_tokens: 3694
+      test_go_lines: 14673
+      simple_compile_ns: 2092
+      nested_compile_ns: 4786
+      gateway_warm_ns: 7998
+      observer_disabled_ns: 2.126
+    primary_delta: "-9"
+    learnings: Reusing an existing inlineable linear scan reduces policy branching without changing gateway allocations or measured latency.
 
 best:
-  iteration: 3
+  iteration: 4
   metrics:
-    production_go_lines: 22153
+    production_go_lines: 22144
   total_judge_cost_usd: 0
 
 hypothesis_backlog:
-  - description: Collapse resolver and executor orchestration onto existing canonical paths.
-    category: execution
-    priority: high
-    dep_status: not_applicable
-    required_deps: []
   - description: Consolidate gateway and transport lifecycle paths.
     category: gateway-transport
     priority: high

@@ -174,17 +174,8 @@ func policyError(class *protocol.Class, action, field string) error {
 	return fmt.Errorf("授权拒绝 class=%s action=%s field=%s", class.Name, action, field)
 }
 func operationAllowed(c *protocol.Class, p *protocol.Permission, action string) bool {
-	if len(c.Operations) > 0 {
-		allowed := false
-		for _, x := range c.Operations {
-			if x == action {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			return false
-		}
+	if len(c.Operations) > 0 && !operationInList(c.Operations, action) {
+		return false
 	}
 	switch action {
 	case protocol.OP_SELECT:
