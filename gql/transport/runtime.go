@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,10 +10,13 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	core "github.com/ichaly/ideabase/gql"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 const endpointProtocolVersion = 1
@@ -63,9 +67,9 @@ func NewManifestHandler(id string, endpoint manifestEndpoint) http.Handler {
 
 // RemoteOptions fixes every network boundary at startup; redirects are always denied.
 type RemoteOptions struct {
-	EndpointID, ManifestURL, ExecuteURL string
-	Client                              *http.Client
-	Delegation                          interface {
+	EndpointID, ManifestURL, ExecuteURL, SubscribeURL string
+	Client                                            *http.Client
+	Delegation                                        interface {
 		Sign(context.Context, string) (string, error)
 	}
 	Timeout          time.Duration
@@ -83,6 +87,9 @@ type RemoteEndpoint struct {
 		Sign(context.Context, string) (string, error)
 	}
 	maxResponse int64
+	timeout     time.Duration
+	subscribe   string
+	available   atomic.Bool
 	snapshot    atomic.Pointer[core.Snapshot]
 }
 
@@ -96,12 +103,19 @@ func (my *remoteRevision) Snapshot() (*core.Snapshot, error) { return my.snapsho
 func (my *remoteRevision) Execute(ctx context.Context, query string, variables map[string]any) ([]byte, error) {
 	return my.endpoint.executeOperation(ctx, query, variables, "", my.snapshot.Fingerprint())
 }
+func (my *remoteRevision) Subscribe(ctx context.Context, query string, variables map[string]any, operationName string) (<-chan []byte, error) {
+	return my.endpoint.subscribeOperation(ctx, query, variables, operationName, my.snapshot.Fingerprint())
+}
 
 func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpoint, error) {
 	if options.EndpointID == "" || options.ManifestURL == "" || options.ExecuteURL == "" {
 		return nil, fmt.Errorf("remote endpoint id, manifest URL and execute URL are required")
 	}
-	for _, raw := range []string{options.ManifestURL, options.ExecuteURL} {
+	urls := []string{options.ManifestURL, options.ExecuteURL}
+	if options.SubscribeURL != "" {
+		urls = append(urls, options.SubscribeURL)
+	}
+	for _, raw := range urls {
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !(options.AllowHTTP && parsed.Scheme == "http")) {
 			return nil, fmt.Errorf("remote endpoint URL is not allowed: %s", raw)
@@ -120,11 +134,10 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 		copy := *client
 		client = &copy
 	}
-	client.Timeout = options.Timeout
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	remote := &RemoteEndpoint{
 		id: options.EndpointID, manifest: options.ManifestURL, execute: options.ExecuteURL,
-		client: client, signer: options.Delegation, maxResponse: options.MaxResponseBytes,
+		client: client, signer: options.Delegation, maxResponse: options.MaxResponseBytes, timeout: options.Timeout, subscribe: options.SubscribeURL,
 	}
 	if err := remote.Refresh(ctx); err != nil {
 		return nil, err
@@ -133,6 +146,8 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 }
 
 func (my *RemoteEndpoint) EndpointID() string { return my.id }
+
+func (my *RemoteEndpoint) SubscriptionAvailable() bool { return my.available.Load() }
 
 func (my *RemoteEndpoint) Snapshot() (*core.Snapshot, error) {
 	snapshot := my.snapshot.Load()
@@ -152,6 +167,8 @@ func (my *RemoteEndpoint) ForSnapshot(fingerprint string) (core.Endpoint, error)
 
 // Refresh atomically installs a fully validated manifest or retains the LKG snapshot.
 func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, my.timeout)
+	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, my.manifest, nil)
 	if err != nil {
 		return err
@@ -176,11 +193,16 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 	if manifest.Version != endpointProtocolVersion || manifest.EndpointID != my.id {
 		return fmt.Errorf("remote manifest identity or protocol mismatch")
 	}
+	parsed, err := gqlparser.LoadSchema(&ast.Source{Name: "remote.graphql", Input: manifest.Schema})
+	if err != nil || (parsed.Subscription != nil) != manifest.Subscription || (manifest.Subscription && my.subscribe == "") {
+		return fmt.Errorf("remote subscription manifest is inconsistent")
+	}
 	snapshot, err := core.NewSnapshotArtifact(manifest.Schema, manifest.Fingerprint, manifest.Capabilities)
 	if err != nil {
 		return err
 	}
 	my.snapshot.Store(snapshot)
+	my.available.Store(manifest.Subscription)
 	return nil
 }
 
@@ -193,6 +215,8 @@ func (my *RemoteEndpoint) ExecuteOperation(ctx context.Context, query string, va
 }
 
 func (my *RemoteEndpoint) executeOperation(ctx context.Context, query string, variables map[string]any, operationName, fingerprint string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, my.timeout)
+	defer cancel()
 	payload := request{Query: query, OperationName: operationName, Variables: variables}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -230,6 +254,93 @@ func (my *RemoteEndpoint) executeOperation(ctx context.Context, query string, va
 		return nil, fmt.Errorf("remote execute content type %q", mediaType)
 	}
 	return readLimited(response.Body, my.maxResponse)
+}
+
+// Subscribe consumes the GraphQL SSE single-operation protocol.
+func (my *RemoteEndpoint) Subscribe(ctx context.Context, query string, variables map[string]any, operationName string) (<-chan []byte, error) {
+	return my.subscribeOperation(ctx, query, variables, operationName, "")
+}
+
+func (my *RemoteEndpoint) subscribeOperation(ctx context.Context, query string, variables map[string]any, operationName, fingerprint string) (<-chan []byte, error) {
+	if my.subscribe == "" {
+		return nil, fmt.Errorf("remote subscription unavailable")
+	}
+	payload := request{Query: query, OperationName: operationName, Variables: variables}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, my.subscribe, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "text/event-stream")
+	if fingerprint != "" {
+		request.Header.Set("GQL-Snapshot", fingerprint)
+	}
+	if my.signer != nil {
+		token, signErr := my.signer.Sign(ctx, operationDigest(payload))
+		if signErr != nil {
+			return nil, signErr
+		}
+		request.Header.Set("Authorization", "GQL-Delegation "+token)
+	}
+	response, err := my.client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("remote subscription unavailable: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		response.Body.Close()
+		return nil, fmt.Errorf("remote subscription status %d", response.StatusCode)
+	}
+	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if mediaType != "text/event-stream" {
+		response.Body.Close()
+		return nil, fmt.Errorf("remote subscription content type %q", mediaType)
+	}
+	events := make(chan []byte, 1)
+	go my.readSubscription(ctx, response.Body, events)
+	return events, nil
+}
+
+func (my *RemoteEndpoint) readSubscription(ctx context.Context, body io.ReadCloser, events chan<- []byte) {
+	defer body.Close()
+	defer close(events)
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 4096), int(my.maxResponse))
+	event, data := "", make([]byte, 0, 1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			if len(data) > 0 {
+				data = append(data, '\n')
+			}
+			data = append(data, strings.TrimSpace(strings.TrimPrefix(line, "data:"))...)
+		case line == "":
+			if event == "complete" {
+				return
+			}
+			if event == "next" && len(data) > 0 {
+				frame := append([]byte(nil), data...)
+				select {
+				case events <- frame:
+				case <-ctx.Done():
+					return
+				}
+			}
+			event, data = "", data[:0]
+		}
+	}
+	if scanner.Err() != nil && ctx.Err() == nil {
+		select {
+		case events <- []byte(`{"errors":[{"message":"remote subscription stream failed"}]}`):
+		case <-ctx.Done():
+		}
+	}
 }
 
 func decodeResponse(reader io.Reader, limit int64, value any) error {

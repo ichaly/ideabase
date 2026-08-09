@@ -16,6 +16,17 @@ type runtimeEndpoint struct {
 	commitMetadata bool
 }
 
+type subscriptionRuntime struct {
+	*runtimeEndpoint
+	events <-chan []byte
+}
+
+func (my *subscriptionRuntime) SubscriptionAvailable() bool { return true }
+func (my *subscriptionRuntime) Subscribe(ctx context.Context, _ string, _ map[string]any, _ string) (<-chan []byte, error) {
+	my.identity, _ = core.IdentityFromContext(ctx)
+	return my.events, nil
+}
+
 func (my *runtimeEndpoint) Snapshot() (*core.Snapshot, error) { return my.snapshot, nil }
 func (my *runtimeEndpoint) Execute(ctx context.Context, _ string, _ map[string]any) ([]byte, error) {
 	my.identity, _ = core.IdentityFromContext(ctx)
@@ -105,5 +116,99 @@ func TestRemoteEndpointRefreshKeepsLastKnownGoodManifest(t *testing.T) {
 	got, _ := remote.Snapshot()
 	if got.Fingerprint() != "good" {
 		t.Fatalf("LKG fingerprint = %s", got.Fingerprint())
+	}
+}
+
+func TestRemoteGatewaySubscriptionUsesSignedSSEStream(t *testing.T) {
+	snapshot, err := core.NewSnapshotArtifact(`
+		type Query { hello: String }
+		type Subscription { changed: String! }
+	`, "subscription-v1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := make(chan []byte, 1)
+	frames <- []byte(`{"data":{"changed":"ready"}}`)
+	close(frames)
+	endpoint := &subscriptionRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}, events: frames}
+	key := []byte("0123456789abcdef0123456789abcdef")
+	serverCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute})
+	clientCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute})
+	mux := http.NewServeMux()
+	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	mux.Handle("/graphql", NewHandler(endpoint, Options{Delegation: serverCodec}))
+	mux.Handle("/subscribe", NewSubscriptionHandler(endpoint, Options{Delegation: serverCodec}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
+		EndpointID: "child", ManifestURL: server.URL + "/manifest", ExecuteURL: server.URL + "/graphql",
+		SubscribeURL: server.URL + "/subscribe", Delegation: clientCodec, AllowHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := core.NewGateway("root", core.Namespace{Name: "child", Endpoint: remote})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, _ := core.NewIdentity(core.IdentityInput{Tenant: "tenant", Subject: "subscriber"})
+	events, err := gateway.Subscribe(core.WithIdentity(context.Background(), identity), `subscription { child { changed } }`, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := <-events; string(body) != `{"data":{"child":{"changed":"ready"}}}` {
+		t.Fatalf("subscription frame = %s", body)
+	}
+	if _, open := <-events; open {
+		t.Fatal("completed remote subscription remained open")
+	}
+	if endpoint.identity.Subject() != "subscriber" {
+		t.Fatalf("subscription identity = %#v", endpoint.identity)
+	}
+}
+
+func TestRemoteEndpointRejectsSubscriptionManifestWithoutExecutableStream(t *testing.T) {
+	snapshot, err := core.NewSnapshotArtifact(`
+		type Query { hello: String }
+		type Subscription { changed: String }
+	`, "subscription-v1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := make(chan []byte)
+	endpoint := &subscriptionRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}, events: frames}
+	mux := http.NewServeMux()
+	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	_, err = NewRemoteEndpoint(context.Background(), RemoteOptions{
+		EndpointID: "child", ManifestURL: server.URL + "/manifest", ExecuteURL: server.URL + "/graphql", AllowHTTP: true,
+	})
+	if err == nil {
+		t.Fatal("subscription manifest was accepted without SubscribeURL")
+	}
+}
+
+func TestRemoteEndpointRejectsFalseSubscriptionCapability(t *testing.T) {
+	snapshot, err := core.NewSnapshotArtifact(`
+		type Query { hello: String }
+		type Subscription { changed: String }
+	`, "subscription-v1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := &runtimeEndpoint{snapshot: snapshot}
+	mux := http.NewServeMux()
+	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	_, err = NewRemoteEndpoint(context.Background(), RemoteOptions{
+		EndpointID: "child", ManifestURL: server.URL + "/manifest", ExecuteURL: server.URL + "/graphql",
+		SubscribeURL: server.URL + "/subscribe", AllowHTTP: true,
+	})
+	if err == nil {
+		t.Fatal("schema-only subscription capability was accepted")
 	}
 }

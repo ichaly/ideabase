@@ -631,6 +631,7 @@ func (my *Executor) rebuild() error {
 		return fmt.Errorf("合并注册声明失败: %w", err)
 	}
 	disableUnsupportedDirectives(s)
+	synchronizeSubscriptionSchema(my, s)
 	my.schema = s
 	my.intro = intro.New(s)
 	my.cache = newPlanCache(planCacheSize)

@@ -97,7 +97,7 @@ func TestIntrospection(t *testing.T) {
 		schema := result.Data["__schema"].(map[string]interface{})
 		assert.Equal(t, "Query", schema["queryType"].(map[string]interface{})["name"])
 		assert.Equal(t, "Mutation", schema["mutationType"].(map[string]interface{})["name"])
-		assert.Equal(t, "Subscription", schema["subscriptionType"].(map[string]interface{})["name"])
+		assert.Nil(t, schema["subscriptionType"], "无CDC时不得在自省中暴露Subscription")
 
 		// 类型清单完整：实体、输入、内省元类型都在
 		names := map[string]map[string]interface{}{}

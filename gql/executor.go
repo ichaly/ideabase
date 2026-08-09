@@ -316,7 +316,6 @@ func newExecutor(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Executor, 
 	disableUnsupportedDirectives(s)
 	executor.source = data
 	executor.schema = s
-	executor.intro = intro.New(s)
 
 	if d != nil {
 		// 全文搜索能力：配置优先，否则按驱动从注册表探测（无探测器的数据库降级ilike）
@@ -336,11 +335,21 @@ func newExecutor(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Executor, 
 			}
 		}
 	}
+	synchronizeSubscriptionSchema(executor, s)
+	executor.intro = intro.New(s)
 	return executor, nil
 }
 
 func disableUnsupportedDirectives(schema *ast.Schema) {
 	delete(schema.Directives, "defer")
+}
+
+func synchronizeSubscriptionSchema(executor *Executor, schema *ast.Schema) {
+	if executor.cdc != nil || schema.Subscription == nil {
+		return
+	}
+	delete(schema.Types, schema.Subscription.Name)
+	schema.Subscription = nil
 }
 
 // loadSchema 解析schema来源：schema.file配置 > renderer现场生成
