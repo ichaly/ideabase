@@ -132,6 +132,7 @@ type Executor struct {
 	effectiveMu       sync.Mutex
 	effective         map[string]*effectiveView
 	subscriptionLease time.Duration
+	observer          Observer
 }
 
 // options 读取schema级选项（元数据未配置时为零值安全默认）
@@ -498,7 +499,13 @@ func (my *Executor) Execute(ctx context.Context, query string, variables map[str
 }
 
 func (my *Executor) executeBytes(ctx context.Context, query string, variables map[string]interface{}, operationName string) ([]byte, error) {
-	return my.execute(ctx, query, variables, operationName).MarshalJSON()
+	done := my.startPhase(ctx, PhaseExecute)
+	reply := my.execute(ctx, query, variables, operationName)
+	body, err := reply.MarshalJSON()
+	if done != nil {
+		done(observationReplyCode(reply, err))
+	}
+	return body, err
 }
 
 // queryData 仅供根Resolver回查和持久化操作内部消费；普通调用统一走Execute字节响应。
@@ -574,7 +581,11 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 
 	// 获取执行计划（缓存命中零解析）；缓存未命中时解析一次，
 	// 顶层选择集含__schema/__type则路由到自省投影，否则编译为SQL
+	done := my.startPhase(ctx, PhasePlan)
 	plan, err := my.plan(query, operationName, variables)
+	if done != nil {
+		done(observationErrorCode(err))
+	}
 	if err != nil {
 		if introErr, ok := err.(*introQuery); ok {
 			handler, viewErr := my.effectiveIntrospection(ctx)
@@ -591,18 +602,32 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 			return r
 		}
 		if rootErr, ok := err.(*rootResolverQuery); ok {
+			done = my.startPhase(ctx, PhaseAuthorize)
 			ctx, err = my.authorizeProvider(ctx, rootErr.entry.operation, variables)
 			if err != nil {
+				if done != nil {
+					done(observationErrorCode(err))
+				}
 				r.Errors = gqlErrors(err)
 				return r
 			}
 			if rootErr.entry.policyNeeded {
 				if authErr := my.authorize(ctx, rootErr.entry.operation, variables); authErr != nil {
+					if done != nil {
+						done(observationErrorCode(authErr))
+					}
 					r.Errors = gqlErrors(authErr)
 					return r
 				}
 			}
+			if done != nil {
+				done("SUCCESS")
+			}
+			done = my.startPhase(ctx, PhaseHandler)
 			r = my.executeRootResolvers(ctx, rootErr.entry, variables)
+			if done != nil {
+				done(observationReplyCode(r, nil))
+			}
 			if rootErr.entry.intro != nil && r.Data != nil {
 				if ierr := my.mergeIntrospection(ctx, r.Data, rootErr.entry.intro, variables); ierr != nil {
 					r.Errors = append(r.Errors, gqlErrors(ierr)...)
@@ -616,26 +641,17 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 	if plan.operation.Operation == ast.Mutation {
 		mutationState = "rolled_back"
 	}
-	if plan.policyNeeded {
-		if authErr := my.authorize(ctx, plan.operation, variables); authErr != nil {
-			r.Errors = gqlErrors(authErr)
-			return r
-		}
-	}
-	ctx, err = my.authorizeProvider(ctx, plan.operation, variables)
+	ctx, plan, err = my.govern(ctx, plan, variables)
 	if err != nil {
 		r.Errors = gqlErrors(err)
 		return r
 	}
-	if my.policy != nil {
-		plan, err = my.policyPlan(ctx, plan, variables)
-		if err != nil {
-			r.Errors = gqlErrors(err)
-			return r
-		}
-	}
 
+	done = my.startPhase(ctx, PhaseDatabase)
 	data, err := my.fetch(ctx, plan, variables)
+	if done != nil {
+		done(observationErrorCode(err))
+	}
 	if err != nil {
 		r.Errors = gqlErrors(err)
 		return r
@@ -659,7 +675,11 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 			result = make(map[string]interface{})
 		}
 	} else {
+		done = my.startPhase(ctx, PhaseHandler)
 		result, warnings, err = my.unpack(ctx, plan, data, variables)
+		if done != nil {
+			done(observationErrorCode(err))
+		}
 	}
 	if err != nil {
 		if nonNull, ok := err.(*nonNullResolverError); ok {
@@ -679,6 +699,25 @@ func (my *Executor) execute(ctx context.Context, query string, variables map[str
 	// 非致命警告与data共存（GraphQL部分错误语义）
 	r.Errors, r.Data = warnings, result
 	return r
+}
+
+func (my *Executor) govern(ctx context.Context, plan *Plan, variables map[string]interface{}) (_ context.Context, result *Plan, err error) {
+	done := my.startPhase(ctx, PhaseAuthorize)
+	if done != nil {
+		defer func() { done(observationErrorCode(err)) }()
+	}
+	if plan.policyNeeded {
+		if err = my.authorize(ctx, plan.operation, variables); err != nil {
+			return ctx, plan, err
+		}
+	}
+	if ctx, err = my.authorizeProvider(ctx, plan.operation, variables); err != nil {
+		return ctx, plan, err
+	}
+	if my.policy != nil {
+		plan, err = my.policyPlan(ctx, plan, variables)
+	}
+	return ctx, plan, err
 }
 
 // fetch 执行计划：单条SQL返回单行单列的__root JSON原始字节。

@@ -18,8 +18,18 @@ type Builder struct {
 	replaces  []Resolver
 	wraps     []resolverWrap
 	documents []string
+	observer  Observer
 	trusted   bool
 	built     bool
+}
+
+// Observe installs a low-cardinality observer before Build.
+func (my *Builder) Observe(observer Observer) error {
+	if my.built {
+		return fmt.Errorf("builder已冻结：Observe仅限Build前调用")
+	}
+	my.observer = observer
+	return nil
 }
 
 type resolverWrap struct {
@@ -114,6 +124,7 @@ func (my *Builder) Build() (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	executor.observer = my.observer
 	ready := false
 	defer func() {
 		if !ready {
