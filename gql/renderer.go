@@ -372,10 +372,14 @@ func (my *Renderer) renderTypes() error {
 					{Name: protocol.WHERE, Type: target + protocol.SUFFIX_WHERE_INPUT},
 					{Name: protocol.SORT, Type: "[" + target + protocol.SUFFIX_SORT_INPUT + "!]"},
 					{Name: protocol.LIMIT, Type: protocol.SCALAR_INT},
-					{Name: protocol.OFFSET, Type: protocol.SCALAR_INT},
 				}
-				if targetClass := my.meta.Nodes[target]; targetClass != nil && targetClass.SoftDelete != nil {
-					args = append(args, renderer.Argument{Name: protocol.DELETION, Type: protocol.TYPE_DELETION_MODE, Default: "ACTIVE"})
+				if targetClass := my.meta.Nodes[target]; targetClass != nil {
+					if len(targetClass.PrimaryKeyFields()) > 0 {
+						args = append(args, renderer.Argument{Name: protocol.OFFSET, Type: protocol.SCALAR_INT})
+					}
+					if targetClass.SoftDelete != nil {
+						args = append(args, renderer.Argument{Name: protocol.DELETION, Type: protocol.TYPE_DELETION_MODE, Default: "ACTIVE"})
+					}
 				}
 				if field.Relation.Deep {
 					args = append(args, renderer.Argument{Name: protocol.DEPTH, Type: protocol.SCALAR_INT})
@@ -731,22 +735,27 @@ func (my *Renderer) renderQuery() error {
 		} else if len(primaryKeys) > 1 {
 			args = append(args, renderer.Argument{Name: protocol.KEY, Type: className + protocol.SUFFIX_KEY_INPUT})
 		}
+		paging := []renderer.Argument{
+			{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
+			{Name: protocol.SORT, Type: "[" + className + protocol.SUFFIX_SORT_INPUT + "!]"},
+			{Name: protocol.DISTINCT, Type: "[" + className + protocol.SUFFIX_DISTINCT_FIELD + "!]"},
+			{Name: protocol.LIMIT, Type: protocol.SCALAR_INT},
+		}
+		if len(primaryKeys) > 0 {
+			paging = append(paging,
+				renderer.Argument{Name: protocol.OFFSET, Type: protocol.SCALAR_INT},
+				renderer.Argument{Name: protocol.FIRST, Type: protocol.SCALAR_INT},
+				renderer.Argument{Name: protocol.AFTER, Type: protocol.SCALAR_CURSOR},
+				renderer.Argument{Name: protocol.LAST, Type: protocol.SCALAR_INT},
+				renderer.Argument{Name: protocol.BEFORE, Type: protocol.SCALAR_CURSOR},
+			)
+		}
 		my.writeField(
 			queryField(className),
 			className+protocol.SUFFIX_RESULT,
 			renderer.NonNull(),
 			renderer.WithMultilineArgs(),
-			renderer.WithArgs(append(args, []renderer.Argument{
-				{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT},
-				{Name: protocol.SORT, Type: "[" + className + protocol.SUFFIX_SORT_INPUT + "!]"},
-				{Name: protocol.DISTINCT, Type: "[" + className + protocol.SUFFIX_DISTINCT_FIELD + "!]"},
-				{Name: protocol.LIMIT, Type: protocol.SCALAR_INT},
-				{Name: protocol.OFFSET, Type: protocol.SCALAR_INT},
-				{Name: protocol.FIRST, Type: protocol.SCALAR_INT},
-				{Name: protocol.AFTER, Type: protocol.SCALAR_CURSOR},
-				{Name: protocol.LAST, Type: protocol.SCALAR_INT},
-				{Name: protocol.BEFORE, Type: protocol.SCALAR_CURSOR},
-			}...)...),
+			renderer.WithArgs(append(args, paging...)...),
 		)
 	}
 	writeConnectionField := func(className string) {
@@ -1086,7 +1095,9 @@ func (my *Renderer) renderPaging() error {
 		my.writeLine("type ", className, protocol.SUFFIX_RESULT, " {")
 		my.writeField(protocol.ITEMS, className, renderer.NonNull(), renderer.ListNonNull(), renderer.WithComment("直接返回"+className+"对象数组"))
 		my.writeField(protocol.TOTAL, protocol.SCALAR_INT, renderer.NonNull())
-		my.writeField(protocol.PAGE_INFO, protocol.TYPE_PAGE_INFO, renderer.WithComment("游标分页信息(需配合first/last使用)"))
+		if len(class.PrimaryKeyFields()) > 0 {
+			my.writeField(protocol.PAGE_INFO, protocol.TYPE_PAGE_INFO, renderer.WithComment("游标分页信息(需配合first/last使用)"))
+		}
 		my.writeLine("}")
 		my.writeLine("")
 		if my.allows(class, protocol.OP_SELECT) && len(class.PrimaryKeyFields()) > 0 {

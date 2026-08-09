@@ -110,6 +110,57 @@ func TestTenantGatewayRejectsUnknownSourceAndSchemaDrift(t *testing.T) {
 	require.ErrorContains(t, err, "datasource")
 }
 
+func TestTenantGatewayRejectsCapabilityDriftWithSameSchema(t *testing.T) {
+	build := func(cost uint32) *Engine {
+		builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal()
+		require.NoError(t, builder.Register(NewResolver[Root, struct{}, string]("Query", "tenantName", "",
+			func(context.Context, Root, struct{}) (string, error) { return "tenant", nil }, Cost(cost))))
+		engine, err := builder.Build()
+		require.NoError(t, err)
+		t.Cleanup(engine.Close)
+		return engine
+	}
+	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Routes: map[string]TenantRoute{
+		"a": {DataSource: "a"}, "b": {DataSource: "b"},
+	}})
+	require.NoError(t, err)
+	_, err = NewTenantGateway(router, map[string]*Engine{"b": build(2), "a": build(1)})
+	require.ErrorContains(t, err, "capability drift")
+}
+
+func TestTenantGatewayReportsChildSubscriptionCapability(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Routes: map[string]TenantRoute{
+		"a": {DataSource: "db"},
+	}})
+	require.NoError(t, err)
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": {Executor: executor}})
+	require.NoError(t, err)
+	require.True(t, executor.SubscriptionAvailable())
+	require.True(t, gateway.SubscriptionAvailable(), "dispatcher capability must match its public subscription schema")
+}
+
+func TestTenantGatewayHealthChecksRoutedDatasource(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Routes: map[string]TenantRoute{
+		"a": {DataSource: "db"},
+	}})
+	require.NoError(t, err)
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": {Executor: executor}})
+	require.NoError(t, err)
+	report, err := gateway.Health(context.Background())
+	require.NoError(t, err)
+	require.True(t, report.Ready)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+	report, err = gateway.Health(context.Background())
+	require.Error(t, err)
+	require.False(t, report.Ready)
+}
+
 func TestTenantGatewaySharedTableRequiresTenantScopeOrExplicitGlobal(t *testing.T) {
 	build := func(loader sharedTenantLoader) *Engine {
 		builder := New(snapshotKonfig(t), nil, snapshotOptions(loader)...).TrustedLocal()

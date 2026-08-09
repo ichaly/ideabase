@@ -255,6 +255,45 @@ func TestBuilderRejectsExternalSchemaShapeDrift(t *testing.T) {
 	require.ErrorContains(t, err, "schema artifact")
 }
 
+func TestBuilderRejectsExecutableDirectiveWithoutRuntime(t *testing.T) {
+	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).TrustedLocal()
+	require.NoError(t, builder.Register(NewResolver[Root, struct{}, string]("Query", "hello", "",
+		func(context.Context, Root, struct{}) (string, error) { return "hello", nil },
+		Extra("directive @upper on FIELD"))))
+	_, err := builder.Build()
+	require.ErrorContains(t, err, "unsupported executable directive @upper")
+}
+
+func TestRemoteSnapshotRejectsExecutableDirectiveWithoutRuntime(t *testing.T) {
+	_, err := NewSnapshotArtifact("directive @upper on FIELD\ntype Query { hello: String }", "revision", nil)
+	require.ErrorContains(t, err, "unsupported executable directive @upper")
+}
+
+func TestRemoteSnapshotDerivesCompleteCapabilityCatalog(t *testing.T) {
+	snapshot, err := NewSnapshotArtifact("type Query { hello(name: String): String }", "revision", nil)
+	require.NoError(t, err)
+	capability, ok := snapshot.Capability("Query.hello")
+	require.True(t, ok)
+	require.Equal(t, HandlerRemote, capability.Handler)
+	require.Equal(t, "String", capability.Type)
+	require.Equal(t, []Argument{{Name: "name", Type: "String"}}, capability.Arguments)
+
+	_, err = NewSnapshotArtifact("type Query { hello: String }", "revision", []Capability{{
+		Coordinate: "Query.missing", Parent: "Query", Name: "missing", Type: "String", Handler: HandlerRemote,
+	}})
+	require.ErrorContains(t, err, "not present in endpoint schema")
+}
+
+func TestRemoteSnapshotDoesNotMutateCallerCapabilities(t *testing.T) {
+	capabilities := append(make([]Capability, 0, 256),
+		Capability{Coordinate: "Query.second", Parent: "Query", Name: "second", Type: "String", Handler: HandlerRemote},
+		Capability{Coordinate: "Query.first", Parent: "Query", Name: "first", Type: "String", Handler: HandlerRemote},
+	)
+	_, err := NewSnapshotArtifact("type Query { first: String, second: String }", "revision", capabilities)
+	require.NoError(t, err)
+	require.Equal(t, "Query.second", capabilities[0].Coordinate)
+}
+
 func TestBuilderRenderingHasNoImplicitFileWrite(t *testing.T) {
 	root := t.TempDir()
 	k := snapshotKonfig(t)

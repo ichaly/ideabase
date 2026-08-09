@@ -11,7 +11,23 @@ import (
 
 // SubscriptionAvailable reports whether the executor has an executable CDC
 // source for subscriptions.
-func (my *Executor) SubscriptionAvailable() bool { return my != nil && my.cdc != nil }
+func (my *Executor) SubscriptionAvailable() bool {
+	if my == nil {
+		return false
+	}
+	if my.tenantRouter == nil {
+		return my.cdc != nil
+	}
+	if len(my.tenantSources) == 0 {
+		return false
+	}
+	for _, source := range my.tenantSources {
+		if !source.SubscriptionAvailable() {
+			return false
+		}
+	}
+	return true
+}
 
 // Subscribe exposes the transport-neutral subscription stream as JSON bytes.
 // Each item is a complete GraphQL response and the returned channel is closed
@@ -97,6 +113,9 @@ func (my *Executor) Health(ctx context.Context) (HealthReport, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if my != nil && my.tenantRouter != nil {
+		return my.tenantHealth(ctx)
+	}
 	report := HealthReport{CDCConfigured: my != nil && my.cdc != nil}
 	report.SubscriptionAvailable = report.CDCConfigured
 	if my == nil || (my.schema == nil && my.snapshot == nil) {
@@ -123,5 +142,23 @@ func (my *Executor) Health(ctx context.Context) (HealthReport, error) {
 	}
 	report.DatabaseOK = true
 	report.Ready = true
+	return report, nil
+}
+
+func (my *Executor) tenantHealth(ctx context.Context) (HealthReport, error) {
+	report := HealthReport{Ready: true, SnapshotOK: my.snapshot != nil, DatabaseOK: true, CDCConfigured: true, SubscriptionAvailable: true}
+	if my.snapshot != nil {
+		report.SnapshotFingerprint = my.snapshot.Fingerprint()
+	}
+	for _, name := range sortedTenantSources(my.tenantSources) {
+		child, err := my.tenantSources[name].Health(ctx)
+		report.DatabaseOK = report.DatabaseOK && child.DatabaseOK
+		report.CDCConfigured = report.CDCConfigured && child.CDCConfigured
+		report.SubscriptionAvailable = report.SubscriptionAvailable && child.SubscriptionAvailable
+		if err != nil || !child.Ready {
+			report.Ready = false
+			return report, fmt.Errorf("tenant datasource %s is not ready", name)
+		}
+	}
 	return report, nil
 }

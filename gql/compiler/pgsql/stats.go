@@ -25,10 +25,7 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 	sc := scope{class: u.class, qualifier: u.class.Table}
 	ctx.MarkTable(u.class.Table)
 
-	groups, err := fieldNames(sc, u.args, protocol.GROUP_BY)
-	if err != nil {
-		return err
-	}
+	groups := u.groups
 
 	// 投影：选择驱动，逐字段生成聚合表达式
 	column := func(name string) {
@@ -88,20 +85,30 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 			ctx.Write(`) AS `).Quote(f.Alias)
 		}
 	}
+	if u.ordered {
+		next()
+		ctx.Write(`ROW_NUMBER() OVER (ORDER BY `)
+		writeColumns(ctx, u.class.Table, columnsOf(sc, groups))
+		ctx.Write(`) AS "__rn"`)
+	}
 	ctx.Space(`FROM`)
 	tableRef(ctx, u.class.Table)
 	// 行级作用域：聚合也强制隔离，否则 count/sum 泄露全表跨租户统计
 	conjuncts := my.scopeConjuncts(ctx, sc.qualifier, u.class)
 	conjuncts = append(conjuncts, my.queryWhereConjuncts(ctx, sc.qualifier, u.class, protocol.OP_AGGREGATE, u.args)...)
-	if err = my.buildWhere(ctx, sc, u.args, conjuncts...); err != nil {
+	if err := my.buildWhere(ctx, sc, u.args, conjuncts...); err != nil {
 		return err
 	}
 	if len(groups) > 0 {
 		ctx.Space(`GROUP BY`)
 		writeColumns(ctx, u.class.Table, columnsOf(sc, groups))
 	}
-	if err = my.buildHaving(ctx, sc, u.args); err != nil {
+	if err := my.buildHaving(ctx, sc, u.args); err != nil {
 		return err
+	}
+	if u.ordered {
+		ctx.Space(`ORDER BY`)
+		writeColumns(ctx, u.class.Table, columnsOf(sc, groups))
 	}
 	return my.buildLimit(ctx, u)
 }

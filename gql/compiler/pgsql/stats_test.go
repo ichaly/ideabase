@@ -16,18 +16,21 @@ func (my *_DialectSuite) TestStats() {
 				) AS "__sj_0" ON TRUE`,
 		},
 		{
-			name:  "分组聚合",
-			query: `query { userStats(groupBy: [name], limit: 10) { key count email { countDistinct } } }`,
+			name:      "分组聚合",
+			query:     `query($groups: [UserGroupField!]) { userStats(groupBy: $groups, limit: 10, offset: 5) { key count email { countDistinct } } }`,
+			variables: map[string]interface{}{"groups": []any{"name"}},
 			expected: `SELECT JSONB_BUILD_OBJECT('userStats', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
-					SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]') AS "json"
+					SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__rn' ORDER BY "__sr_0"."__rn"), '[]') AS "json"
 					FROM (
 						SELECT JSONB_BUILD_OBJECT('name', "sys_user"."name") AS "key",
 							COUNT(*) AS "count",
-							JSONB_BUILD_OBJECT('countDistinct', COUNT(DISTINCT "sys_user"."email")) AS "email"
+							JSONB_BUILD_OBJECT('countDistinct', COUNT(DISTINCT "sys_user"."email")) AS "email",
+							ROW_NUMBER() OVER (ORDER BY "sys_user"."name") AS "__rn"
 						FROM "public"."sys_user"
 						GROUP BY "sys_user"."name"
-						LIMIT 10
+						ORDER BY "sys_user"."name"
+						LIMIT 10 OFFSET 5
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},

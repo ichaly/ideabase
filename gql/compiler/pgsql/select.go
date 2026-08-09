@@ -39,6 +39,7 @@ type unit struct {
 	readback bool               // 变更读回顶层单元（读CTE非基表），跳过行级作用域注入
 	ordered  bool               // 显式排序的非游标列表：__rn行号在聚合内固化顺序
 	sorts    []*ast.ChildValue  // 解析后的sort项缓存（sortEntries惰性填充）
+	groups   []string           // 统计分组列（含变量解析结果，避免重复解析）
 }
 
 // sortEntries 惰性解析并缓存sort项，单元内多处消费只解析一次
@@ -49,10 +50,20 @@ func (u *unit) sortEntries() []*ast.ChildValue {
 	return u.sorts
 }
 
+func (u *unit) stableKeys() []string {
+	if u.args.ForName(protocol.LIMIT) == nil && u.args.ForName(protocol.OFFSET) == nil {
+		return nil
+	}
+	if len(u.class.PrimaryKeys) > 0 {
+		return u.class.PrimaryKeys
+	}
+	return u.class.PrimaryKeyFields()
+}
+
 // orderedList 是否携带显式排序语义：sort参数或search相关度（JSONB_AGG不保证
 // 维持输入序，并行/归并计划下会丢失，须经__rn在聚合内ORDER BY固化）
 func (u *unit) orderedList() bool {
-	return len(u.sortEntries()) > 0 || u.args.ForName(protocol.SEARCH) != nil
+	return len(u.sortEntries()) > 0 || len(u.stableKeys()) > 0 || u.args.ForName(protocol.SEARCH) != nil
 }
 
 // BuildQuery 构建查询语句：根JSON对象 + 每个根字段一个LATERAL单元
@@ -125,6 +136,11 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 	default: // shapeList / shapeStats：纯数组包装
 		core := func() error { return my.buildCore(ctx, u, compiler.FieldsOf(u.field.SelectionSet), false) }
 		if u.shape == shapeStats {
+			u.groups, err = fieldNames(ctx, scope{class: u.class, qualifier: u.class.Table}, u.args, protocol.GROUP_BY)
+			if err != nil {
+				return err
+			}
+			u.ordered = len(u.groups) > 0 && (u.args.ForName(protocol.LIMIT) != nil || u.args.ForName(protocol.OFFSET) != nil)
 			core = func() error { return my.buildStatsCore(ctx, u) }
 		} else {
 			u.ordered = u.orderedList()
@@ -534,7 +550,10 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	for _, column := range sortColumns(sc, sorts) {
 		appendColumn(column)
 	}
-	distinctNames, err := fieldNames(sc, u.args, protocol.DISTINCT)
+	for _, column := range columnsOf(sc, u.stableKeys()) {
+		appendColumn(column)
+	}
+	distinctNames, err := fieldNames(ctx, sc, u.args, protocol.DISTINCT)
 	if err != nil {
 		return err
 	}
@@ -638,6 +657,9 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		return err
 	}
 	if search != nil {
+		if u.args.ForName(protocol.OFFSET) != nil && u.args.ForName(protocol.SORT) == nil {
+			return fmt.Errorf("search与offset分页同用时必须显式sort（相关度排序无法作为稳定分页键）")
+		}
 		if u.page != nil && len(sorts) == 0 {
 			return fmt.Errorf("search与游标分页同用时必须显式sort（相关度排序无法作为稳定游标键）")
 		}
@@ -674,19 +696,24 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			if search != nil {
 				return fmt.Errorf("distinct与search不能同时使用")
 			}
-			if err = my.buildOrderBy(ctx, sc, sorts, distinct...); err != nil {
+			if err = my.buildOrderBy(ctx, sc, sorts, distinct, u.stableKeys()); err != nil {
 				return err
 			}
 		// 无显式排序时按搜索相关度降序（ilike模式无相关度，维持自然序）
-		case search != nil && len(sorts) == 0:
+		case search != nil && u.args.ForName(protocol.SORT) == nil:
 			if search.hasRank() {
 				ctx.Space(`ORDER BY`)
 				if err = search.buildRank(my, ctx, sc); err != nil {
 					return err
 				}
+				for _, key := range u.stableKeys() {
+					ctx.Write(`, `).Column(sc.qualifier, sc.column(key)).SpaceBefore(`ASC`)
+				}
+			} else if err = my.buildOrderBy(ctx, sc, sorts, nil, u.stableKeys()); err != nil {
+				return err
 			}
 		default:
-			if err = my.buildOrderBy(ctx, sc, sorts); err != nil {
+			if err = my.buildOrderBy(ctx, sc, sorts, nil, u.stableKeys()); err != nil {
 				return err
 			}
 		}
@@ -892,7 +919,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 	if err = my.buildWhere(ctx, treeScope, u.args); err != nil {
 		return err
 	}
-	if err = my.buildOrderBy(ctx, treeScope, u.sortEntries()); err != nil {
+	if err = my.buildOrderBy(ctx, treeScope, u.sortEntries(), nil, u.stableKeys()); err != nil {
 		return err
 	}
 	return my.buildLimit(ctx, u)

@@ -23,6 +23,21 @@ func TestRendererCatalogReadOnlyRelationHasNoMutationSurface(t *testing.T) {
 	require.False(t, strings.Contains(schema, "input ActiveUserUpdateInput"))
 }
 
+func TestRendererDoesNotAdvertiseCursorPaginationWithoutPrimaryKey(t *testing.T) {
+	view := governanceClass("EventView", protocol.OP_SELECT)
+	view.PrimaryKeys = nil
+	view.Fields["id"].IsPrimary = false
+	schema := governanceSchema(t, view)
+
+	require.Contains(t, schema, "eventViews(")
+	require.Contains(t, schema, "limit: Int")
+	require.NotContains(t, schema, "offset: Int")
+	require.NotContains(t, schema, "first: Int")
+	require.NotContains(t, schema, "after: Cursor")
+	require.NotContains(t, schema, "eventViewConnection")
+	require.NotContains(t, schema, "pageInfo: PageInfo  # 游标分页信息")
+}
+
 func TestRendererCatalogDefaultAndGenerationControlCreateInput(t *testing.T) {
 	class := governanceClass("CatalogInput", protocol.OP_INSERT)
 	class.Fields["id"].Catalog = &protocol.Column{Type: protocol.TypeRef{Name: "integer", Kind: protocol.TypeBase}}

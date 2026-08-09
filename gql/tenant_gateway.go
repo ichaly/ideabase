@@ -3,6 +3,8 @@ package gql
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sort"
 )
 
 // NewTenantGateway builds a routing-only Engine over independently built,
@@ -34,7 +36,8 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 	}
 	targets := make(map[string]*Executor, len(sources))
 	var canonical *Snapshot
-	for name, engine := range sources {
+	for _, name := range sortedTenantSources(sources) {
+		engine := sources[name]
 		if name == "" || engine == nil || engine.Executor == nil {
 			return nil, fmt.Errorf("tenant datasource %q is invalid", name)
 		}
@@ -46,6 +49,8 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 			canonical = snapshot
 		} else if snapshot.Schema() != canonical.Schema() {
 			return nil, fmt.Errorf("tenant datasource %q schema drift", name)
+		} else if !reflect.DeepEqual(snapshot.Capabilities(), canonical.Capabilities()) {
+			return nil, fmt.Errorf("tenant datasource %q capability drift", name)
 		}
 		targets[name] = engine.Executor
 	}
@@ -102,6 +107,15 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 	dispatcher := &Executor{tenantRouter: router, tenantSources: targets, revocation: config.revocation, snapshot: canonical}
 	dispatcher.frozen.Store(true)
 	return &Engine{Executor: dispatcher}, nil
+}
+
+func sortedTenantSources[T any](sources map[string]T) []string {
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func validateRLSTables(metadata *Metadata, tables []RLSTable) error {

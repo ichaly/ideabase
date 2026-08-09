@@ -168,6 +168,7 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 	if err != nil {
 		return nil, err
 	}
+	capabilities = completeCapabilities(schema, capabilities, HandlerRemote, "namespace")
 	mutations := make(map[string]*namespaceContract)
 	for _, contract := range contracts {
 		for field := range contract.mutations {

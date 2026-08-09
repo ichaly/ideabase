@@ -1,7 +1,7 @@
 ---
 title: refactor: 构建可组合的多租户 GQL 网关引擎
 type: refactor
-status: active
+status: complete
 date: 2026-08-08
 deepened: 2026-08-08
 ---
@@ -665,6 +665,13 @@ flowchart TB
 nested 51 alloc、4.51–4.82µs，均在冻结预算内；Gateway warm query 约 7.9µs/75 alloc，
 关闭 Observer 约 2.1ns/0 alloc。fish-ai-api 独立 worktree 的 GQL/Bot/service 普通、race、
 vet 通过；脱离 go.work 使用旧 pseudo-version 的失败已作为发布顺序写入 `MIGRATION.md`。
+
+最终逐项审计补齐了 tenant datasource 的 capability drift/Health/Subscription 聚合、远程与组合
+snapshot 的完整 coordinate catalog、自定义 executable directive 启动拒绝、无主键分页自省、
+offset/limit/groupBy 的稳定唯一排序，以及变量 `distinct/groupBy` 的 volatile 编译契约。修复后再次
+通过全量普通与 race 测试、10 秒 frontend fuzz（164,491 次执行）、Go 1.25/1.26 编译、
+PostgreSQL 15 全量和 16/17/18 catalog smoke、fish-ai-api 兼容矩阵。热编译仍保持 simple 22 alloc、
+nested 51 alloc，稳定分页没有增加分配。
 
 ---
 

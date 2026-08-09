@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	stdjson "encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -150,13 +151,31 @@ func NewSnapshotArtifact(schema, fingerprint string, capabilities []Capability) 
 	if schema == "" || fingerprint == "" {
 		return nil, fmt.Errorf("snapshot schema and fingerprint are required")
 	}
-	if _, err := gqlparser.LoadSchema(&ast.Source{Name: "endpoint.graphql", Input: schema}); err != nil {
+	parsed, err := gqlparser.LoadSchema(&ast.Source{Name: "endpoint.graphql", Input: schema})
+	if err != nil {
 		return nil, fmt.Errorf("endpoint schema: %w", err)
 	}
+	disableUnsupportedDirectives(parsed)
+	if err := validateExecutableDirectives(parsed); err != nil {
+		return nil, err
+	}
+	capabilities = append([]Capability(nil), capabilities...)
+	capabilities = completeCapabilities(parsed, capabilities, HandlerRemote, "endpoint")
 	index := make(map[string]Capability, len(capabilities))
 	for _, capability := range capabilities {
 		if capability.Coordinate == "" || index[capability.Coordinate].Coordinate != "" {
 			return nil, fmt.Errorf("endpoint capability coordinate invalid or duplicated: %q", capability.Coordinate)
+		}
+		parent := parsed.Types[capability.Parent]
+		var field *ast.FieldDefinition
+		if parent != nil {
+			field = parent.Fields.ForName(capability.Name)
+		}
+		if field == nil || capability.Coordinate != capability.Parent+"."+capability.Name {
+			return nil, fmt.Errorf("endpoint capability %q is not present in endpoint schema", capability.Coordinate)
+		}
+		if capability.Handler == "" || capability.Type != field.Type.String() || !slices.Equal(capability.Arguments, fieldArguments(field)) {
+			return nil, fmt.Errorf("endpoint capability %q does not match endpoint schema", capability.Coordinate)
 		}
 		index[capability.Coordinate] = cloneCapability(capability)
 	}
@@ -190,7 +209,38 @@ func cloneCapability(capability Capability) Capability {
 	return capability
 }
 
+func completeCapabilities(schema *ast.Schema, capabilities []Capability, fallback HandlerKind, planner string) []Capability {
+	seen := make(map[string]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		seen[capability.Coordinate] = struct{}{}
+	}
+	for _, parent := range sortedDefinitions(schema) {
+		if parent.Kind != ast.Object && parent.Kind != ast.Interface {
+			continue
+		}
+		for _, field := range parent.Fields {
+			coordinate := parent.Name + "." + field.Name
+			if _, exists := seen[coordinate]; exists {
+				continue
+			}
+			handler := fallback
+			if strings.HasPrefix(parent.Name, "__") || strings.HasPrefix(field.Name, "__") {
+				handler = HandlerIntrospection
+			}
+			capabilities = append(capabilities, Capability{
+				Coordinate: coordinate, Parent: parent.Name, Name: field.Name, Type: field.Type.String(),
+				Arguments: fieldArguments(field), Handler: handler, Planner: planner, Cost: 1,
+			})
+		}
+	}
+	sort.Slice(capabilities, func(i, j int) bool { return capabilities[i].Coordinate < capabilities[j].Coordinate })
+	return capabilities
+}
+
 func buildSnapshot(executor *Executor) (*Snapshot, error) {
+	if err := validateExecutableDirectives(executor.schema); err != nil {
+		return nil, err
+	}
 	schema := formatSchema(executor.schema)
 	capabilities := make([]Capability, 0, len(executor.schema.Types)*4)
 	index := make(map[string]Capability)
@@ -231,6 +281,22 @@ func buildSnapshot(executor *Executor) (*Snapshot, error) {
 		schema: schema, fingerprint: fmt.Sprintf("%x", fingerprint),
 		capabilities: capabilities, index: index,
 	}, nil
+}
+
+func validateExecutableDirectives(schema *ast.Schema) error {
+	for name, directive := range schema.Directives {
+		if name == "skip" || name == "include" {
+			continue
+		}
+		for _, location := range directive.Locations {
+			switch location {
+			case ast.LocationQuery, ast.LocationMutation, ast.LocationSubscription, ast.LocationField,
+				ast.LocationFragmentDefinition, ast.LocationFragmentSpread, ast.LocationInlineFragment, ast.LocationVariableDefinition:
+				return fmt.Errorf("unsupported executable directive @%s", name)
+			}
+		}
+	}
+	return nil
 }
 
 func validateSchemaArtifact(generated, artifact string) error {

@@ -28,11 +28,38 @@ func comma(ctx *compiler.Context) func() {
 	}
 }
 
-// fieldNames 解析字符串列表参数为字段名（兼容单值写法），校验须为实体真实列
-func fieldNames(sc scope, args ast.ArgumentList, argName string) ([]string, error) {
+// fieldNames 解析枚举列表参数为字段名（兼容变量与单值写法），校验须为实体真实列。
+// 变量值改变SQL列集合，因此标记volatile，禁止复用按查询文本缓存的计划。
+func fieldNames(ctx *compiler.Context, sc scope, args ast.ArgumentList, argName string) ([]string, error) {
 	arg := args.ForName(argName)
 	if arg == nil || arg.Value == nil {
 		return nil, nil
+	}
+	if arg.Value.Kind == ast.Variable {
+		ctx.MarkVolatile()
+		value, ok := ctx.Variable(arg.Value.Raw)
+		if !ok || value == nil {
+			return nil, nil
+		}
+		var names []string
+		switch values := value.(type) {
+		case []any:
+			names = make([]string, len(values))
+			for i, item := range values {
+				name, ok := item.(string)
+				if !ok {
+					return nil, fmt.Errorf("%s变量必须是字段名列表", argName)
+				}
+				names[i] = name
+			}
+		case []string:
+			names = values
+		case string:
+			names = []string{values}
+		default:
+			return nil, fmt.Errorf("%s变量必须是字段名列表", argName)
+		}
+		return validateFieldNames(sc, argName, names)
 	}
 	values := arg.Value.Children
 	if len(values) == 0 && arg.Value.Raw != "" { // 单值写法
@@ -40,11 +67,16 @@ func fieldNames(sc scope, args ast.ArgumentList, argName string) ([]string, erro
 	}
 	names := make([]string, 0, len(values))
 	for _, child := range values {
-		name := child.Value.Raw
+		names = append(names, child.Value.Raw)
+	}
+	return validateFieldNames(sc, argName, names)
+}
+
+func validateFieldNames(sc scope, argName string, names []string) ([]string, error) {
+	for _, name := range names {
 		if field, ok := sc.class.Fields[name]; !ok || field.Column == "" {
 			return nil, fmt.Errorf("%s包含无效字段: %s", argName, name)
 		}
-		names = append(names, name)
 	}
 	return names, nil
 }

@@ -41,10 +41,10 @@ func (my *_DialectSuite) TestSelect() {
 			query: `query { users(limit: 10, offset: 20) { items { id } total } }`,
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
-					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__total'), '[]'), 'total', COALESCE(MIN("__sr_0"."__total"), 0)) AS "json"
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__rn' - '__total' ORDER BY "__sr_0"."__rn"), '[]'), 'total', COALESCE(MIN("__sr_0"."__total"), 0)) AS "json"
 					FROM (
-						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."__total"
-						FROM (SELECT "sys_user"."id", COUNT(*) OVER() AS "__total" FROM "public"."sys_user" LIMIT 10 OFFSET 20) AS "sys_user_0"
+						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."__total", ROW_NUMBER() OVER () AS "__rn"
+						FROM (SELECT "sys_user"."id", COUNT(*) OVER() AS "__total" FROM "public"."sys_user" ORDER BY "sys_user"."id" ASC LIMIT 10 OFFSET 20) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},
@@ -205,9 +205,9 @@ func (my *_DialectSuite) TestRelation() {
 							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*) - '__rn' ORDER BY "__sr_1"."__rn"), '[]') AS "json"
 							FROM (
 								SELECT "sys_post_1"."title" AS "title", ROW_NUMBER() OVER () AS "__rn"
-								FROM (SELECT "sys_post"."title" FROM "public"."sys_post"
+								FROM (SELECT "sys_post"."title", "sys_post"."id" FROM "public"."sys_post"
 									WHERE "sys_post"."user_id" = "sys_user_0"."id" AND "sys_post"."title" LIKE $1
-									ORDER BY "sys_post"."title" DESC LIMIT 3) AS "sys_post_1"
+									ORDER BY "sys_post"."title" DESC, "sys_post"."id" ASC LIMIT 3) AS "sys_post_1"
 							) AS "__sr_1"
 						) AS "__sj_1" ON TRUE
 					) AS "__sr_0"

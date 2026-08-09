@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 const gatewayChildSchema = `
@@ -456,6 +457,24 @@ func TestGatewayPrefixesImportedTypesAndIntrospectsNamespaces(t *testing.T) {
 	body, err := gateway.Execute(context.Background(), `{ __type(name: "Crm_User") { name fields { name } } }`, nil)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"data":{"__type":{"name":"Crm_User","fields":[{"name":"id"},{"name":"name"},{"name":"status"},{"name":"payload"}]}}}`, string(body))
+}
+
+func TestGatewaySnapshotCoversEveryIntrospectableCoordinate(t *testing.T) {
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: newGatewayEndpoint("crm", gatewayChildSchema, nil)})
+	require.NoError(t, err)
+	snapshot, err := gateway.Snapshot()
+	require.NoError(t, err)
+	for _, definition := range gateway.current().schema.Types {
+		if definition.Kind != ast.Object && definition.Kind != ast.Interface {
+			continue
+		}
+		for _, field := range definition.Fields {
+			coordinate := definition.Name + "." + field.Name
+			capability, ok := snapshot.Capability(coordinate)
+			require.True(t, ok, coordinate)
+			require.NotEmpty(t, capability.Handler, coordinate)
+		}
+	}
 }
 
 func TestGatewayRunsNamespacesInParallelAndBatchesOneNamespace(t *testing.T) {
