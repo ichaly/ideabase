@@ -1,0 +1,93 @@
+spec: gql-engine-five-round-simplification
+run_id: "20260809T180000+0800"
+started_at: "2026-08-09T18:00:00+08:00"
+
+baseline:
+  timestamp: "2026-08-09T18:00:00+08:00"
+  gates:
+    unit_tests_passed: 1
+    race_tests_passed: 1
+    vet_passed: 1
+    staticcheck_findings: 11
+    api_compatibility_passed: 1
+    simple_compile_allocs: 22
+    nested_compile_allocs: 51
+    gateway_warm_allocs: 75
+    observer_disabled_allocs: 0
+  diagnostics:
+    production_go_lines: 22190
+    production_go_files: 76
+    production_functions: 893
+    production_branch_tokens: 3701
+    test_go_lines: 14673
+    simple_compile_ns: 2049
+    nested_compile_ns: 4866
+    gateway_warm_ns: 8484
+    observer_disabled_ns: 2.135
+
+experiments:
+  - iteration: 1
+    batch: 1
+    hypothesis: Remove private functions proven unreachable by production and tests.
+    category: dead-code
+    outcome: kept
+    changes:
+      - file: gql/derive.go
+        summary: Removed the unused scalar wrapper.
+      - file: gql/frontend.go
+        summary: Removed the unused schema-less selection normalizer.
+      - file: gql/subscription.go
+        summary: Removed the superseded feed-key builder.
+      - file: gql/tenant_gateway.go
+        summary: Removed the superseded tenant target wrapper.
+    gates:
+      unit_tests_passed: 1
+      race_tests_passed: 1
+      vet_passed: 1
+      staticcheck_findings: 7
+      api_compatibility_passed: 1
+      simple_compile_allocs: 22
+      nested_compile_allocs: 51
+      gateway_warm_allocs: 75
+      observer_disabled_allocs: 0
+    gates_passed: true
+    diagnostics:
+      production_go_lines: 22166
+      production_go_files: 76
+      production_functions: 889
+      production_branch_tokens: 3701
+      test_go_lines: 14673
+      simple_compile_ns: 2099
+      nested_compile_ns: 4949
+      gateway_warm_ns: 8480
+      observer_disabled_ns: 2.149
+    primary_delta: "-24"
+    learnings: Private compatibility wrappers can be removed safely only after checking both production and same-package tests; observable error text must remain unchanged.
+
+best:
+  iteration: 1
+  metrics:
+    production_go_lines: 22166
+  total_judge_cost_usd: 0
+
+hypothesis_backlog:
+  - description: Consolidate metadata and schema construction helpers without adding hot-path abstraction.
+    category: metadata-schema
+    priority: high
+    dep_status: not_applicable
+    required_deps: []
+  - description: Deduplicate PostgreSQL compiler operation shapes and shared rendering branches.
+    category: compiler
+    priority: high
+    dep_status: not_applicable
+    required_deps: []
+  - description: Collapse resolver and executor orchestration onto existing canonical paths.
+    category: execution
+    priority: high
+    dep_status: not_applicable
+    required_deps: []
+  - description: Consolidate gateway and transport lifecycle paths.
+    category: gateway-transport
+    priority: high
+    dep_status: not_applicable
+    required_deps: []

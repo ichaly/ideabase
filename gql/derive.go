@@ -298,11 +298,6 @@ func required(tag string) bool {
 	return false
 }
 
-// deriveScalar Go类型→GraphQL标量或复合类型引用。
-func deriveScalar(t reflect.Type) string {
-	return deriveType(t, false)
-}
-
 func deriveType(t reflect.Type, input bool) string {
 	for t.Kind() == reflect.Ptr {
 		t = t.Elem()

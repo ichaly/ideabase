@@ -237,13 +237,6 @@ func (my *Executor) expireFeed(f *feed, err error) {
 	}
 }
 
-// feedKey 共享流身份：查询+操作名+变量+作用域（map序列化按键排序，同构请求必得同键）
-func feedKey(query, operation string, variables, scope map[string]any) string {
-	v, _ := json.Marshal(variables)
-	s, _ := json.Marshal(scope)
-	return query + "\x00" + operation + "\x00" + string(v) + "\x00" + string(s)
-}
-
 func subscriptionFeedKey(query, operation string, variables, scope map[string]any, identity Identity, route TenantRoute, policy string) string {
 	roles := identity.Roles()
 	sort.Strings(roles)

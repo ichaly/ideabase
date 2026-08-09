@@ -154,11 +154,6 @@ func validateSharedTenantScope(metadata *Metadata) error {
 	return nil
 }
 
-func (my *Executor) tenantTarget(ctx context.Context) (*Executor, error) {
-	target, _, err := my.tenantDispatch(ctx)
-	return target, err
-}
-
 func (my *Executor) tenantDispatch(ctx context.Context) (*Executor, context.Context, error) {
 	if my.tenantRouter == nil {
 		return my, ctx, nil

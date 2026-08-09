@@ -32,13 +32,6 @@ func loadQuery(schema *ast.Schema, source string, maxTokens int, rules *validato
 	return doc, nil
 }
 
-// normalizeSelection evaluates the standard conditional directives and expands
-// fragments before authorization, compilation, and resolver collection. The
-// compiler consequently receives one honest, directive-free selection shape.
-func normalizeSelection(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]interface{}) (ast.SelectionSet, error) {
-	return normalizeSelections(set, fragments, variables, make(map[string]bool), nil)
-}
-
 func normalizeSelectionWithSchema(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]interface{}, schema *ast.Schema) (ast.SelectionSet, error) {
 	return normalizeSelections(set, fragments, variables, make(map[string]bool), schema)
 }
