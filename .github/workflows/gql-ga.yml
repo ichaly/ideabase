@@ -1,0 +1,40 @@
+name: gql-ga
+
+on:
+  pull_request:
+    paths: ["gql/**", ".github/workflows/gql-ga.yml"]
+  push:
+    branches: [main]
+
+jobs:
+  correctness:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: gql/go.sum
+      - run: go test ./... -count=1
+      - run: go test -race . ./transport ./compiler/... -count=1
+      - run: go vet ./...
+
+  performance:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: gql/go.sum
+      - run: ./scripts/perf.sh | tee performance.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gql-performance
+          path: gql/performance.txt

@@ -66,7 +66,7 @@ func (my *Engine) Schema() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return string([]byte(snapshot.Schema())), nil
+	return snapshot.Schema(), nil
 }
 
 // ExecuteOperation executes one named operation from a multi-operation document.
@@ -110,6 +110,8 @@ type HealthReport struct {
 	DatabaseOK            bool
 	DatabaseError         string
 	CDCConfigured         bool
+	CDCConnected          bool
+	CDCError              string
 	SubscriptionAvailable bool
 }
 
@@ -121,6 +123,11 @@ func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 	}
 	report := HealthReport{CDCConfigured: my != nil && my.cdc != nil}
 	report.SubscriptionAvailable = report.CDCConfigured
+	if my != nil {
+		if status, ok := my.cdc.(interface{ status() (bool, string) }); ok {
+			report.CDCConnected, report.CDCError = status.status()
+		}
+	}
 	if my == nil || (my.schema == nil && my.snapshot == nil) {
 		return report, errors.New("gql schema is unavailable")
 	}

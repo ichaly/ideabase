@@ -18,7 +18,7 @@ func init() { zerolog.SetGlobalLevel(zerolog.Disabled) } // 基准跑期静音sc
 // CPU 与分配——每个计划缓存未命中的请求都走此路径，是引擎核心热路径。
 // 运行：go test -bench=BenchmarkCompile -benchmem ./compiler/pgsql/
 
-func benchCompiler(b *testing.B) (*gql.Compiler, *ast.Schema) {
+func benchCompiler(b testing.TB) (*gql.Compiler, *ast.Schema) {
 	k, err := std.NewKonfig()
 	if err != nil {
 		b.Fatal(err)
@@ -76,12 +76,34 @@ func benchCompiler(b *testing.B) (*gql.Compiler, *ast.Schema) {
 	return compile, schema
 }
 
-func benchOperation(b *testing.B, schema *ast.Schema, query string) *ast.OperationDefinition {
+func benchOperation(b testing.TB, schema *ast.Schema, query string) *ast.OperationDefinition {
 	doc, errs := gqlparser.LoadQuery(schema, query)
 	if len(errs) > 0 {
 		b.Fatal(errs)
 	}
 	return doc.Operations[0]
+}
+
+func TestGACompilerAllocationBudgets(t *testing.T) {
+	compile, schema := benchCompiler(t)
+	for name, budget := range map[string]struct {
+		query  string
+		allocs float64
+	}{
+		"simple": {`{ posts(limit: 10) { items { id title } total } }`, 22},
+		"nested": {`{ posts(limit: 10) { items { id title user { name } tags { name } } total } }`, 51},
+	} {
+		t.Run(name, func(t *testing.T) {
+			op := benchOperation(t, schema, budget.query)
+			if got := testing.AllocsPerRun(100, func() {
+				if _, _, err := compile.Build(op, nil); err != nil {
+					panic(err)
+				}
+			}); got > budget.allocs {
+				t.Fatalf("compiler allocations %.0f exceed budget %.0f", got, budget.allocs)
+			}
+		})
+	}
 }
 
 // BenchmarkCompileSimple 单表查询编译（无关系）

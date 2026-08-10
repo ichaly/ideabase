@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -25,9 +26,14 @@ type DelegationConfig struct {
 	Replay                          ReplayStore
 }
 
-// ReplayStore atomically accepts a token id once until its expiry.
+var ErrReplay = errors.New("delegation replay")
+
+type ReplayKey struct{ Issuer, Audience, ID string }
+
+// ReplayStore atomically consumes a token once until its expiry. Backing-store
+// errors remain distinguishable from ErrReplay while verification fails closed.
 type ReplayStore interface {
-	Use(id string, expiry time.Time) bool
+	Consume(context.Context, ReplayKey, time.Time) error
 }
 
 // DelegationCodec signs and verifies short-lived identity envelopes.
@@ -71,12 +77,11 @@ func NewDelegationCodec(config DelegationConfig) (*DelegationCodec, error) {
 	if config.Clock == nil {
 		config.Clock = time.Now
 	}
-	replay := config.Replay
-	if replay == nil {
-		replay = &memoryReplayStore{clock: config.Clock, tokens: make(map[string]time.Time)}
+	if config.Replay == nil {
+		return nil, fmt.Errorf("delegation replay store is required")
 	}
 	config.Key = append([]byte(nil), config.Key...)
-	return &DelegationCodec{config: config, replay: replay}, nil
+	return &DelegationCodec{config: config, replay: config.Replay}, nil
 }
 
 // Sign binds the verified context identity to one exact operation digest.
@@ -129,8 +134,11 @@ func (my *DelegationCodec) Verify(ctx context.Context, token, operation string) 
 	if subtle.ConstantTimeCompare([]byte(claims.Operation), []byte(operation)) != 1 {
 		return nil, fmt.Errorf("delegation operation does not match")
 	}
-	if claims.ExpiresAt == nil || claims.ID == "" || !my.replay.Use(claims.ID, claims.ExpiresAt.Time) {
-		return nil, fmt.Errorf("delegation replay rejected")
+	if claims.ExpiresAt == nil || claims.ID == "" {
+		return nil, ErrReplay
+	}
+	if err := my.replay.Consume(ctx, ReplayKey{Issuer: claims.Issuer, Audience: my.config.Audience, ID: claims.ID}, claims.ExpiresAt.Time.Add(my.config.ClockSkew)); err != nil {
+		return nil, fmt.Errorf("delegation replay rejected: %w", err)
 	}
 	identity, err := NewIdentity(IdentityInput{
 		Tenant: claims.Tenant, Subject: claims.RegisteredClaims.Subject, Actor: claims.Actor, Roles: claims.Roles, Claims: claims.Claims,
@@ -153,13 +161,31 @@ func randomTokenID() (string, error) {
 type memoryReplayStore struct {
 	mu     sync.Mutex
 	clock  func() time.Time
+	limit  int
 	tokens map[string]time.Time
 	expiry replayExpiryHeap
 }
 
-func (my *memoryReplayStore) Use(id string, expiry time.Time) bool {
+// NewMemoryReplayStore is the bounded standalone ReplayStore. Clustered
+// deployments must inject a shared store with atomic use-once semantics.
+func NewMemoryReplayStore(capacity int) ReplayStore {
+	return newMemoryReplayStore(capacity, time.Now)
+}
+
+func newMemoryReplayStore(capacity int, clock func() time.Time) *memoryReplayStore {
+	if capacity <= 0 {
+		capacity = 65536
+	}
+	return &memoryReplayStore{clock: clock, limit: capacity, tokens: make(map[string]time.Time)}
+}
+
+func (my *memoryReplayStore) Consume(ctx context.Context, key ReplayKey, expiry time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	my.mu.Lock()
 	defer my.mu.Unlock()
+	id := key.Issuer + "\x00" + key.Audience + "\x00" + key.ID
 	now := my.clock()
 	for len(my.expiry) > 0 && !my.expiry[0].expiry.After(now) {
 		item := heap.Pop(&my.expiry).(replayExpiry)
@@ -168,11 +194,14 @@ func (my *memoryReplayStore) Use(id string, expiry time.Time) bool {
 		}
 	}
 	if _, exists := my.tokens[id]; exists {
-		return false
+		return ErrReplay
+	}
+	if len(my.tokens) >= my.limit {
+		return fmt.Errorf("replay store capacity exhausted")
 	}
 	my.tokens[id] = expiry
 	heap.Push(&my.expiry, replayExpiry{id: id, expiry: expiry})
-	return true
+	return nil
 }
 
 type replayExpiry struct {

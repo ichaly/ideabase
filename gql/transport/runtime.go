@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -100,6 +101,10 @@ type RemoteEndpoint struct {
 	subscribe   string
 	health      string
 	state       atomic.Pointer[remoteState]
+	refresh     sync.Mutex
+	historyMu   sync.RWMutex
+	history     map[string]*remoteState
+	order       []string
 }
 
 // remoteState is published as one pointer so snapshot, subscription and
@@ -135,12 +140,7 @@ func (my *remoteRevision) SubscriptionAvailable() bool { return my.subscriptionA
 func (my *remoteRevision) HealthAvailable() bool       { return my.healthAvailable }
 func (my *remoteRevision) Health(ctx context.Context) (core.HealthReport, error) {
 	report, err := my.endpoint.Health(ctx)
-	if report.SnapshotFingerprint != my.snapshot.Fingerprint() {
-		report.Ready, report.SnapshotOK = false, false
-		if err == nil {
-			err = fmt.Errorf("remote health snapshot mismatch")
-		}
-	}
+	report.SnapshotFingerprint = my.snapshot.Fingerprint()
 	return report, err
 }
 
@@ -177,7 +177,8 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 	remote := &RemoteEndpoint{
 		id: options.EndpointID, manifest: options.ManifestURL, execute: options.ExecuteURL,
 		client: client, signer: options.Delegation, maxResponse: options.MaxResponseBytes, timeout: options.Timeout, subscribe: options.SubscribeURL,
-		health: options.HealthURL,
+		health:  options.HealthURL,
+		history: make(map[string]*remoteState, 8),
 	}
 	if err := remote.Refresh(ctx); err != nil {
 		return nil, err
@@ -219,13 +220,28 @@ func (my *RemoteEndpoint) Snapshot() (*core.Snapshot, error) {
 func (my *RemoteEndpoint) ForSnapshot(fingerprint string) (core.Endpoint, error) {
 	state := my.state.Load()
 	if state == nil || state.snapshot == nil || state.snapshot.Fingerprint() != fingerprint {
-		return nil, fmt.Errorf("remote snapshot revision unavailable")
+		my.historyMu.Lock()
+		state = my.history[fingerprint]
+		if state == nil {
+			my.historyMu.Unlock()
+			return nil, fmt.Errorf("remote snapshot revision unavailable")
+		}
+		for i, revision := range my.order {
+			if revision == fingerprint {
+				copy(my.order[i:], my.order[i+1:])
+				my.order[len(my.order)-1] = fingerprint
+				break
+			}
+		}
+		my.historyMu.Unlock()
 	}
 	return &remoteRevision{endpoint: my, snapshot: state.snapshot, subscriptionAvailable: state.subscriptionAvailable, healthAvailable: state.healthAvailable}, nil
 }
 
 // Refresh atomically installs a fully validated manifest or retains the LKG snapshot.
 func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
+	my.refresh.Lock()
+	defer my.refresh.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, my.timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, my.manifest, nil)
@@ -263,7 +279,26 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	my.state.Store(&remoteState{snapshot: snapshot, subscriptionAvailable: manifest.Subscription, healthAvailable: manifest.Health})
+	next := &remoteState{snapshot: snapshot, subscriptionAvailable: manifest.Subscription, healthAvailable: manifest.Health}
+	if current := my.state.Load(); current != nil && current.snapshot.Fingerprint() != snapshot.Fingerprint() {
+		my.historyMu.Lock()
+		for index, revision := range my.order {
+			if revision == snapshot.Fingerprint() {
+				delete(my.history, revision)
+				my.order = append(my.order[:index], my.order[index+1:]...)
+				break
+			}
+		}
+		fingerprint := current.snapshot.Fingerprint()
+		my.history[fingerprint] = current
+		my.order = append(my.order, fingerprint)
+		if len(my.order) > 8 {
+			delete(my.history, my.order[0])
+			my.order = my.order[1:]
+		}
+		my.historyMu.Unlock()
+	}
+	my.state.Store(next)
 	return nil
 }
 
@@ -296,7 +331,7 @@ func (my *RemoteEndpoint) executeOperation(ctx context.Context, query string, va
 		request.Header.Set("GQL-Snapshot", fingerprint)
 	}
 	if my.signer != nil {
-		token, signErr := my.signer.Sign(ctx, operationDigest(payload))
+		token, signErr := my.signer.Sign(ctx, operationDigest(payload, fingerprint))
 		if signErr != nil {
 			return nil, signErr
 		}
@@ -338,7 +373,7 @@ func (my *RemoteEndpoint) subscribeOperation(ctx context.Context, query string, 
 		request.Header.Set("GQL-Snapshot", fingerprint)
 	}
 	if my.signer != nil {
-		token, signErr := my.signer.Sign(ctx, operationDigest(payload))
+		token, signErr := my.signer.Sign(ctx, operationDigest(payload, fingerprint))
 		if signErr != nil {
 			return nil, signErr
 		}

@@ -3,6 +3,7 @@ package gql
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -19,12 +20,7 @@ func policyError(class *protocol.Class, action, field string) error {
 }
 
 func operationInList(list []string, action string) bool {
-	for _, candidate := range list {
-		if candidate == action {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, action)
 }
 
 func allowedColumn(list []string, field *protocol.Field) bool {
@@ -37,18 +33,6 @@ func allowedColumn(list []string, field *protocol.Field) bool {
 		}
 	}
 	return false
-}
-
-func uniqueStrings(in []string) []string {
-	seen := make(map[string]bool, len(in))
-	out := make([]string, 0, len(in))
-	for _, item := range in {
-		if !seen[item] {
-			seen[item] = true
-			out = append(out, item)
-		}
-	}
-	return out
 }
 
 func policyRows(value any) ([]map[string]interface{}, error) {

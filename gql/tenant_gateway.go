@@ -13,13 +13,13 @@ import (
 // CDC and transaction boundary; the gateway routes before parsing or calling
 // any handler. All sources must expose the same GraphQL contract.
 type tenantGatewayConfig struct {
-	revocation *RevocationBarrier
+	revocation SecurityStateProvider
 	rls        map[string]RLSConfig
 }
 type TenantGatewayOption func(*tenantGatewayConfig)
 
-func WithRevocationBarrier(barrier *RevocationBarrier) TenantGatewayOption {
-	return func(config *tenantGatewayConfig) { config.revocation = barrier }
+func WithSecurityState(provider SecurityStateProvider) TenantGatewayOption {
+	return func(config *tenantGatewayConfig) { config.revocation = provider }
 }
 
 // WithRLS validates PostgreSQL role/table facts for shared-table datasources
@@ -34,7 +34,7 @@ type TenantGateway struct {
 	router     *TenantRouter
 	sources    map[string]*Engine
 	snapshot   *Snapshot
-	revocation *RevocationBarrier
+	revocation SecurityStateProvider
 	rls        map[string]RLSConfig
 }
 
@@ -102,6 +102,9 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 			option(&config)
 		}
 	}
+	if config.revocation == nil {
+		return nil, fmt.Errorf("tenant SecurityStateProvider is required")
+	}
 	if router.mode == TenantModeSharedTable {
 		for source, target := range targets {
 			rls, configured := config.rls[source]
@@ -153,7 +156,7 @@ func (my *TenantGateway) route(ctx context.Context) (*Engine, context.Context, T
 		return nil, ctx, TenantRoute{}, err
 	}
 	if my.revocation != nil {
-		if err := my.revocation.Check(identity, route); err != nil {
+		if err := my.revocation.Check(ctx, identity, route); err != nil {
 			return nil, ctx, TenantRoute{}, err
 		}
 	}
@@ -196,18 +199,11 @@ func (my *TenantGateway) EffectiveSchema(ctx context.Context) (SchemaArtifact, e
 	}
 	return target.EffectiveSchema(routed)
 }
-func (my *TenantGateway) OperationCost(query, operationName string, variables map[string]any) (uint64, error) {
-	if my == nil || len(my.sources) == 0 {
-		return 0, fmt.Errorf("tenant gateway is unavailable")
-	}
-	name := sortedTenantSources(my.sources)[0]
-	return my.sources[name].OperationCost(query, operationName, variables)
-}
 func (my *TenantGateway) Health(ctx context.Context) (HealthReport, error) {
 	if my == nil || len(my.sources) == 0 {
 		return HealthReport{}, fmt.Errorf("tenant gateway is unavailable")
 	}
-	report := HealthReport{Ready: true, SnapshotOK: my.snapshot != nil, DatabaseOK: true, CDCConfigured: true, SubscriptionAvailable: true}
+	report := HealthReport{Ready: true, SnapshotOK: my.snapshot != nil, DatabaseOK: true, CDCConfigured: true, CDCConnected: true, SubscriptionAvailable: true}
 	if my.snapshot != nil {
 		report.SnapshotFingerprint = my.snapshot.Fingerprint()
 	}
@@ -217,6 +213,13 @@ func (my *TenantGateway) Health(ctx context.Context) (HealthReport, error) {
 		report.SnapshotOK = report.SnapshotOK && child.SnapshotOK
 		report.DatabaseOK = report.DatabaseOK && child.DatabaseOK
 		report.CDCConfigured = report.CDCConfigured && child.CDCConfigured
+		report.CDCConnected = report.CDCConnected && child.CDCConnected
+		if child.CDCError != "" {
+			if report.CDCError != "" {
+				report.CDCError += "; "
+			}
+			report.CDCError += name + ": " + child.CDCError
+		}
 		report.SubscriptionAvailable = report.SubscriptionAvailable && child.SubscriptionAvailable
 		if child.DatabaseError != "" {
 			if report.DatabaseError != "" {
@@ -235,8 +238,15 @@ func (my *TenantGateway) Health(ctx context.Context) (HealthReport, error) {
 	return report, errors.Join(failures...)
 }
 func (my *TenantGateway) SubscriptionAvailable() bool {
-	report, err := my.Health(context.Background())
-	return err == nil && report.SubscriptionAvailable
+	if my == nil || len(my.sources) == 0 {
+		return false
+	}
+	for _, source := range my.sources {
+		if !source.SubscriptionAvailable() {
+			return false
+		}
+	}
+	return true
 }
 func (my *TenantGateway) Close() {}
 

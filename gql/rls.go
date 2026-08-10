@@ -36,6 +36,9 @@ func InspectRLS(db *gorm.DB, metadata *Metadata) (RLSConfig, error) {
 	if db == nil || metadata == nil || db.Name() != "postgres" {
 		return RLSConfig{}, fmt.Errorf("PostgreSQL database and metadata are required for RLS inspection")
 	}
+	ctx, cancel := startupProbeContext(context.Background())
+	defer cancel()
+	db = db.WithContext(ctx)
 	config := RLSConfig{}
 	if err := db.Raw(`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`).Row().Scan(&config.Role.Superuser, &config.Role.BypassRLS); err != nil {
 		return RLSConfig{}, fmt.Errorf("inspect RLS role: %w", err)

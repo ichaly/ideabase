@@ -35,22 +35,6 @@ func NewCompiler(m *Metadata, dialects []compiler.Dialect) (*Compiler, error) {
 	return my, nil
 }
 
-func (my *Compiler) freeze(m *Metadata) (*Compiler, error) {
-	if my == nil {
-		return nil, nil
-	}
-	frozen := *my
-	frozen.meta = m
-	if m != nil {
-		fingerprint, err := m.CatalogFingerprint()
-		if err != nil {
-			return nil, err
-		}
-		frozen.cursorFingerprint = fingerprint
-	}
-	return &frozen, nil
-}
-
 // Plan 编译产物：SQL + 参数槽位 + 变量默认值 + resolver绑定
 // 非volatile的计划可按查询文本缓存，执行期仅需解析参数槽位
 type Plan struct {
@@ -61,6 +45,7 @@ type Plan struct {
 	defaults    map[string]interface{}
 	volatile    bool
 	resolvers   []binding
+	decode      decodeTrie
 	tables      []string   // 涉及的表集合，订阅按表变更唤醒
 	paths       codecPaths // 选择集中codec字段路径树，出参流式转换用（executor首次编译时固化）
 	policyRoles []string

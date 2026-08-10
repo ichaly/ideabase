@@ -38,7 +38,9 @@ func newEngineForTest(d *gorm.DB, renderer *Renderer, metadata *Metadata, compil
 	if metadata == nil || renderer == nil {
 		return nil, fmt.Errorf("缺少Metadata或Renderer")
 	}
-	configureSearchMode(metadata, d)
+	if err := configureSearchMode(metadata, d); err != nil {
+		return nil, err
+	}
 	catalog := metadata.freeze()
 	if compiler == nil {
 		var err error

@@ -6,9 +6,9 @@ package gql
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
@@ -53,7 +53,12 @@ func newPostgresNotifier(db *gorm.DB, cfg internal.SubscriptionConfig) (notifier
 	if dsn == "" {
 		return nil, fmt.Errorf("无法获取数据库DSN，请配置 subscription.dsn")
 	}
-	return newListener(dsn, cfg.Publication), nil
+	listener := newListener(dsn, cfg.Publication)
+	if err := listener.validate(); err != nil {
+		listener.close()
+		return nil, err
+	}
+	return listener, nil
 }
 
 // watcher 单个订阅的唤醒端：关注的表集合 + 容量1的唤醒通道（天然合并连续变更）
@@ -73,6 +78,8 @@ type listener struct {
 	cancel      context.CancelFunc
 	dsn         string
 	publication string
+	connected   atomic.Bool
+	lastError   atomic.Pointer[string]
 }
 
 // newListener 构造监听器（连接延迟到首个订阅时建立）
@@ -91,7 +98,10 @@ func newListener(dsn, publication string) *listener {
 }
 
 // close 停止监听：取消生命周期ctx，接收循环随ctx中断、重连循环退出
-func (my *listener) close() { my.cancel() }
+func (my *listener) close() {
+	my.connected.Store(false)
+	my.cancel()
+}
 
 // watch 注册订阅的唤醒端；首次调用启动复制连接。
 // 建连失败只返回错误不缓存（不用sync.Once），数据库恢复后的下一次订阅会自动重试
@@ -104,6 +114,7 @@ func (my *listener) watch(tables []string) (*watcher, error) {
 			return nil, fmt.Errorf("CDC监听启动失败（确认 wal_level=logical 与REPLICATION权限）: %w", err)
 		}
 		my.started = true // 启动后run内部自带退避重连，无需再回退标志
+		my.setStatus(true, nil)
 		go my.run(conn)
 	}
 
@@ -119,6 +130,17 @@ func (my *listener) watch(tables []string) (*watcher, error) {
 	}
 	my.mu.Unlock()
 	return w, nil
+}
+
+func (my *listener) validate() error {
+	ctx, cancel := context.WithTimeout(my.ctx, 15*time.Second)
+	defer cancel()
+	conn, err := pgconn.Connect(ctx, replicationDSN(my.dsn))
+	if err != nil {
+		return fmt.Errorf("验证CDC复制连接失败: %w", err)
+	}
+	defer my.closeConn(conn)
+	return my.ensurePublication(ctx, conn)
 }
 
 // unwatch 注销唤醒端
@@ -175,26 +197,25 @@ func (my *listener) connect() (*pgconn.PgConn, error) {
 		return nil, err
 	}
 
-	// 确保发布存在（已存在的报错忽略）
-	if _, err = conn.Exec(ctx, fmt.Sprintf(
-		`CREATE PUBLICATION %q FOR ALL TABLES`, my.publication)).ReadAll(); err != nil &&
-		!strings.Contains(err.Error(), "42710") { // duplicate_object
-		return fail(fmt.Errorf("创建发布失败: %w", err))
+	if err = my.ensurePublication(ctx, conn); err != nil {
+		return fail(err)
 	}
-	my.auditPublication(ctx, conn)
 
-	system, err := pglogrepl.IdentifySystem(ctx, conn)
+	slot, err := replicationSlotName()
 	if err != nil {
-		return fail(fmt.Errorf("IdentifySystem失败: %w", err))
+		return fail(err)
 	}
-
-	slot := fmt.Sprintf("ideabase_%d_%d", os.Getpid(), time.Now().UnixNano()%100000)
-	if _, err = pglogrepl.CreateReplicationSlot(ctx, conn, slot, "pgoutput",
-		pglogrepl.CreateReplicationSlotOptions{Temporary: true}); err != nil {
+	created, err := pglogrepl.CreateReplicationSlot(ctx, conn, slot, "pgoutput",
+		pglogrepl.CreateReplicationSlotOptions{Temporary: true})
+	if err != nil {
 		return fail(fmt.Errorf("创建临时复制槽失败: %w", err))
 	}
+	start, err := pglogrepl.ParseLSN(created.ConsistentPoint)
+	if err != nil {
+		return fail(fmt.Errorf("解析复制槽一致性位置失败: %w", err))
+	}
 
-	if err = pglogrepl.StartReplication(ctx, conn, slot, system.XLogPos, pglogrepl.StartReplicationOptions{
+	if err = pglogrepl.StartReplication(ctx, conn, slot, start, pglogrepl.StartReplicationOptions{
 		PluginArgs: []string{"proto_version '1'", fmt.Sprintf("publication_names '%s'", my.publication)},
 	}); err != nil {
 		return fail(fmt.Errorf("启动逻辑复制失败: %w", err))
@@ -202,10 +223,26 @@ func (my *listener) connect() (*pgconn.PgConn, error) {
 	return conn, nil
 }
 
-// auditPublication 审计发布覆盖范围：已存在的同名发布可能是DBA预建的窄发布
-// （非FOR ALL TABLES），未覆盖的表变更不进WAL解码、订阅永不唤醒且无任何报错——
-// 此处显式告警实际覆盖表清单（预建窄发布是文档允许的场景，不中断启动）
-func (my *listener) auditPublication(ctx context.Context, conn *pgconn.PgConn) {
+func (my *listener) ensurePublication(ctx context.Context, conn *pgconn.PgConn) error {
+	if _, err := conn.Exec(ctx, fmt.Sprintf(
+		`CREATE PUBLICATION %q FOR ALL TABLES`, my.publication)).ReadAll(); err != nil &&
+		!strings.Contains(err.Error(), "42710") { // duplicate_object
+		return fmt.Errorf("创建发布失败: %w", err)
+	}
+	return my.auditPublication(ctx, conn)
+}
+
+func replicationSlotName() (string, error) {
+	id, err := randomTokenID()
+	if err != nil {
+		return "", fmt.Errorf("CDC replication slot identity: %w", err)
+	}
+	return "ideabase_" + id, nil
+}
+
+// auditPublication rejects narrow publications: an uncovered table would
+// otherwise leave its subscriptions permanently stale without an error.
+func (my *listener) auditPublication(ctx context.Context, conn *pgconn.PgConn) error {
 	name := strings.ReplaceAll(my.publication, "'", "''")
 	read := func(sql string) (string, bool) {
 		results, err := conn.Exec(ctx, sql).ReadAll()
@@ -214,15 +251,17 @@ func (my *listener) auditPublication(ctx context.Context, conn *pgconn.PgConn) {
 		}
 		return string(results[0].Rows[0][0]), true
 	}
-	if all, ok := read(fmt.Sprintf(
-		`SELECT puballtables::text FROM pg_publication WHERE pubname = '%s'`, name)); !ok || all == "t" {
-		return
+	all, ok := read(fmt.Sprintf(`SELECT puballtables::text FROM pg_publication WHERE pubname = '%s'`, name))
+	if !ok {
+		return fmt.Errorf("无法审计CDC publication %q", my.publication)
+	}
+	if all == "t" || all == "true" {
+		return nil
 	}
 	covered, _ := read(fmt.Sprintf(
 		`SELECT COALESCE(string_agg(schemaname||'.'||tablename, ', ' ORDER BY tablename), '<空>')
 		 FROM pg_publication_tables WHERE pubname = '%s'`, name))
-	log.Warn().Str("publication", my.publication).Str("covered", covered).
-		Msg("发布非FOR ALL TABLES，清单外的表订阅不会被唤醒（如非预期请重建发布或调整subscription.publication）")
+	return fmt.Errorf("CDC publication %q must be FOR ALL TABLES (covered: %s)", my.publication, covered)
 }
 
 // run 接收循环：解码WAL消息到表级变更；断线退避重连，重连后广播补偿；close后退出
@@ -230,6 +269,7 @@ func (my *listener) run(conn *pgconn.PgConn) {
 	backoff := time.Second
 	for {
 		my.receive(conn)
+		my.setStatus(false, fmt.Errorf("CDC replication connection lost"))
 		my.closeConn(conn)
 		if my.ctx.Err() != nil {
 			return
@@ -248,14 +288,33 @@ func (my *listener) run(conn *pgconn.PgConn) {
 			}
 			next, err := my.connect()
 			if err != nil {
+				my.setStatus(false, err)
 				log.Error().Err(err).Msg("CDC重连失败")
 				continue
 			}
 			conn, backoff = next, time.Second
+			my.setStatus(true, nil)
 			my.notify() // 广播：补偿断线期间可能错过的变更
 			break
 		}
 	}
+}
+
+func (my *listener) setStatus(connected bool, err error) {
+	my.connected.Store(connected)
+	if err == nil {
+		my.lastError.Store(nil)
+		return
+	}
+	message := err.Error()
+	my.lastError.Store(&message)
+}
+
+func (my *listener) status() (bool, string) {
+	if message := my.lastError.Load(); message != nil {
+		return my.connected.Load(), *message
+	}
+	return my.connected.Load(), ""
 }
 
 // receive 单连接接收循环，出错返回交由run重连

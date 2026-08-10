@@ -148,9 +148,6 @@ var allFieldUses = []FieldUse{
 // EffectiveSchema returns the exact identity-specific schema artifact used by
 // introspection. Runtime authorization remains mandatory on every handler.
 func (my *Engine) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) {
-	if _, err := my.Snapshot(); err != nil {
-		return SchemaArtifact{}, err
-	}
 	view, err := my.effectiveSchema(ctx)
 	if err != nil {
 		return SchemaArtifact{}, err
@@ -170,6 +167,9 @@ func (my *Engine) effectiveIntrospection(ctx context.Context) (*intro.Handler, e
 
 func (my *Engine) effectiveSchema(ctx context.Context) (*effectiveView, error) {
 	if _, err := my.Snapshot(); err != nil {
+		return nil, err
+	}
+	if err := my.checkSecurity(ctx); err != nil {
 		return nil, err
 	}
 	provider, identity, builtin, err := my.effectivePolicy(ctx)
@@ -193,16 +193,12 @@ func (my *Engine) effectiveSchema(ctx context.Context) (*effectiveView, error) {
 	if cached, ok := my.effectiveCache.Get(key); ok {
 		return cached, nil
 	}
-	value, err, _ := my.effectiveFlight.Do(key, func() (any, error) {
+	return sharedBuild(ctx, &my.effectiveFlight, key, func(shared context.Context) (*effectiveView, error) {
 		if cached, ok := my.effectiveCache.Get(key); ok {
 			return cached, nil
 		}
-		return my.effectiveSchemaBuild(ctx, provider, identity, key, true)
+		return my.effectiveSchemaBuild(shared, provider, identity, key, true)
 	})
-	if err != nil {
-		return nil, err
-	}
-	return value.(*effectiveView), nil
 }
 
 func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvider, identity Identity, key string, cacheable bool) (*effectiveView, error) {
@@ -219,6 +215,7 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 	writes := make(map[string]map[string][]string)
 	writeSeen := make(map[string]map[string]bool)
 	denied := make(map[string]bool)
+	relationActions := make(map[string]map[string]bool)
 	var signatures []string
 	for _, capability := range my.snapshot.Capabilities() {
 		if capability.Resource == "" || len(capability.Actions) == 0 || capability.Parent != "Query" && capability.Parent != "Mutation" && capability.Parent != "Subscription" {
@@ -233,6 +230,21 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 			return nil, fmt.Errorf("policy %s: %w", capability.Coordinate, publicPolicyFailure("POLICY_REVISION_MISMATCH", "policy revision mismatch"))
 		}
 		class, governed := my.metadata.GetNode(capability.Resource)
+		if governed && capability.Parent == "Mutation" {
+			action := ""
+			switch capability.Coordinate {
+			case "Mutation." + protocol.CREATE + class.Name:
+				action = protocol.OP_INSERT
+			case "Mutation." + protocol.UPDATE + class.Name:
+				action = protocol.OP_UPDATE
+			}
+			if action != "" {
+				if relationActions[class.Name] == nil {
+					relationActions[class.Name] = make(map[string]bool)
+				}
+				relationActions[class.Name][action] = decision.Allow
+			}
+		}
 		// nil means the provider does not shape fields; a non-nil map is an
 		// explicit shape, including an empty deny-all shape.
 		hasFieldShape := decision.Fields != nil
@@ -302,6 +314,18 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 		parent, name, _ := strings.Cut(coordinate, ".")
 		if definition := schema.Types[parent]; definition != nil {
 			definition.Fields = removeSchemaField(definition.Fields, name)
+		}
+	}
+	for resource, actions := range relationActions {
+		for _, suffix := range []string{protocol.SUFFIX_CREATE_RELATION_INPUT, protocol.SUFFIX_UPDATE_RELATION_INPUT} {
+			if definition := schema.Types[resource+suffix]; definition != nil {
+				if !actions[protocol.OP_UPDATE] {
+					definition.Fields = removeSchemaField(removeSchemaField(definition.Fields, protocol.CONNECT), protocol.DISCONNECT)
+				}
+				if !actions[protocol.OP_INSERT] {
+					definition.Fields = removeSchemaField(definition.Fields, protocol.CREATE)
+				}
+			}
 		}
 	}
 	for resource, uses := range allowed {
@@ -465,10 +489,10 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 		}
 	}
 	filterEffectiveFields(schema.Types[class.Name], class, output, false)
-	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_CREATE_INPUT], class, writes[protocol.OP_INSERT], false)
+	filterEffectiveInput(schema.Types[class.Name+protocol.SUFFIX_CREATE_INPUT], class, writes[protocol.OP_INSERT], uses[FieldUseJoin])
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_CREATE_ROW_INPUT], class, writes[protocol.OP_INSERT], false)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPSERT_ROW_INPUT], class, writes[protocol.UPSERT], false)
-	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPDATE_INPUT], class, writes[protocol.OP_UPDATE], false)
+	filterEffectiveInput(schema.Types[class.Name+protocol.SUFFIX_UPDATE_INPUT], class, writes[protocol.OP_UPDATE], uses[FieldUseJoin])
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPDATE_ROW_INPUT], class, writes[protocol.OP_UPDATE], false)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_WHERE_INPUT], class, uses[FieldUseFilter], true)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_SORT_INPUT], class, uses[FieldUseOrder], true)
@@ -515,6 +539,24 @@ func filterEffectiveFields(definition *ast.Definition, class *protocol.Class, al
 	for _, definition := range definition.Fields {
 		field := class.Fields[definition.Name]
 		if (field == nil && generated) || (field != nil && allowedColumn(allowed, field)) {
+			fields = append(fields, definition)
+		}
+	}
+	definition.Fields = fields
+}
+
+func filterEffectiveInput(definition *ast.Definition, class *protocol.Class, writes, joins []string) {
+	if definition == nil {
+		return
+	}
+	fields := definition.Fields[:0]
+	for _, definition := range definition.Fields {
+		field := class.Fields[definition.Name]
+		allowed := writes
+		if field != nil && field.Relation != nil {
+			allowed = joins
+		}
+		if field != nil && allowedColumn(allowed, field) {
 			fields = append(fields, definition)
 		}
 	}

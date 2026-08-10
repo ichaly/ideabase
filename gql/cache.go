@@ -22,116 +22,64 @@ type planEntry struct {
 	operation    *ast.OperationDefinition // 已解析展开的AST
 	intro        *ast.OperationDefinition // 与业务字段混排的自省投影
 	resolvers    []binding                // resolver绑定只依赖AST，volatile重编译复用（非volatile时plan内已含，恒存仅为构造统一）
+	decode       decodeTrie               // resolver宿主路径树只构建一次
 	paths        codecPaths               // codec路径树只依赖AST，volatile重编译复用（同上）
 	rootResolver bool                     // 自定义Query/Mutation根字段Resolver
 	rootPlans    sync.Map                 // 多根执行中按字段缓存非volatile子计划（key: *ast.Field）
 }
 
-// planCache 执行计划LRU缓存：命中路径零解析；非volatile零编译
-type planCache struct {
-	mu    sync.Mutex
-	limit int
-	items map[planKey]*list.Element
-	order *list.List // 最近使用在前
-}
-
-// cacheEntry 缓存项
-type cacheEntry struct {
-	key   planKey
-	value *planEntry
-}
-
 // effectiveCache bounds identity-shaped schema artifacts. Schema construction
 // is relatively expensive and an unbounded map lets high-cardinality tenants
 // retain every shape forever.
-type lruCache[T any] struct {
+type lruCache[K comparable, V any] struct {
 	mu    sync.Mutex
 	limit int
-	items map[string]*list.Element
+	items map[K]*list.Element
 	order *list.List
 }
 
-type lruCacheEntry[T any] struct {
-	key   string
-	value T
+type lruCacheEntry[K comparable, V any] struct {
+	key   K
+	value V
 }
 
-func newLRU[T any](limit int) *lruCache[T] {
+func newLRU[K comparable, V any](limit int) *lruCache[K, V] {
 	if limit < 1 {
 		limit = 1
 	}
-	return &lruCache[T]{limit: limit, items: make(map[string]*list.Element, limit), order: list.New()}
+	return &lruCache[K, V]{limit: limit, items: make(map[K]*list.Element, limit), order: list.New()}
 }
 
-func (my *lruCache[T]) Get(key string) (T, bool) {
+func (my *lruCache[K, V]) Get(key K) (V, bool) {
 	my.mu.Lock()
 	defer my.mu.Unlock()
 	e, ok := my.items[key]
 	if !ok {
-		var zero T
+		var zero V
 		return zero, false
 	}
 	my.order.MoveToFront(e)
-	return e.Value.(*lruCacheEntry[T]).value, true
+	return e.Value.(*lruCacheEntry[K, V]).value, true
 }
 
-func (my *lruCache[T]) Put(key string, value T) {
+func (my *lruCache[K, V]) Put(key K, value V) {
 	my.mu.Lock()
 	defer my.mu.Unlock()
 	if e, ok := my.items[key]; ok {
-		e.Value.(*lruCacheEntry[T]).value = value
+		e.Value.(*lruCacheEntry[K, V]).value = value
 		my.order.MoveToFront(e)
 		return
 	}
-	my.items[key] = my.order.PushFront(&lruCacheEntry[T]{key: key, value: value})
+	my.items[key] = my.order.PushFront(&lruCacheEntry[K, V]{key: key, value: value})
 	if my.order.Len() > my.limit {
 		e := my.order.Back()
 		my.order.Remove(e)
-		delete(my.items, e.Value.(*lruCacheEntry[T]).key)
+		delete(my.items, e.Value.(*lruCacheEntry[K, V]).key)
 	}
 }
 
-type effectiveCache = lruCache[*effectiveView]
+type planCache = lruCache[planKey, *planEntry]
+type effectiveCache = lruCache[string, *effectiveView]
 
-func newEffectiveCache(limit int) *effectiveCache { return newLRU[*effectiveView](limit) }
-
-// newPlanCache 创建指定容量的计划缓存
-func newPlanCache(limit int) *planCache {
-	return &planCache{
-		limit: limit,
-		items: make(map[planKey]*list.Element, limit),
-		order: list.New(),
-	}
-}
-
-// Get 查找缓存项并刷新热度
-func (my *planCache) Get(key planKey) (*planEntry, bool) {
-	my.mu.Lock()
-	defer my.mu.Unlock()
-
-	element, ok := my.items[key]
-	if !ok {
-		return nil, false
-	}
-	my.order.MoveToFront(element)
-	return element.Value.(*cacheEntry).value, true
-}
-
-// Put 写入缓存项，超出容量时淘汰最久未用项
-func (my *planCache) Put(key planKey, value *planEntry) {
-	my.mu.Lock()
-	defer my.mu.Unlock()
-
-	if element, ok := my.items[key]; ok {
-		element.Value.(*cacheEntry).value = value
-		my.order.MoveToFront(element)
-		return
-	}
-
-	my.items[key] = my.order.PushFront(&cacheEntry{key: key, value: value})
-	if my.order.Len() > my.limit {
-		oldest := my.order.Back()
-		my.order.Remove(oldest)
-		delete(my.items, oldest.Value.(*cacheEntry).key)
-	}
-}
+func newEffectiveCache(limit int) *effectiveCache { return newLRU[string, *effectiveView](limit) }
+func newPlanCache(limit int) *planCache           { return newLRU[planKey, *planEntry](limit) }

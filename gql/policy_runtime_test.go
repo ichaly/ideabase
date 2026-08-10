@@ -249,6 +249,46 @@ func TestPolicyProviderCreateCheckRejectsBeforeWrite(t *testing.T) {
 	require.Empty(t, allowed.Errors, "%v", allowed.Errors)
 }
 
+func TestPolicyProviderAuthorizesNestedRelationTarget(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	seenTarget := false
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_UPDATE) && len(request.Fields) > 0 {
+			seenTarget = true
+			return PolicyDecision{Allow: false}, nil
+		}
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `mutation {
+		createUser(input: { name: "Nested policy", email: "nested-policy@x.com", posts: { connect: [1] } }) { id }
+	}`, nil, "")
+	require.True(t, seenTarget, "nested connect must authorize the target update capability")
+	require.NotEmpty(t, reply.Errors)
+	require.Contains(t, reply.Errors.Error(), "policy denied")
+}
+
+func TestPolicyProviderChecksNestedRelationCreate(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		decision := PolicyDecision{Allow: true, Fields: request.Fields}
+		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_INSERT) {
+			decision.Check = []TypedPredicate{{Column: "title", Operator: "eq", Value: "Allowed"}}
+		}
+		return decision, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `mutation {
+		createUser(input: { name: "Nested policy", email: "nested-create-policy@x.com", posts: { create: [{ title: "Denied" }] } }) { id }
+	}`, nil, "")
+	require.NotEmpty(t, reply.Errors)
+	require.Contains(t, reply.Errors.Error(), "check failed")
+}
+
 func TestPolicyPlanCacheIsPartitionedByTenantRoute(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
@@ -261,7 +301,7 @@ func TestPolicyPlanCacheIsPartitionedByTenantRoute(t *testing.T) {
 		"a": {DataSource: "db"}, "b": {DataSource: "db"},
 	}})
 	require.NoError(t, err)
-	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": executor})
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": executor}, testTenantSecurity(router))
 	require.NoError(t, err)
 	for _, tenant := range []string{"a", "b"} {
 		identity, identityErr := NewIdentity(IdentityInput{Tenant: tenant, Subject: "u"})

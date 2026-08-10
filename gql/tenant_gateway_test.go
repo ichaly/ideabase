@@ -9,6 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func testTenantSecurity(router *TenantRouter) TenantGatewayOption {
+	states := make(map[string]TenantSecurityState, len(router.routes))
+	for tenant, route := range router.routes {
+		states[tenant] = TenantSecurityState{MinimumRouteRevision: route.Revision}
+	}
+	return WithSecurityState(NewRevocationBarrier(router.revision, states))
+}
+
 type sharedTenantLoader struct{ global, scoped bool }
 
 func (sharedTenantLoader) Name() string  { return "shared-tenant" }
@@ -50,7 +58,9 @@ func TestTenantGatewayRoutesBeforeHandlerAndCache(t *testing.T) {
 		"a": {DataSource: "a"}, "b": {DataSource: "b"},
 	}})
 	require.NoError(t, err)
-	gateway, err := NewTenantGateway(router, map[string]*Engine{"a": a, "b": b})
+	_, err = NewTenantGateway(router, map[string]*Engine{"a": a, "b": b})
+	require.ErrorContains(t, err, "SecurityStateProvider")
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"a": a, "b": b}, testTenantSecurity(router))
 	require.NoError(t, err)
 
 	execute := func(tenant string) string {
@@ -71,7 +81,7 @@ func TestTenantGatewayOwnsRuntimeInsteadOfHalfInitializedEngine(t *testing.T) {
 	engine := tenantTestEngine(t, "a", new(atomic.Int32))
 	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Routes: map[string]TenantRoute{"a": {DataSource: "a"}}})
 	require.NoError(t, err)
-	gateway, err := NewTenantGateway(router, map[string]*Engine{"a": engine})
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"a": engine}, testTenantSecurity(router))
 	require.NoError(t, err)
 	require.IsType(t, &TenantGateway{}, gateway)
 	require.False(t, engine.rls)
@@ -82,7 +92,7 @@ func TestTenantGatewayRejectsBeforeHandler(t *testing.T) {
 	engine := tenantTestEngine(t, "a", &calls)
 	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Routes: map[string]TenantRoute{"a": {DataSource: "a"}}})
 	require.NoError(t, err)
-	gateway, err := NewTenantGateway(router, map[string]*Engine{"a": engine})
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"a": engine}, testTenantSecurity(router))
 	require.NoError(t, err)
 
 	data, err := gateway.Execute(context.Background(), `{ tenantName }`, nil)
@@ -97,7 +107,7 @@ func TestTenantGatewayRevocationBypassesLastKnownGood(t *testing.T) {
 	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Revision: 1, Routes: map[string]TenantRoute{"a": {DataSource: "a"}}})
 	require.NoError(t, err)
 	barrier := NewRevocationBarrier(1, map[string]TenantSecurityState{"a": {}})
-	gateway, err := NewTenantGateway(router, map[string]*Engine{"a": engine}, WithRevocationBarrier(barrier))
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"a": engine}, WithSecurityState(barrier))
 	require.NoError(t, err)
 	identity, err := NewIdentity(IdentityInput{Tenant: "a", Subject: "u"})
 	require.NoError(t, err)
@@ -117,7 +127,7 @@ func TestTenantGatewayRejectsUnknownSourceAndSchemaDrift(t *testing.T) {
 	engine := tenantTestEngine(t, "a", &calls)
 	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Routes: map[string]TenantRoute{"a": {DataSource: "missing"}}})
 	require.NoError(t, err)
-	_, err = NewTenantGateway(router, map[string]*Engine{"a": engine})
+	_, err = NewTenantGateway(router, map[string]*Engine{"a": engine}, testTenantSecurity(router))
 	require.ErrorContains(t, err, "datasource")
 }
 
@@ -135,7 +145,7 @@ func TestTenantGatewayRejectsCapabilityDriftWithSameSchema(t *testing.T) {
 		"a": {DataSource: "a"}, "b": {DataSource: "b"},
 	}})
 	require.NoError(t, err)
-	_, err = NewTenantGateway(router, map[string]*Engine{"b": build(2), "a": build(1)})
+	_, err = NewTenantGateway(router, map[string]*Engine{"b": build(2), "a": build(1)}, testTenantSecurity(router))
 	require.ErrorContains(t, err, "capability drift")
 }
 
@@ -146,10 +156,14 @@ func TestTenantGatewayReportsChildSubscriptionCapability(t *testing.T) {
 		"a": {DataSource: "db"},
 	}})
 	require.NoError(t, err)
-	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": executor})
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": executor}, testTenantSecurity(router))
 	require.NoError(t, err)
 	require.True(t, executor.SubscriptionAvailable())
 	require.True(t, gateway.SubscriptionAvailable(), "dispatcher capability must match its public subscription schema")
+	sqlDB, err := executor.database.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+	require.True(t, gateway.SubscriptionAvailable(), "capability discovery must not depend on database health")
 }
 
 func TestTenantGatewayHealthChecksRoutedDatasource(t *testing.T) {
@@ -159,7 +173,7 @@ func TestTenantGatewayHealthChecksRoutedDatasource(t *testing.T) {
 		"a": {DataSource: "db"},
 	}})
 	require.NoError(t, err)
-	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": executor})
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": executor}, testTenantSecurity(router))
 	require.NoError(t, err)
 	report, err := gateway.Health(context.Background())
 	require.NoError(t, err)
@@ -184,20 +198,20 @@ func TestTenantGatewaySharedTableRequiresTenantScopeOrExplicitGlobal(t *testing.
 	}
 	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeSharedTable, Routes: map[string]TenantRoute{"a": {DataSource: "db"}}})
 	require.NoError(t, err)
-	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{})})
+	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{})}, testTenantSecurity(router))
 	require.ErrorContains(t, err, "tenant scope")
-	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{scoped: true})})
+	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{scoped: true})}, testTenantSecurity(router))
 	require.NoError(t, err)
 	engine := build(sharedTenantLoader{scoped: true})
-	_, err = NewTenantGateway(router, map[string]*Engine{"db": engine}, WithRLS(map[string]RLSConfig{"db": {
+	_, err = NewTenantGateway(router, map[string]*Engine{"db": engine}, testTenantSecurity(router), WithRLS(map[string]RLSConfig{"db": {
 		Tables: []RLSTable{{Name: "accounts", Protected: true, HasPolicy: true}},
 	}}))
 	require.NoError(t, err)
 	require.False(t, engine.rls, "gateway assembly must not mutate a built child engine")
-	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{scoped: true})}, WithRLS(map[string]RLSConfig{"db": {
+	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{scoped: true})}, testTenantSecurity(router), WithRLS(map[string]RLSConfig{"db": {
 		Role: RLSRole{BypassRLS: true}, Tables: []RLSTable{{Name: "accounts", Protected: true, HasPolicy: true}},
 	}}))
 	require.ErrorContains(t, err, "BYPASSRLS")
-	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{global: true})})
+	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{global: true})}, testTenantSecurity(router))
 	require.NoError(t, err)
 }

@@ -126,6 +126,13 @@ func TestGETAllowsQueryButRejectsMutation(t *testing.T) {
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("subscription status = %d", w.Code)
 	}
+	persisted := httptest.NewRequest(http.MethodGet, "/graphql?operationName=PersistedMutation", nil)
+	persisted.Header.Set("Accept", "application/graphql-response+json")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, persisted)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("persisted operation status = %d", w.Code)
+	}
 }
 
 func TestRequestErrorUses422AndKeepsGraphQLBody(t *testing.T) {

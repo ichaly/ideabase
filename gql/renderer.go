@@ -253,8 +253,6 @@ func (my *Renderer) eachTableClass(fn func(className string, class *protocol.Cla
 	})
 }
 
-// allows reports whether an operation is exposed for a class. Empty Operations
-// preserves the legacy schema (all operations enabled).
 // eachField 按名有序遍历类的主名字段（跳过列名索引）
 func (my *Renderer) eachField(class *protocol.Class, fn func(fieldName string, field *protocol.Field)) {
 	for _, fieldName := range utl.SortKeys(class.Fields) {

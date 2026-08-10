@@ -28,19 +28,24 @@ import (
 // planCacheSize 执行计划LRU缓存容量（newEngine与启动期装配重建共用）
 const planCacheSize = 512
 
-func configureSearchMode(metadata *Metadata, database *gorm.DB) {
+func configureSearchMode(metadata *Metadata, database *gorm.DB) error {
 	if metadata == nil || database == nil || metadata.cfg == nil {
-		return
+		return nil
 	}
 	if mode := strings.TrimSpace(metadata.cfg.Search.Mode); mode != "" {
 		metadata.SetSearchMode(mode, metadata.cfg.Search.Config)
-		return
+		return nil
 	}
 	if detect, ok := searchDetectors[database.Name()]; ok {
-		metadata.SetSearchMode(detect(database))
-		return
+		mode, config, err := detect(database)
+		if err != nil {
+			return err
+		}
+		metadata.SetSearchMode(mode, config)
+		return nil
 	}
 	metadata.SetSearchMode("ilike", "")
+	return nil
 }
 
 // 请求和结果类型定义
@@ -138,7 +143,7 @@ type Engine struct {
 	snapshotErr       error
 	baseView          *effectiveView
 	validation        *validatorrules.Rules // 快照自有验证规则，不修改gqlparser全局状态
-	revocation        *RevocationBarrier
+	revocation        SecurityStateProvider
 	policy            PolicyProvider
 	policyBuiltin     bool
 	rls               bool
@@ -187,11 +192,6 @@ func (my *Engine) register(items ...any) error {
 			my.resolvers[v.Name()] = v
 		case Remote:
 			my.remotes[v.Name()] = v
-		case PolicyProvider:
-			if my.policy != nil {
-				return fmt.Errorf("PolicyProvider已注册")
-			}
-			my.policy = v
 		default:
 			return fmt.Errorf("不支持的注册类型: %T", item)
 		}
@@ -287,11 +287,11 @@ func newEngine(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Engine, erro
 	if d != nil {
 		// 订阅唤醒源：按驱动名从注册表选取CDC实现（复制连接延迟到首个订阅时建立）
 		if factory, ok := notifiers[d.Name()]; ok {
-			if source, err := factory(d, m.cfg.Subscription); err == nil {
-				executor.cdc = source
-			} else {
-				log.Warn().Err(err).Str("driver", d.Name()).Msg("CDC唤醒源初始化失败，订阅将不可用")
+			source, err := factory(d, m.cfg.Subscription)
+			if err != nil {
+				return nil, fmt.Errorf("CDC唤醒源初始化失败（%s）: %w", d.Name(), err)
 			}
+			executor.cdc = source
 		}
 	}
 	synchronizeSubscriptionSchema(executor, s)
@@ -409,15 +409,6 @@ func (my *Engine) loadDocument(content string) error {
 	return nil
 }
 
-// runOperation 按操作名执行已加载文档中的持久化查询
-func (my *Engine) runOperation(ctx context.Context, operationName string, variables map[string]interface{}) gqlReply {
-	query, ok := my.documents[operationName]
-	if !ok {
-		return gqlReply{Errors: gqlerror.List{gqlerror.Errorf("未找到名为'%s'的持久化操作", operationName)}}
-	}
-	return my.queryData(ctx, query, variables, operationName)
-}
-
 // 接口实现方法
 
 // Path 实现Plugin接口的Path方法，返回插件的基础路径
@@ -508,7 +499,6 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 		r.Errors = GraphQLErrors(err)
 		return r
 	}
-
 	// 获取执行计划（缓存命中零解析）；缓存未命中时解析一次，
 	// 顶层选择集含__schema/__type则路由到自省投影，否则编译为SQL
 	done := my.startPhase(ctx, PhasePlan)
@@ -696,7 +686,7 @@ func (my *Engine) unpack(ctx context.Context, plan *Plan, data []byte, variables
 	var result map[string]interface{}
 	if len(data) == 0 {
 		result = map[string]interface{}{}
-	} else if v, err := splitDecode(data, pathTrie(plan.resolvers)); err != nil {
+	} else if v, err := splitDecode(data, plan.decode); err != nil {
 		return nil, nil, err
 	} else {
 		result, _ = v.(map[string]interface{})
@@ -848,12 +838,6 @@ type introQuery struct {
 
 func (my *introQuery) Error() string { return "自省查询不支持此入口" }
 
-// plan 获取执行计划：普通查询命中缓存零解析；volatile命中仅重做SQL构建；
-// 冷查询每个请求独立校验变量，编译经singleflight收敛；自省经introQuery带出。
-func (my *Engine) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
-	return my.planWithView(&effectiveView{schema: my.schema, intro: my.intro}, query, operationName, variables)
-}
-
 func (my *Engine) planWithView(view *effectiveView, query, operationName string, variables map[string]interface{}) (*Plan, error) {
 	if view == nil || view.schema == nil {
 		return nil, fmt.Errorf("effective schema is unavailable")
@@ -977,7 +961,7 @@ func (my *Engine) preparedPlan(view *effectiveView, entry *planEntry, variables 
 	if err != nil {
 		return nil, err
 	}
-	plan.resolvers, plan.paths = entry.resolvers, entry.paths
+	plan.resolvers, plan.decode, plan.paths = entry.resolvers, entry.decode, entry.paths
 	plan.intro = entry.intro
 	return plan, nil
 }
@@ -1093,9 +1077,10 @@ func (my *Engine) compile(key planKey, operation, introspection *ast.OperationDe
 		return nil, nil, err
 	}
 	plan.resolvers = collectBindings(my.metadata, operation)
+	plan.decode = pathTrie(plan.resolvers)
 	plan.paths = collectCodecPaths(operation.SelectionSet, my.metadata)
 	plan.intro = introspection
-	entry := &planEntry{operation: operation, intro: introspection, resolvers: plan.resolvers, paths: plan.paths}
+	entry := &planEntry{operation: operation, intro: introspection, resolvers: plan.resolvers, decode: plan.decode, paths: plan.paths}
 	if !plan.Volatile() {
 		entry.plan = plan
 	}

@@ -57,16 +57,6 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 	if my.cdc == nil {
 		return nil, fmt.Errorf("订阅不可用：当前数据库没有注册CDC唤醒源或DSN不可用")
 	}
-	if my.revocation != nil {
-		identity, ok := IdentityFromContext(ctx)
-		if !ok {
-			return nil, fmt.Errorf("verified identity is required for subscription")
-		}
-		route, _ := PinnedRoute(ctx)
-		if err := my.revocation.Check(identity, route); err != nil {
-			return nil, err
-		}
-	}
 	if my.policy != nil {
 		ctx, err = my.authorizeProvider(ctx, plan.operation, variables)
 		if err != nil {
@@ -100,12 +90,7 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 	scope := scopeValues(ctx)
 	identity, _ := IdentityFromContext(ctx)
 	route, _ := PinnedRoute(ctx)
-	decisions, _ := ctx.Value(policyDecisionsKey{}).(map[string]PolicyDecision)
-	policySignature := ""
-	if len(decisions) > 0 {
-		policySignature = policyRuntimeSignature(decisions)
-	}
-	key := subscriptionFeedKey(query, operationName, variables, scope, identity, route, policySignature)
+	key := subscriptionFeedKey(query, operationName, variables, scope, identity, route, lease.PolicySignature)
 	events := make(chan gqlReply, 1)
 
 	my.feedMu.Lock()
@@ -237,7 +222,7 @@ func subscriptionFeedKey(query, operation string, variables, scope map[string]an
 	v, _ := json.Marshal(variables)
 	s, _ := json.Marshal(scope)
 	r, _ := json.Marshal(roles)
-	return query + "\x00" + operation + "\x00" + string(v) + "\x00" + string(s) + "\x00" + identity.Tenant() + "\x00" + identity.Subject() + "\x00" + string(r) + "\x00" + fmt.Sprint(identity.PolicyRevision()) + "\x00" + route.CacheKey + "\x00" + policy
+	return query + "\x00" + operation + "\x00" + string(v) + "\x00" + string(s) + "\x00" + identity.Tenant() + "\x00" + identity.Subject() + "\x00" + string(r) + "\x00" + fmt.Sprint(identity.PolicyRevision()) + "\x00" + fmt.Sprint(identity.CredentialEpoch()) + "\x00" + route.CacheKey + "\x00" + policy
 }
 
 // tick 表变更唤醒后重查一次：结果指纹无变化时返回false（不推送）
@@ -343,8 +328,10 @@ func (my *Engine) UpgradeContext(rc *fasthttp.RequestCtx, ctx context.Context) e
 type socketSession struct {
 	mu   sync.Mutex
 	conn *websocket.Conn
-	subs map[string]context.CancelFunc
+	subs map[string]*socketSubscription
 }
+
+type socketSubscription struct{ stop context.CancelFunc }
 
 // maxActiveSubscriptions bounds per-connection fan-out and goroutine usage.
 // It is intentionally a clear protocol-level constant until a public server
@@ -397,12 +384,12 @@ func (my *Engine) serveSocket(conn *websocket.Conn, ctx context.Context) {
 	defer cancel()
 	conn.SetReadLimit(wsReadLimit)
 
-	session := &socketSession{conn: conn, subs: make(map[string]context.CancelFunc)}
+	session := &socketSession{conn: conn, subs: make(map[string]*socketSubscription)}
 	defer func() {
 		session.mu.Lock()
-		for _, stop := range session.subs {
-			if stop != nil {
-				stop()
+		for _, subscription := range session.subs {
+			if subscription != nil {
+				subscription.stop()
 			}
 		}
 		session.mu.Unlock()
@@ -460,9 +447,9 @@ func (my *Engine) serveSocket(conn *websocket.Conn, ctx context.Context) {
 			my.startSubscription(ctx, session, message)
 		case wsComplete:
 			session.mu.Lock()
-			if stop, ok := session.subs[message.ID]; ok {
-				if stop != nil {
-					stop()
+			if subscription, ok := session.subs[message.ID]; ok {
+				if subscription != nil {
+					subscription.stop()
 				}
 				delete(session.subs, message.ID)
 			}
@@ -480,6 +467,14 @@ func (my *socketSession) reserve(id string) bool {
 	}
 	my.subs[id] = nil
 	return true
+}
+
+func (my *socketSession) release(id string, subscription *socketSubscription) {
+	my.mu.Lock()
+	if my.subs[id] == subscription {
+		delete(my.subs, id)
+	}
+	my.mu.Unlock()
 }
 
 // startSubscription 启动单个订阅：消费事件通道并推送next帧
@@ -507,12 +502,14 @@ func (my *Engine) startSubscription(ctx context.Context, session *socketSession,
 		return
 	}
 
+	subscription := &socketSubscription{stop: stop}
 	session.mu.Lock()
-	session.subs[message.ID] = stop
+	session.subs[message.ID] = subscription
 	session.mu.Unlock()
 
 	go func() {
 		defer stop()
+		defer session.release(message.ID, subscription)
 		for reply := range events {
 			if err := session.write(wsReply{ID: message.ID, Type: wsNext, Payload: reply}); err != nil {
 				return

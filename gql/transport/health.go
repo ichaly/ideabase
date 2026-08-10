@@ -21,6 +21,8 @@ type healthStatus struct {
 	DatabaseOK            bool   `json:"databaseOk"`
 	DatabaseError         string `json:"databaseError,omitempty"`
 	CDCConfigured         bool   `json:"cdcConfigured"`
+	CDCConnected          bool   `json:"cdcConnected"`
+	CDCError              string `json:"cdcError,omitempty"`
 	SubscriptionAvailable bool   `json:"subscriptionAvailable"`
 }
 
@@ -43,7 +45,7 @@ func NewHealthHandler(endpoint healthEndpoint) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(healthStatus{Ready: report.Ready, SnapshotOK: report.SnapshotOK, Snapshot: report.SnapshotFingerprint, DatabaseOK: report.DatabaseOK, DatabaseError: report.DatabaseError, CDCConfigured: report.CDCConfigured, SubscriptionAvailable: report.SubscriptionAvailable})
+		_ = json.NewEncoder(w).Encode(healthStatus{Ready: report.Ready, SnapshotOK: report.SnapshotOK, Snapshot: report.SnapshotFingerprint, DatabaseOK: report.DatabaseOK, DatabaseError: report.DatabaseError, CDCConfigured: report.CDCConfigured, CDCConnected: report.CDCConnected, CDCError: report.CDCError, SubscriptionAvailable: report.SubscriptionAvailable})
 	})
 }
 
@@ -71,7 +73,7 @@ func (my *RemoteEndpoint) Health(ctx context.Context) (core.HealthReport, error)
 	if err := decodeResponse(response.Body, my.maxResponse, &status); err != nil {
 		return core.HealthReport{}, fmt.Errorf("remote health response: %w", err)
 	}
-	report := core.HealthReport{Ready: status.Ready, SnapshotOK: status.SnapshotOK, SnapshotFingerprint: status.Snapshot, DatabaseOK: status.DatabaseOK, DatabaseError: status.DatabaseError, CDCConfigured: status.CDCConfigured, SubscriptionAvailable: status.SubscriptionAvailable}
+	report := core.HealthReport{Ready: status.Ready, SnapshotOK: status.SnapshotOK, SnapshotFingerprint: status.Snapshot, DatabaseOK: status.DatabaseOK, DatabaseError: status.DatabaseError, CDCConfigured: status.CDCConfigured, CDCConnected: status.CDCConnected, CDCError: status.CDCError, SubscriptionAvailable: status.SubscriptionAvailable}
 	state := my.state.Load()
 	if state == nil || state.snapshot == nil || status.Snapshot != state.snapshot.Fingerprint() {
 		report.Ready, report.SnapshotOK = false, false

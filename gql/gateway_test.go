@@ -409,8 +409,9 @@ func TestGatewayRejectsUnstableDuplicateAndCyclicEndpointIdentities(t *testing.T
 
 func TestGatewayRefreshAtomicallyKeepsInflightAndLastKnownGoodSnapshots(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
 	oldEndpoint := newGatewayEndpoint("crm-v1", gatewayChildSchema, func(ctx context.Context, _ string, _ map[string]any) ([]byte, error) {
-		close(started)
+		once.Do(func() { close(started) })
 		select {
 		case <-release:
 			return []byte(`{"data":{"user":{"id":"old"}}}`), nil
@@ -423,6 +424,8 @@ func TestGatewayRefreshAtomicallyKeepsInflightAndLastKnownGoodSnapshots(t *testi
 	})
 	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: oldEndpoint})
 	require.NoError(t, err)
+	oldSnapshot, err := gateway.Snapshot()
+	require.NoError(t, err)
 	oldResult := make(chan []byte, 1)
 	go func() {
 		body, _ := gateway.Execute(context.Background(), `{ crm { user { id } } }`, nil)
@@ -431,6 +434,11 @@ func TestGatewayRefreshAtomicallyKeepsInflightAndLastKnownGoodSnapshots(t *testi
 	<-started
 	require.NoError(t, gateway.Refresh(Namespace{Name: "crm", Endpoint: newEndpoint}))
 	close(release)
+	oldRevision, err := gateway.ForSnapshot(oldSnapshot.Fingerprint())
+	require.NoError(t, err)
+	pinned, err := oldRevision.Execute(context.Background(), `{ crm { user { id } } }`, nil)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":{"crm":{"user":{"id":"old"}}}}`, string(pinned))
 	require.JSONEq(t, `{"data":{"crm":{"user":{"id":"old"}}}}`, string(<-oldResult))
 	body, err := gateway.Execute(context.Background(), `{ crm { user { id } } }`, nil)
 	require.NoError(t, err)
@@ -463,6 +471,44 @@ func TestParentGatewayPinsChildGatewayRevisionUntilRefresh(t *testing.T) {
 	body, err = parent.Execute(context.Background(), query, nil)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"data":{"nested":{"crm":{"user":{"id":"v2"}}}}}`, string(body))
+}
+
+func TestGatewayApplyRejectsStaleAndConflictingClusterUpdates(t *testing.T) {
+	endpoint := func(id string) *gatewayEndpoint { return newGatewayEndpoint(id, gatewayChildSchema, nil) }
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint("v1")})
+	require.NoError(t, err)
+	_, err = gateway.Apply(GatewayUpdate{Revision: 1, Namespaces: []Namespace{{Name: "crm", Endpoint: endpoint("control-v1")}}})
+	require.NoError(t, err)
+	update := GatewayUpdate{Revision: 3, Namespaces: []Namespace{{Name: "crm", Endpoint: endpoint("v3")}}}
+	snapshot, err := gateway.Apply(update)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+
+	_, err = gateway.Apply(update)
+	require.NoError(t, err, "an identical control-plane delivery must be idempotent")
+	_, err = gateway.Apply(GatewayUpdate{Revision: 3, Namespaces: []Namespace{{Name: "crm", Endpoint: endpoint("split-brain")}}})
+	require.ErrorContains(t, err, "conflicting")
+	_, err = gateway.Apply(GatewayUpdate{Revision: 2, Namespaces: []Namespace{{Name: "crm", Endpoint: endpoint("v2")}}})
+	require.ErrorContains(t, err, "stale")
+}
+
+func TestGAGatewayApplyCannotRollBackUnderConcurrentControlPlaneLoad(t *testing.T) {
+	endpoint := func(revision uint64) *gatewayEndpoint {
+		return newGatewayEndpoint(fmt.Sprintf("v%d", revision), gatewayChildSchema, nil)
+	}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint(1)})
+	require.NoError(t, err)
+	var wait sync.WaitGroup
+	for revision := uint64(2); revision <= 65; revision++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, _ = gateway.Apply(GatewayUpdate{Revision: revision, Namespaces: []Namespace{{Name: "crm", Endpoint: endpoint(revision)}}})
+		}()
+	}
+	wait.Wait()
+	require.EqualValues(t, 65, gateway.revision)
+	require.Equal(t, "v65", gateway.current().contracts["crm"].id)
 }
 
 func TestGatewayExposesOnlyExecutableSingleRootSubscriptions(t *testing.T) {
@@ -595,6 +641,22 @@ func TestGatewayEffectiveSnapshotPreservesAllowedChildCapabilitySemantics(t *tes
 	require.True(t, capability.PolicyAware)
 }
 
+func TestGatewayEffectiveSnapshotFingerprintIncludesCapabilities(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
+	capability := Capability{Coordinate: "Query.user", Parent: "Query", Name: "user", Type: "User!", Handler: HandlerRemote, Cost: 1}
+	endpoint := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effective: SchemaArtifact{
+		Schema: gatewayChildSchema, Fingerprint: digest(gatewayChildSchema), Capabilities: []Capability{capability},
+	}}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint})
+	require.NoError(t, err)
+	first, err := gateway.current().effective(context.Background())
+	require.NoError(t, err)
+	endpoint.effective.Capabilities[0].Cost = 2
+	second, err := gateway.current().effective(context.Background())
+	require.NoError(t, err)
+	require.NotEqual(t, first.snapshot.Fingerprint(), second.snapshot.Fingerprint())
+}
+
 func TestGatewayIntrospectionUsesChildEffectiveArtifact(t *testing.T) {
 	child := newGatewayEndpoint("crm", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
 		return []byte(`{"data":{"user":{"id":"1"}}}`), nil
@@ -606,6 +668,29 @@ func TestGatewayIntrospectionUsesChildEffectiveArtifact(t *testing.T) {
 	body, err := gateway.Execute(context.Background(), `{ __type(name: "Crm_User") { fields { name } } }`, nil)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"data":{"__type":{"fields":[{"name":"id"},{"name":"name"},{"name":"payload"}]}}}`, string(body))
+}
+
+func TestNestedGatewayPropagatesChildEffectiveSchema(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
+	effectiveSchema := strings.Replace(gatewayChildSchema, ", status: Status", "", 1)
+	inner, err := NewGateway("inner", Namespace{Name: "crm", Endpoint: &gatewayEffectiveEndpoint{
+		gatewayEndpoint: child,
+		effective:       SchemaArtifact{Schema: effectiveSchema, Fingerprint: digest(effectiveSchema)},
+	}})
+	require.NoError(t, err)
+	outer, err := NewGateway("outer", Namespace{Name: "platform", Endpoint: inner})
+	require.NoError(t, err)
+	body, err := outer.Execute(context.Background(), `{ __type(name: "Platform_Crm_User") { fields { name } } }`, nil)
+	require.NoError(t, err)
+	require.NotContains(t, string(body), `"name":"status"`)
+}
+
+func TestStaticNestedGatewayAvoidsEffectiveSchemaHotPath(t *testing.T) {
+	inner, err := NewGateway("inner", Namespace{Name: "crm", Endpoint: newGatewayEndpoint("crm", gatewayChildSchema, nil)})
+	require.NoError(t, err)
+	outer, err := NewGateway("outer", Namespace{Name: "platform", Endpoint: inner})
+	require.NoError(t, err)
+	require.False(t, outer.current().identityAware)
 }
 
 func TestGatewayRejectsForgedEffectiveArtifactFingerprint(t *testing.T) {
@@ -759,7 +844,8 @@ func TestGatewayCachesStaticOperationAndLimitsExpandedRootFragments(t *testing.T
 		_, err = gateway.Execute(context.Background(), query, nil)
 		require.NoError(t, err)
 	}
-	_, cached := gateway.current().cache.Get(planKey{query: query})
+	state := gateway.current()
+	_, cached := state.cache.Get(planKey{query: query, view: state.snapshot.Fingerprint()})
 	require.True(t, cached)
 
 	var document strings.Builder

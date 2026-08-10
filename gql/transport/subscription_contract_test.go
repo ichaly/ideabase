@@ -52,7 +52,7 @@ func TestSubscriptionEstablishFailureKeepsGraphQLErrorMetadata(t *testing.T) {
 	}
 }
 
-func TestSubscriptionSnapshotHeaderUsesPinnedRevision(t *testing.T) {
+func TestSubscriptionSnapshotHeaderRejectsHistoricalRevisionWithoutDelegation(t *testing.T) {
 	old := &subscriptionRevision{snapshot: newArtifact(t, "type Query { x: String } type Subscription { x: String }"), event: `{"data":{"x":"old"}}`}
 	newer := &subscriptionRevision{snapshot: newArtifact(t, "type Query { x: String! } type Subscription { x: String! }"), event: `{"data":{"x":"new"}}`}
 	r := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { x }"}`))
@@ -61,7 +61,7 @@ func TestSubscriptionSnapshotHeaderUsesPinnedRevision(t *testing.T) {
 	r.Header.Set("GQL-Snapshot", old.snapshot.Fingerprint())
 	w := httptest.NewRecorder()
 	NewSubscriptionHandler(&pinningSubscription{current: newer, pinned: old}).ServeHTTP(w, r)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"x":"old"`) {
+	if w.Code != http.StatusConflict {
 		t.Fatalf("status/body = %d/%s", w.Code, w.Body.String())
 	}
 }

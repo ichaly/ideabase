@@ -2,7 +2,6 @@ package gql
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/vektah/gqlparser/v2/ast"
@@ -11,7 +10,7 @@ import (
 const defaultSubscriptionLeaseInterval = time.Minute
 
 type subscriptionLease struct {
-	Barrier         *RevocationBarrier
+	Barrier         SecurityStateProvider
 	Identity        Identity
 	Route           TenantRoute
 	Interval        time.Duration
@@ -23,7 +22,7 @@ type subscriptionLease struct {
 
 func (l subscriptionLease) Check(ctx context.Context) error {
 	if l.Barrier != nil {
-		if err := l.Barrier.Check(l.Identity, l.Route); err != nil {
+		if err := l.Barrier.Check(ctx, l.Identity, l.Route); err != nil {
 			return err
 		}
 	}
@@ -42,18 +41,6 @@ func withSubscriptionLease(ctx context.Context, lease subscriptionLease) context
 func subscriptionLeaseFromContext(ctx context.Context) (subscriptionLease, bool) {
 	lease, ok := ctx.Value(subscriptionLeaseKey{}).(subscriptionLease)
 	return lease, ok
-}
-
-// ConfigureSubscriptionLease sets a periodic reauthorization interval for an Engine.
-func ConfigureSubscriptionLease(engine *Engine, interval time.Duration) error {
-	if engine == nil {
-		return fmt.Errorf("engine is nil")
-	}
-	if interval <= 0 {
-		return fmt.Errorf("subscription lease interval must be positive")
-	}
-	engine.subscriptionLease = interval
-	return nil
 }
 
 func configuredSubscriptionLease(engine *Engine) time.Duration {

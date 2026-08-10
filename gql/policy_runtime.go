@@ -178,6 +178,7 @@ type policyTarget struct {
 	class      *protocol.Class
 	fields     map[FieldUse][]string
 	nodes      []*ast.Field
+	rows       []map[string]interface{}
 }
 
 // policyOverlay is a request-local catalog view. Classes and fields are
@@ -299,6 +300,14 @@ func (t policyTarget) uses() []FieldUse {
 func (my *Engine) policyTargets(operation *ast.OperationDefinition, variables map[string]interface{}) ([]policyTarget, error) {
 	var targets []policyTarget
 	indexes := make(map[string]int)
+	targetFor := func(capability Capability, class *protocol.Class) *policyTarget {
+		if index, exists := indexes[capability.Coordinate]; exists {
+			return &targets[index]
+		}
+		indexes[capability.Coordinate] = len(targets)
+		targets = append(targets, policyTarget{capability: capability, class: class, fields: make(map[FieldUse][]string)})
+		return &targets[len(targets)-1]
+	}
 	var collect func(*ast.Field, *protocol.Class) error
 	collect = func(root *ast.Field, class *protocol.Class) error {
 		parent := "Query"
@@ -317,16 +326,15 @@ func (my *Engine) policyTargets(operation *ast.OperationDefinition, variables ma
 		if class == nil {
 			class, _ = my.metadata.GetNode(capability.Resource)
 		}
-		index, exists := indexes[coordinate]
-		if !exists {
-			index = len(targets)
-			indexes[coordinate] = index
-			targets = append(targets, policyTarget{capability: capability, class: class, fields: make(map[FieldUse][]string)})
-		}
-		target := &targets[index]
+		target := targetFor(capability, class)
 		target.nodes = append(target.nodes, root)
 		if class != nil {
 			my.collectPolicyFields(target, class, root, variables)
+			if operation.Operation == ast.Mutation {
+				if err := my.collectRelationPolicyTargets(targetFor, class, root, variables); err != nil {
+					return err
+				}
+			}
 			if err := my.collectPolicyChildren(class, root.SelectionSet, collect); err != nil {
 				return err
 			}
@@ -344,6 +352,66 @@ func (my *Engine) policyTargets(operation *ast.OperationDefinition, variables ma
 	return targets, nil
 }
 
+func (my *Engine) collectRelationPolicyTargets(targetFor func(Capability, *protocol.Class) *policyTarget, class *protocol.Class, root *ast.Field, variables map[string]interface{}) error {
+	argument := root.Arguments.ForName(protocol.INPUT)
+	if argument == nil {
+		return nil
+	}
+	value, err := argument.Value.Value(variables)
+	if err != nil {
+		return err
+	}
+	rows, err := policyRows(value)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		for name, raw := range row {
+			field := class.Fields[name]
+			operations, ok := raw.(map[string]interface{})
+			if !ok || field == nil || field.Column != "" || field.Relation == nil || !field.IsList {
+				continue
+			}
+			targetClass, ok := my.metadata.GetNode(field.Relation.TargetClass)
+			if !ok {
+				return fmt.Errorf("relation target class is missing: %s", field.Relation.TargetClass)
+			}
+			if operations[protocol.CONNECT] != nil || operations[protocol.DISCONNECT] != nil {
+				capability, ok := my.snapshot.Capability("Mutation." + protocol.UPDATE + targetClass.Name)
+				if !ok {
+					return fmt.Errorf("policy capability is missing for nested relation update: %s", targetClass.Name)
+				}
+				target := targetFor(capability, targetClass)
+				if field.Relation.Through != nil {
+					target.add(FieldUseWrite, targetClass.PrimaryKeys[0])
+				} else {
+					target.add(FieldUseWrite, field.Relation.TargetField)
+				}
+			}
+			if rawCreate := operations[protocol.CREATE]; rawCreate != nil {
+				capability, ok := my.snapshot.Capability("Mutation." + protocol.CREATE + targetClass.Name)
+				if !ok {
+					return fmt.Errorf("policy capability is missing for nested relation create: %s", targetClass.Name)
+				}
+				created, err := policyRows(rawCreate)
+				if err != nil {
+					return err
+				}
+				target := targetFor(capability, targetClass)
+				target.rows = append(target.rows, created...)
+				for _, createdRow := range created {
+					for fieldName := range createdRow {
+						if targetClass.Fields[fieldName] != nil {
+							target.add(FieldUseWrite, fieldName)
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func evaluatePolicyChecks(target policyTarget, decision PolicyDecision, variables map[string]interface{}, scope map[string]any) error {
 	if len(decision.Check) == 0 && len(decision.Preset) == 0 {
 		empty := true
@@ -354,6 +422,7 @@ func evaluatePolicyChecks(target policyTarget, decision PolicyDecision, variable
 			return nil
 		}
 	}
+	rows := append([]map[string]interface{}(nil), target.rows...)
 	for _, node := range target.nodes {
 		argument := node.Arguments.ForName(protocol.INPUT)
 		if argument == nil {
@@ -366,50 +435,51 @@ func evaluatePolicyChecks(target policyTarget, decision PolicyDecision, variable
 		if err != nil {
 			return err
 		}
-		rows, err := policyRows(value)
+		resolved, err := policyRows(value)
 		if err != nil {
 			return err
 		}
-		for _, row := range rows {
-			values := make(map[string]any, len(row)+len(decision.Preset))
-			for name, value := range row {
-				field := target.class.Fields[name]
-				if field != nil && field.Column != "" {
-					values[field.Column] = value
-				}
-			}
-			for _, preset := range decision.Preset {
-				field := target.class.Fields[preset.Column]
-				if field == nil {
-					continue
-				}
-				if _, submitted := values[field.Column]; submitted {
-					return fmt.Errorf("client submitted preset field %s", field.Name)
-				}
-				value := preset.Value
-				if preset.Context != "" {
-					var ok bool
-					value, ok = scope[preset.Context]
-					if !ok {
-						return fmt.Errorf("missing preset context %s", preset.Context)
-					}
-				}
+		rows = append(rows, resolved...)
+	}
+	for _, row := range rows {
+		values := make(map[string]any, len(row)+len(decision.Preset))
+		for name, value := range row {
+			field := target.class.Fields[name]
+			if field != nil && field.Column != "" {
 				values[field.Column] = value
 			}
-			if err := matchPolicyPredicates(target.class, decision.Check, values, scope); err != nil {
-				return err
+		}
+		for _, preset := range decision.Preset {
+			field := target.class.Fields[preset.Column]
+			if field == nil {
+				continue
 			}
-			if len(decision.RoleBranches) > 0 {
-				matched := false
-				for _, branch := range decision.RoleBranches {
-					if matchPolicyPredicates(target.class, branch.Check, values, scope) == nil {
-						matched = true
-						break
-					}
+			if _, submitted := values[field.Column]; submitted {
+				return fmt.Errorf("client submitted preset field %s", field.Name)
+			}
+			value := preset.Value
+			if preset.Context != "" {
+				var ok bool
+				value, ok = scope[preset.Context]
+				if !ok {
+					return fmt.Errorf("missing preset context %s", preset.Context)
 				}
-				if !matched {
-					return fmt.Errorf("row check failed")
+			}
+			values[field.Column] = value
+		}
+		if err := matchPolicyPredicates(target.class, decision.Check, values, scope); err != nil {
+			return err
+		}
+		if len(decision.RoleBranches) > 0 {
+			matched := false
+			for _, branch := range decision.RoleBranches {
+				if matchPolicyPredicates(target.class, branch.Check, values, scope) == nil {
+					matched = true
+					break
 				}
+			}
+			if !matched {
+				return fmt.Errorf("row check failed")
 			}
 		}
 	}
@@ -487,6 +557,26 @@ func (my *Engine) collectPolicyFields(target *policyTarget, class *protocol.Clas
 		if argument.Name == protocol.DELETION {
 			if value != "ACTIVE" && class.SoftDelete != nil {
 				target.add(use, class.SoftDelete.Column)
+			}
+			continue
+		}
+		if argument.Name == protocol.INPUT {
+			rows, err := policyRows(value)
+			if err != nil {
+				continue
+			}
+			for _, row := range rows {
+				for name := range row {
+					field := class.Fields[name]
+					if field == nil {
+						continue
+					}
+					if field.Relation != nil {
+						target.add(FieldUseJoin, name)
+					} else {
+						target.add(use, name)
+					}
+				}
 			}
 			continue
 		}

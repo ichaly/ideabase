@@ -221,6 +221,21 @@ func NewSnapshotArtifact(schema, fingerprint string, capabilities []Capability) 
 	if err != nil {
 		return nil, fmt.Errorf("endpoint schema: %w", err)
 	}
+	computed, fingerprintErr := artifactFingerprint(schema, capabilities, parsed)
+	snapshot, err := newSnapshotArtifact(schema, computed, capabilities, parsed)
+	if err != nil {
+		return nil, err
+	}
+	if fingerprintErr != nil {
+		return nil, fmt.Errorf("endpoint fingerprint: %w", fingerprintErr)
+	}
+	if fingerprint != computed {
+		return nil, fmt.Errorf("endpoint fingerprint mismatch: advertised %s, computed %s", fingerprint, computed)
+	}
+	return snapshot, nil
+}
+
+func newSnapshotArtifact(schema, fingerprint string, capabilities []Capability, parsed *ast.Schema) (*Snapshot, error) {
 	disableUnsupportedDirectives(parsed)
 	if err := validateExecutableDirectives(parsed); err != nil {
 		return nil, err
@@ -252,14 +267,7 @@ func NewSnapshotArtifact(schema, fingerprint string, capabilities []Capability) 
 	for i, capability := range capabilities {
 		copy[i] = cloneCapability(capability)
 	}
-	computed, err := ArtifactFingerprint(schema, copy)
-	if err != nil {
-		return nil, fmt.Errorf("endpoint fingerprint: %w", err)
-	}
-	if fingerprint != computed {
-		return nil, fmt.Errorf("endpoint fingerprint mismatch: advertised %s, computed %s", fingerprint, computed)
-	}
-	return &Snapshot{schema: schema, fingerprint: computed, capabilities: copy, index: index}, nil
+	return &Snapshot{schema: schema, fingerprint: fingerprint, capabilities: copy, index: index}, nil
 }
 
 func (my *Snapshot) Schema() string      { return my.schema }
@@ -347,6 +355,10 @@ func ArtifactFingerprint(schema string, capabilities []Capability) (string, erro
 	if err != nil {
 		return "", err
 	}
+	return artifactFingerprint(schema, capabilities, parsed)
+}
+
+func artifactFingerprint(schema string, capabilities []Capability, parsed *ast.Schema) (string, error) {
 	canonical := schemaWithoutComments(formatSchema(parsed))
 	capabilities = completeCapabilities(parsed, append([]Capability(nil), capabilities...), HandlerProjection, "endpoint")
 	ordered := make([]Capability, len(capabilities))

@@ -1,9 +1,17 @@
 package gql
 
 import (
+	"context"
 	"fmt"
+	"maps"
 	"sync/atomic"
 )
+
+// SecurityStateProvider is the single request and subscription revocation
+// boundary. Cluster deployments inject a shared, fail-closed implementation.
+type SecurityStateProvider interface {
+	Check(context.Context, Identity, TenantRoute) error
+}
 
 type TenantSecurityState struct {
 	Disabled               bool
@@ -37,8 +45,14 @@ func (barrier *RevocationBarrier) Replace(revision uint64, tenants map[string]Te
 	next := &revocationSnapshot{revision: revision, tenants: cloneTenantStates(tenants)}
 	for {
 		current := barrier.state.Load()
-		if current != nil && revision <= current.revision {
+		if current != nil && revision < current.revision {
 			return fmt.Errorf("stale revocation revision %d", revision)
+		}
+		if current != nil && revision == current.revision {
+			if maps.Equal(current.tenants, next.tenants) {
+				return nil
+			}
+			return fmt.Errorf("conflicting revocation revision %d", revision)
 		}
 		if barrier.state.CompareAndSwap(current, next) {
 			return nil
@@ -46,7 +60,7 @@ func (barrier *RevocationBarrier) Replace(revision uint64, tenants map[string]Te
 	}
 }
 
-func (barrier *RevocationBarrier) Check(identity Identity, route TenantRoute) error {
+func (barrier *RevocationBarrier) Check(_ context.Context, identity Identity, route TenantRoute) error {
 	if barrier == nil || barrier.state.Load() == nil {
 		return fmt.Errorf("revocation state unavailable")
 	}
@@ -67,6 +81,18 @@ func (barrier *RevocationBarrier) Check(identity Identity, route TenantRoute) er
 		return fmt.Errorf("tenant route revision is revoked")
 	}
 	return nil
+}
+
+func (my *Engine) checkSecurity(ctx context.Context) error {
+	if my == nil || my.revocation == nil {
+		return nil
+	}
+	identity, ok := IdentityFromContext(ctx)
+	if !ok {
+		return fmt.Errorf("verified identity is required")
+	}
+	route, _ := PinnedRoute(ctx)
+	return my.revocation.Check(ctx, identity, route)
 }
 
 func cloneTenantStates(states map[string]TenantSecurityState) map[string]TenantSecurityState {

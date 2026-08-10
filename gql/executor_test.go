@@ -39,7 +39,10 @@ func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOpti
 	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err, "创建执行器失败")
 
-	return executor, db, cleanup
+	return executor, db, func() {
+		executor.Close()
+		cleanup()
+	}
 }
 
 // setupTestExecutor 默认配置的执行器

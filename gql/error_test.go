@@ -7,6 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"gorm.io/gorm"
 )
 
@@ -46,4 +48,10 @@ func TestGQLErrorsKeepOrdinaryPublicError(t *testing.T) {
 func TestGQLErrorsPreserveStableCodeThroughWrapping(t *testing.T) {
 	got := GraphQLErrors(fmt.Errorf("policy context: %w", &publicFailure{message: "denied", code: "FORBIDDEN"}))
 	require.Equal(t, "FORBIDDEN", got[0].Extensions["code"])
+}
+
+func TestGraphQLErrorsPreserveWrappedGraphQLError(t *testing.T) {
+	want := &gqlerror.Error{Message: "denied", Path: ast.Path{ast.PathName("account")}, Extensions: map[string]any{"code": "FORBIDDEN"}}
+	got := GraphQLErrors(fmt.Errorf("resolver: %w", want))
+	require.Equal(t, gqlerror.List{want}, got)
 }

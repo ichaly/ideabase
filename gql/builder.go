@@ -2,6 +2,7 @@ package gql
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/ichaly/ideabase/std"
 	"gorm.io/gorm"
@@ -18,7 +19,30 @@ type Builder struct {
 	documents []string
 	observer  Observer
 	policy    PolicyProvider
+	security  SecurityStateProvider
+	lease     time.Duration
 	built     bool
+}
+
+// SubscriptionLease sets the periodic authorization refresh before Build.
+func (my *Builder) SubscriptionLease(interval time.Duration) error {
+	if my.built || interval <= 0 || my.lease != 0 {
+		return fmt.Errorf("SubscriptionLease必须在Build前设置为正数")
+	}
+	my.lease = interval
+	return nil
+}
+
+// Security installs the shared revocation boundary before Build.
+func (my *Builder) Security(provider SecurityStateProvider) error {
+	if my.built {
+		return fmt.Errorf("builder已冻结：Security仅限Build前调用")
+	}
+	if provider == nil || my.security != nil {
+		return fmt.Errorf("SecurityStateProvider必须且只能设置一次")
+	}
+	my.security = provider
+	return nil
 }
 
 // Observe installs a low-cardinality observer before Build.
@@ -121,7 +145,9 @@ func (my *Builder) Build() (*Engine, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("Engine policy provider or metadata permissions is required")
 	}
-	configureSearchMode(metadata, my.database)
+	if err := configureSearchMode(metadata, my.database); err != nil {
+		return nil, fmt.Errorf("detect search capability: %w", err)
+	}
 	// Loader-owned metadata is a build-time assembly object. Compile only
 	// against the Engine-owned frozen catalog.
 	catalog := metadata.freeze()
@@ -141,6 +167,8 @@ func (my *Builder) Build() (*Engine, error) {
 	executor.observer = my.observer
 	executor.policy = provider
 	executor.policyBuiltin = my.policy == nil
+	executor.revocation = my.security
+	executor.subscriptionLease = my.lease
 	ready := false
 	defer func() {
 		if !ready {

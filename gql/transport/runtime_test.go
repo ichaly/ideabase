@@ -105,11 +105,11 @@ func TestRemoteEndpointLoadsManifestAndDelegatesIdentity(t *testing.T) {
 	snapshot := newArtifact(t, "type Query { hello: String! }")
 	endpoint := &runtimeEndpoint{snapshot: snapshot}
 	key := []byte("0123456789abcdef0123456789abcdef")
-	serverCodec, err := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute})
+	serverCodec, err := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientCodec, err := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute})
+	clientCodec, err := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,6 +217,44 @@ func TestRemoteEndpointRefreshKeepsLastKnownGoodManifest(t *testing.T) {
 	}
 }
 
+func TestRemoteEndpointRetainsRollingSnapshotWindow(t *testing.T) {
+	first := newArtifact(t, "type Query { hello: String }")
+	endpoint := &runtimeEndpoint{snapshot: first}
+	server := httptest.NewServer(NewManifestHandler("child", endpoint))
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
+		EndpointID: "child", ManifestURL: server.URL, ExecuteURL: server.URL + "/graphql", AllowHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint.snapshot = newArtifact(t, "type Query { goodbye: String }")
+	if err = remote.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := remote.ForSnapshot(first.Fingerprint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pinned.Snapshot()
+	if err != nil || got.Fingerprint() != first.Fingerprint() {
+		t.Fatalf("rolling snapshot = %#v, %v", got, err)
+	}
+	endpoint.snapshot = first
+	if err = remote.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"c", "d", "e", "f", "g", "h", "i", "j"} {
+		endpoint.snapshot = newArtifact(t, "type Query { "+field+": String }")
+		if err = remote.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = remote.ForSnapshot(first.Fingerprint()); err != nil {
+		t.Fatal("recently-current snapshot was evicted before older history:", err)
+	}
+}
+
 func TestRemoteGatewaySubscriptionUsesSignedSSEStream(t *testing.T) {
 	snapshot := newArtifact(t, `
 		type Query { hello: String }
@@ -227,8 +265,8 @@ func TestRemoteGatewaySubscriptionUsesSignedSSEStream(t *testing.T) {
 	close(frames)
 	endpoint := &subscriptionRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}, events: frames}
 	key := []byte("0123456789abcdef0123456789abcdef")
-	serverCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute})
-	clientCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute})
+	serverCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
+	clientCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
 	mux := http.NewServeMux()
 	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
 	mux.Handle("/graphql", NewHandler(endpoint, Options{Delegation: serverCodec}))

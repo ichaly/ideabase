@@ -2,19 +2,28 @@ package gql
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
+type failingReplayStore struct{ err error }
+
+func (store failingReplayStore) Consume(context.Context, ReplayKey, time.Time) error {
+	return store.err
+}
+
 func TestDelegationCodecAuthenticatesBoundIdentityOnce(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	codec, err := NewDelegationCodec(DelegationConfig{
 		Issuer: "gateway", Audience: "crm", Key: []byte("0123456789abcdef0123456789abcdef"),
 		KeyEpoch: 7, PolicyRevision: 11, CredentialEpoch: 5, TTL: time.Minute, MaxDepth: 3,
-		Clock: func() time.Time { return now },
+		Clock: func() time.Time { return now }, Replay: newMemoryReplayStore(64, func() time.Time { return now }),
 	})
 	require.NoError(t, err)
 	identity, err := NewIdentity(IdentityInput{
@@ -43,6 +52,7 @@ func TestDelegationCodecRejectsWrongBoundaryAndExpiredToken(t *testing.T) {
 	config := DelegationConfig{
 		Issuer: "gateway", Audience: "crm", Key: []byte("0123456789abcdef0123456789abcdef"),
 		KeyEpoch: 2, TTL: time.Minute, MaxDepth: 1, Clock: func() time.Time { return now },
+		Replay: newMemoryReplayStore(64, func() time.Time { return now }),
 	}
 	codec, err := NewDelegationCodec(config)
 	require.NoError(t, err)
@@ -71,8 +81,13 @@ func TestDelegationCodecRejectsWrongBoundaryAndExpiredToken(t *testing.T) {
 func TestDelegationCodecRejectsWeakConfigurationAndDepth(t *testing.T) {
 	_, err := NewDelegationCodec(DelegationConfig{Issuer: "a", Audience: "b", Key: []byte("short")})
 	require.Error(t, err)
+	_, err = NewDelegationCodec(DelegationConfig{
+		Issuer: "a", Audience: "b", Key: []byte("0123456789abcdef0123456789abcdef"),
+	})
+	require.ErrorContains(t, err, "replay store")
+	replay := NewMemoryReplayStore(65536)
 	codec, err := NewDelegationCodec(DelegationConfig{
-		Issuer: "a", Audience: "b", Key: []byte("0123456789abcdef0123456789abcdef"), TTL: time.Minute, MaxDepth: 1,
+		Issuer: "a", Audience: "b", Key: []byte("0123456789abcdef0123456789abcdef"), TTL: time.Minute, MaxDepth: 1, Replay: replay,
 	})
 	require.NoError(t, err)
 	identity, err := NewIdentity(IdentityInput{Tenant: "tenant", Subject: "user"})
@@ -84,11 +99,115 @@ func TestDelegationCodecRejectsWeakConfigurationAndDepth(t *testing.T) {
 
 func TestDefaultReplayStoreDoesNotRejectValidTrafficAtAnArbitraryCapacity(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
+	replay := newMemoryReplayStore(65536, func() time.Time { return now })
 	codec, err := NewDelegationCodec(DelegationConfig{
 		Issuer: "a", Audience: "b", Key: []byte("0123456789abcdef0123456789abcdef"), Clock: func() time.Time { return now },
+		Replay: replay,
 	})
 	require.NoError(t, err)
 	for i := 0; i < 5000; i++ {
-		require.True(t, codec.replay.Use(fmt.Sprint(i), now.Add(time.Minute)), "valid token %d was rejected", i)
+		require.NoError(t, codec.replay.Consume(context.Background(), ReplayKey{ID: fmt.Sprint(i)}, now.Add(time.Minute)), "valid token %d was rejected", i)
 	}
+}
+
+func TestDefaultReplayStoreFailsClosedAtConfiguredCapacity(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	replay := newMemoryReplayStore(2, func() time.Time { return now })
+	codec, err := NewDelegationCodec(DelegationConfig{
+		Issuer: "a", Audience: "b", Key: []byte("0123456789abcdef0123456789abcdef"),
+		Clock: func() time.Time { return now }, Replay: replay,
+	})
+	require.NoError(t, err)
+	require.NoError(t, codec.replay.Consume(context.Background(), ReplayKey{ID: "a"}, now.Add(time.Minute)))
+	require.NoError(t, codec.replay.Consume(context.Background(), ReplayKey{ID: "b"}, now.Add(time.Minute)))
+	require.Error(t, codec.replay.Consume(context.Background(), ReplayKey{ID: "c"}, now.Add(time.Minute)))
+}
+
+func TestDelegationReplayIsSharedAcrossInstances(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	replay := newMemoryReplayStore(64, func() time.Time { return now })
+	config := DelegationConfig{
+		Issuer: "gateway", Audience: "child", Key: []byte("0123456789abcdef0123456789abcdef"),
+		Clock: func() time.Time { return now }, Replay: replay,
+	}
+	first, err := NewDelegationCodec(config)
+	require.NoError(t, err)
+	second, err := NewDelegationCodec(config)
+	require.NoError(t, err)
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant", Subject: "user"})
+	require.NoError(t, err)
+	token, err := first.Sign(WithIdentity(context.Background(), identity), "operation")
+	require.NoError(t, err)
+	_, err = first.Verify(context.Background(), token, "operation")
+	require.NoError(t, err)
+	_, err = second.Verify(context.Background(), token, "operation")
+	require.ErrorContains(t, err, "replay")
+}
+
+func TestDelegationReplayStoreFailureIsObservableAndFailsClosed(t *testing.T) {
+	unavailable := errors.New("shared replay store unavailable")
+	codec, err := NewDelegationCodec(DelegationConfig{
+		Issuer: "gateway", Audience: "child", Key: []byte("0123456789abcdef0123456789abcdef"),
+		Replay: failingReplayStore{err: unavailable},
+	})
+	require.NoError(t, err)
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant", Subject: "user"})
+	require.NoError(t, err)
+	token, err := codec.Sign(WithIdentity(context.Background(), identity), "operation")
+	require.NoError(t, err)
+	_, err = codec.Verify(context.Background(), token, "operation")
+	require.ErrorIs(t, err, unavailable)
+	require.NotErrorIs(t, err, ErrReplay)
+}
+
+func TestDelegationReplayRemainsConsumedThroughoutClockSkew(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	clock := func() time.Time { return now }
+	codec, err := NewDelegationCodec(DelegationConfig{
+		Issuer: "gateway", Audience: "child", Key: []byte("0123456789abcdef0123456789abcdef"),
+		TTL: time.Minute, ClockSkew: 10 * time.Second, Clock: clock,
+		Replay: newMemoryReplayStore(64, clock),
+	})
+	require.NoError(t, err)
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant", Subject: "user"})
+	require.NoError(t, err)
+	token, err := codec.Sign(WithIdentity(context.Background(), identity), "operation")
+	require.NoError(t, err)
+	now = now.Add(time.Minute + 5*time.Second)
+	_, err = codec.Verify(context.Background(), token, "operation")
+	require.NoError(t, err)
+	_, err = codec.Verify(context.Background(), token, "operation")
+	require.ErrorIs(t, err, ErrReplay)
+}
+
+func TestGADelegationReplayIsAtomicUnderClusterLoad(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	replay := newMemoryReplayStore(128, func() time.Time { return now })
+	config := DelegationConfig{
+		Issuer: "gateway", Audience: "child", Key: []byte("0123456789abcdef0123456789abcdef"),
+		Clock: func() time.Time { return now }, Replay: replay,
+	}
+	codec, err := NewDelegationCodec(config)
+	require.NoError(t, err)
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant", Subject: "user"})
+	require.NoError(t, err)
+	token, err := codec.Sign(WithIdentity(context.Background(), identity), "operation")
+	require.NoError(t, err)
+	var accepted atomic.Int32
+	var wait sync.WaitGroup
+	for range 64 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			verifier, createErr := NewDelegationCodec(config)
+			require.NoError(t, createErr)
+			if _, verifyErr := verifier.Verify(context.Background(), token, "operation"); verifyErr == nil {
+				accepted.Add(1)
+			} else {
+				require.ErrorIs(t, verifyErr, ErrReplay)
+			}
+		}()
+	}
+	wait.Wait()
+	require.EqualValues(t, 1, accepted.Load())
 }

@@ -51,7 +51,7 @@ func TestContractBlankQueryForwardsOperationName(t *testing.T) {
 	}
 }
 
-func TestContractSnapshotHeaderExecutesPinnedRevision(t *testing.T) {
+func TestContractSnapshotHeaderRejectsHistoricalRevisionWithoutDelegation(t *testing.T) {
 	old := &contractRevision{contractEndpoint: &contractEndpoint{body: []byte(`{"data":{"revision":"old"}}`)}, snapshot: newArtifact(t, "type Query { revision: String }")}
 	newer := &contractRevision{contractEndpoint: &contractEndpoint{body: []byte(`{"data":{"revision":"new"}}`)}, snapshot: newArtifact(t, "type Query { revision: String! }")}
 	r := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ revision }"}`))
@@ -60,7 +60,33 @@ func TestContractSnapshotHeaderExecutesPinnedRevision(t *testing.T) {
 	r.Header.Set("GQL-Snapshot", old.snapshot.Fingerprint())
 	w := httptest.NewRecorder()
 	NewHandler(&pinningContract{current: newer, pinned: old}).ServeHTTP(w, r)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"revision":"old"`) {
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status/body = %d/%s", w.Code, w.Body.String())
+	}
+}
+
+func TestContractDelegationBindsSnapshotRevision(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	signer, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, Replay: core.NewMemoryReplayStore(8)})
+	verifier, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, Replay: core.NewMemoryReplayStore(8)})
+	identity, err := core.NewIdentity(core.IdentityInput{Tenant: "tenant", Subject: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := request{Query: "{ revision }"}
+	token, err := signer.Sign(core.WithIdentity(context.Background(), identity), operationDigest(payload, "old"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := &contractRevision{contractEndpoint: &contractEndpoint{body: []byte(`{"data":{"revision":"new"}}`)}, snapshot: newArtifact(t, "type Query { revision: String }")}
+	r := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ revision }"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Accept", responseType)
+	r.Header.Set("Authorization", "GQL-Delegation "+token)
+	r.Header.Set("GQL-Snapshot", "substituted")
+	w := httptest.NewRecorder()
+	NewHandler(endpoint, Options{Delegation: verifier}).ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status/body = %d/%s", w.Code, w.Body.String())
 	}
 }

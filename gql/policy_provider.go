@@ -155,16 +155,7 @@ func cloneRoleBranches(in []RolePolicyBranch) ([]RolePolicyBranch, error) {
 func sortedUnique(values []string) []string {
 	result := append([]string(nil), values...)
 	sort.Strings(result)
-	if len(result) == 0 {
-		return result
-	}
-	n := 1
-	for _, value := range result[1:] {
-		if value != result[n-1] {
-			result[n], n = value, n+1
-		}
-	}
-	return result[:n]
+	return slices.Compact(result)
 }
 
 func validatePolicyRequest(request PolicyRequest) error {
@@ -456,7 +447,7 @@ func policyWriteFields(actions, roles []string, permissions map[string]*protocol
 				fields = append(fields, permission.Update...)
 			}
 		}
-		fields = uniqueStrings(fields)
+		fields = sortedUnique(fields)
 		if first {
 			result, first = fields, false
 			continue

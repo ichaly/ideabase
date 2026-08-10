@@ -158,7 +158,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var authErr error
-		ctx, authErr = h.options.Delegation.Verify(ctx, strings.TrimPrefix(authorization, scheme), operationDigest(req))
+		ctx, authErr = h.options.Delegation.Verify(ctx, strings.TrimPrefix(authorization, scheme), operationDigest(req, r.Header.Get("GQL-Snapshot")))
 		if authErr != nil {
 			http.Error(w, "invalid delegation", http.StatusUnauthorized)
 			return
@@ -166,6 +166,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	execution := h.endpoint
 	if revision := r.Header.Get("GQL-Snapshot"); revision != "" {
+		if h.options.Delegation == nil {
+			source, ok := h.endpoint.(manifestEndpoint)
+			if !ok {
+				http.Error(w, "snapshot pinning unavailable", http.StatusConflict)
+				return
+			}
+			current, snapshotErr := source.Snapshot()
+			if snapshotErr != nil || current == nil || current.Fingerprint() != revision {
+				http.Error(w, "snapshot revision changed", http.StatusConflict)
+				return
+			}
+		}
 		if pinner, ok := h.endpoint.(snapshotPinner); ok {
 			pinned, pinErr := pinner.ForSnapshot(revision)
 			var executable bool
@@ -186,6 +198,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	if r.Method == http.MethodGet && req.Query == "" {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "GET requires an explicit query operation", http.StatusMethodNotAllowed)
+		return
 	}
 	kind := ast.Query
 	if req.Query != "" {
@@ -222,8 +239,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeGraphQLError(w, http.StatusInternalServerError, fmt.Errorf("empty execution response"))
 }
 
-func operationDigest(req request) string {
-	body, _ := json.Marshal(req)
+func operationDigest(req request, revision string) string {
+	body, _ := json.Marshal(struct {
+		Request  request `json:"request"`
+		Revision string  `json:"revision,omitempty"`
+	}{Request: req, Revision: revision})
 	return fmt.Sprintf("%x", sha256.Sum256(body))
 }
 
@@ -245,7 +265,7 @@ func decodeLimited(r *http.Request, limit int64, dst any) error {
 }
 
 func decodeJSON(raw []byte, dst any) error {
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	if err := dec.Decode(dst); err != nil {
 		return err

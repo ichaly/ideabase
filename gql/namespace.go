@@ -49,9 +49,7 @@ func composeNamespaces(namespaces []Namespace) (*ast.Schema, string, map[string]
 		query.Fields = append(query.Fields, &ast.FieldDefinition{Name: contract.name, Type: ast.NamedType(contract.prefix+"Query", nil)})
 		capabilities = append(capabilities, namespaceRootCapability(contract, "Query", contract.name, contract.prefix+"Query"))
 		capabilities = append(capabilities, contract.capabilities...)
-		for _, field := range fields {
-			mutation.Fields = append(mutation.Fields, field)
-		}
+		mutation.Fields = append(mutation.Fields, fields...)
 		if contract.subscription {
 			subscription.Fields = append(subscription.Fields, &ast.FieldDefinition{Name: contract.name, Type: ast.NamedType(contract.prefix+"Subscription", nil)})
 			capabilities = append(capabilities, namespaceRootCapability(contract, "Subscription", contract.name, contract.prefix+"Subscription"))
@@ -170,15 +168,6 @@ func importNamespace(namespace Namespace) (*namespaceContract, map[string]*ast.D
 
 func namespaceRootCapability(contract *namespaceContract, parent, name, typ string) Capability {
 	return Capability{Coordinate: parent + "." + name, Parent: parent, Name: name, Type: typ, Handler: HandlerRemote, Planner: "namespace", Cost: 1}
-}
-
-func (contract *namespaceContract) capability(parent, name string) (Capability, bool) {
-	for _, capability := range contract.capabilities {
-		if capability.Parent == parent && capability.Name == name {
-			return capability, true
-		}
-	}
-	return Capability{}, false
 }
 
 func renameNamespaceCapabilities(source []Capability, contract *namespaceContract, rename map[string]string) []Capability {

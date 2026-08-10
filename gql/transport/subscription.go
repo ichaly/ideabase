@@ -59,7 +59,7 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 				return
 			}
 			var err error
-			ctx, err = opts.Delegation.Verify(ctx, strings.TrimPrefix(authorization, scheme), operationDigest(params))
+			ctx, err = opts.Delegation.Verify(ctx, strings.TrimPrefix(authorization, scheme), operationDigest(params, r.Header.Get("GQL-Snapshot")))
 			if err != nil {
 				http.Error(w, "invalid delegation", http.StatusUnauthorized)
 				return
@@ -67,6 +67,18 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 		}
 		execution := endpoint
 		if revision := r.Header.Get("GQL-Snapshot"); revision != "" {
+			if opts.Delegation == nil {
+				source, ok := endpoint.(manifestEndpoint)
+				if !ok {
+					http.Error(w, "snapshot pinning unavailable", http.StatusConflict)
+					return
+				}
+				current, snapshotErr := source.Snapshot()
+				if snapshotErr != nil || current == nil || current.Fingerprint() != revision {
+					http.Error(w, "snapshot revision changed", http.StatusConflict)
+					return
+				}
+			}
 			if pinner, ok := endpoint.(snapshotPinner); ok {
 				pinned, pinErr := pinner.ForSnapshot(revision)
 				var subscribable bool

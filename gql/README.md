@@ -80,15 +80,36 @@ GraphQL 规定的串行顺序。不同 namespace Query 并行，同 namespace �
 child 的 object/input/enum/interface/union/scalar 会确定性改名；目前只接受
 GraphQL 标准 directive，自定义 directive 在组合时显式拒绝，不会在运行期被静默忽略。
 返回值会按公共 Schema 重新完成，额外字段、错误路径和 `__typename` 不会泄漏
-child 内部名字。`Gateway.Refresh` 只有在完整新拓扑校验成功后才原子换代，失败继续服务
-旧 snapshot；执行中的请求固定使用启动时的 child fingerprint。
+child 内部名字。生产控制面用 `Gateway.Apply(GatewayUpdate{Revision, Namespaces})` 发布
+单调、幂等的完整拓扑；旧 revision 与同 revision 冲突均 fail closed。最近 8 个不可变
+snapshot 保留为滚动发布兼容窗口，执行中的请求继续固定启动时的 child fingerprint。
 
 远程组合使用 `transport.NewRemoteEndpoint`，只接受启动时配置的 HTTPS 地址，禁止跳转，
 并校验 endpoint identity、manifest、snapshot fingerprint、响应大小和返回类型。身份通过
 短期签名 delegation envelope 传播，child 仍必须按自己的 policy 再授权；客户端伪造
 tenant/role header 不构成可信身份。
+`DelegationConfig.Replay` 必须显式提供；单实例可用 `NewMemoryReplayStore`，多实例必须接入
+共享且原子的 `ReplayStore.Consume`（例如 Redis `SET NX PX` 或数据库唯一键）。重放返回
+`ErrReplay`，共享存储故障保留原始错误且一律 fail closed。
 `AllowHTTP` 仅用于显式的 localhost/回环测试地址，不会放行内网或公网明文连接。
 `GQL-Snapshot` 会把 HTTP/SSE 请求绑定到不可变修订，不是仅在执行前比较一次指纹。
+
+### 多实例部署合同
+
+- 所有副本使用相同的数据库元数据、Policy revision、Gateway revision 和 delegation key epoch。
+- `EndpointID` 必须唯一标识不可变的目标与传输配置；同一 control revision 下复用 ID 指向
+  不同地址属于控制面 split-brain，调用方必须拒绝发布。
+- `Builder.Security` / `WithSecurityState` 注入同一个共享撤权事实源；本地
+  `RevocationBarrier` 只用于单实例或由控制面向每个副本可靠同步的部署。
+- 每个副本使用独立的 128-bit 随机临时复制槽；断线自动重连并广播重查，语义是“最新状态
+  收敛”而不是持久事件日志。需要逐事件交付时应使用独立 outbox/消息系统。
+- 租户路由在一个请求内固定；数据库/Schema 迁移通过单调 route revision 与安全状态一起发布。
+- 撤权在请求开始和订阅 lease 边界生效，不承诺与已在数据库执行中的请求瞬时线性化；需要
+  强制即时撤权的写操作必须同时使用数据库 RLS/事务内 policy predicate。
+- 新副本启动时必须按序回放当前 revision 及之前的滚动窗口，再接入负载均衡；仅加载最新
+  revision 的新副本无法接受旧父节点的 snapshot pin。
+- CI 的 GA 门禁包含共享 token 并发消费、滚动 snapshot、真实 PostgreSQL 锁超时恢复、真实
+  CDC backend 终止后重连，以及稳定的分配预算；`scripts/perf.sh` 生成 10 轮相对性能样本。
 
 ## 查询能力
 

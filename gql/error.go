@@ -23,10 +23,18 @@ func GraphQLErrors(err error) gqlerror.List {
 	if item, ok := err.(*gqlerror.Error); ok {
 		return gqlerror.List{item}
 	}
+	var list gqlerror.List
+	if errors.As(err, &list) {
+		return list
+	}
+	var item *gqlerror.Error
+	if errors.As(err, &item) {
+		return gqlerror.List{item}
+	}
 	if safe := safeFailure(err); safe != nil {
 		err = safe
 	}
-	item := gqlerror.Wrap(err)
+	item = gqlerror.Wrap(err)
 	var coded errorCoder
 	if errors.As(err, &coded) {
 		item.Extensions = map[string]any{"code": coded.ErrorCode()}

@@ -3,10 +3,46 @@ package gql
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
+
+type blockingCachedPolicy struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	calls   atomic.Int32
+}
+
+func (p *blockingCachedPolicy) Decide(ctx context.Context, request PolicyRequest) (PolicyDecision, error) {
+	p.calls.Add(1)
+	p.once.Do(func() {
+		close(p.started)
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+		}
+	})
+	if err := ctx.Err(); err != nil {
+		return PolicyDecision{}, err
+	}
+	return PolicyDecision{Allow: true, Fields: map[FieldUse][]string{
+		FieldUseSelect: {"*"}, FieldUseFilter: {"*"}, FieldUseOrder: {"*"}, FieldUseGroup: {"*"},
+		FieldUseAggregate: {"*"}, FieldUseJoin: {"*"}, FieldUseWrite: {"*"}, FieldUseReturn: {"*"},
+		FieldUseInternalDependency: {"*"},
+	}}, nil
+}
+
+func (*blockingCachedPolicy) PolicyCacheIdentity(context.Context, Identity, TenantRoute, map[string]any) (string, bool) {
+	return "stable", true
+}
 
 func TestEffectiveSchemaCacheIncludesScopeValues(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
@@ -63,6 +99,57 @@ func TestDynamicPolicyProviderWithoutCacheIdentityIsNotCached(t *testing.T) {
 	_, err = executor.EffectiveSchema(ctx)
 	require.NoError(t, err)
 	require.Greater(t, calls, 5, "dynamic providers must be evaluated again without an explicit cache identity")
+}
+
+func TestEffectiveSchemaFollowerSurvivesLeaderCancellation(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	provider := &blockingCachedPolicy{started: make(chan struct{}), release: make(chan struct{})}
+	installTestPolicy(t, executor, provider)
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u", PolicyRevision: 1})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	leaderCtx, cancel := context.WithCancel(ctx)
+	leader := make(chan error, 1)
+	go func() { _, err := executor.EffectiveSchema(leaderCtx); leader <- err }()
+	<-provider.started
+	follower := make(chan error, 1)
+	go func() { _, err := executor.EffectiveSchema(ctx); follower <- err }()
+	require.Eventually(t, func() bool { return provider.calls.Load() == 1 }, time.Second, time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-leader, context.Canceled)
+	select {
+	case err := <-follower:
+		require.Failf(t, "healthy follower inherited leader cancellation", "error: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(provider.release)
+	require.NoError(t, <-follower)
+}
+
+func TestEffectiveSchemaRemovesUnauthorizedRelationOperations(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_UPDATE) {
+			return PolicyDecision{Allow: false}, nil
+		}
+		return PolicyDecision{Allow: true, Fields: map[FieldUse][]string{
+			FieldUseSelect: {"*"}, FieldUseReturn: {"*"}, FieldUseFilter: {"*"}, FieldUseOrder: {"*"},
+			FieldUseGroup: {"*"}, FieldUseAggregate: {"*"}, FieldUseJoin: {"*"}, FieldUseWrite: {"*"},
+			FieldUseInternalDependency: {"*"},
+		}}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	artifact, err := executor.EffectiveSchema(WithIdentity(context.Background(), identity))
+	require.NoError(t, err)
+	schema, gqlErr := gqlparser.LoadSchema(&ast.Source{Name: "effective.graphql", Input: artifact.Schema})
+	require.Empty(t, gqlErr)
+	relation := schema.Types["PostCreateRelationInput"]
+	require.NotNil(t, relation)
+	require.Nil(t, relation.Fields.ForName("connect"))
+	require.NotNil(t, relation.Fields.ForName("create"))
 }
 
 func TestSchemaProfileCompatibilityDetectsClientBreakingChanges(t *testing.T) {

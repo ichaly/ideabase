@@ -1,11 +1,26 @@
 package gql
 
 import (
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReplicationSlotNamesAreClusterSafePostgresIdentifiers(t *testing.T) {
+	valid := regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+	seen := make(map[string]struct{}, 1000)
+	for range 1000 {
+		name, err := replicationSlotName()
+		require.NoError(t, err)
+		require.True(t, valid.MatchString(name), name)
+		require.LessOrEqual(t, len(name), 63)
+		_, duplicate := seen[name]
+		require.False(t, duplicate, name)
+		seen[name] = struct{}{}
+	}
+}
 
 // TestListenerWatchRetryAfterFailure 首次建连失败不得缓存错误（原sync.Once会永久缓存）：
 // started保持未置位，数据库恢复后下一次Subscribe可自动重试

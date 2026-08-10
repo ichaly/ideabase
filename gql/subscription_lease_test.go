@@ -29,6 +29,18 @@ func TestSubscriptionFeedKeySeparatesIdentityAndPolicy(t *testing.T) {
 	require.NotEqual(t, a, c)
 }
 
+func TestSubscriptionFeedKeySeparatesCredentialEpoch(t *testing.T) {
+	old, err := NewIdentity(IdentityInput{Tenant: "t1", Subject: "u1", PolicyRevision: 1, CredentialEpoch: 1})
+	require.NoError(t, err)
+	current, err := NewIdentity(IdentityInput{Tenant: "t1", Subject: "u1", PolicyRevision: 1, CredentialEpoch: 2})
+	require.NoError(t, err)
+	route := TenantRoute{Tenant: "t1", CacheKey: "route-1"}
+	require.NotEqual(t,
+		subscriptionFeedKey("q", "Op", nil, nil, old, route, "policy"),
+		subscriptionFeedKey("q", "Op", nil, nil, current, route, "policy"),
+	)
+}
+
 func TestSubscriptionLeaseStopsAfterRevocation(t *testing.T) {
 	identity, err := NewIdentity(IdentityInput{Tenant: "t1", Subject: "u", PolicyRevision: 1})
 	require.NoError(t, err)
@@ -42,8 +54,9 @@ func TestSubscriptionLeaseStopsAfterRevocation(t *testing.T) {
 func TestSubscriptionLeaseExpiresWithoutDatabaseWake(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	executor.revocation = NewRevocationBarrier(1, map[string]TenantSecurityState{"t1": {}})
-	require.NoError(t, ConfigureSubscriptionLease(executor, 10*time.Millisecond))
+	barrier := NewRevocationBarrier(1, map[string]TenantSecurityState{"t1": {}})
+	executor.revocation = barrier
+	executor.subscriptionLease = 10 * time.Millisecond
 	identity, err := NewIdentity(IdentityInput{Tenant: "t1", Subject: "u", PolicyRevision: 1})
 	require.NoError(t, err)
 	route := TenantRoute{Tenant: "t1", Revision: 1, CacheKey: "route"}
@@ -57,7 +70,7 @@ func TestSubscriptionLeaseExpiresWithoutDatabaseWake(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("missing initial subscription result")
 	}
-	require.NoError(t, executor.revocation.Replace(2, map[string]TenantSecurityState{"t1": {Disabled: true}}))
+	require.NoError(t, barrier.Replace(2, map[string]TenantSecurityState{"t1": {Disabled: true}}))
 	select {
 	case expired, ok := <-events:
 		require.True(t, ok)
