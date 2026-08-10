@@ -69,7 +69,7 @@ func TestPurgeAndAuditOutboxSharePostgresStatement(t *testing.T) {
 	var tenant, actor, action, resource, request, snapshot string
 	var revision, affected int64
 	require.NoError(t, db.Raw(`SELECT tenant,actor,action,resource,request_id,snapshot,policy_revision,affected_count
-		FROM gql_audit_outbox WHERE event_key='request-a:purge:Article'`).Row().Scan(&tenant, &actor, &action, &resource, &request, &snapshot, &revision, &affected))
+		FROM gql_audit_outbox WHERE event_key='request-a:tenant-a:purge:Article:0'`).Row().Scan(&tenant, &actor, &action, &resource, &request, &snapshot, &revision, &affected))
 	require.Equal(t, []string{"tenant-a", "actor-a", "purge", "Article", "request-a"}, []string{tenant, actor, action, resource, request})
 	require.NotEmpty(t, snapshot)
 	require.EqualValues(t, 7, revision)

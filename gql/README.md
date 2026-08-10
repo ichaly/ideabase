@@ -26,7 +26,7 @@ GraphQL 请求
 | `renderer` | 从元数据生成 GraphQL schema（Result/WhereInput/SortInput/CreateInput/UpdateInput） |
 | `compiler` | 编译上下文（对象池、参数槽位、全局别名计数）与 Dialect 接口 |
 | `compiler/pgsql` | PostgreSQL 方言：SELECT 单元化编译 + 变更 CTE |
-| `executor` | HTTP 入口、计划 LRU 缓存、执行与结果组织、Resolver/Remote 分发、codec 出入参转换、持久化查询 |
+| `executor` | 计划 LRU 缓存、执行与结果组织、Resolver/Remote 分发、codec 出入参转换、持久化查询 |
 | `Snapshot` | Build 后不可变的 SDL、参数、Handler、Planner、授权 action、resource、cost 与稳定指纹 |
 
 ## 快速开始
@@ -52,6 +52,11 @@ fmt.Println(snapshot.Fingerprint(), snapshot.Capabilities())
 Builder 是唯一装配入口。每个 Engine 必须通过 `Builder.Policy` 或 metadata
 `permissions` 获得唯一 PolicyProvider；两者冲突或两者都缺失时 Build 失败并保持
 fail-closed。Build 后 Engine 只提供执行、快照、健康检查和订阅接口。
+每个请求先生成与可信 Identity/租户路由一致的 Effective Schema；校验、普通执行、订阅、
+自省和 Gateway 组合共用该不可变 artifact。artifact 同时包含过滤后的 capability 目录，
+其 schema 指纹、结构指纹、权限签名与 policy/route revision 是独立字段，不混用缓存身份。
+内置角色策略和显式实现 `PolicyCacheIdentity` 的自定义 provider 使用有界 LRU +
+singleflight；依赖请求临时状态的 provider 不声明缓存身份，引擎就不冒险复用 Schema。
 
 ### 独立服务与命名空间组合
 
@@ -72,8 +77,9 @@ gateway, err := gql.NewGateway("public-api",
 
 组合后的 Query 以 namespace 对象呈现；Mutation 使用带 namespace 的顶层字段并保持
 GraphQL 规定的串行顺序。不同 namespace Query 并行，同 namespace 选择只下发一次。
-child 的 object/input/enum/interface/union 会确定性改名，scalar/directive 仅在契约一致时
-共享；返回值还会按公共 Schema 重新完成，额外字段、错误路径和 `__typename` 不会泄漏
+child 的 object/input/enum/interface/union/scalar 会确定性改名；目前只接受
+GraphQL 标准 directive，自定义 directive 在组合时显式拒绝，不会在运行期被静默忽略。
+返回值会按公共 Schema 重新完成，额外字段、错误路径和 `__typename` 不会泄漏
 child 内部名字。`Gateway.Refresh` 只有在完整新拓扑校验成功后才原子换代，失败继续服务
 旧 snapshot；执行中的请求固定使用启动时的 child fingerprint。
 
@@ -81,6 +87,8 @@ child 内部名字。`Gateway.Refresh` 只有在完整新拓扑校验成功后�
 并校验 endpoint identity、manifest、snapshot fingerprint、响应大小和返回类型。身份通过
 短期签名 delegation envelope 传播，child 仍必须按自己的 policy 再授权；客户端伪造
 tenant/role header 不构成可信身份。
+`AllowHTTP` 仅用于显式的 localhost/回环测试地址，不会放行内网或公网明文连接。
+`GQL-Snapshot` 会把 HTTP/SSE 请求绑定到不可变修订，不是仅在执行前比较一次指纹。
 
 ## 查询能力
 
@@ -338,7 +346,8 @@ SELECT ... FROM posts WHERE posts.tenant_id = $1   -- $1 = ctx 的 tenant
 ## 数据治理（软删除、审计与角色权限）
 
 治理规则仍编译进参数化 SQL；角色和上下文值不进入计划缓存键。同一查询文本在不同
-角色间复用同一计划，未配置 `permissions` 与 `operations` 的实体保持原有全开放行为。
+角色间复用同一计划。Engine 启动必须有唯一 PolicyProvider：显式 provider，或由非空
+`permissions` 生成的内置 provider；缺失时直接拒绝 Build，不存在默认全开放路径。
 
 ```yaml
 metadata:
@@ -484,6 +493,8 @@ GraphQL 实体，或实现带持久 offset 契约的 `Endpoint.Subscribe`，不�
 元数据按 `schema.schema`（缺省 `public`）加载，生成 SQL 中所有基表引用
 带 schema 限定（`"public"."users"`），不依赖 search_path；变更 CTE 及其
 读回引用为裸名（CTE 名与表名一致，语句作用域内命中）。
+`schema.catalog-timeout`（缺省 30s）限制启动期 catalog 读取；超时、空结果或游标错误都会
+fail closed，不会以部分元数据启动。
 
 ## schema 与操作文档加载
 
@@ -495,8 +506,8 @@ GraphQL 实体，或实现带持久 offset 契约的 `Endpoint.Subscribe`，不�
 ## 生产安全开关
 
 - `schema.introspection: false` 关闭自省（`__schema/__type` 拒绝，常规查询不受影响）
-- `schema.persisted-only: true` HTTP 边界只接受持久化操作（原始查询文本 403），
-  程序内 `Execute`/订阅 channel API 不受限（服务端代码可信）
+- `schema.persisted-only: true` 所有 `ExecuteOperation` 入口只接受已注册操作；原始查询
+  返回标准 GraphQL `errors` 响应，HTTP/Fiber 不再各自实现一套分支语义
 - `Register`/`LoadDocuments` 仅限启动期：首次执行后注册表冻结，运行期调用明确报错
   （schema 重建与并发请求不互斥，冻结防静默数据竞争）
 - 订阅 WebSocket 实现 graphql-transport-ws 完整状态机：未 `connection_init` 即

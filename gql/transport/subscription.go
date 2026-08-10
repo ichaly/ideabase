@@ -2,9 +2,13 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+
+	core "github.com/ichaly/ideabase/gql"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 type subscriptionEndpoint interface {
@@ -61,21 +65,32 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 				return
 			}
 		}
+		execution := endpoint
 		if revision := r.Header.Get("GQL-Snapshot"); revision != "" {
-			source, ok := endpoint.(manifestEndpoint)
-			if !ok {
-				http.Error(w, "snapshot pinning unavailable", http.StatusConflict)
-				return
-			}
-			snapshot, err := source.Snapshot()
-			if err != nil || snapshot.Fingerprint() != revision {
-				http.Error(w, "snapshot revision changed", http.StatusConflict)
-				return
+			if pinner, ok := endpoint.(snapshotPinner); ok {
+				pinned, pinErr := pinner.ForSnapshot(revision)
+				var subscribable bool
+				execution, subscribable = pinned.(subscriptionEndpoint)
+				if pinErr != nil || !subscribable {
+					http.Error(w, "snapshot revision changed", http.StatusConflict)
+					return
+				}
+			} else {
+				source, ok := endpoint.(manifestEndpoint)
+				if !ok {
+					http.Error(w, "snapshot pinning unavailable", http.StatusConflict)
+					return
+				}
+				snapshot, err := source.Snapshot()
+				if err != nil || snapshot == nil || snapshot.Fingerprint() != revision {
+					http.Error(w, "snapshot revision changed", http.StatusConflict)
+					return
+				}
 			}
 		}
-		events, err := endpoint.Subscribe(ctx, params.Query, params.Variables, params.OperationName)
+		events, err := execution.Subscribe(ctx, params.Query, params.Variables, params.OperationName)
 		if err != nil || events == nil {
-			http.Error(w, "subscription rejected", http.StatusUnprocessableEntity)
+			writeSubscriptionError(w, err)
 			return
 		}
 		flusher, ok := w.(http.Flusher)
@@ -96,7 +111,11 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 					flusher.Flush()
 					return
 				}
-				if int64(len(frame)) > opts.MaxResponseBytes {
+				eventBytes := int64(len("event: next\n\n"))
+				for _, line := range strings.Split(string(frame), "\n") {
+					eventBytes += int64(len("data: ")) + int64(len(line)) + 1
+				}
+				if eventBytes > opts.MaxResponseBytes {
 					_, _ = fmt.Fprint(w, "event: next\ndata: {\"errors\":[{\"message\":\"subscription event exceeds response limit\",\"extensions\":{\"code\":\"LIMIT_EXCEEDED\"}}]}\n\nevent: complete\n\n")
 					flusher.Flush()
 					return
@@ -110,4 +129,16 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 			}
 		}
 	})
+}
+
+func writeSubscriptionError(w http.ResponseWriter, cause error) {
+	errors := gqlerror.List{&gqlerror.Error{Message: "subscription rejected", Extensions: map[string]any{"code": "SUBSCRIPTION_REJECTED"}}}
+	if cause != nil {
+		errors = core.GraphQLErrors(cause)
+	}
+	body, _ := json.Marshal(map[string]any{"errors": errors})
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprintf(w, "event: next\ndata: %s\n\nevent: complete\n\n", body)
 }

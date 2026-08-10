@@ -171,7 +171,7 @@ func (my *listener) connect() (*pgconn.PgConn, error) {
 		return nil, fmt.Errorf("建立复制连接失败: %w", err)
 	}
 	fail := func(err error) (*pgconn.PgConn, error) {
-		_ = conn.Close(context.Background())
+		my.closeConn(conn)
 		return nil, err
 	}
 
@@ -230,7 +230,7 @@ func (my *listener) run(conn *pgconn.PgConn) {
 	backoff := time.Second
 	for {
 		my.receive(conn)
-		_ = conn.Close(context.Background())
+		my.closeConn(conn)
 		if my.ctx.Err() != nil {
 			return
 		}
@@ -268,10 +268,14 @@ func (my *listener) receive(conn *pgconn.PgConn) {
 	for {
 		// 周期上报消费进度，避免服务端断开
 		if time.Now().After(deadline) {
-			if err := pglogrepl.SendStandbyStatusUpdate(context.Background(), conn,
-				pglogrepl.StandbyStatusUpdate{WALWritePosition: position}); err != nil {
+			statusCtx, cancel := context.WithTimeout(my.ctx, cdcStatusTimeout)
+			err := pglogrepl.SendStandbyStatusUpdate(statusCtx, conn,
+				pglogrepl.StandbyStatusUpdate{WALWritePosition: position})
+			if err != nil {
+				cancel()
 				return
 			}
+			cancel()
 			deadline = time.Now().Add(statusInterval)
 		}
 
@@ -324,16 +328,24 @@ func (my *listener) dispatch(walData []byte, relations map[uint32]string, touche
 	}
 	switch m := message.(type) {
 	case *pglogrepl.RelationMessage:
-		relations[m.RelationID] = m.RelationName
+		relations[m.RelationID] = subscriptionTableIdentity(m.Namespace, m.RelationName)
 	case *pglogrepl.InsertMessage:
-		touched[relations[m.RelationID]] = true
+		if table := relations[m.RelationID]; table != "" {
+			touched[table] = true
+		}
 	case *pglogrepl.UpdateMessage:
-		touched[relations[m.RelationID]] = true
+		if table := relations[m.RelationID]; table != "" {
+			touched[table] = true
+		}
 	case *pglogrepl.DeleteMessage:
-		touched[relations[m.RelationID]] = true
+		if table := relations[m.RelationID]; table != "" {
+			touched[table] = true
+		}
 	case *pglogrepl.TruncateMessage:
 		for _, id := range m.RelationIDs {
-			touched[relations[id]] = true
+			if table := relations[id]; table != "" {
+				touched[table] = true
+			}
 		}
 	case *pglogrepl.CommitMessage:
 		if len(touched) > 0 {
@@ -349,6 +361,13 @@ func (my *listener) dispatch(walData []byte, relations map[uint32]string, touche
 
 // statusInterval 复制进度上报间隔
 const statusInterval = 10 * time.Second
+const cdcStatusTimeout = 5 * time.Second
+
+func (my *listener) closeConn(conn *pgconn.PgConn) {
+	ctx, cancel := context.WithTimeout(context.Background(), cdcStatusTimeout)
+	defer cancel()
+	_ = conn.Close(ctx)
+}
 
 // replicationDSN 在DSN上追加复制模式参数，兼容URL与key=value两种格式
 func replicationDSN(dsn string) string {

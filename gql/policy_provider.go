@@ -67,6 +67,14 @@ type PolicyProvider interface {
 	Decide(context.Context, PolicyRequest) (PolicyDecision, error)
 }
 
+// PolicyCacheIdentity is an explicit provider assertion that its effective
+// schema shape is stable for the returned identity. Providers whose decisions
+// depend on request-local state should omit this interface; their schemas are
+// deliberately rebuilt instead of being unsafely cached.
+type PolicyCacheIdentity interface {
+	PolicyCacheIdentity(context.Context, Identity, TenantRoute, map[string]any) (string, bool)
+}
+
 func NormalizeDecision(request PolicyRequest, decision PolicyDecision) (PolicyDecision, error) {
 	if err := validatePolicyRequest(request); err != nil {
 		return PolicyDecision{}, err
@@ -395,9 +403,9 @@ func (p *ProtocolPolicyProvider) Decide(_ context.Context, request PolicyRequest
 			value, _ := cloneClaim(predicate.Value)
 			branch.Check = append(branch.Check, TypedPredicate{Column: predicate.Column, Operator: predicate.Operator, Context: predicate.Context, Value: value})
 		}
-		if len(branch.RowPredicates) > 0 || len(branch.Check) > 0 {
-			d.RoleBranches = append(d.RoleBranches, branch)
-		}
+		// Keep an authorized role even when it contributes no predicates. An
+		// empty branch is the explicit unrestricted arm of the role union.
+		d.RoleBranches = append(d.RoleBranches, branch)
 	}
 	if len(selectFields) > 0 {
 		for _, use := range []FieldUse{FieldUseSelect, FieldUseFilter, FieldUseOrder, FieldUseGroup, FieldUseAggregate, FieldUseReturn} {
@@ -417,6 +425,15 @@ func (p *ProtocolPolicyProvider) Decide(_ context.Context, request PolicyRequest
 		}
 	}
 	return NormalizeDecision(request, d)
+}
+
+func (p *ProtocolPolicyProvider) PolicyCacheIdentity(_ context.Context, identity Identity, _ TenantRoute, _ map[string]any) (string, bool) {
+	if p == nil {
+		return "", false
+	}
+	roles := identity.Roles()
+	sort.Strings(roles)
+	return strings.Join(roles, "\x00"), true
 }
 
 // policyWriteFields unions grants across roles but intersects the actions of

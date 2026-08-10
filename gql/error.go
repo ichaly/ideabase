@@ -11,9 +11,9 @@ import (
 
 type errorCoder interface{ ErrorCode() string }
 
-// gqlErrors preserves parser/coercion error lists and their public location/path
-// instead of wrapping them into one opaque execution error.
-func gqlErrors(err error) gqlerror.List {
+// GraphQLErrors converts one execution failure into the engine's public,
+// transport-independent GraphQL error contract.
+func GraphQLErrors(err error) gqlerror.List {
 	if err == nil {
 		return nil
 	}
@@ -27,7 +27,8 @@ func gqlErrors(err error) gqlerror.List {
 		err = safe
 	}
 	item := gqlerror.Wrap(err)
-	if coded, ok := err.(errorCoder); ok {
+	var coded errorCoder
+	if errors.As(err, &coded) {
 		item.Extensions = map[string]any{"code": coded.ErrorCode()}
 	}
 	return gqlerror.List{item}

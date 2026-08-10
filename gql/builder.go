@@ -122,16 +122,19 @@ func (my *Builder) Build() (*Engine, error) {
 		return nil, fmt.Errorf("Engine policy provider or metadata permissions is required")
 	}
 	configureSearchMode(metadata, my.database)
-	compiler, err := NewCompiler(metadata, nil)
+	// Loader-owned metadata is a build-time assembly object. Compile only
+	// against the Engine-owned frozen catalog.
+	catalog := metadata.freeze()
+	compiler, err := NewCompiler(catalog, nil)
 	if err != nil {
 		return nil, err
 	}
-	renderer := NewRenderer(metadata)
-	schema, err := loadSchema(metadata, renderer)
+	renderer := NewRenderer(catalog)
+	schema, err := loadSchema(catalog, renderer)
 	if err != nil {
 		return nil, err
 	}
-	executor, err := newEngine(my.database, metadata, compiler, schema)
+	executor, err := newEngine(my.database, catalog, compiler, schema)
 	if err != nil {
 		return nil, err
 	}

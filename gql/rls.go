@@ -110,6 +110,17 @@ type RLSStatement struct {
 	Args []any
 }
 
+type rlsPreparedKey struct{}
+
+func rlsPrepared(ctx context.Context, tx *gorm.DB) bool {
+	prepared, _ := ctx.Value(rlsPreparedKey{}).(*gorm.DB)
+	return prepared != nil && prepared == tx
+}
+
+func markRLSPrepared(ctx context.Context, tx *gorm.DB) context.Context {
+	return context.WithValue(ctx, rlsPreparedKey{}, tx)
+}
+
 func NewRLSIdentityStatement(identity Identity) (RLSStatement, error) {
 	if identity.Tenant() == "" || identity.Subject() == "" {
 		return RLSStatement{}, fmt.Errorf("verified identity is required")
@@ -121,6 +132,9 @@ func NewRLSIdentityStatement(identity Identity) (RLSStatement, error) {
 }
 
 func (my *Engine) prepareRLS(ctx context.Context, tx *gorm.DB) error {
+	if rlsPrepared(ctx, tx) {
+		return nil
+	}
 	identity, ok := IdentityFromContext(ctx)
 	if !ok {
 		return fmt.Errorf("verified identity is required for RLS")

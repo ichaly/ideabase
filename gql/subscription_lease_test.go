@@ -8,6 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSubscriptionPolicySignatureIncludesPredicateValues(t *testing.T) {
+	a := map[string]PolicyDecision{"Query.users": {Allow: true, RowPredicates: []TypedPredicate{{Column: "tenant_id", Operator: "eq", Value: "t1"}}}}
+	b := map[string]PolicyDecision{"Query.users": {Allow: true, RowPredicates: []TypedPredicate{{Column: "tenant_id", Operator: "eq", Value: "t2"}}}}
+	require.NotEqual(t, policyRuntimeSignature(a), policyRuntimeSignature(b))
+}
+
 func TestSubscriptionFeedKeySeparatesIdentityAndPolicy(t *testing.T) {
 	variables := map[string]any{"limit": 10}
 	scope := map[string]any{"tenant": "t1"}

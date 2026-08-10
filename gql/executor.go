@@ -138,14 +138,12 @@ type Engine struct {
 	snapshotErr       error
 	baseView          *effectiveView
 	validation        *validatorrules.Rules // 快照自有验证规则，不修改gqlparser全局状态
-	tenantRouter      *TenantRouter
-	tenantSources     map[string]*Engine
 	revocation        *RevocationBarrier
 	policy            PolicyProvider
 	policyBuiltin     bool
 	rls               bool
-	effectiveMu       sync.Mutex
-	effective         map[string]*effectiveView
+	effectiveCache    *effectiveCache
+	effectiveFlight   singleflight.Group
 	subscriptionLease time.Duration
 	observer          Observer
 }
@@ -241,15 +239,12 @@ func (my *Engine) wrap(coordinate string, middleware ResolverMiddleware) error {
 
 // Snapshot 返回 Engine 实际使用的不可变 Schema/Handler 契约。
 func (my *Engine) Snapshot() (*Snapshot, error) {
-	if my.tenantRouter != nil {
-		return my.snapshot, my.snapshotErr
-	}
 	my.finalizeOnce.Do(func() {
 		my.snapshot, my.snapshotErr = buildSnapshot(my)
 		if my.snapshotErr == nil {
 			fingerprint := my.snapshot.Fingerprint()
 			my.baseView = &effectiveView{
-				artifact: SchemaArtifact{Schema: my.snapshot.Schema(), Fingerprint: fingerprint, StructuralFingerprint: fingerprint},
+				artifact: SchemaArtifact{Schema: my.snapshot.Schema(), Fingerprint: digest(my.snapshot.Schema()), StructuralFingerprint: fingerprint, Capabilities: my.snapshot.Capabilities()},
 				schema:   my.schema, intro: my.intro,
 			}
 		}
@@ -261,16 +256,17 @@ func (my *Engine) Snapshot() (*Snapshot, error) {
 
 func newEngine(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Engine, error) {
 	executor := &Engine{
-		database:    d,
-		metadata:    m,
-		compiler:    c,
-		cache:       newPlanCache(planCacheSize),
-		policyCache: newPlanCache(planCacheSize),
-		feeds:       make(map[string]*feed),
-		resolvers:   make(map[string]Resolver),
-		documents:   make(map[string]string),
-		remotes:     make(map[string]Remote),
-		validation:  validatorrules.NewDefaultRules(),
+		database:       d,
+		metadata:       m,
+		compiler:       c,
+		cache:          newPlanCache(planCacheSize),
+		policyCache:    newPlanCache(planCacheSize),
+		effectiveCache: newEffectiveCache(128),
+		feeds:          make(map[string]*feed),
+		resolvers:      make(map[string]Resolver),
+		documents:      make(map[string]string),
+		remotes:        make(map[string]Remote),
+		validation:     validatorrules.NewDefaultRules(),
 	}
 
 	s, err := gqlparser.LoadSchema(&ast.Source{
@@ -458,7 +454,7 @@ func (my *Engine) queryData(ctx context.Context, query string, variables map[str
 		if len(raw) > 0 {
 			v, err := decodeValue(raw)
 			if err != nil {
-				return gqlReply{Errors: gqlErrors(err)}
+				return gqlReply{Errors: GraphQLErrors(err)}
 			}
 			r.Data, _ = v.(map[string]interface{})
 		}
@@ -505,19 +501,11 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 			r = r.mutationCommit(ctx, mutationState)
 		}
 	}()
-	if my.tenantRouter != nil {
-		target, routed, err := my.tenantDispatch(ctx)
-		if err != nil {
-			r.Errors = gqlErrors(err)
-			return r
-		}
-		return target.execute(routed, query, variables, operationName)
-	}
 	if variables == nil && strings.IndexByte(query, '$') >= 0 {
 		variables = make(map[string]interface{})
 	}
 	if _, err := my.Snapshot(); err != nil {
-		r.Errors = gqlErrors(err)
+		r.Errors = GraphQLErrors(err)
 		return r
 	}
 
@@ -526,7 +514,7 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 	done := my.startPhase(ctx, PhasePlan)
 	view, err := my.effectiveSchema(ctx)
 	if err != nil {
-		r.Errors = gqlErrors(err)
+		r.Errors = GraphQLErrors(err)
 		return r
 	}
 	plan, err := my.planWithView(view, query, operationName, variables)
@@ -537,7 +525,7 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 		if introErr, ok := err.(*introQuery); ok {
 			data, ierr := view.intro.Introspect(introErr.operation, variables)
 			if ierr != nil {
-				r.Errors = gqlErrors(ierr)
+				r.Errors = GraphQLErrors(ierr)
 			} else {
 				r.Data = data
 			}
@@ -550,7 +538,7 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 				if done != nil {
 					done(observationErrorCode(err))
 				}
-				r.Errors = gqlErrors(err)
+				r.Errors = GraphQLErrors(err)
 				return r
 			}
 			if done != nil {
@@ -563,12 +551,12 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 			}
 			if rootErr.entry.intro != nil && r.Data != nil {
 				if ierr := my.mergeIntrospection(ctx, r.Data, rootErr.entry.intro, variables); ierr != nil {
-					r.Errors = append(r.Errors, gqlErrors(ierr)...)
+					r.Errors = append(r.Errors, GraphQLErrors(ierr)...)
 				}
 			}
 			return r
 		}
-		r.Errors = gqlErrors(err)
+		r.Errors = GraphQLErrors(err)
 		return r
 	}
 	if plan.operation.Operation == ast.Mutation {
@@ -576,7 +564,7 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 	}
 	ctx, plan, err = my.govern(ctx, plan, variables)
 	if err != nil {
-		r.Errors = gqlErrors(err)
+		r.Errors = GraphQLErrors(err)
 		return r
 	}
 
@@ -586,7 +574,7 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 		done(observationErrorCode(err))
 	}
 	if err != nil {
-		r.Errors = gqlErrors(err)
+		r.Errors = GraphQLErrors(err)
 		return r
 	}
 	if mutationState != "" {
@@ -620,12 +608,12 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 			r.nullData = true
 			return r
 		}
-		r.Errors = gqlErrors(err)
+		r.Errors = GraphQLErrors(err)
 		return r
 	}
 	if plan.intro != nil {
 		if err = my.mergeIntrospection(ctx, result, plan.intro, variables); err != nil {
-			r.Errors = gqlErrors(err)
+			r.Errors = GraphQLErrors(err)
 			return r
 		}
 	}
@@ -682,14 +670,14 @@ func (my *Engine) fetch(ctx context.Context, plan *Plan, variables map[string]in
 	}
 	var data []byte
 	run := func(tx *gorm.DB) error {
-		if my.rls {
+		if (my.rls || tenantRLSRequested(ctx)) && !rlsPrepared(ctx, tx) {
 			if err := my.prepareRLS(ctx, tx); err != nil {
 				return err
 			}
 		}
 		return tx.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
 	}
-	if my.rls && Tx(ctx) == nil {
+	if (my.rls || tenantRLSRequested(ctx)) && Tx(ctx) == nil {
 		err = database.WithContext(ctx).Transaction(run)
 	} else {
 		err = run(database)
@@ -719,12 +707,13 @@ func (my *Engine) unpack(ctx context.Context, plan *Plan, data []byte, variables
 		warnings, err = my.resolve(callCtx, plan.resolvers, result, variables)
 		return err
 	}
-	if my.rls && my.database != nil && Tx(ctx) == nil {
+	if (my.rls || tenantRLSRequested(ctx)) && my.database != nil && Tx(ctx) == nil {
 		err = my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			if err := my.prepareRLS(ctx, tx); err != nil {
 				return err
 			}
-			return resolve(context.WithValue(ctx, transactionKey{}, tx))
+			prepared := markRLSPrepared(ctx, tx)
+			return resolve(context.WithValue(prepared, transactionKey{}, tx))
 		})
 	} else {
 		err = resolve(ctx)

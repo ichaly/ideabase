@@ -19,11 +19,13 @@ import (
 
 // mutation 单个变更操作：op + 目标实体 + 可选读回单元（delete返回计数无单元）
 type mutation struct {
-	field *ast.Field
-	class *protocol.Class
-	op    string
-	shape compiler.OperationShape
-	unit  *unit
+	field      *ast.Field
+	class      *protocol.Class
+	op         string
+	occurrence int
+	cte        string
+	shape      compiler.OperationShape
+	unit       *unit
 }
 
 // paramWriter 把一个参数值写入SQL（占位符+槽位）
@@ -52,8 +54,8 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 	}
 
 	muts := make([]*mutation, 0, len(fields))
-	seen := make(map[string]bool, len(fields))
-	for _, field := range fields {
+	seen := make(map[string]string, len(fields))
+	for i, field := range fields {
 		if field.Name == typename {
 			continue // 元字段在根对象输出字面量
 		}
@@ -61,11 +63,16 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 		if err != nil {
 			return err
 		}
+		m.occurrence = i
+		m.cte = m.class.Table
 		// CTE名与表名一致，同一操作内不能重复变更同一张表
-		if seen[m.class.Table] {
-			return fmt.Errorf("同一操作中不能多次变更表: %s", m.class.Table)
+		if previous := seen[m.class.Table]; previous != "" {
+			if previous != protocol.OP_PURGE || m.op != protocol.OP_PURGE {
+				return fmt.Errorf("同一操作中不能多次变更表: %s", m.class.Table)
+			}
+			m.cte = fmt.Sprintf("%s_%d", m.class.Table, m.occurrence)
 		}
-		seen[m.class.Table] = true
+		seen[m.class.Table] = m.op
 		ctx.MarkTable(m.class.Table)
 
 		if (m.op != protocol.DELETE || m.shape.Result() || m.shape.Single()) && len(field.SelectionSet) > 0 {
@@ -103,7 +110,7 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 		if i > 0 {
 			ctx.SpaceAfter(`,`)
 		}
-		ctx.Quote(m.class.Table).Write(` AS (`)
+		ctx.Quote(m.cte).Write(` AS (`)
 		var ops []relationOp
 		var err error
 		switch m.op {
@@ -151,7 +158,7 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 		if m.shape.Result() {
 			my.buildMutationResultJSON(ctx, m)
 		} else if m.unit == nil {
-			ctx.Write(`(SELECT COUNT(*) FROM `).Quote(m.class.Table).Write(`)`)
+			ctx.Write(`(SELECT COUNT(*) FROM `).Quote(m.cte).Write(`)`)
 		} else {
 			ctx.Quote(`__sj_`, m.unit.index).Write(`."json"`)
 		}
@@ -169,6 +176,10 @@ func (my *Dialect) BuildMutation(ctx *compiler.Context, set ast.SelectionSet) er
 }
 
 func (my *Dialect) buildMutationResultJSON(ctx *compiler.Context, m *mutation) {
+	cte := m.cte
+	if cte == "" {
+		cte = m.class.Table
+	}
 	ctx.Write(`JSONB_BUILD_OBJECT(`)
 	next := comma(ctx)
 	for _, selected := range compiler.FieldsOf(m.field.SelectionSet) {
@@ -176,7 +187,7 @@ func (my *Dialect) buildMutationResultJSON(ctx *compiler.Context, m *mutation) {
 		ctx.Write(`'`, selected.Alias, `', `)
 		switch selected.Name {
 		case "affectedCount":
-			ctx.Write(`(SELECT COUNT(*) FROM `).Quote(m.class.Table).Write(`)`)
+			ctx.Write(`(SELECT COUNT(*) FROM `).Quote(cte).Write(`)`)
 		case "returning":
 			if m.unit == nil {
 				ctx.Write(`'[]'`)
@@ -565,7 +576,7 @@ func (my *Dialect) buildPurge(ctx *compiler.Context, m *mutation) error {
 // buildMutationWhere 变更条件：强制要求条件，杜绝误操作全表
 func (my *Dialect) buildMutationWhere(ctx *compiler.Context, class *protocol.Class, field *ast.Field, operation, skipColumn string) error {
 	sc := scope{class: class, qualifier: class.Table}
-	conditions, err := my.collectConditions(field.Arguments)
+	conditions, err := my.collectConditions(ctx, field.Arguments)
 	if err != nil {
 		return err
 	}
@@ -973,7 +984,7 @@ func (my *Dialect) appendFixedPolicy(ctx *compiler.Context, qualifier string, cl
 
 func (my *Dialect) appendUpdatePresets(ctx *compiler.Context, class *protocol.Class, skipColumn string) error {
 	for _, field := range sortedClassFields(class) {
-		if field.Column == "" || field.Column == skipColumn || field.UpdatePreset == nil {
+		if field.Column == "" || field.Column == skipColumn || field.UpdatePreset == nil || auditColumn(field.Column) {
 			continue
 		}
 		ctx.Write(`, `).Quote(field.Column).Write(` = `)
@@ -1087,6 +1098,7 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 				made := ctx.NextIndex()
 				ctx.Write(`, `).Quote(`__c_`, made).Write(` AS (`)
 				my.applyPreset(target, op.create, protocol.OP_INSERT)
+				my.applyAudit(target, op.create, protocol.OP_INSERT)
 				my.applyScope(target, op.create) // 嵌套创建的子行也填作用域
 				if _, err := my.writeInsertValues(ctx, target, op.create); err != nil {
 					return err
@@ -1113,6 +1125,10 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			if err := my.appendUpdatePresets(ctx, target, fk); err != nil {
 				return err
 			}
+			columns := auditColumnsFor(target)
+			if err := my.appendAuditAssignments(ctx, []string{columns.updatedAt, columns.updatedBy}, false); err != nil {
+				return err
+			}
 			ctx.Write(` WHERE `).Quote(pk).Write(` IN (`)
 			if err := params(op.connect); err != nil {
 				return err
@@ -1129,6 +1145,10 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			tableRef(ctx, target.Table)
 			ctx.Write(` SET `).Quote(fk).Write(` = NULL`)
 			if err := my.appendUpdatePresets(ctx, target, fk); err != nil {
+				return err
+			}
+			columns := auditColumnsFor(target)
+			if err := my.appendAuditAssignments(ctx, []string{columns.updatedAt, columns.updatedBy}, false); err != nil {
 				return err
 			}
 			ctx.Write(` WHERE `).Quote(fk).Write(` = `)
@@ -1159,6 +1179,7 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			}
 			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (`)
 			my.applyPreset(target, op.create, protocol.OP_INSERT)
+			my.applyAudit(target, op.create, protocol.OP_INSERT)
 			my.applyScope(target, op.create) // 嵌套创建的子行也填作用域
 			if _, err := my.writeInsertValues(ctx, target, op.create); err != nil {
 				return err

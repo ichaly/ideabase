@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -27,7 +28,28 @@ func WithRLS(config map[string]RLSConfig) TenantGatewayOption {
 	return func(options *tenantGatewayConfig) { options.rls = config }
 }
 
-func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options ...TenantGatewayOption) (*Engine, error) {
+// TenantGateway is a routing runtime. It deliberately does not embed Engine:
+// a gateway has no compiler, database, policy or partially initialized caches.
+type TenantGateway struct {
+	router     *TenantRouter
+	sources    map[string]*Engine
+	snapshot   *Snapshot
+	revocation *RevocationBarrier
+	rls        map[string]RLSConfig
+}
+
+type tenantRLSKey struct{}
+
+func tenantRLSContext(ctx context.Context, source string) context.Context {
+	return context.WithValue(ctx, tenantRLSKey{}, source)
+}
+
+func tenantRLSRequested(ctx context.Context) bool {
+	_, ok := ctx.Value(tenantRLSKey{}).(string)
+	return ok
+}
+
+func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options ...TenantGatewayOption) (*TenantGateway, error) {
 	if router == nil {
 		return nil, fmt.Errorf("tenant router is required")
 	}
@@ -101,15 +123,125 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 			if err := validateRLSTables(target.metadata, rls.Tables); err != nil {
 				return nil, fmt.Errorf("shared-table datasource %s: %w", source, err)
 			}
-			target.rls = true
+			if config.rls == nil {
+				config.rls = make(map[string]RLSConfig)
+			}
+			config.rls[source] = rls
 		}
 	}
-	first := targets[sortedTenantSources(targets)[0]]
-	dispatcher := &Engine{
-		tenantRouter: router, tenantSources: targets, revocation: config.revocation,
-		snapshot: canonical, policy: first.policy, policyBuiltin: first.policyBuiltin,
+	return &TenantGateway{router: router, sources: targets, snapshot: canonical, revocation: config.revocation, rls: config.rls}, nil
+}
+
+func (my *TenantGateway) EndpointID() string { return "tenant-gateway" }
+func (my *TenantGateway) Path() string       { return "/graphql" }
+func (my *TenantGateway) Snapshot() (*Snapshot, error) {
+	if my == nil || my.snapshot == nil {
+		return nil, fmt.Errorf("gql snapshot is unavailable")
 	}
-	return dispatcher, nil
+	return my.snapshot, nil
+}
+func (my *TenantGateway) route(ctx context.Context) (*Engine, context.Context, TenantRoute, error) {
+	if my == nil || my.router == nil {
+		return nil, ctx, TenantRoute{}, fmt.Errorf("tenant gateway is unavailable")
+	}
+	identity, ok := IdentityFromContext(ctx)
+	if !ok {
+		return nil, ctx, TenantRoute{}, fmt.Errorf("verified identity is required for tenant gateway")
+	}
+	route, err := my.router.Resolve(ctx, identity)
+	if err != nil {
+		return nil, ctx, TenantRoute{}, err
+	}
+	if my.revocation != nil {
+		if err := my.revocation.Check(identity, route); err != nil {
+			return nil, ctx, TenantRoute{}, err
+		}
+	}
+	target := my.sources[route.DataSource]
+	if target == nil {
+		return nil, ctx, TenantRoute{}, fmt.Errorf("tenant datasource is unavailable")
+	}
+	ctx = PinRoute(ctx, route)
+	if _, ok := my.rls[route.DataSource]; ok {
+		ctx = tenantRLSContext(ctx, route.DataSource)
+	}
+	return target, ctx, route, nil
+}
+func (my *TenantGateway) Execute(ctx context.Context, query string, variables map[string]any) ([]byte, error) {
+	target, routed, _, err := my.route(ctx)
+	if err != nil {
+		return marshalGatewayError(err)
+	}
+	return target.Execute(routed, query, variables)
+}
+func (my *TenantGateway) ExecuteOperation(ctx context.Context, query string, variables map[string]any, operationName string) ([]byte, error) {
+	target, routed, _, err := my.route(ctx)
+	if err != nil {
+		return marshalGatewayError(err)
+	}
+	return target.ExecuteOperation(routed, query, variables, operationName)
+}
+func (my *TenantGateway) Subscribe(ctx context.Context, query string, variables map[string]any, operationName string) (<-chan []byte, error) {
+	target, routed, route, err := my.route(ctx)
+	if err != nil {
+		return nil, err
+	}
+	routed = withSubscriptionLease(routed, subscriptionLease{Barrier: my.revocation, Route: route})
+	return target.Subscribe(routed, query, variables, operationName)
+}
+func (my *TenantGateway) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) {
+	target, routed, _, err := my.route(ctx)
+	if err != nil {
+		return SchemaArtifact{}, err
+	}
+	return target.EffectiveSchema(routed)
+}
+func (my *TenantGateway) OperationCost(query, operationName string, variables map[string]any) (uint64, error) {
+	if my == nil || len(my.sources) == 0 {
+		return 0, fmt.Errorf("tenant gateway is unavailable")
+	}
+	name := sortedTenantSources(my.sources)[0]
+	return my.sources[name].OperationCost(query, operationName, variables)
+}
+func (my *TenantGateway) Health(ctx context.Context) (HealthReport, error) {
+	if my == nil || len(my.sources) == 0 {
+		return HealthReport{}, fmt.Errorf("tenant gateway is unavailable")
+	}
+	report := HealthReport{Ready: true, SnapshotOK: my.snapshot != nil, DatabaseOK: true, CDCConfigured: true, SubscriptionAvailable: true}
+	if my.snapshot != nil {
+		report.SnapshotFingerprint = my.snapshot.Fingerprint()
+	}
+	var failures []error
+	for _, name := range sortedTenantSources(my.sources) {
+		child, err := my.sources[name].Health(ctx)
+		report.SnapshotOK = report.SnapshotOK && child.SnapshotOK
+		report.DatabaseOK = report.DatabaseOK && child.DatabaseOK
+		report.CDCConfigured = report.CDCConfigured && child.CDCConfigured
+		report.SubscriptionAvailable = report.SubscriptionAvailable && child.SubscriptionAvailable
+		if child.DatabaseError != "" {
+			if report.DatabaseError != "" {
+				report.DatabaseError += "; "
+			}
+			report.DatabaseError += name + ": " + child.DatabaseError
+		}
+		if err != nil || !child.Ready {
+			report.Ready = false
+			if err == nil {
+				err = fmt.Errorf("not ready")
+			}
+			failures = append(failures, fmt.Errorf("tenant datasource %s: %w", name, err))
+		}
+	}
+	return report, errors.Join(failures...)
+}
+func (my *TenantGateway) SubscriptionAvailable() bool {
+	report, err := my.Health(context.Background())
+	return err == nil && report.SubscriptionAvailable
+}
+func (my *TenantGateway) Close() {}
+
+func marshalGatewayError(err error) ([]byte, error) {
+	return marshalSubscriptionReply(gqlReply{Errors: GraphQLErrors(err)}), nil
 }
 
 func sortedTenantSources[T any](sources map[string]T) []string {
@@ -155,28 +287,4 @@ func validateSharedTenantScope(metadata *Metadata) error {
 		}
 	}
 	return nil
-}
-
-func (my *Engine) tenantDispatch(ctx context.Context) (*Engine, context.Context, error) {
-	if my.tenantRouter == nil {
-		return my, ctx, nil
-	}
-	identity, ok := IdentityFromContext(ctx)
-	if !ok {
-		return nil, ctx, fmt.Errorf("verified identity is required for tenant gateway")
-	}
-	route, err := my.tenantRouter.Resolve(ctx, identity)
-	if err != nil {
-		return nil, ctx, err
-	}
-	if my.revocation != nil {
-		if err := my.revocation.Check(identity, route); err != nil {
-			return nil, ctx, err
-		}
-	}
-	target := my.tenantSources[route.DataSource]
-	if target == nil {
-		return nil, ctx, fmt.Errorf("tenant datasource is unavailable")
-	}
-	return target, PinRoute(ctx, route), nil
 }

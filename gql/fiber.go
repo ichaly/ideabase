@@ -1,9 +1,6 @@
 package gql
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/gofiber/fiber/v3"
 )
 
@@ -25,21 +22,7 @@ func (my *Engine) Handler(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 
-	// persisted-only：HTTP边界只接受持久化操作，原始查询文本一律拒绝
-	if my.options().PersistedOnly && strings.TrimSpace(req.Query) != "" {
-		return fiber.NewError(fiber.StatusForbidden, "仅接受持久化操作（省略query，以operationName执行已注册文档）")
-	}
-
-	// 空查询且携带操作名时按持久化查询执行
-	if strings.TrimSpace(req.Query) == "" && req.OperationName != "" {
-		query, ok := my.documents[req.OperationName]
-		if !ok {
-			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("未找到名为'%s'的持久化操作", req.OperationName))
-		}
-		req.Query = query
-	}
-
-	out, err := my.executeBytes(c.Context(), req.Query, req.Variables, req.OperationName)
+	out, err := my.ExecuteOperation(c.Context(), req.Query, req.Variables, req.OperationName)
 	if err != nil {
 		return err
 	}

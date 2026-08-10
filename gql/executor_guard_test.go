@@ -52,3 +52,15 @@ func TestPersistedOnlyHTTP(t *testing.T) {
 	persisted := post(`{"operationName":"UserTotal"}`)
 	assert.Contains(t, persisted, `"total"`, "持久化操作应放行: %s", persisted)
 }
+
+func TestExecuteOperationIsThePersistedOperationBoundary(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	require.NoError(t, executor.loadDocument(`query UserTotal { users { total } }`))
+	body, err := executor.ExecuteOperation(context.Background(), "", nil, "UserTotal")
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"total"`)
+	body, err = executor.ExecuteOperation(context.Background(), `query { users { total } }`, nil, "")
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "持久化")
+}

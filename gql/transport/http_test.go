@@ -137,11 +137,11 @@ func TestRequestErrorUses422AndKeepsGraphQLBody(t *testing.T) {
 	}
 }
 
-func TestPartialExecutionUses294AndKeepsGraphQLBody(t *testing.T) {
+func TestPartialExecutionUses200AndKeepsGraphQLBody(t *testing.T) {
 	ep := &testEndpoint{body: []byte(`{"data":null,"errors":[{"message":"failed"}]}`)}
 	w := httptest.NewRecorder()
 	NewHandler(ep).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
-	if w.Code != 294 || w.Body.String() != string(ep.body) {
+	if w.Code != http.StatusOK || w.Body.String() != string(ep.body) {
 		t.Fatalf("response = %d %s", w.Code, w.Body)
 	}
 }

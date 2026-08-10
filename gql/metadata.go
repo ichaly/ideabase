@@ -183,6 +183,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 
 	// 设置默认配置
 	k.SetDefault("schema.schema", "public")
+	k.SetDefault("schema.catalog-timeout", 30*time.Second)
 	k.SetDefault("schema.default-limit", 10)
 	k.SetDefault("schema.max-depth", 20)
 	k.SetDefault("schema.max-tokens", 15000)
@@ -372,6 +373,7 @@ func (my *Metadata) eachClass(fn func(class *protocol.Class)) {
 // 字段级配置显式指定类型时保留配置（配置是最终裁决的例外通道）
 func (my *Metadata) finalize() {
 	my.eachClass(func(class *protocol.Class) {
+		class.CanonicalizePrimaryKeys()
 		primaryKeys := class.PrimaryKeyFields()
 		for name, field := range class.Fields {
 			if name != field.Name || field.Virtual || my.configured(class, field) {

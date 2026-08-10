@@ -77,6 +77,20 @@ func TestBuiltinPolicyProviderKeepsStablePerRoleBranches(t *testing.T) {
 	require.NotContains(t, decide([]string{"owner"}).Fields[FieldUseSelect], "mutated")
 }
 
+func TestBuiltinPolicyProviderPreservesUnrestrictedRoleBranch(t *testing.T) {
+	provider := NewProtocolPolicyProvider(map[string]map[string]*protocol.Permission{"users": {
+		"reader": {Select: []string{"id"}},
+		"scoped": {Select: []string{"id"}, Filter: []protocol.Predicate{{Column: "tenant_id", Operator: "eq", Context: "tenant"}}},
+	}})
+	identity, err := NewIdentity(IdentityInput{Tenant: "t1", Subject: "u", Roles: []string{"reader", "scoped"}})
+	require.NoError(t, err)
+	decision, err := provider.Decide(context.Background(), PolicyRequest{Identity: identity, Route: TenantRoute{Tenant: "t1"}, Coordinate: "Query.users", Resource: "users", Actions: []string{"select"}, FieldUses: []FieldUse{FieldUseSelect}})
+	require.NoError(t, err)
+	require.Len(t, decision.RoleBranches, 2)
+	require.Equal(t, "reader", decision.RoleBranches[0].Role)
+	require.Empty(t, decision.RoleBranches[0].RowPredicates)
+}
+
 func TestNormalizeDecisionRejectsInvalidRoleBranch(t *testing.T) {
 	request := PolicyRequest{Identity: mustPolicyIdentity(t, "u"), Route: TenantRoute{Tenant: "t1"}, Coordinate: "Query.users", Resource: "users"}
 	request.Actions = []string{"select"}

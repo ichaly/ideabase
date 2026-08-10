@@ -3,7 +3,9 @@ package pgsql
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/compiler"
@@ -29,7 +31,7 @@ func (my scope) column(fieldName string) string {
 
 // buildWhere 构建WHERE子句；conjuncts为前置合取条件（关联/搜索/keyset），与用户条件AND组合
 func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.ArgumentList, conjuncts ...func() error) error {
-	conditions, err := my.collectConditions(args)
+	conditions, err := my.collectConditions(ctx, args)
 	if err != nil {
 		return err
 	}
@@ -139,7 +141,7 @@ func writeKeyEquals(ctx *compiler.Context, sc scope, fields []*protocol.Field, v
 }
 
 // collectConditions 收集可渲染的WHERE条件（id参数转换为主键等值条件；空对象剪枝）
-func (my *Dialect) collectConditions(args ast.ArgumentList) ([]*ast.Value, error) {
+func (my *Dialect) collectConditions(ctx *compiler.Context, args ast.ArgumentList) ([]*ast.Value, error) {
 	var conditions []*ast.Value
 
 	if idArg := args.ForName(protocol.ID); idArg != nil && idArg.Value != nil {
@@ -157,7 +159,21 @@ func (my *Dialect) collectConditions(args ast.ArgumentList) ([]*ast.Value, error
 
 	if whereArg := args.ForName(protocol.WHERE); whereArg != nil && whereArg.Value != nil {
 		if whereArg.Value.Kind == ast.Variable {
-			return nil, fmt.Errorf("where暂不支持整体变量，请内联条件或使用字段级变量")
+			raw, ok := ctx.Variable(whereArg.Value.Raw)
+			if !ok || raw == nil {
+				return nil, fmt.Errorf("where变量 %s 缺失或为null", whereArg.Value.Raw)
+			}
+			value, ok := runtimeWhereValue(raw)
+			if !ok || value.Kind != ast.ObjectValue {
+				return nil, fmt.Errorf("where变量 %s 必须是对象", whereArg.Value.Raw)
+			}
+			// Object shape changes the emitted SQL, so this plan cannot be
+			// reused solely by query text.
+			ctx.MarkVolatile()
+			if renderable(value) {
+				conditions = append(conditions, value)
+			}
+			return conditions, nil
 		}
 		if renderable(whereArg.Value) {
 			conditions = append(conditions, whereArg.Value)
@@ -165,6 +181,62 @@ func (my *Dialect) collectConditions(args ast.ArgumentList) ([]*ast.Value, error
 	}
 
 	return conditions, nil
+}
+
+// runtimeWhereValue converts an already GraphQL-coerced input object back to
+// the small AST shape consumed by the single condition compiler. Keeping one
+// renderer means literal and whole-variable where inputs have identical SQL
+// semantics, including nested and/or/not operators.
+func runtimeWhereValue(raw any) (*ast.Value, bool) {
+	if raw == nil {
+		return &ast.Value{Kind: ast.NullValue, Raw: "null"}, true
+	}
+	rv := reflect.ValueOf(raw)
+	for rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return &ast.Value{Kind: ast.NullValue, Raw: "null"}, true
+		}
+		rv = rv.Elem()
+	}
+	switch rv.Kind() {
+	case reflect.Map:
+		if rv.Type().Key().Kind() != reflect.String {
+			return nil, false
+		}
+		keys := rv.MapKeys()
+		sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+		value := &ast.Value{Kind: ast.ObjectValue, Children: make(ast.ChildValueList, 0, len(keys))}
+		for _, key := range keys {
+			child, ok := runtimeWhereValue(rv.MapIndex(key).Interface())
+			if !ok {
+				return nil, false
+			}
+			value.Children = append(value.Children, &ast.ChildValue{Name: key.String(), Value: child})
+		}
+		return value, true
+	case reflect.Slice, reflect.Array:
+		value := &ast.Value{Kind: ast.ListValue, Children: make(ast.ChildValueList, 0, rv.Len())}
+		for i := 0; i < rv.Len(); i++ {
+			child, ok := runtimeWhereValue(rv.Index(i).Interface())
+			if !ok {
+				return nil, false
+			}
+			value.Children = append(value.Children, &ast.ChildValue{Value: child})
+		}
+		return value, true
+	case reflect.Bool:
+		return &ast.Value{Kind: ast.BooleanValue, Raw: strconv.FormatBool(rv.Bool())}, true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return &ast.Value{Kind: ast.IntValue, Raw: strconv.FormatInt(rv.Int(), 10)}, true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return &ast.Value{Kind: ast.IntValue, Raw: strconv.FormatUint(rv.Uint(), 10)}, true
+	case reflect.Float32, reflect.Float64:
+		return &ast.Value{Kind: ast.FloatValue, Raw: strconv.FormatFloat(rv.Float(), 'g', -1, rv.Type().Bits())}, true
+	case reflect.String:
+		return &ast.Value{Kind: ast.StringValue, Raw: rv.String()}, true
+	default:
+		return nil, false
+	}
 }
 
 // renderable 条件值是否会产出SQL片段；空对象语义为无条件恒真，整体剪枝

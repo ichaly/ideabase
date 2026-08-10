@@ -1,6 +1,10 @@
 package internal
 
-import "github.com/ichaly/ideabase/std"
+import (
+	"time"
+
+	"github.com/ichaly/ideabase/std"
+)
 
 // Config 表示GraphQL配置
 type Config struct {
@@ -33,6 +37,8 @@ type SubscriptionConfig struct {
 type SchemaConfig struct {
 	// 数据库schema
 	Schema string `mapstructure:"schema"`
+	// CatalogTimeout bounds startup metadata queries; zero uses the safe default.
+	CatalogTimeout time.Duration `mapstructure:"catalog-timeout"`
 
 	// GraphQL schema文件路径（配置后优先从文件加载，生产环境推荐）
 	File string `mapstructure:"file"`

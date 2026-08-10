@@ -41,6 +41,60 @@ type cacheEntry struct {
 	value *planEntry
 }
 
+// effectiveCache bounds identity-shaped schema artifacts. Schema construction
+// is relatively expensive and an unbounded map lets high-cardinality tenants
+// retain every shape forever.
+type lruCache[T any] struct {
+	mu    sync.Mutex
+	limit int
+	items map[string]*list.Element
+	order *list.List
+}
+
+type lruCacheEntry[T any] struct {
+	key   string
+	value T
+}
+
+func newLRU[T any](limit int) *lruCache[T] {
+	if limit < 1 {
+		limit = 1
+	}
+	return &lruCache[T]{limit: limit, items: make(map[string]*list.Element, limit), order: list.New()}
+}
+
+func (my *lruCache[T]) Get(key string) (T, bool) {
+	my.mu.Lock()
+	defer my.mu.Unlock()
+	e, ok := my.items[key]
+	if !ok {
+		var zero T
+		return zero, false
+	}
+	my.order.MoveToFront(e)
+	return e.Value.(*lruCacheEntry[T]).value, true
+}
+
+func (my *lruCache[T]) Put(key string, value T) {
+	my.mu.Lock()
+	defer my.mu.Unlock()
+	if e, ok := my.items[key]; ok {
+		e.Value.(*lruCacheEntry[T]).value = value
+		my.order.MoveToFront(e)
+		return
+	}
+	my.items[key] = my.order.PushFront(&lruCacheEntry[T]{key: key, value: value})
+	if my.order.Len() > my.limit {
+		e := my.order.Back()
+		my.order.Remove(e)
+		delete(my.items, e.Value.(*lruCacheEntry[T]).key)
+	}
+}
+
+type effectiveCache = lruCache[*effectiveView]
+
+func newEffectiveCache(limit int) *effectiveCache { return newLRU[*effectiveView](limit) }
+
 // newPlanCache 创建指定容量的计划缓存
 func newPlanCache(limit int) *planCache {
 	return &planCache{

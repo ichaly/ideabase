@@ -90,8 +90,25 @@ type Key struct {
 	Primary bool
 }
 
-// PrimaryKeyFields returns the explicit ordered key, with an IsPrimary
-// fallback for legacy programmatic metadata that predates Class.PrimaryKeys.
+// CanonicalizePrimaryKeys migrates legacy field flags into the ordered class
+// key once at metadata finalization. Runtime consumers should use PrimaryKeys.
+func (class *Class) CanonicalizePrimaryKeys() {
+	if class == nil || len(class.PrimaryKeys) > 0 {
+		return
+	}
+	var names []string
+	for name, field := range class.Fields {
+		if field != nil && name == field.Name && field.IsPrimary {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	class.PrimaryKeys = names
+}
+
+// PrimaryKeyFields returns the ordered class key. The fallback is retained for
+// callers constructing legacy metadata directly; loaded/finalized catalogs use
+// Class.PrimaryKeys as the sole runtime authority.
 func (class *Class) PrimaryKeyFields() []string {
 	if class == nil {
 		return nil

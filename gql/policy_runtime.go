@@ -2,12 +2,14 @@ package gql
 
 import (
 	"context"
+	stdjson "encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/log"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -31,7 +33,7 @@ func (my *Engine) authorizeProvider(ctx context.Context, operation *ast.Operatio
 	}
 	identity, ok := IdentityFromContext(ctx)
 	if !ok {
-		return ctx, fmt.Errorf("verified identity is required for policy")
+		return ctx, publicPolicyFailure("IDENTITY_REQUIRED", "verified identity is required for policy")
 	}
 	route, ok := PinnedRoute(ctx)
 	if !ok {
@@ -50,44 +52,63 @@ func (my *Engine) authorizeProvider(ctx context.Context, operation *ast.Operatio
 			FieldUses: target.uses(), Fields: target.fields,
 			Values: scopeValues(ctx),
 		}
-		decision, err := my.policy.Decide(ctx, request)
-		if err != nil {
-			return ctx, fmt.Errorf("policy %s: %w", coordinate, err)
-		}
-		decision, err = NormalizeDecision(request, decision)
+		decision, err := decidePolicy(ctx, my.policy, request)
 		if err != nil {
 			return ctx, fmt.Errorf("policy %s: %w", coordinate, err)
 		}
 		if revision := identity.PolicyRevision(); revision != 0 && decision.PolicyRevision != revision {
-			return ctx, fmt.Errorf("policy %s revision mismatch: identity=%d decision=%d", coordinate, revision, decision.PolicyRevision)
+			return ctx, fmt.Errorf("policy %s: %w (identity=%d decision=%d)", coordinate, publicPolicyFailure("POLICY_REVISION_MISMATCH", "policy revision mismatch"), revision, decision.PolicyRevision)
 		}
 		if !decision.Allow {
-			return ctx, fmt.Errorf("policy denied %s", coordinate)
+			return ctx, fmt.Errorf("%w: %s", publicPolicyFailure("POLICY_DENIED", "policy denied"), coordinate)
 		}
 		if err := my.validatePolicyBudget(target, decision, operation, variables); err != nil {
-			return ctx, fmt.Errorf("policy denied %s: %w", coordinate, err)
+			return ctx, fmt.Errorf("%w: %s: %v", publicPolicyFailure(policyBudgetCode(err), "policy budget exceeded"), coordinate, err)
 		}
 		if capability.Handler != HandlerSQL && hasRowPolicy(decision) && !capability.PolicyAware {
-			return ctx, fmt.Errorf("policy %s requires a policy-aware handler", coordinate)
+			return ctx, fmt.Errorf("%w: %s", publicPolicyFailure("POLICY_HANDLER_REQUIRED", "policy requires a policy-aware handler"), coordinate)
 		}
 		if target.class != nil {
 			if err := ValidateDecisionCatalog(target.class, decision); err != nil {
-				return ctx, fmt.Errorf("policy %s: %w", coordinate, err)
+				return ctx, fmt.Errorf("%w: %s: %v", publicPolicyFailure("POLICY_CATALOG_INVALID", "policy catalog is invalid"), coordinate, err)
 			}
 			for _, use := range request.FieldUses {
 				for _, field := range request.Fields[use] {
 					if !policyFieldAllowed(target.class, decision.Fields[use], field) {
-						return ctx, fmt.Errorf("policy denied %s field-use=%s field=%s", coordinate, use, field)
+						return ctx, fmt.Errorf("%w: %s field-use=%s field=%s", publicPolicyFailure("POLICY_FIELD_DENIED", "policy denied field"), coordinate, use, field)
 					}
 				}
 			}
 			if err := evaluatePolicyChecks(target, decision, variables, scopeValues(ctx)); err != nil {
-				return ctx, fmt.Errorf("policy denied %s: %w", coordinate, err)
+				return ctx, fmt.Errorf("%w: %s: %v", publicPolicyFailure("POLICY_CHECK_FAILED", "policy check failed"), coordinate, err)
 			}
 		}
 		decisions[coordinate] = decision
 	}
 	return context.WithValue(ctx, policyDecisionsKey{}, decisions), nil
+}
+
+func decidePolicy(ctx context.Context, provider PolicyProvider, request PolicyRequest) (PolicyDecision, error) {
+	decision, err := provider.Decide(ctx, request)
+	if err == nil {
+		decision, err = NormalizeDecision(request, decision)
+	}
+	if err != nil {
+		log.Error().Err(err).Str("coordinate", request.Coordinate).Msg("policy evaluation failed")
+		return PolicyDecision{}, publicPolicyFailure("POLICY_ERROR", "policy evaluation failed")
+	}
+	return decision, nil
+}
+
+func publicPolicyFailure(code, message string) error {
+	return &publicFailure{message: message, code: code}
+}
+
+func policyBudgetCode(err error) string {
+	if strings.HasPrefix(err.Error(), "cost ") {
+		return "QUERY_COST_EXCEEDED"
+	}
+	return "QUERY_LIMIT_EXCEEDED"
 }
 
 func (my *Engine) validatePolicyBudget(target policyTarget, decision PolicyDecision, operation *ast.OperationDefinition, variables map[string]interface{}) error {
@@ -102,6 +123,11 @@ func (my *Engine) validatePolicyBudget(target policyTarget, decision PolicyDecis
 	}
 	for _, node := range target.nodes {
 		limit := my.metadata.DefaultLimit()
+		if limit <= 0 {
+			// Connection lists receive the compiler's bounded fallback even when
+			// schema.default-limit is unset; authorize that effective value too.
+			limit = protocol.DEFAULT_PAGE_SIZE
+		}
 		for _, name := range []string{protocol.LIMIT, protocol.FIRST, protocol.LAST} {
 			if argument := node.Arguments.ForName(name); argument != nil {
 				value, err := argument.Value.Value(variables)
@@ -735,4 +761,22 @@ func policyPlanSignature(decisions map[string]PolicyDecision) string {
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "\x00")
+}
+
+// policyRuntimeSignature extends the plan shape signature with predicate
+// values. Shape caches may reuse SQL, but a subscription lease must expire when
+// the values feeding that SQL change.
+func policyRuntimeSignature(decisions map[string]PolicyDecision) string {
+	parts := make([]string, 0, len(decisions))
+	for coordinate, decision := range decisions {
+		value, _ := stdjson.Marshal(struct {
+			Row      []TypedPredicate
+			Preset   []TypedPredicate
+			Check    []TypedPredicate
+			Branches []RolePolicyBranch
+		}{decision.RowPredicates, decision.Preset, decision.Check, decision.RoleBranches})
+		parts = append(parts, coordinate+"\x00"+string(value))
+	}
+	sort.Strings(parts)
+	return policyPlanSignature(decisions) + "\x00" + strings.Join(parts, "\x00")
 }

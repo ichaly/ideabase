@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -79,4 +80,15 @@ func TestDelegationCodecRejectsWeakConfigurationAndDepth(t *testing.T) {
 	ctx := context.WithValue(WithIdentity(context.Background(), identity), delegationDepthKey{}, 1)
 	_, err = codec.Sign(ctx, "operation")
 	require.ErrorContains(t, err, "depth")
+}
+
+func TestDefaultReplayStoreDoesNotRejectValidTrafficAtAnArbitraryCapacity(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	codec, err := NewDelegationCodec(DelegationConfig{
+		Issuer: "a", Audience: "b", Key: []byte("0123456789abcdef0123456789abcdef"), Clock: func() time.Time { return now },
+	})
+	require.NoError(t, err)
+	for i := 0; i < 5000; i++ {
+		require.True(t, codec.replay.Use(fmt.Sprint(i), now.Add(time.Minute)), "valid token %d was rejected", i)
+	}
 }

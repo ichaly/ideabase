@@ -266,8 +266,12 @@ func (my *Snapshot) Schema() string      { return my.schema }
 func (my *Snapshot) Fingerprint() string { return my.fingerprint }
 
 func (my *Snapshot) Capabilities() []Capability {
-	out := make([]Capability, len(my.capabilities))
-	for i, capability := range my.capabilities {
+	return cloneCapabilities(my.capabilities)
+}
+
+func cloneCapabilities(capabilities []Capability) []Capability {
+	out := make([]Capability, len(capabilities))
+	for i, capability := range capabilities {
 		out[i] = cloneCapability(capability)
 	}
 	return out

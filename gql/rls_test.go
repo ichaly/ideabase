@@ -3,9 +3,11 @@ package gql
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -41,6 +43,38 @@ func TestRLSExecutionUsesTransactionLocalIdentity(t *testing.T) {
 	var tenant string
 	require.NoError(t, db.Raw(`SELECT COALESCE(current_setting('gql.tenant', true), '')`).Scan(&tenant).Error)
 	require.Empty(t, tenant)
+}
+
+func TestRLSActuallyIsolatesRowsForNonBypassRole(t *testing.T) {
+	executor, admin, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	require.NoError(t, admin.Exec(`ALTER TABLE users ADD COLUMN tenant_id text NOT NULL DEFAULT 'tenant-a'`).Error)
+	require.NoError(t, admin.Exec(`INSERT INTO users(name,email,tenant_id) VALUES
+		('A','rls-a@example.com','tenant-a'),('B','rls-b@example.com','tenant-b')`).Error)
+	require.NoError(t, admin.Exec(`ALTER TABLE users ENABLE ROW LEVEL SECURITY`).Error)
+	require.NoError(t, admin.Exec(`CREATE POLICY gql_tenant_users ON users USING (tenant_id = current_setting('gql.tenant', true))`).Error)
+	require.NoError(t, admin.Exec(`CREATE ROLE gql_rls LOGIN PASSWORD 'gql_rls_test' NOSUPERUSER NOBYPASSRLS`).Error)
+	require.NoError(t, admin.Exec(`GRANT USAGE ON SCHEMA public TO gql_rls`).Error)
+	require.NoError(t, admin.Exec(`GRANT SELECT ON users TO gql_rls`).Error)
+
+	dsn := admin.Dialector.(*postgres.Dialector).Config.DSN
+	dsn = strings.Replace(strings.Replace(dsn, "user=test", "user=gql_rls", 1), "password=test", "password=gql_rls_test", 1)
+	restricted, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	defer func() {
+		sqlDB, openErr := restricted.DB()
+		if openErr == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+	executor.database, executor.rls = restricted, true
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-a"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `{ users(sort: {id: ASC}) { items { email } total } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	users := reply.Data["users"].(map[string]any)
+	require.EqualValues(t, 1, users["total"])
+	require.Equal(t, "rls-a@example.com", users["items"].([]any)[0].(map[string]any)["email"])
 }
 
 func TestInspectRLSReadsPostgreSQLCatalog(t *testing.T) {
@@ -79,4 +113,13 @@ func TestRLSIdentityStatementUsesTransactionalParameters(t *testing.T) {
 	require.NotContains(t, stmt.SQL, id.Tenant())
 	require.Equal(t, []any{"gql.tenant", "t' OR true"}, stmt.Args[:2])
 	require.NotContains(t, stmt.SQL, "SET LOCAL")
+}
+
+func TestRLSPreparedMarkerIsScopedToTransaction(t *testing.T) {
+	ctx := context.Background()
+	tx := &gorm.DB{}
+	require.False(t, rlsPrepared(ctx, tx))
+	prepared := markRLSPrepared(ctx, tx)
+	require.True(t, rlsPrepared(prepared, tx))
+	require.False(t, rlsPrepared(prepared, &gorm.DB{}))
 }

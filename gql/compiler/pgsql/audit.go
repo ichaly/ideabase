@@ -1,6 +1,8 @@
 package pgsql
 
 import (
+	"strconv"
+
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
 )
@@ -23,8 +25,9 @@ const AuditOutboxDDL = `CREATE TABLE IF NOT EXISTS gql_audit_outbox (
 )`
 
 type PurgeAudit struct {
-	Resource string
-	Source   string
+	Resource   string
+	Source     string
+	Occurrence int
 }
 
 // AuditWriter appends an audit fact to the mutation CTE graph. Implementations
@@ -48,7 +51,7 @@ func (writer OutboxAuditWriter) WritePurge(ctx *compiler.Context, dialect *Diale
 	revision := dialect.Placeholder(ctx.AddRequiredContextSlot("policyRevision"))
 	ctx.Write(`, `).Quote("__gql_audit_", ctx.NextIndex()).Write(` AS (INSERT INTO `).Quote(table).Write(` (`)
 	ctx.Write(`"event_key", "tenant", "actor", "action", "resource", "request_id", "snapshot", "policy_revision", "affected_count") SELECT `)
-	ctx.Write(request, `::text || ':purge:`, event.Resource, `', `, tenant, `, `, actor, `, 'purge', '`, event.Resource, `', `)
+	ctx.Write(request, `::text || ':' || `, tenant, `::text || ':purge:`, event.Resource, `:`, strconv.Itoa(event.Occurrence), `', `, tenant, `, `, actor, `, 'purge', '`, event.Resource, `', `)
 	ctx.Write(request, `, `, snapshot, `, `, revision, `, COUNT(*) FROM `).Quote(event.Source)
 	ctx.Write(` HAVING COUNT(*) > 0 ON CONFLICT ("event_key") DO NOTHING RETURNING "event_key")`)
 }
@@ -59,7 +62,11 @@ func (my *Dialect) buildPurgeAudit(ctx *compiler.Context, m *mutation) {
 	if writer == nil {
 		writer = OutboxAuditWriter{}
 	}
-	writer.WritePurge(ctx, my, PurgeAudit{Resource: m.class.Name, Source: m.class.Table})
+	source := m.cte
+	if source == "" {
+		source = m.class.Table
+	}
+	writer.WritePurge(ctx, my, PurgeAudit{Resource: m.class.Name, Source: source, Occurrence: m.occurrence})
 }
 
 // auditColumns is derived from the catalog's conventional column names. A

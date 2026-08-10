@@ -5,6 +5,7 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -12,21 +13,7 @@ import (
 // SubscriptionAvailable reports whether the Engine has an executable CDC
 // source for subscriptions.
 func (my *Engine) SubscriptionAvailable() bool {
-	if my == nil {
-		return false
-	}
-	if my.tenantRouter == nil {
-		return my.cdc != nil
-	}
-	if len(my.tenantSources) == 0 {
-		return false
-	}
-	for _, source := range my.tenantSources {
-		if !source.SubscriptionAvailable() {
-			return false
-		}
-	}
-	return true
+	return my != nil && my.cdc != nil
 }
 
 // Subscribe exposes the transport-neutral subscription stream as JSON bytes.
@@ -84,6 +71,25 @@ func (my *Engine) Schema() (string, error) {
 
 // ExecuteOperation executes one named operation from a multi-operation document.
 func (my *Engine) ExecuteOperation(ctx context.Context, query string, variables map[string]any, operationName string) ([]byte, error) {
+	if my == nil {
+		return nil, errors.New("gql engine is unavailable")
+	}
+	if my.options().PersistedOnly {
+		if strings.TrimSpace(query) != "" {
+			return marshalGatewayError(errors.New("仅允许执行持久化操作"))
+		}
+		persisted, ok := my.documents[operationName]
+		if !ok {
+			return marshalGatewayError(fmt.Errorf("未找到名为'%s'的持久化操作", operationName))
+		}
+		query = persisted
+	} else if strings.TrimSpace(query) == "" {
+		if persisted, ok := my.documents[operationName]; ok {
+			query = persisted
+		} else {
+			return marshalGatewayError(fmt.Errorf("未找到名为'%s'的持久化操作", operationName))
+		}
+	}
 	return my.executeBytes(ctx, query, variables, operationName)
 }
 
@@ -113,9 +119,6 @@ func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if my != nil && my.tenantRouter != nil {
-		return my.tenantHealth(ctx)
-	}
 	report := HealthReport{CDCConfigured: my != nil && my.cdc != nil}
 	report.SubscriptionAvailable = report.CDCConfigured
 	if my == nil || (my.schema == nil && my.snapshot == nil) {
@@ -142,23 +145,5 @@ func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 	}
 	report.DatabaseOK = true
 	report.Ready = true
-	return report, nil
-}
-
-func (my *Engine) tenantHealth(ctx context.Context) (HealthReport, error) {
-	report := HealthReport{Ready: true, SnapshotOK: my.snapshot != nil, DatabaseOK: true, CDCConfigured: true, SubscriptionAvailable: true}
-	if my.snapshot != nil {
-		report.SnapshotFingerprint = my.snapshot.Fingerprint()
-	}
-	for _, name := range sortedTenantSources(my.tenantSources) {
-		child, err := my.tenantSources[name].Health(ctx)
-		report.DatabaseOK = report.DatabaseOK && child.DatabaseOK
-		report.CDCConfigured = report.CDCConfigured && child.CDCConfigured
-		report.SubscriptionAvailable = report.SubscriptionAvailable && child.SubscriptionAvailable
-		if err != nil || !child.Ready {
-			report.Ready = false
-			return report, fmt.Errorf("tenant datasource %s is not ready", name)
-		}
-	}
 	return report, nil
 }

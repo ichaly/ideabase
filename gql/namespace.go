@@ -18,6 +18,7 @@ type namespaceContract struct {
 	endpoint         Endpoint
 	publicToChild    map[string]string
 	mutations        map[string]string
+	capabilities     []Capability
 	subscription     bool
 }
 
@@ -46,14 +47,14 @@ func composeNamespaces(namespaces []Namespace) (*ast.Schema, string, map[string]
 			types[name] = definition
 		}
 		query.Fields = append(query.Fields, &ast.FieldDefinition{Name: contract.name, Type: ast.NamedType(contract.prefix+"Query", nil)})
-		capabilities = append(capabilities, Capability{Coordinate: "Query." + contract.name, Parent: "Query", Name: contract.name, Type: contract.prefix + "Query", Handler: HandlerRemote, Planner: "namespace", Cost: 1})
+		capabilities = append(capabilities, namespaceRootCapability(contract, "Query", contract.name, contract.prefix+"Query"))
+		capabilities = append(capabilities, contract.capabilities...)
 		for _, field := range fields {
 			mutation.Fields = append(mutation.Fields, field)
-			capabilities = append(capabilities, Capability{Coordinate: "Mutation." + field.Name, Parent: "Mutation", Name: field.Name, Type: field.Type.String(), Handler: HandlerRemote, Planner: "namespace", Cost: 1})
 		}
 		if contract.subscription {
 			subscription.Fields = append(subscription.Fields, &ast.FieldDefinition{Name: contract.name, Type: ast.NamedType(contract.prefix+"Subscription", nil)})
-			capabilities = append(capabilities, Capability{Coordinate: "Subscription." + contract.name, Parent: "Subscription", Name: contract.name, Type: contract.prefix + "Subscription", Handler: HandlerRemote, Planner: "namespace", Cost: 1})
+			capabilities = append(capabilities, namespaceRootCapability(contract, "Subscription", contract.name, contract.prefix+"Subscription"))
 		}
 	}
 	if len(mutation.Fields) > 0 {
@@ -94,7 +95,7 @@ func importNamespace(namespace Namespace) (*namespaceContract, map[string]*ast.D
 	if id == "" {
 		return nil, nil, nil, fmt.Errorf("namespace %s缺少稳定endpoint identity", namespace.Name)
 	}
-	snapshot, err := namespace.Endpoint.Snapshot()
+	snapshot, err := safelyCall(namespace.Endpoint.Snapshot)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("namespace %s snapshot: %w", namespace.Name, err)
 	}
@@ -163,7 +164,69 @@ func importNamespace(namespace Namespace) (*namespaceContract, map[string]*ast.D
 			contract.subscription = true
 		}
 	}
+	contract.capabilities = renameNamespaceCapabilities(snapshot.Capabilities(), contract, rename)
 	return contract, definitions, mutations, nil
+}
+
+func namespaceRootCapability(contract *namespaceContract, parent, name, typ string) Capability {
+	return Capability{Coordinate: parent + "." + name, Parent: parent, Name: name, Type: typ, Handler: HandlerRemote, Planner: "namespace", Cost: 1}
+}
+
+func (contract *namespaceContract) capability(parent, name string) (Capability, bool) {
+	for _, capability := range contract.capabilities {
+		if capability.Parent == parent && capability.Name == name {
+			return capability, true
+		}
+	}
+	return Capability{}, false
+}
+
+func renameNamespaceCapabilities(source []Capability, contract *namespaceContract, rename map[string]string) []Capability {
+	out := make([]Capability, 0, len(source))
+	for _, capability := range source {
+		mapped := capability
+		switch capability.Parent {
+		case "Query":
+			mapped.Parent = contract.prefix + "Query"
+		case "Mutation":
+			mapped.Parent = "Mutation"
+			mapped.Name = contract.name + "_" + capability.Name
+		case "Subscription":
+			mapped.Parent = contract.prefix + "Subscription"
+		default:
+			mapped.Parent = contract.prefix + capability.Parent
+		}
+		mapped.Coordinate = mapped.Parent + "." + mapped.Name
+		mapped.Type = renameTypeNames(mapped.Type, rename)
+		mapped.Arguments = append([]Argument(nil), capability.Arguments...)
+		for index := range mapped.Arguments {
+			mapped.Arguments[index].Type = renameTypeNames(mapped.Arguments[index].Type, rename)
+		}
+		out = append(out, mapped)
+	}
+	return out
+}
+
+func renameTypeNames(source string, names map[string]string) string {
+	var out strings.Builder
+	for index := 0; index < len(source); {
+		start := index
+		if source[index] == '_' || source[index] >= 'A' && source[index] <= 'Z' || source[index] >= 'a' && source[index] <= 'z' {
+			index++
+			for index < len(source) && (source[index] == '_' || source[index] >= 'A' && source[index] <= 'Z' || source[index] >= 'a' && source[index] <= 'z' || source[index] >= '0' && source[index] <= '9') {
+				index++
+			}
+			if renamed := names[source[start:index]]; renamed != "" {
+				out.WriteString(renamed)
+			} else {
+				out.WriteString(source[start:index])
+			}
+			continue
+		}
+		out.WriteByte(source[index])
+		index++
+	}
+	return out.String()
 }
 
 func builtInDirective(name string) bool {

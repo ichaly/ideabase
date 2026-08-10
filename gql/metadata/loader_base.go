@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -12,6 +13,8 @@ import (
 	"github.com/samber/lo"
 	"gorm.io/gorm"
 )
+
+const defaultCatalogTimeout = 30 * time.Second
 
 // baseLoader 只在包内复用，封装数据库元数据加载的主流程
 // 不对外暴露
@@ -36,7 +39,13 @@ type catalogData struct {
 // 3. 组装为Class结构，处理主键、外键、多对多关系
 // 4. 注入Hoster
 func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface{}) error {
-	rows, err := my.db.Raw(query, args...).Rows()
+	timeout := defaultCatalogTimeout
+	if my.cfg != nil && my.cfg.Schema.CatalogTimeout > 0 {
+		timeout = my.cfg.Schema.CatalogTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	rows, err := my.db.WithContext(ctx).Raw(query, args...).Rows()
 	if err != nil {
 		return fmt.Errorf("执行元数据SQL失败: %w", err)
 	}
@@ -44,15 +53,21 @@ func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface
 
 	var catalog catalogData
 	// 假设rows只返回一行JSON，解析为结构体
-	if rows.Next() {
-		var jsonData []byte
-		if err := rows.Scan(&jsonData); err != nil {
-			return fmt.Errorf("扫描元数据结果失败: %w", err)
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("读取元数据结果失败: %w", err)
 		}
-		// 解析JSON为结构体
-		if err := json.Unmarshal(jsonData, &catalog); err != nil {
-			return fmt.Errorf("解析元数据JSON失败: %w", err)
-		}
+		return fmt.Errorf("元数据SQL未返回catalog结果")
+	}
+	var jsonData []byte
+	if err := rows.Scan(&jsonData); err != nil {
+		return fmt.Errorf("扫描元数据结果失败: %w", err)
+	}
+	if err := json.Unmarshal(jsonData, &catalog); err != nil {
+		return fmt.Errorf("解析元数据JSON失败: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("读取元数据结果失败: %w", err)
 	}
 	return my.loadCatalog(h, catalog)
 }

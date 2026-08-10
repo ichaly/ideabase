@@ -2,8 +2,8 @@
 
 应用主路径统一为 `New` → `Builder` → `Policy`/metadata permissions → `Build` → `Engine`；
 低级构造器不再是运行时装配入口。
-`NewResolver` 与 Fiber `Bind`。新代码统一使用 `New(...).Build()`，运行时类型只有
-`Engine`。
+自定义业务统一注册 `Resolver`，Fiber 使用 `Bind`。单数据源使用 `Engine`；多租户数据源
+路由使用 `TenantGateway`，跨引擎命名空间组合使用 `Gateway`，三者都经由同一执行契约暴露。
 
 ## 1. 先升级引擎，再迁调用方
 
@@ -18,8 +18,8 @@ GOWORK=off go test ./internal/modules/gql/api ./internal/modules/bot/api
 ## 2. 收紧生产边界
 
 `Builder` 默认 fail-closed。为每个生产实体声明 `operations` 与 `permissions`，由认证层
-构造 `gql.Identity`/scope；不要接受客户端传入的 tenant、role 或 actor。只在可信本地工具
-请为本地工具也配置私有 PolicyProvider；生产代码不得绕过 fail-closed policy。
+构造 `gql.Identity`/scope；不要接受客户端传入的 tenant、role 或 actor。本地工具也要配置
+私有 PolicyProvider；生产代码不得绕过 fail-closed policy。
 
 推荐顺序：先部署完整权限配置与身份注入，观察拒绝指标，再逐步切换实例。
 

@@ -39,6 +39,16 @@ func TestOperationCostUsesCapabilityAndSaturates(t *testing.T) {
 	require.Equal(t, maxUint64, saturatingAdd(maxUint64, 1))
 }
 
+func TestOperationCostCountsAbstractInlineFragment(t *testing.T) {
+	op := &ast.OperationDefinition{SelectionSet: ast.SelectionSet{&ast.Field{
+		Name: "node", Definition: &ast.FieldDefinition{Type: &ast.Type{NamedType: "Node"}}, SelectionSet: ast.SelectionSet{
+			&ast.InlineFragment{TypeCondition: "User", SelectionSet: ast.SelectionSet{&ast.Field{Name: "name"}}},
+		},
+	}}}
+	require.Equal(t, uint64(2), operationCost(op, nil, 0, nil))
+	require.Equal(t, 2, depthOf(op.SelectionSet))
+}
+
 func TestOperationCostUsesCoercedBoundsAndBulkInput(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()

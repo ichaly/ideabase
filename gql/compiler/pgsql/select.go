@@ -195,7 +195,7 @@ func (my *Dialect) buildConnectionWrap(ctx *compiler.Context, u *unit) error {
 	if page == nil {
 		limit := ctx.DefaultLimit()
 		if limit <= 0 {
-			limit = 20
+			limit = protocol.DEFAULT_PAGE_SIZE
 		}
 		u.args = append(u.args, &ast.Argument{Name: protocol.FIRST, Value: &ast.Value{Kind: ast.IntValue, Raw: strconv.Itoa(limit)}})
 		page, err = newPager(scope{class: u.class}, u.args)

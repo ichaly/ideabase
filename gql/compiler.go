@@ -39,7 +39,16 @@ func (my *Compiler) freeze(m *Metadata) (*Compiler, error) {
 	if my == nil {
 		return nil, nil
 	}
-	return NewCompiler(m, []compiler.Dialect{my.dialect})
+	frozen := *my
+	frozen.meta = m
+	if m != nil {
+		fingerprint, err := m.CatalogFingerprint()
+		if err != nil {
+			return nil, err
+		}
+		frozen.cursorFingerprint = fingerprint
+	}
+	return &frozen, nil
 }
 
 // Plan 编译产物：SQL + 参数槽位 + 变量默认值 + resolver绑定
@@ -102,8 +111,13 @@ func (my *Plan) ResolveArgs(variables, scope map[string]interface{}) ([]any, err
 func depthOf(set ast.SelectionSet) int {
 	deepest := 0
 	for _, s := range set {
-		if f, ok := s.(*ast.Field); ok {
-			if d := depthOf(f.SelectionSet) + 1; d > deepest {
+		switch node := s.(type) {
+		case *ast.Field:
+			if d := depthOf(node.SelectionSet) + 1; d > deepest {
+				deepest = d
+			}
+		case *ast.InlineFragment:
+			if d := depthOf(node.SelectionSet); d > deepest {
 				deepest = d
 			}
 		}

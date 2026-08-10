@@ -77,6 +77,10 @@ func (my *runtimeEndpoint) Execute(ctx context.Context, _ string, _ map[string]a
 	return []byte(`{"data":{"hello":"world"}}`), nil
 }
 
+func (my *runtimeEndpoint) ExecuteOperation(ctx context.Context, query string, vars map[string]any, _ string) ([]byte, error) {
+	return my.Execute(ctx, query, vars)
+}
+
 func TestRemoteEndpointAcceptsPartialGraphQLResponseStatus(t *testing.T) {
 	snapshot := newArtifact(t, "type Query { hello: String }")
 	endpoint := &runtimeEndpoint{snapshot: snapshot, body: []byte(`{"data":{"hello":null},"errors":[{"message":"failed","path":["hello"]}]}`)}

@@ -1,6 +1,7 @@
 package gql
 
 import (
+	"container/heap"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -72,7 +73,7 @@ func NewDelegationCodec(config DelegationConfig) (*DelegationCodec, error) {
 	}
 	replay := config.Replay
 	if replay == nil {
-		replay = &memoryReplayStore{clock: config.Clock, tokens: make(map[string]time.Time), limit: 4096}
+		replay = &memoryReplayStore{clock: config.Clock, tokens: make(map[string]time.Time)}
 	}
 	config.Key = append([]byte(nil), config.Key...)
 	return &DelegationCodec{config: config, replay: replay}, nil
@@ -153,21 +154,41 @@ type memoryReplayStore struct {
 	mu     sync.Mutex
 	clock  func() time.Time
 	tokens map[string]time.Time
-	limit  int
+	expiry replayExpiryHeap
 }
 
 func (my *memoryReplayStore) Use(id string, expiry time.Time) bool {
 	my.mu.Lock()
 	defer my.mu.Unlock()
 	now := my.clock()
-	for key, expires := range my.tokens {
-		if !expires.After(now) {
-			delete(my.tokens, key)
+	for len(my.expiry) > 0 && !my.expiry[0].expiry.After(now) {
+		item := heap.Pop(&my.expiry).(replayExpiry)
+		if current, ok := my.tokens[item.id]; ok && current.Equal(item.expiry) {
+			delete(my.tokens, item.id)
 		}
 	}
-	if _, exists := my.tokens[id]; exists || len(my.tokens) >= my.limit {
+	if _, exists := my.tokens[id]; exists {
 		return false
 	}
 	my.tokens[id] = expiry
+	heap.Push(&my.expiry, replayExpiry{id: id, expiry: expiry})
 	return true
+}
+
+type replayExpiry struct {
+	id     string
+	expiry time.Time
+}
+
+type replayExpiryHeap []replayExpiry
+
+func (h replayExpiryHeap) Len() int           { return len(h) }
+func (h replayExpiryHeap) Less(i, j int) bool { return h[i].expiry.Before(h[j].expiry) }
+func (h replayExpiryHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *replayExpiryHeap) Push(value any)    { *h = append(*h, value.(replayExpiry)) }
+func (h *replayExpiryHeap) Pop() any {
+	old := *h
+	last := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return last
 }

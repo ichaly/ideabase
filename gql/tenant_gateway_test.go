@@ -67,6 +67,16 @@ func TestTenantGatewayRoutesBeforeHandlerAndCache(t *testing.T) {
 	require.Equal(t, int32(1), bCalls.Load())
 }
 
+func TestTenantGatewayOwnsRuntimeInsteadOfHalfInitializedEngine(t *testing.T) {
+	engine := tenantTestEngine(t, "a", new(atomic.Int32))
+	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Routes: map[string]TenantRoute{"a": {DataSource: "a"}}})
+	require.NoError(t, err)
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"a": engine})
+	require.NoError(t, err)
+	require.IsType(t, &TenantGateway{}, gateway)
+	require.False(t, engine.rls)
+}
+
 func TestTenantGatewayRejectsBeforeHandler(t *testing.T) {
 	var calls atomic.Int32
 	engine := tenantTestEngine(t, "a", &calls)
@@ -183,7 +193,7 @@ func TestTenantGatewaySharedTableRequiresTenantScopeOrExplicitGlobal(t *testing.
 		Tables: []RLSTable{{Name: "accounts", Protected: true, HasPolicy: true}},
 	}}))
 	require.NoError(t, err)
-	require.True(t, engine.rls)
+	require.False(t, engine.rls, "gateway assembly must not mutate a built child engine")
 	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{scoped: true})}, WithRLS(map[string]RLSConfig{"db": {
 		Role: RLSRole{BypassRLS: true}, Tables: []RLSTable{{Name: "accounts", Protected: true, HasPolicy: true}},
 	}}))

@@ -29,7 +29,7 @@ func TestGQLErrorsSanitizeDatabaseAndContextFailures(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := gqlErrors(test.err)
+			got := GraphQLErrors(test.err)
 			require.Len(t, got, 1)
 			require.Equal(t, test.code, got[0].Extensions["code"])
 			require.NotContains(t, got[0].Message, "secret")
@@ -38,7 +38,12 @@ func TestGQLErrorsSanitizeDatabaseAndContextFailures(t *testing.T) {
 }
 
 func TestGQLErrorsKeepOrdinaryPublicError(t *testing.T) {
-	got := gqlErrors(fmt.Errorf("invalid filter"))
+	got := GraphQLErrors(fmt.Errorf("invalid filter"))
 	require.Equal(t, "invalid filter", got[0].Message)
 	require.Empty(t, got[0].Extensions)
+}
+
+func TestGQLErrorsPreserveStableCodeThroughWrapping(t *testing.T) {
+	got := GraphQLErrors(fmt.Errorf("policy context: %w", &publicFailure{message: "denied", code: "FORBIDDEN"}))
+	require.Equal(t, "FORBIDDEN", got[0].Extensions["code"])
 }

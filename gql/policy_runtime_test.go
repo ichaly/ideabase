@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -10,6 +11,21 @@ import (
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
+
+func TestPolicyProviderFailureDoesNotLeakInternalDetails(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{}, errors.New("secret policy backend DSN")
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users { total } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "policy evaluation failed")
+	require.Contains(t, string(body), "POLICY_ERROR")
+	require.NotContains(t, string(body), "secret policy backend DSN")
+}
 
 func emptyMetadata(t *testing.T) *Metadata {
 	t.Helper()
@@ -311,6 +327,20 @@ func TestPolicyProviderEnforcesRequestLimitBeforeSQL(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(body), "limit 2 exceeds 1")
 	require.NotContains(t, string(body), `"data"`)
+}
+
+func TestPolicyProviderEnforcesImplicitListLimitWhenDefaultIsUnset(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	executor.metadata.cfg.Schema.DefaultLimit = 0
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{Allow: true, Fields: request.Fields, Limit: 1}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users { items { id } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "limit 20 exceeds 1")
 }
 
 func TestBuiltinPermissionsFilterEffectiveIntrospection(t *testing.T) {

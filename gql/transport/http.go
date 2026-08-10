@@ -22,11 +22,11 @@ import (
 
 // Endpoint is the transport-neutral execution contract implemented by gql.Engine and gql.Gateway.
 type Endpoint interface {
-	Execute(context.Context, string, map[string]any) ([]byte, error)
+	ExecuteOperation(context.Context, string, map[string]any, string) ([]byte, error)
 }
 
-type operationEndpoint interface {
-	ExecuteOperation(context.Context, string, map[string]any, string) ([]byte, error)
+type snapshotPinner interface {
+	ForSnapshot(string) (core.Endpoint, error)
 }
 
 // Options controls the HTTP resource limits. Zero values use safe defaults.
@@ -135,7 +135,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if req.Query == "" {
+	// A blank query is a valid persisted-operation request when the endpoint
+	// supports it; policy enforcement remains in the endpoint.
+	if req.Query == "" && req.OperationName == "" {
 		http.Error(w, "query is required", http.StatusUnprocessableEntity)
 		return
 	}
@@ -162,22 +164,38 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	execution := h.endpoint
 	if revision := r.Header.Get("GQL-Snapshot"); revision != "" {
-		source, ok := h.endpoint.(manifestEndpoint)
-		if !ok {
-			http.Error(w, "snapshot pinning unavailable", http.StatusConflict)
-			return
-		}
-		snapshot, snapshotErr := source.Snapshot()
-		if snapshotErr != nil || snapshot.Fingerprint() != revision {
-			http.Error(w, "snapshot revision changed", http.StatusConflict)
-			return
+		if pinner, ok := h.endpoint.(snapshotPinner); ok {
+			pinned, pinErr := pinner.ForSnapshot(revision)
+			var executable bool
+			execution, executable = pinned.(Endpoint)
+			if pinErr != nil || !executable {
+				http.Error(w, "snapshot revision changed", http.StatusConflict)
+				return
+			}
+		} else {
+			source, ok := h.endpoint.(manifestEndpoint)
+			if !ok {
+				http.Error(w, "snapshot pinning unavailable", http.StatusConflict)
+				return
+			}
+			snapshot, snapshotErr := source.Snapshot()
+			if snapshotErr != nil || snapshot == nil || snapshot.Fingerprint() != revision {
+				http.Error(w, "snapshot revision changed", http.StatusConflict)
+				return
+			}
 		}
 	}
-	kind, status, operationErr := requestOperation(req.Query, req.OperationName)
-	if operationErr != nil {
-		writeGraphQLRequestError(w, status, operationErr, responseMedia)
-		return
+	kind := ast.Query
+	if req.Query != "" {
+		var status int
+		var operationErr error
+		kind, status, operationErr = requestOperation(req.Query, req.OperationName)
+		if operationErr != nil {
+			writeGraphQLRequestError(w, status, operationErr, responseMedia)
+			return
+		}
 	}
 	if r.Method == http.MethodGet && kind != ast.Query {
 		w.Header().Set("Allow", "POST")
@@ -186,11 +204,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var body []byte
 	var err error
-	if named, ok := h.endpoint.(operationEndpoint); ok {
-		body, err = named.ExecuteOperation(ctx, req.Query, req.Variables, req.OperationName)
-	} else {
-		body, err = h.endpoint.Execute(ctx, req.Query, req.Variables)
-	}
+	body, err = execution.ExecuteOperation(ctx, req.Query, req.Variables, req.OperationName)
 	if len(body) != 0 {
 		if int64(len(body)) > h.options.MaxResponseBytes {
 			writeGraphQLError(w, http.StatusInternalServerError, fmt.Errorf("GraphQL response exceeds configured limit"))
@@ -321,9 +335,7 @@ func writeGraphQL(w http.ResponseWriter, body []byte, mediaType string) bool {
 		return false
 	}
 	status := http.StatusOK
-	if data && errors {
-		status = 294
-	} else if !data {
+	if !data {
 		status = http.StatusUnprocessableEntity
 	}
 	if mediaType == "application/json" {
@@ -346,7 +358,7 @@ func writeGraphQLRequestError(w http.ResponseWriter, status int, err error, medi
 }
 
 func writeGraphQLError(w http.ResponseWriter, status int, err error) {
-	body, _ := json.Marshal(map[string]any{"errors": []map[string]string{{"message": err.Error()}}})
+	body, _ := json.Marshal(map[string]any{"errors": core.GraphQLErrors(err)})
 	// Failures that prevent a GraphQL response use ordinary JSON as required by
 	// GraphQL-over-HTTP; execution errors already arrive as endpoint bodies.
 	w.Header().Set("Content-Type", "application/json")

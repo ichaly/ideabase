@@ -156,7 +156,7 @@ func (my *_DialectSuite) TestGovernanceRelationUpdateInjectsTargetPolicy() {
 	sql, _, err := compile.Build(doc.Operations[0], nil)
 	my.Require().NoError(err)
 	my.Contains(sql, `UPDATE "public"."sys_post" SET "user_id"`)
-	my.Contains(sql, `"updated_at" = $`)
+	my.Contains(sql, `"updated_at" = CURRENT_TIMESTAMP`)
 	my.Contains(sql, `"sys_post"."owner_id" = $`)
 }
 
@@ -211,6 +211,7 @@ func (h testHoster) LookupOperation(coordinate string) (compiler.OperationSpec, 
 		"Mutation.deleteUser":       {Operation: protocol.OP_DELETE},
 		"Mutation.deleteUserByPk":   {Operation: protocol.OP_DELETE, Shape: compiler.ShapeSingleByPK},
 		"Mutation.deleteUsersMany":  {Operation: protocol.OP_DELETE, Shape: compiler.ShapeBulkResult},
+		"Mutation.purgeUserByPk":    {Operation: protocol.OP_PURGE, Shape: compiler.ShapeSingleByPK},
 		"Mutation.restoreUserByPk":  {Operation: protocol.OP_RESTORE, Shape: compiler.ShapeSingleByPK},
 		"Mutation.restoreUsersMany": {Operation: protocol.OP_RESTORE, Shape: compiler.ShapeBulkResult},
 	}

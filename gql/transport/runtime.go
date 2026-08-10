@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -94,18 +95,26 @@ type RemoteEndpoint struct {
 	signer   interface {
 		Sign(context.Context, string) (string, error)
 	}
-	maxResponse           int64
-	timeout               time.Duration
-	subscribe             string
-	health                string
-	subscriptionAvailable atomic.Bool
-	healthAvailable       atomic.Bool
-	snapshot              atomic.Pointer[core.Snapshot]
+	maxResponse int64
+	timeout     time.Duration
+	subscribe   string
+	health      string
+	state       atomic.Pointer[remoteState]
+}
+
+// remoteState is published as one pointer so snapshot, subscription and
+// health capability bits always describe the same manifest revision.
+type remoteState struct {
+	snapshot              *core.Snapshot
+	subscriptionAvailable bool
+	healthAvailable       bool
 }
 
 type remoteRevision struct {
-	endpoint *RemoteEndpoint
-	snapshot *core.Snapshot
+	endpoint              *RemoteEndpoint
+	snapshot              *core.Snapshot
+	subscriptionAvailable bool
+	healthAvailable       bool
 }
 
 func (my *remoteRevision) EndpointID() string                { return my.endpoint.id }
@@ -113,12 +122,26 @@ func (my *remoteRevision) Snapshot() (*core.Snapshot, error) { return my.snapsho
 func (my *remoteRevision) Execute(ctx context.Context, query string, variables map[string]any) ([]byte, error) {
 	return my.endpoint.executeOperation(ctx, query, variables, "", my.snapshot.Fingerprint())
 }
+func (my *remoteRevision) ExecuteOperation(ctx context.Context, query string, variables map[string]any, operationName string) ([]byte, error) {
+	return my.endpoint.executeOperation(ctx, query, variables, operationName, my.snapshot.Fingerprint())
+}
 func (my *remoteRevision) Subscribe(ctx context.Context, query string, variables map[string]any, operationName string) (<-chan []byte, error) {
+	if !my.subscriptionAvailable {
+		return nil, fmt.Errorf("remote subscription unavailable for snapshot")
+	}
 	return my.endpoint.subscribeOperation(ctx, query, variables, operationName, my.snapshot.Fingerprint())
 }
-func (my *remoteRevision) HealthAvailable() bool { return my.endpoint.HealthAvailable() }
+func (my *remoteRevision) SubscriptionAvailable() bool { return my.subscriptionAvailable }
+func (my *remoteRevision) HealthAvailable() bool       { return my.healthAvailable }
 func (my *remoteRevision) Health(ctx context.Context) (core.HealthReport, error) {
-	return my.endpoint.Health(ctx)
+	report, err := my.endpoint.Health(ctx)
+	if report.SnapshotFingerprint != my.snapshot.Fingerprint() {
+		report.Ready, report.SnapshotOK = false, false
+		if err == nil {
+			err = fmt.Errorf("remote health snapshot mismatch")
+		}
+	}
+	return report, err
 }
 
 func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpoint, error) {
@@ -133,8 +156,7 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 		urls = append(urls, options.HealthURL)
 	}
 	for _, raw := range urls {
-		parsed, err := url.Parse(raw)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !(options.AllowHTTP && parsed.Scheme == "http")) {
+		if !remoteURLAllowed(raw, options.AllowHTTP) {
 			return nil, fmt.Errorf("remote endpoint URL is not allowed: %s", raw)
 		}
 	}
@@ -163,25 +185,43 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 	return remote, nil
 }
 
+func remoteURLAllowed(raw string, allowHTTP bool) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	if parsed.Scheme == "https" {
+		return true
+	}
+	host := parsed.Hostname()
+	return allowHTTP && parsed.Scheme == "http" && (strings.EqualFold(host, "localhost") || net.ParseIP(host).IsLoopback())
+}
+
 func (my *RemoteEndpoint) EndpointID() string { return my.id }
 
-func (my *RemoteEndpoint) SubscriptionAvailable() bool { return my.subscriptionAvailable.Load() }
-func (my *RemoteEndpoint) HealthAvailable() bool       { return my.healthAvailable.Load() }
+func (my *RemoteEndpoint) SubscriptionAvailable() bool {
+	state := my.state.Load()
+	return state != nil && state.subscriptionAvailable
+}
+func (my *RemoteEndpoint) HealthAvailable() bool {
+	state := my.state.Load()
+	return state != nil && state.healthAvailable
+}
 
 func (my *RemoteEndpoint) Snapshot() (*core.Snapshot, error) {
-	snapshot := my.snapshot.Load()
-	if snapshot == nil {
+	state := my.state.Load()
+	if state == nil || state.snapshot == nil {
 		return nil, fmt.Errorf("remote snapshot unavailable")
 	}
-	return snapshot, nil
+	return state.snapshot, nil
 }
 
 func (my *RemoteEndpoint) ForSnapshot(fingerprint string) (core.Endpoint, error) {
-	snapshot, err := my.Snapshot()
-	if err != nil || snapshot.Fingerprint() != fingerprint {
+	state := my.state.Load()
+	if state == nil || state.snapshot == nil || state.snapshot.Fingerprint() != fingerprint {
 		return nil, fmt.Errorf("remote snapshot revision unavailable")
 	}
-	return &remoteRevision{endpoint: my, snapshot: snapshot}, nil
+	return &remoteRevision{endpoint: my, snapshot: state.snapshot, subscriptionAvailable: state.subscriptionAvailable, healthAvailable: state.healthAvailable}, nil
 }
 
 // Refresh atomically installs a fully validated manifest or retains the LKG snapshot.
@@ -223,9 +263,7 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	my.snapshot.Store(snapshot)
-	my.subscriptionAvailable.Store(manifest.Subscription)
-	my.healthAvailable.Store(manifest.Health)
+	my.state.Store(&remoteState{snapshot: snapshot, subscriptionAvailable: manifest.Subscription, healthAvailable: manifest.Health})
 	return nil
 }
 
@@ -306,21 +344,56 @@ func (my *RemoteEndpoint) subscribeOperation(ctx context.Context, query string, 
 		}
 		request.Header.Set("Authorization", "GQL-Delegation "+token)
 	}
-	response, err := my.client.Do(request)
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	request = request.WithContext(streamCtx)
+	result := make(chan struct {
+		response *http.Response
+		err      error
+	}, 1)
+	go func() {
+		response, err := my.client.Do(request)
+		if streamCtx.Err() != nil && response != nil {
+			response.Body.Close()
+			response = nil
+		}
+		result <- struct {
+			response *http.Response
+			err      error
+		}{response, err}
+	}()
+	timer := time.NewTimer(my.timeout)
+	defer timer.Stop()
+	var resultValue struct {
+		response *http.Response
+		err      error
+	}
+	select {
+	case resultValue = <-result:
+	case <-timer.C:
+		cancelStream()
+		return nil, fmt.Errorf("remote subscription handshake timeout")
+	}
+	response, err := resultValue.response, resultValue.err
 	if err != nil {
+		cancelStream()
 		return nil, fmt.Errorf("remote subscription unavailable: %w", err)
 	}
 	if response.StatusCode != http.StatusOK {
+		cancelStream()
 		response.Body.Close()
 		return nil, fmt.Errorf("remote subscription status %d", response.StatusCode)
 	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType != "text/event-stream" {
+		cancelStream()
 		response.Body.Close()
 		return nil, fmt.Errorf("remote subscription content type %q", mediaType)
 	}
 	events := make(chan []byte, 1)
-	go my.readSubscription(ctx, response.Body, events)
+	go func() {
+		defer cancelStream()
+		my.readSubscription(ctx, response.Body, events)
+	}()
 	return events, nil
 }
 
@@ -336,10 +409,15 @@ func (my *RemoteEndpoint) readSubscription(ctx context.Context, body io.ReadClos
 		case strings.HasPrefix(line, "event:"):
 			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
+			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if int64(len(data)+len(payload)+1) > my.maxResponse {
+				sendStreamError(ctx, events, "remote subscription response limit exceeded")
+				return
+			}
 			if len(data) > 0 {
 				data = append(data, '\n')
 			}
-			data = append(data, strings.TrimSpace(strings.TrimPrefix(line, "data:"))...)
+			data = append(data, payload...)
 		case line == "":
 			if event == "complete" {
 				return
@@ -356,10 +434,15 @@ func (my *RemoteEndpoint) readSubscription(ctx context.Context, body io.ReadClos
 		}
 	}
 	if scanner.Err() != nil && ctx.Err() == nil {
-		select {
-		case events <- []byte(`{"errors":[{"message":"remote subscription stream failed"}]}`):
-		case <-ctx.Done():
-		}
+		sendStreamError(ctx, events, "remote subscription stream failed")
+	}
+}
+
+func sendStreamError(ctx context.Context, events chan<- []byte, message string) {
+	frame, _ := json.Marshal(map[string]any{"errors": []map[string]any{{"message": message, "extensions": map[string]any{"code": "BAD_GATEWAY_RESPONSE"}}}})
+	select {
+	case events <- frame:
+	case <-ctx.Done():
 	}
 }
 

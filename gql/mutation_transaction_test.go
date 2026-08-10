@@ -72,6 +72,17 @@ func TestRootExecutionKeepsDefaultFastPaths(t *testing.T) {
 	require.True(t, executor.needsRootExecution(&ast.OperationDefinition{
 		Operation: ast.Mutation, SelectionSet: ast.SelectionSet{field("createUser"), field("createPost")},
 	}))
+	require.True(t, executor.needsRootExecution(&ast.OperationDefinition{
+		Operation: ast.Mutation, SelectionSet: ast.SelectionSet{field("__typename")},
+	}))
+}
+
+func TestMutationTypenameDoesNotRequireSQLMutation(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	reply := executor.run(context.Background(), `mutation { root: __typename }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, "Mutation", reply.Data["root"])
 }
 
 func TestMutationFailureRollsBackEarlierRootFields(t *testing.T) {

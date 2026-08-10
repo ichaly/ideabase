@@ -2,8 +2,8 @@ package gql
 
 import (
 	"context"
-	stdjson "encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -22,6 +22,7 @@ type SchemaArtifact struct {
 	PermissionSignature   string
 	PolicyRevision        uint64
 	RouteRevision         uint64
+	Capabilities          []Capability
 }
 
 type SchemaProfile struct {
@@ -74,12 +75,18 @@ func CheckProfileCompatibility(previous, next SchemaProfile) error {
 			breaking = append(breaking, "removed type "+name)
 			continue
 		}
+		if newType.Kind != oldType.Kind {
+			breaking = append(breaking, "changed type kind "+name)
+			continue
+		}
 		for _, oldField := range oldType.Fields {
 			newField := newType.Fields.ForName(oldField.Name)
 			if newField == nil {
 				breaking = append(breaking, "removed field "+name+"."+oldField.Name)
 			} else if newField.Type.String() != oldField.Type.String() {
 				breaking = append(breaking, "changed field "+name+"."+oldField.Name)
+			} else if oldType.Kind == ast.InputObject && oldField.DefaultValue != nil && newField.DefaultValue == nil && newField.Type.NonNull {
+				breaking = append(breaking, "removed required input default "+name+"."+oldField.Name)
 			} else if oldType.Kind != ast.InputObject {
 				breaking = append(breaking, incompatibleArguments(name+"."+oldField.Name, oldField.Arguments, newField.Arguments)...)
 			}
@@ -114,6 +121,8 @@ func incompatibleArguments(coordinate string, before, after ast.ArgumentDefiniti
 			breaking = append(breaking, "removed argument "+coordinate+"("+argument.Name+")")
 		} else if next.Type.String() != argument.Type.String() {
 			breaking = append(breaking, "changed argument "+coordinate+"("+argument.Name+")")
+		} else if argument.DefaultValue != nil && next.DefaultValue == nil && next.Type.NonNull {
+			breaking = append(breaking, "removed required argument default "+coordinate+"("+argument.Name+")")
 		}
 	}
 	for _, argument := range after {
@@ -139,13 +148,6 @@ var allFieldUses = []FieldUse{
 // EffectiveSchema returns the exact identity-specific schema artifact used by
 // introspection. Runtime authorization remains mandatory on every handler.
 func (my *Engine) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) {
-	if my.tenantRouter != nil {
-		target, routed, err := my.tenantDispatch(ctx)
-		if err != nil {
-			return SchemaArtifact{}, err
-		}
-		return target.EffectiveSchema(routed)
-	}
 	if _, err := my.Snapshot(); err != nil {
 		return SchemaArtifact{}, err
 	}
@@ -153,7 +155,9 @@ func (my *Engine) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) {
 	if err != nil {
 		return SchemaArtifact{}, err
 	}
-	return view.artifact, nil
+	artifact := view.artifact
+	artifact.Capabilities = cloneCapabilities(artifact.Capabilities)
+	return artifact, nil
 }
 
 func (my *Engine) effectiveIntrospection(ctx context.Context) (*intro.Handler, error) {
@@ -165,8 +169,7 @@ func (my *Engine) effectiveIntrospection(ctx context.Context) (*intro.Handler, e
 }
 
 func (my *Engine) effectiveSchema(ctx context.Context) (*effectiveView, error) {
-	_, err := my.Snapshot()
-	if err != nil {
+	if _, err := my.Snapshot(); err != nil {
 		return nil, err
 	}
 	provider, identity, builtin, err := my.effectivePolicy(ctx)
@@ -176,16 +179,33 @@ func (my *Engine) effectiveSchema(ctx context.Context) (*effectiveView, error) {
 	if provider == nil {
 		return my.baseView, nil
 	}
-	key := my.effectiveSchemaKey(ctx, identity)
-	cacheable := builtin || identity.PolicyRevision() != 0
-	if cacheable {
-		my.effectiveMu.Lock()
-		cached := my.effective[key]
-		my.effectiveMu.Unlock()
-		if cached != nil {
+	if my.effectiveCache == nil {
+		my.effectiveCache = newEffectiveCache(128)
+	}
+	cacheable := builtin
+	if !builtin {
+		_, cacheable = effectiveProviderCacheIdentity(ctx, provider, identity)
+	}
+	key := my.effectiveSchemaKey(ctx, identity, provider)
+	if !cacheable {
+		return my.effectiveSchemaBuild(ctx, provider, identity, "", false)
+	}
+	if cached, ok := my.effectiveCache.Get(key); ok {
+		return cached, nil
+	}
+	value, err, _ := my.effectiveFlight.Do(key, func() (any, error) {
+		if cached, ok := my.effectiveCache.Get(key); ok {
 			return cached, nil
 		}
+		return my.effectiveSchemaBuild(ctx, provider, identity, key, true)
+	})
+	if err != nil {
+		return nil, err
 	}
+	return value.(*effectiveView), nil
+}
+
+func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvider, identity Identity, key string, cacheable bool) (*effectiveView, error) {
 	route, _ := PinnedRoute(ctx)
 	if route.Tenant == "" {
 		route.Tenant = identity.Tenant()
@@ -195,29 +215,22 @@ func (my *Engine) effectiveSchema(ctx context.Context) (*effectiveView, error) {
 		return nil, err
 	}
 	allowed := make(map[string]map[FieldUse][]string)
+	shapeSeen := make(map[string]bool)
 	writes := make(map[string]map[string][]string)
+	writeSeen := make(map[string]map[string]bool)
 	denied := make(map[string]bool)
 	var signatures []string
 	for _, capability := range my.snapshot.Capabilities() {
 		if capability.Resource == "" || len(capability.Actions) == 0 || capability.Parent != "Query" && capability.Parent != "Mutation" && capability.Parent != "Subscription" {
 			continue
 		}
-		if builtin {
-			if class, ok := my.metadata.GetNode(capability.Resource); !ok || class.Permissions == nil {
-				continue
-			}
-		}
 		request := PolicyRequest{Identity: identity, Route: route, Coordinate: capability.Coordinate, Resource: capability.Resource, Actions: capability.Actions, FieldUses: allFieldUses, Values: scopeValues(ctx)}
-		decision, err := provider.Decide(ctx, request)
-		if err != nil {
-			return nil, fmt.Errorf("policy %s: %w", capability.Coordinate, err)
-		}
-		decision, err = NormalizeDecision(request, decision)
+		decision, err := decidePolicy(ctx, provider, request)
 		if err != nil {
 			return nil, fmt.Errorf("policy %s: %w", capability.Coordinate, err)
 		}
 		if revision := identity.PolicyRevision(); revision != 0 && decision.PolicyRevision != revision {
-			return nil, fmt.Errorf("policy %s revision mismatch", capability.Coordinate)
+			return nil, fmt.Errorf("policy %s: %w", capability.Coordinate, publicPolicyFailure("POLICY_REVISION_MISMATCH", "policy revision mismatch"))
 		}
 		class, governed := my.metadata.GetNode(capability.Resource)
 		// nil means the provider does not shape fields; a non-nil map is an
@@ -251,18 +264,35 @@ func (my *Engine) effectiveSchema(ctx context.Context) (*effectiveView, error) {
 				uses = make(map[FieldUse][]string)
 				allowed[class.Name] = uses
 			}
-			for use, fields := range decision.Fields {
-				if use != FieldUseWrite {
-					uses[use] = append(uses[use], fields...)
+			if !shapeSeen[class.Name] {
+				for use, fields := range decision.Fields {
+					if use != FieldUseWrite {
+						uses[use] = append([]string(nil), fields...)
+					}
 				}
+				shapeSeen[class.Name] = true
+			} else {
+				intersectFieldShape(uses, decision.Fields)
 			}
 			if len(decision.Fields[FieldUseWrite]) > 0 {
 				if writes[class.Name] == nil {
 					writes[class.Name] = make(map[string][]string)
 				}
-				for _, action := range capability.Actions {
-					if action == protocol.OP_INSERT || action == protocol.OP_UPDATE {
-						writes[class.Name][action] = append(writes[class.Name][action], decision.Fields[FieldUseWrite]...)
+				if writeSeen[class.Name] == nil {
+					writeSeen[class.Name] = make(map[string]bool)
+				}
+				key := ""
+				if len(capability.Actions) > 1 && operationInList(capability.Actions, protocol.OP_INSERT) && operationInList(capability.Actions, protocol.OP_UPDATE) {
+					key = protocol.UPSERT
+				} else if len(capability.Actions) == 1 && (capability.Actions[0] == protocol.OP_INSERT || capability.Actions[0] == protocol.OP_UPDATE) {
+					key = capability.Actions[0]
+				}
+				if key != "" {
+					if !writeSeen[class.Name][key] {
+						writes[class.Name][key] = append([]string(nil), decision.Fields[FieldUseWrite]...)
+						writeSeen[class.Name][key] = true
+					} else {
+						writes[class.Name][key] = intersectFieldNames(writes[class.Name][key], decision.Fields[FieldUseWrite])
 					}
 				}
 			}
@@ -288,16 +318,27 @@ func (my *Engine) effectiveSchema(ctx context.Context) (*effectiveView, error) {
 	view := &effectiveView{artifact: SchemaArtifact{
 		Schema: source, Fingerprint: digest(source), StructuralFingerprint: my.snapshot.Fingerprint(),
 		PermissionSignature: permission, PolicyRevision: identity.PolicyRevision(), RouteRevision: route.Revision,
+		Capabilities: schemaCapabilities(schema, my.snapshot.Capabilities()),
 	}, schema: schema, intro: intro.New(schema)}
 	if cacheable {
-		my.effectiveMu.Lock()
-		if my.effective == nil || len(my.effective) >= 128 {
-			my.effective = make(map[string]*effectiveView)
-		}
-		my.effective[key] = view
-		my.effectiveMu.Unlock()
+		my.effectiveCache.Put(key, view)
 	}
 	return view, nil
+}
+
+func schemaCapabilities(schema *ast.Schema, capabilities []Capability) []Capability {
+	out := make([]Capability, 0, len(capabilities))
+	for _, capability := range capabilities {
+		parent := schema.Types[capability.Parent]
+		if parent != nil {
+			if field := parent.Fields.ForName(capability.Name); field != nil {
+				capability = cloneCapability(capability)
+				capability.Type, capability.Arguments = field.Type.String(), fieldArguments(field)
+				out = append(out, capability)
+			}
+		}
+	}
+	return out
 }
 
 func removeSchemaArgument(arguments ast.ArgumentDefinitionList, name string) ast.ArgumentDefinitionList {
@@ -305,6 +346,35 @@ func removeSchemaArgument(arguments ast.ArgumentDefinitionList, name string) ast
 	for _, argument := range arguments {
 		if argument.Name != name {
 			out = append(out, argument)
+		}
+	}
+	return out
+}
+
+func intersectFieldShape(current map[FieldUse][]string, next map[FieldUse][]string) {
+	for use, fields := range current {
+		if use == FieldUseWrite {
+			continue
+		}
+		current[use] = intersectFieldNames(fields, next[use])
+	}
+}
+
+func intersectFieldNames(a, b []string) []string {
+	if slices.Contains(a, "*") {
+		return sortedUnique(b)
+	}
+	if slices.Contains(b, "*") {
+		return sortedUnique(a)
+	}
+	set := make(map[string]struct{}, len(b))
+	for _, name := range b {
+		set[name] = struct{}{}
+	}
+	out := make([]string, 0, len(a))
+	for _, name := range sortedUnique(a) {
+		if _, ok := set[name]; ok {
+			out = append(out, name)
 		}
 	}
 	return out
@@ -347,13 +417,25 @@ func metadataPolicy(metadata *Metadata) PolicyProvider {
 	return NewProtocolPolicyProvider(permissions)
 }
 
-func (my *Engine) effectiveSchemaKey(ctx context.Context, identity Identity) string {
-	claims, _ := stdjson.Marshal(identity.Claims())
+func (my *Engine) effectiveSchemaKey(ctx context.Context, identity Identity, provider PolicyProvider) string {
 	route, _ := PinnedRoute(ctx)
+	providerKey := ""
+	providerKey, _ = effectiveProviderCacheIdentity(ctx, provider, identity)
 	return digest(strings.Join([]string{
-		my.snapshot.Fingerprint(), identity.Tenant(), identity.Subject(), strings.Join(identity.Roles(), ","),
-		string(claims), fmt.Sprint(identity.PolicyRevision()), route.CacheKey,
+		my.snapshot.Fingerprint(), identity.Tenant(), providerKey,
+		fmt.Sprint(identity.PolicyRevision()),
+		fmt.Sprint(identity.CredentialEpoch()), route.Tenant, route.DataSource, route.Schema, route.Catalog, route.CacheKey,
+		fmt.Sprint(route.Revision), fmt.Sprint(route.Mode),
 	}, "\x00"))
+}
+
+func effectiveProviderCacheIdentity(ctx context.Context, provider PolicyProvider, identity Identity) (string, bool) {
+	cacheIdentity, ok := provider.(PolicyCacheIdentity)
+	if !ok {
+		return "", false
+	}
+	route, _ := PinnedRoute(ctx)
+	return cacheIdentity.PolicyCacheIdentity(ctx, identity, route, scopeValues(ctx))
 }
 
 func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[FieldUse][]string, writes map[string][]string) {
@@ -385,7 +467,7 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 	filterEffectiveFields(schema.Types[class.Name], class, output, false)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_CREATE_INPUT], class, writes[protocol.OP_INSERT], false)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_CREATE_ROW_INPUT], class, writes[protocol.OP_INSERT], false)
-	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPSERT_ROW_INPUT], class, policyWriteIntersection(writes), false)
+	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPSERT_ROW_INPUT], class, writes[protocol.UPSERT], false)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPDATE_INPUT], class, writes[protocol.OP_UPDATE], false)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPDATE_ROW_INPUT], class, writes[protocol.OP_UPDATE], false)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_WHERE_INPUT], class, uses[FieldUseFilter], true)
@@ -400,20 +482,6 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 	if !filterEffectiveEnum(schema.Types[class.Name+protocol.SUFFIX_GROUP_FIELD], class, uses[FieldUseGroup]) {
 		removeFieldArgument(schema.Types["Query"], strcase.ToLowerCamel(class.Name)+protocol.SUFFIX_STATS, protocol.GROUP_BY)
 	}
-}
-
-func policyWriteIntersection(writes map[string][]string) []string {
-	allowed := make(map[string]struct{}, len(writes[protocol.OP_UPDATE]))
-	for _, field := range writes[protocol.OP_UPDATE] {
-		allowed[field] = struct{}{}
-	}
-	var fields []string
-	for _, field := range uniqueStrings(writes[protocol.OP_INSERT]) {
-		if _, ok := allowed[field]; ok {
-			fields = append(fields, field)
-		}
-	}
-	return fields
 }
 
 func filterEffectiveEnum(definition *ast.Definition, class *protocol.Class, allowed []string) bool {

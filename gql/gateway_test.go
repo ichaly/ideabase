@@ -48,9 +48,33 @@ type gatewaySubscriptionEndpoint struct {
 	events <-chan []byte
 }
 
-type gatewayHealthyEndpoint struct{ *gatewayEndpoint }
+type gatewayHealthyEndpoint struct {
+	*gatewayEndpoint
+	report *HealthReport
+}
+
+type gatewayEffectiveEndpoint struct {
+	*gatewayEndpoint
+	effective SchemaArtifact
+}
+
+type gatewayEffectiveSubscriptionEndpoint struct {
+	*gatewaySubscriptionEndpoint
+	effective SchemaArtifact
+}
+
+func (my *gatewayEffectiveEndpoint) EffectiveSchema(context.Context) (SchemaArtifact, error) {
+	return my.effective, nil
+}
+
+func (my *gatewayEffectiveSubscriptionEndpoint) EffectiveSchema(context.Context) (SchemaArtifact, error) {
+	return my.effective, nil
+}
 
 func (my *gatewayHealthyEndpoint) Health(context.Context) (HealthReport, error) {
+	if my.report != nil {
+		return *my.report, nil
+	}
 	return HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, SnapshotFingerprint: my.snapshot.Fingerprint()}, nil
 }
 
@@ -92,6 +116,19 @@ func TestGatewayHealthRequiresEveryExecutableChild(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestGatewayHealthAggregatesChildCapabilitiesAndDatabaseFailure(t *testing.T) {
+	good := &gatewayHealthyEndpoint{gatewayEndpoint: newGatewayEndpoint("good", gatewayChildSchema, nil), report: &HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, CDCConfigured: true, SubscriptionAvailable: true}}
+	bad := &gatewayHealthyEndpoint{gatewayEndpoint: newGatewayEndpoint("bad", gatewayChildSchema, nil), report: &HealthReport{SnapshotOK: true, DatabaseError: "db down"}}
+	gateway, err := NewGateway("root", Namespace{Name: "good", Endpoint: good}, Namespace{Name: "bad", Endpoint: bad})
+	require.NoError(t, err)
+	report, err := gateway.Health(context.Background())
+	require.Error(t, err)
+	require.False(t, report.Ready)
+	require.False(t, report.DatabaseOK)
+	require.Equal(t, "bad: db down", report.DatabaseError)
+	require.True(t, report.CDCConfigured)
+}
+
 func TestGatewayPrefixesChildErrorsAndKeepsNullableNamespace(t *testing.T) {
 	child := newGatewayEndpoint("crm-service", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
 		return []byte(`{"data":{"user":null},"errors":[{"message":"denied","path":["user"],"extensions":{"code":"FORBIDDEN"}}]}`), nil
@@ -104,6 +141,29 @@ func TestGatewayPrefixesChildErrorsAndKeepsNullableNamespace(t *testing.T) {
 		"data":{"sales":null},
 		"errors":[{"message":"denied","path":["sales","user"],"locations":[{"line":1,"column":22}],"extensions":{"code":"FORBIDDEN"}}]
 	}`, string(body))
+}
+
+func TestGatewayRejectsNullChildErrorsWithoutPanicking(t *testing.T) {
+	child := newGatewayEndpoint("crm-service", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+		return []byte(`{"data":{"user":null},"errors":[null]}`), nil
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	body, err := gateway.Execute(context.Background(), `{ crm { user { id } } }`, nil)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":{"crm":null},"errors":[{"message":"endpoint returned an invalid GraphQL response","path":["crm"],"locations":[{"line":1,"column":3}],"extensions":{"code":"BAD_GATEWAY_RESPONSE"}}]}`, string(body))
+}
+
+func TestGatewayContainsChildEndpointPanic(t *testing.T) {
+	child := newGatewayEndpoint("crm-service", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+		panic("secret child panic")
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	body, err := gateway.Execute(context.Background(), `{ crm { user { id } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "REMOTE_UNAVAILABLE")
+	require.NotContains(t, string(body), "secret child panic")
 }
 
 func TestGatewayStripsUnselectedChildResponseFields(t *testing.T) {
@@ -432,6 +492,23 @@ func TestGatewayExposesOnlyExecutableSingleRootSubscriptions(t *testing.T) {
 	require.ErrorContains(t, err, "child根字段")
 }
 
+func TestGatewayValidatesSubscriptionAgainstChildEffectiveArtifact(t *testing.T) {
+	frames := make(chan []byte, 1)
+	frames <- []byte(`{"data":{"changed":{"id":"1"}}}`)
+	close(frames)
+	base := &gatewaySubscriptionEndpoint{gatewayEndpoint: newGatewayEndpoint("crm", gatewaySubscriptionSchema, nil), events: frames}
+	effectiveSchema := strings.Replace(gatewaySubscriptionSchema, ", removed: User", "", 1)
+	child := &gatewayEffectiveSubscriptionEndpoint{gatewaySubscriptionEndpoint: base, effective: SchemaArtifact{Schema: effectiveSchema, Fingerprint: digest(effectiveSchema)}}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+
+	_, err = gateway.Subscribe(context.Background(), `subscription { crm { removed { id } } }`, nil, "")
+	require.ErrorContains(t, err, `Cannot query field "removed"`)
+	events, err := gateway.Subscribe(context.Background(), `subscription { crm { changed { id } } }`, nil, "")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":{"crm":{"changed":{"id":"1"}}}}`, string(<-events))
+}
+
 func newGatewayEndpoint(id, schema string, execute func(context.Context, string, map[string]any) ([]byte, error)) *gatewayEndpoint {
 	return &gatewayEndpoint{id: id, snapshot: &Snapshot{schema: schema, fingerprint: id}, execute: execute}
 }
@@ -477,6 +554,85 @@ func TestGatewaySnapshotCoversEveryIntrospectableCoordinate(t *testing.T) {
 			require.NotEmpty(t, capability.Handler, coordinate)
 		}
 	}
+}
+
+func TestGatewayPreservesChildCapabilitySemanticsWhenRenaming(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
+	child.snapshot.capabilities = []Capability{
+		{Coordinate: "Query.user", Parent: "Query", Name: "user", Type: "User!", Handler: HandlerRemote, Planner: "child", Resource: "users", Actions: []string{"select"}, Cost: 7, PolicyAware: true, Timeout: 3 * time.Second, RetrySafe: true},
+		{Coordinate: "User.name", Parent: "User", Name: "name", Type: "String", Handler: HandlerRemote, Planner: "child", Resource: "users", Actions: []string{"select"}, Cost: 11, Timeout: time.Second},
+	}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	snapshot, err := gateway.Snapshot()
+	require.NoError(t, err)
+	query, ok := snapshot.Capability("Crm_Query.user")
+	require.True(t, ok)
+	require.Equal(t, uint32(7), query.Cost)
+	require.Equal(t, []string{"select"}, query.Actions)
+	require.Equal(t, "users", query.Resource)
+	require.True(t, query.PolicyAware)
+	require.Equal(t, 3*time.Second, query.Timeout)
+	field, ok := snapshot.Capability("Crm_User.name")
+	require.True(t, ok)
+	require.Equal(t, uint32(11), field.Cost)
+}
+
+func TestGatewayEffectiveSnapshotPreservesAllowedChildCapabilitySemantics(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
+	child.snapshot.capabilities = []Capability{{Coordinate: "Query.user", Parent: "Query", Name: "user", Type: "User!", Handler: HandlerRemote, Planner: "child", Resource: "users", Actions: []string{"select"}, Cost: 7, PolicyAware: true}}
+	child.snapshot.index = map[string]Capability{"Query.user": child.snapshot.capabilities[0]}
+	effectiveSchema := strings.Replace(gatewayChildSchema, ", status: Status", "", 1)
+	endpoint := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effective: SchemaArtifact{Schema: effectiveSchema, Fingerprint: digest(effectiveSchema), Capabilities: child.snapshot.Capabilities()}}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint})
+	require.NoError(t, err)
+	state, err := gateway.current().effective(context.Background())
+	require.NoError(t, err)
+	capability, ok := state.snapshot.Capability("Crm_Query.user")
+	require.True(t, ok)
+	require.Equal(t, uint32(7), capability.Cost)
+	require.Equal(t, "users", capability.Resource)
+	require.True(t, capability.PolicyAware)
+}
+
+func TestGatewayIntrospectionUsesChildEffectiveArtifact(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+		return []byte(`{"data":{"user":{"id":"1"}}}`), nil
+	})
+	effectiveSchema := strings.Replace(gatewayChildSchema, ", status: Status", "", 1)
+	endpoint := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effective: SchemaArtifact{Schema: effectiveSchema, Fingerprint: digest(effectiveSchema)}}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint})
+	require.NoError(t, err)
+	body, err := gateway.Execute(context.Background(), `{ __type(name: "Crm_User") { fields { name } } }`, nil)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":{"__type":{"fields":[{"name":"id"},{"name":"name"},{"name":"payload"}]}}}`, string(body))
+}
+
+func TestGatewayRejectsForgedEffectiveArtifactFingerprint(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
+	endpoint := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effective: SchemaArtifact{Schema: gatewayChildSchema, Fingerprint: "forged"}}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint})
+	require.NoError(t, err)
+	body, err := gateway.Execute(context.Background(), `{ crm { user { id } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "effective artifact fingerprint mismatch")
+	require.Zero(t, child.calls.Load())
+}
+
+func TestGatewayValidatesDataAndMixedIntrospectionAgainstChildEffectiveArtifact(t *testing.T) {
+	var calls atomic.Int32
+	child := newGatewayEndpoint("crm", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+		calls.Add(1)
+		return []byte(`{"data":{"user":{"status":"ACTIVE"}}}`), nil
+	})
+	effectiveSchema := strings.Replace(gatewayChildSchema, ", status: Status", "", 1)
+	endpoint := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effective: SchemaArtifact{Schema: effectiveSchema, Fingerprint: digest(effectiveSchema)}}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint})
+	require.NoError(t, err)
+	body, err := gateway.Execute(context.Background(), `{ crm { user { status } } __type(name: "Crm_User") { fields { name } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `Cannot query field \"status\"`)
+	require.Zero(t, calls.Load())
 }
 
 func TestGatewayRunsNamespacesInParallelAndBatchesOneNamespace(t *testing.T) {

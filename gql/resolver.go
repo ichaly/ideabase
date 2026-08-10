@@ -13,6 +13,7 @@ import (
 
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/log"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -451,7 +452,7 @@ func batchRequestKey(b binding, args map[string]interface{}) string {
 
 func resolverFieldErrors(b binding, hostPath ast.Path, err error) gqlerror.List {
 	path := append(append(ast.Path(nil), hostPath...), ast.PathName(b.Field))
-	originals := gqlErrors(err)
+	originals := GraphQLErrors(err)
 	if len(originals) == 0 {
 		return gqlerror.List{gqlerror.ErrorPathf(path, "resolver failed")}
 	}
@@ -502,10 +503,21 @@ func resolveEachPartial(ctx context.Context, resolver Resolver, sources []map[st
 func safely(fn func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("panic: %v\n%s", r, debug.Stack())
+			log.Error().Str("panic", fmt.Sprint(r)).Bytes("stack", debug.Stack()).Msg("resolver or remote handler panicked")
+			e := gqlerror.Errorf("resolver failed")
+			e.Extensions = map[string]any{"code": "RESOLVER_ERROR"}
+			err = e
 		}
 	}()
 	return fn()
+}
+
+func safelyCall[T any](fn func() (T, error)) (value T, err error) {
+	err = safely(func() error {
+		value, err = fn()
+		return err
+	})
+	return value, err
 }
 
 // Define 是Resolver/Remote注册即声明的schema形状。
@@ -679,7 +691,7 @@ func (my *Engine) needsRootExecution(operation *ast.OperationDefinition) bool {
 			}
 		}
 	}
-	return false
+	return operation.Operation == ast.Mutation && fields == 0
 }
 
 func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, variables map[string]interface{}) gqlReply {
@@ -725,14 +737,18 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 		return nil
 	}
 	var err error
-	if my.database != nil && Tx(ctx) == nil && (operation.Operation == ast.Mutation || my.rls) {
+	if my.database != nil && Tx(ctx) == nil && (operation.Operation == ast.Mutation || my.rls || tenantRLSRequested(ctx)) {
 		err = my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			if my.rls {
+			if my.rls || tenantRLSRequested(ctx) {
 				if err := my.prepareRLS(ctx, tx); err != nil {
 					return err
 				}
 			}
-			err := execute(context.WithValue(ctx, transactionKey{}, tx))
+			executionCtx := context.WithValue(ctx, transactionKey{}, tx)
+			if my.rls || tenantRLSRequested(ctx) {
+				executionCtx = markRLSPrepared(executionCtx, tx)
+			}
+			err := execute(executionCtx)
 			if len(executionErrors) > 0 {
 				return errRootTransactionRollback
 			}
@@ -742,7 +758,7 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 		err = execute(ctx)
 	}
 	if err != nil && len(executionErrors) == 0 {
-		reply := gqlReply{Errors: gqlErrors(err)}
+		reply := gqlReply{Errors: GraphQLErrors(err)}
 		if operation.Operation == ast.Mutation {
 			return reply.mutationCommit(ctx, "rolled_back")
 		}
@@ -771,7 +787,7 @@ func rootFieldExecutionErrors(field *ast.Field, err error, code string, rolledBa
 		alias = field.Name
 	}
 	prefix := ast.Path{ast.PathName(alias)}
-	result := gqlErrors(err)
+	result := GraphQLErrors(err)
 	for i, original := range result {
 		copy := *original
 		copy.Path = append(prefix, original.Path...)

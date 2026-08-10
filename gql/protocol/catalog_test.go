@@ -38,6 +38,15 @@ func TestCatalogFactsRoundTripAndConflictTargets(t *testing.T) {
 	require.False(t, invalid.IsUsableConflictTarget())
 }
 
+func TestCanonicalizePrimaryKeysPromotesLegacyFieldFlags(t *testing.T) {
+	class := &Class{Fields: map[string]*Field{
+		"code":   {Name: "code", IsPrimary: true},
+		"tenant": {Name: "tenant", IsPrimary: true},
+	}}
+	class.CanonicalizePrimaryKeys()
+	require.Equal(t, []string{"code", "tenant"}, class.PrimaryKeys)
+}
+
 func TestConflictTargetsExcludeDeferrableAndUnsafeIndexes(t *testing.T) {
 	class := &Class{
 		Fields: map[string]*Field{

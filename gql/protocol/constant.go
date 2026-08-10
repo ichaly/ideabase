@@ -86,6 +86,8 @@ const (
 )
 
 const (
+	DEFAULT_PAGE_SIZE = 20
+
 	TOTAL     = "total"
 	ITEMS     = "items"
 	PAGE_INFO = "pageInfo"

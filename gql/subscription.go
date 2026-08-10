@@ -34,16 +34,6 @@ type feed struct {
 // 首次立即推送当前结果；ctx取消后通道关闭
 // 依赖数据库 wal_level=logical 与连接账号的REPLICATION权限
 func (my *Engine) subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
-	if my.tenantRouter != nil {
-		target, routed, err := my.tenantDispatch(ctx)
-		if err != nil {
-			return nil, err
-		}
-		identity, _ := IdentityFromContext(routed)
-		route, _ := PinnedRoute(routed)
-		routed = withSubscriptionLease(routed, subscriptionLease{Barrier: my.revocation, Identity: identity, Route: route, Interval: configuredSubscriptionLease(my)})
-		return target.subscribe(routed, query, variables, operationName)
-	}
 	if _, err := my.Snapshot(); err != nil {
 		return nil, err
 	}
@@ -102,7 +92,7 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 	}
 	lease.PolicyProvider, lease.Operation, lease.Variables = my.policy, plan.operation, variables
 	if decisions, ok := ctx.Value(policyDecisionsKey{}).(map[string]PolicyDecision); ok {
-		lease.PolicySignature = policyPlanSignature(decisions)
+		lease.PolicySignature = policyRuntimeSignature(decisions)
 	}
 	ctx = withSubscriptionLease(ctx, lease)
 
@@ -113,7 +103,7 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 	decisions, _ := ctx.Value(policyDecisionsKey{}).(map[string]PolicyDecision)
 	policySignature := ""
 	if len(decisions) > 0 {
-		policySignature = policyPlanSignature(decisions)
+		policySignature = policyRuntimeSignature(decisions)
 	}
 	key := subscriptionFeedKey(query, operationName, variables, scope, identity, route, policySignature)
 	events := make(chan gqlReply, 1)
@@ -121,7 +111,7 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 	my.feedMu.Lock()
 	f := my.feeds[key]
 	if f == nil {
-		w, err := my.cdc.watch(plan.tables)
+		w, err := my.cdc.watch(subscriptionTableIdentities(my.metadata.SchemaName(), plan.tables))
 		if err != nil {
 			my.feedMu.Unlock()
 			return nil, err
@@ -180,7 +170,7 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 					return
 				}
 				decisions, _ := reauthed.Value(policyDecisionsKey{}).(map[string]PolicyDecision)
-				if policyPlanSignature(decisions) != lease.PolicySignature {
+				if policyRuntimeSignature(decisions) != lease.PolicySignature {
 					my.expireFeed(f, fmt.Errorf("subscription policy changed"))
 					return
 				}
@@ -229,7 +219,7 @@ func (my *Engine) leave(key string, f *feed, ch chan gqlReply) {
 func (my *Engine) expireFeed(f *feed, err error) {
 	my.feedMu.Lock()
 	defer my.feedMu.Unlock()
-	reply := gqlReply{Errors: gqlErrors(err)}
+	reply := gqlReply{Errors: GraphQLErrors(err)}
 	for ch := range f.subs {
 		push(ch, reply)
 		close(ch)
@@ -259,7 +249,7 @@ func (my *Engine) tick(ctx context.Context, plan *Plan, variables map[string]int
 		if ctx.Err() != nil {
 			return r, false
 		}
-		r.Errors = gqlErrors(err)
+		r.Errors = GraphQLErrors(err)
 		data = []byte(err.Error()) // 错误同样参与指纹：持续故障只推送一次，恢复或换错才再推
 	}
 
@@ -278,7 +268,7 @@ func (my *Engine) tick(ctx context.Context, plan *Plan, variables map[string]int
 	// 懒解包残留的原始字节段就地物化，维持Data全map契约
 	result, warnings, err := my.unpack(ctx, plan, data, variables)
 	if err != nil {
-		r.Errors = gqlErrors(err)
+		r.Errors = GraphQLErrors(err)
 		return r, true
 	}
 	materialize(result)
@@ -356,6 +346,11 @@ type socketSession struct {
 	subs map[string]context.CancelFunc
 }
 
+// maxActiveSubscriptions bounds per-connection fan-out and goroutine usage.
+// It is intentionally a clear protocol-level constant until a public server
+// configuration surface is introduced.
+const maxActiveSubscriptions = 100
+
 // write 串行化并发写
 func (my *socketSession) write(message wsReply) error {
 	my.mu.Lock()
@@ -365,6 +360,25 @@ func (my *socketSession) write(message wsReply) error {
 
 // wsInitTimeout connection_init握手时限，超时按协议关4408（测试可缩短）
 var wsInitTimeout = 5 * time.Second
+
+const wsReadLimit = 1 << 20
+
+func subscriptionTableIdentity(schema, table string) string {
+	if strings.Contains(table, ".") || schema == "" {
+		return table
+	}
+	return schema + "." + table
+}
+
+func subscriptionTableIdentities(schema string, tables []string) []string {
+	result := make([]string, 0, len(tables))
+	for _, table := range tables {
+		if table != "" {
+			result = append(result, subscriptionTableIdentity(schema, table))
+		}
+	}
+	return result
+}
 
 // closeSocket 按graphql-transport-ws协议码关闭连接（4401/4408/4429/4409...）
 func closeSocket(conn *websocket.Conn, code int, reason string) {
@@ -381,6 +395,7 @@ func closeSocket(conn *websocket.Conn, code int, reason string) {
 func (my *Engine) serveSocket(conn *websocket.Conn, ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	conn.SetReadLimit(wsReadLimit)
 
 	session := &socketSession{conn: conn, subs: make(map[string]context.CancelFunc)}
 	defer func() {
@@ -402,6 +417,7 @@ func (my *Engine) serveSocket(conn *websocket.Conn, ctx context.Context) {
 	for {
 		var message wsMessage
 		if err := conn.ReadJSON(&message); err != nil {
+			closeSocket(conn, 4400, "Invalid WebSocket message")
 			return
 		}
 
@@ -430,7 +446,15 @@ func (my *Engine) serveSocket(conn *websocket.Conn, ctx context.Context) {
 				return
 			}
 			if !session.reserve(message.ID) {
-				closeSocket(conn, 4409, "Subscriber for "+message.ID+" already exists")
+				session.mu.Lock()
+				_, duplicate := session.subs[message.ID]
+				atLimit := len(session.subs) >= maxActiveSubscriptions
+				session.mu.Unlock()
+				if atLimit && !duplicate {
+					closeSocket(conn, 4400, "Too many active subscriptions")
+				} else {
+					closeSocket(conn, 4409, "Subscriber for "+message.ID+" already exists")
+				}
 				return
 			}
 			my.startSubscription(ctx, session, message)
@@ -451,7 +475,7 @@ func (my *Engine) serveSocket(conn *websocket.Conn, ctx context.Context) {
 func (my *socketSession) reserve(id string) bool {
 	my.mu.Lock()
 	defer my.mu.Unlock()
-	if _, exists := my.subs[id]; exists {
+	if _, exists := my.subs[id]; exists || len(my.subs) >= maxActiveSubscriptions {
 		return false
 	}
 	my.subs[id] = nil
@@ -479,7 +503,7 @@ func (my *Engine) startSubscription(ctx context.Context, session *socketSession,
 	if err != nil {
 		stop()
 		release()
-		_ = session.write(wsReply{ID: message.ID, Type: wsError, Payload: gqlErrors(err)})
+		_ = session.write(wsReply{ID: message.ID, Type: wsError, Payload: GraphQLErrors(err)})
 		return
 	}
 

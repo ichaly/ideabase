@@ -322,6 +322,9 @@ func operationCost(operation *ast.OperationDefinition, variables map[string]inte
 		for _, selection := range set {
 			field, ok := selection.(*ast.Field)
 			if !ok {
+				if fragment, inline := selection.(*ast.InlineFragment); inline {
+					total = saturatingAdd(total, walk(fragment.SelectionSet))
+				}
 				continue
 			}
 			cost := uint64(1)

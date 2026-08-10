@@ -148,13 +148,23 @@ func (my *_DialectSuite) TestWherePruning() {
 	my.runCases(cases)
 }
 
-// TestWhereGuards where参数约束：整体变量无法编译期展开，明确报错防悬空SQL；
-// 变更条件剪空后仍强制要求条件
+// TestWhereWholeVariable whole where inputs are coerced before SQL compilation.
 func (my *_DialectSuite) TestWhereGuards() {
-	for name, c := range map[string]struct{ query, wants string }{
-		"查询整体变量where":   {`query ($w: UserWhereInput) { users(where: $w) { items { id } } }`, "整体变量"},
-		"变更整体变量where":   {`mutation ($w: UserWhereInput) { updateUser(input: { name: "x" }, where: $w) { id } }`, "整体变量"},
-		"变更空where剪空后报错": {`mutation { updateUser(input: { name: "x" }, where: {}) { id } }`, "需要主键或where条件"},
+	for name, c := range map[string]struct {
+		query     string
+		variables map[string]interface{}
+		want      string
+	}{
+		"查询整体变量where": {
+			query:     `query ($w: UserWhereInput) { users(where: $w) { items { id } } }`,
+			variables: map[string]interface{}{"w": map[string]interface{}{"or": []interface{}{map[string]interface{}{"name": map[string]interface{}{"eq": "a"}}, map[string]interface{}{"age": map[string]interface{}{"gt": int64(18)}}}}},
+			want:      `WHERE ("sys_user"."name" = $1 OR "sys_user"."age" > $2)`,
+		},
+		"变更整体变量where": {
+			query:     `mutation ($w: UserWhereInput) { updateUser(input: { name: "x" }, where: $w) { id } }`,
+			variables: map[string]interface{}{"w": map[string]interface{}{"name": map[string]interface{}{"eq": "a"}}},
+			want:      `WHERE "sys_user"."name" = $2`,
+		},
 	} {
 		my.Run(name, func() {
 			doc, gqlErr := gqlparser.LoadQuery(my.schema, c.query)
@@ -162,8 +172,9 @@ func (my *_DialectSuite) TestWhereGuards() {
 
 			compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
 			my.Require().NoError(err)
-			_, _, err = compile.Build(doc.Operations[0], nil)
-			my.Assert().ErrorContains(err, c.wants)
+			sql, _, err := compile.Build(doc.Operations[0], c.variables)
+			my.Require().NoError(err)
+			my.Assert().Contains(sql, c.want)
 		})
 	}
 }
