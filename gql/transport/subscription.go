@@ -52,14 +52,13 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 		}
 		ctx := r.Context()
 		if opts.Delegation != nil {
-			const scheme = "GQL-Delegation "
-			authorization := r.Header.Get("Authorization")
-			if !strings.HasPrefix(authorization, scheme) {
+			token, ok := delegationToken(r)
+			if !ok {
 				http.Error(w, "delegation required", http.StatusUnauthorized)
 				return
 			}
 			var err error
-			ctx, err = opts.Delegation.Verify(ctx, strings.TrimPrefix(authorization, scheme), operationDigest(params, r.Header.Get("GQL-Snapshot")))
+			ctx, err = opts.Delegation.Verify(ctx, token, operationDigest(params, r.Header.Get("GQL-Snapshot")))
 			if err != nil {
 				http.Error(w, "invalid delegation", http.StatusUnauthorized)
 				return

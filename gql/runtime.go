@@ -82,10 +82,10 @@ func (my *Engine) ExecuteOperation(ctx context.Context, query string, variables 
 		if !ok {
 			return marshalGatewayError(fmt.Errorf("未找到名为'%s'的持久化操作", operationName))
 		}
-		query = persisted
+		query = persisted.query
 	} else if strings.TrimSpace(query) == "" {
 		if persisted, ok := my.documents[operationName]; ok {
-			query = persisted
+			query = persisted.query
 		} else {
 			return marshalGatewayError(fmt.Errorf("未找到名为'%s'的持久化操作", operationName))
 		}

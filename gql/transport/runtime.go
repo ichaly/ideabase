@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ const endpointProtocolVersion = 1
 // Manifest is the immutable wire contract used to compose a remote endpoint.
 type Manifest struct {
 	Version      int               `json:"version"`
+	Revision     uint64            `json:"revision"`
 	EndpointID   string            `json:"endpointId"`
 	Schema       string            `json:"schema"`
 	Fingerprint  string            `json:"fingerprint"`
@@ -38,9 +40,65 @@ type manifestEndpoint interface {
 	Snapshot() (*core.Snapshot, error)
 }
 
-// NewManifestHandler exposes one frozen runtime manifest for remote composition.
-func NewManifestHandler(id string, endpoint manifestEndpoint) http.Handler {
+type manifestStateEndpoint interface {
+	ManifestState() (*core.Snapshot, uint64, error)
+}
+
+type effectiveSchemaEndpoint interface {
+	EffectiveSchema(context.Context) (core.SchemaArtifact, error)
+}
+
+// ManifestAuthenticator is the explicit trust boundary for schema metadata.
+type ManifestAuthenticator func(*http.Request) bool
+
+func schemaDigest(schema string) string {
+	return fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(schema)))
+}
+
+// NewEffectiveSchemaHandler exposes identity-aware schema materialization over
+// one authenticated control-plane path.
+func NewEffectiveSchemaHandler(endpoint effectiveSchemaEndpoint, verifier DelegationVerifier) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if endpoint == nil || verifier == nil {
+			http.Error(w, "effective schema authentication required", http.StatusUnauthorized)
+			return
+		}
+		token, ok := delegationToken(r)
+		if !ok {
+			http.Error(w, "delegation required", http.StatusUnauthorized)
+			return
+		}
+		ctx, err := verifier.Verify(r.Context(), token, operationDigest(request{}, "effective-schema"))
+		if err != nil {
+			http.Error(w, "invalid delegation", http.StatusUnauthorized)
+			return
+		}
+		artifact, err := endpoint.EffectiveSchema(ctx)
+		if err != nil {
+			http.Error(w, "effective schema unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if artifact.Schema == "" || artifact.Fingerprint != schemaDigest(artifact.Schema) {
+			http.Error(w, "invalid effective schema", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(artifact)
+	})
+}
+
+// NewManifestHandler exposes one frozen runtime manifest for remote composition.
+func NewManifestHandler(id string, endpoint manifestEndpoint, authenticate ManifestAuthenticator) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authenticate == nil || !authenticate(r) {
+			http.Error(w, "manifest authentication required", http.StatusUnauthorized)
+			return
+		}
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -50,7 +108,7 @@ func NewManifestHandler(id string, endpoint manifestEndpoint) http.Handler {
 			http.Error(w, "manifest unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		snapshot, err := endpoint.Snapshot()
+		snapshot, revision, err := publishedManifest(endpoint)
 		if err != nil {
 			http.Error(w, "manifest unavailable", http.StatusServiceUnavailable)
 			return
@@ -59,6 +117,7 @@ func NewManifestHandler(id string, endpoint manifestEndpoint) http.Handler {
 			Version: endpointProtocolVersion, EndpointID: id, Schema: snapshot.Schema(), Fingerprint: snapshot.Fingerprint(),
 			Capabilities: snapshot.Capabilities(),
 		}
+		manifest.Revision = revision
 		if source, ok := endpoint.(interface{ SubscriptionAvailable() bool }); ok {
 			manifest.Subscription = source.SubscriptionAvailable()
 		}
@@ -70,16 +129,29 @@ func NewManifestHandler(id string, endpoint manifestEndpoint) http.Handler {
 			manifest.Health = true
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("ETag", `"`+snapshot.Fingerprint()+`"`)
+		etag := fmt.Sprintf(`"%d:%s"`, revision, snapshot.Fingerprint())
+		w.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(manifest)
 	})
 }
 
+func publishedManifest(endpoint manifestEndpoint) (*core.Snapshot, uint64, error) {
+	if source, ok := endpoint.(manifestStateEndpoint); ok {
+		return source.ManifestState()
+	}
+	snapshot, err := endpoint.Snapshot()
+	return snapshot, 0, err
+}
+
 // RemoteOptions fixes every network boundary at startup; redirects are always denied.
 type RemoteOptions struct {
-	EndpointID, ManifestURL, ExecuteURL, SubscribeURL, HealthURL string
-	Client                                                       *http.Client
-	Delegation                                                   interface {
+	EndpointID, ManifestURL, EffectiveSchemaURL, ExecuteURL, SubscribeURL, HealthURL string
+	Client                                                                           *http.Client
+	Delegation                                                                       interface {
 		Sign(context.Context, string) (string, error)
 	}
 	Timeout          time.Duration
@@ -89,11 +161,12 @@ type RemoteOptions struct {
 
 // RemoteEndpoint implements gql.Endpoint over GraphQL-over-HTTP.
 type RemoteEndpoint struct {
-	id       string
-	manifest string
-	execute  string
-	client   *http.Client
-	signer   interface {
+	id        string
+	manifest  string
+	effective string
+	execute   string
+	client    *http.Client
+	signer    interface {
 		Sign(context.Context, string) (string, error)
 	}
 	maxResponse int64
@@ -107,10 +180,19 @@ type RemoteEndpoint struct {
 	order       []string
 }
 
+func (my *RemoteEndpoint) ControlState() core.ControlState {
+	state := my.state.Load()
+	if state == nil || state.snapshot == nil {
+		return core.ControlState{}
+	}
+	return core.ControlState{Revision: state.revision, Fingerprint: state.snapshot.Fingerprint()}
+}
+
 // remoteState is published as one pointer so snapshot, subscription and
 // health capability bits always describe the same manifest revision.
 type remoteState struct {
 	snapshot              *core.Snapshot
+	revision              uint64
 	subscriptionAvailable bool
 	healthAvailable       bool
 }
@@ -139,9 +221,13 @@ func (my *remoteRevision) Subscribe(ctx context.Context, query string, variables
 func (my *remoteRevision) SubscriptionAvailable() bool { return my.subscriptionAvailable }
 func (my *remoteRevision) HealthAvailable() bool       { return my.healthAvailable }
 func (my *remoteRevision) Health(ctx context.Context) (core.HealthReport, error) {
-	report, err := my.endpoint.Health(ctx)
-	report.SnapshotFingerprint = my.snapshot.Fingerprint()
-	return report, err
+	return my.endpoint.healthFor(ctx, my.snapshot.Fingerprint())
+}
+func (my *remoteRevision) EffectiveSchema(ctx context.Context) (core.SchemaArtifact, error) {
+	if my.endpoint.effective == "" {
+		return staticSchemaArtifact(my.snapshot), nil
+	}
+	return my.endpoint.effectiveSchema(ctx, my.snapshot.Fingerprint())
 }
 
 func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpoint, error) {
@@ -149,6 +235,9 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 		return nil, fmt.Errorf("remote endpoint id, manifest URL and execute URL are required")
 	}
 	urls := []string{options.ManifestURL, options.ExecuteURL}
+	if options.EffectiveSchemaURL != "" {
+		urls = append(urls, options.EffectiveSchemaURL)
+	}
 	if options.SubscribeURL != "" {
 		urls = append(urls, options.SubscribeURL)
 	}
@@ -175,7 +264,7 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	remote := &RemoteEndpoint{
-		id: options.EndpointID, manifest: options.ManifestURL, execute: options.ExecuteURL,
+		id: options.EndpointID, manifest: options.ManifestURL, effective: options.EffectiveSchemaURL, execute: options.ExecuteURL,
 		client: client, signer: options.Delegation, maxResponse: options.MaxResponseBytes, timeout: options.Timeout, subscribe: options.SubscribeURL,
 		health:  options.HealthURL,
 		history: make(map[string]*remoteState, 8),
@@ -184,6 +273,73 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 		return nil, err
 	}
 	return remote, nil
+}
+
+// EffectiveSchema fetches an identity-bound schema artifact. It never falls
+// back to the static manifest because doing so would leak or over-advertise
+// fields hidden by the child policy.
+func (my *RemoteEndpoint) EffectiveSchema(ctx context.Context) (core.SchemaArtifact, error) {
+	state := my.state.Load()
+	if state == nil || state.snapshot == nil {
+		return core.SchemaArtifact{}, fmt.Errorf("remote manifest unavailable")
+	}
+	return my.effectiveSchema(ctx, state.snapshot.Fingerprint())
+}
+
+func (my *RemoteEndpoint) effectiveSchema(ctx context.Context, structural string) (core.SchemaArtifact, error) {
+	if my == nil {
+		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema unavailable")
+	}
+	if my.effective == "" {
+		state := my.state.Load()
+		if state == nil || state.snapshot == nil || state.snapshot.Fingerprint() != structural {
+			return core.SchemaArtifact{}, fmt.Errorf("remote manifest unavailable")
+		}
+		return staticSchemaArtifact(state.snapshot), nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, my.timeout)
+	defer cancel()
+	reqPayload := request{}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, my.effective, nil)
+	if err != nil {
+		return core.SchemaArtifact{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if my.signer == nil {
+		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema requires delegation")
+	}
+	token, err := my.signer.Sign(ctx, operationDigest(reqPayload, "effective-schema"))
+	if err != nil {
+		return core.SchemaArtifact{}, err
+	}
+	req.Header.Set("Authorization", delegationScheme+token)
+	resp, err := my.client.Do(req)
+	if err != nil {
+		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema unavailable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema status %d", resp.StatusCode)
+	}
+	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if mediaType != "application/json" {
+		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema content type %q", mediaType)
+	}
+	var artifact core.SchemaArtifact
+	if err := decodeResponse(resp.Body, my.maxResponse, &artifact); err != nil {
+		return core.SchemaArtifact{}, err
+	}
+	if artifact.Schema == "" || artifact.Fingerprint == "" || artifact.StructuralFingerprint != structural {
+		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema is invalid")
+	}
+	if artifact.Fingerprint != schemaDigest(artifact.Schema) {
+		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema fingerprint mismatch")
+	}
+	return artifact, nil
+}
+
+func staticSchemaArtifact(snapshot *core.Snapshot) core.SchemaArtifact {
+	return core.SchemaArtifact{Schema: snapshot.Schema(), Fingerprint: schemaDigest(snapshot.Schema()), StructuralFingerprint: snapshot.Fingerprint(), Capabilities: snapshot.Capabilities()}
 }
 
 func remoteURLAllowed(raw string, allowHTTP bool) bool {
@@ -199,6 +355,21 @@ func remoteURLAllowed(raw string, allowHTTP bool) bool {
 }
 
 func (my *RemoteEndpoint) EndpointID() string { return my.id }
+func (my *RemoteEndpoint) ManifestRevision() uint64 {
+	state := my.state.Load()
+	if state == nil {
+		return 0
+	}
+	return state.revision
+}
+
+func (my *RemoteEndpoint) ManifestState() (*core.Snapshot, uint64, error) {
+	state := my.state.Load()
+	if state == nil || state.snapshot == nil {
+		return nil, 0, fmt.Errorf("remote manifest unavailable")
+	}
+	return state.snapshot, state.revision, nil
+}
 
 func (my *RemoteEndpoint) SubscriptionAvailable() bool {
 	state := my.state.Load()
@@ -244,16 +415,31 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 	defer my.refresh.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, my.timeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, my.manifest, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, my.manifest, nil)
 	if err != nil {
 		return err
 	}
-	request.Header.Set("Accept", "application/json")
-	response, err := my.client.Do(request)
+	req.Header.Set("Accept", "application/json")
+	if current := my.state.Load(); current != nil && current.snapshot != nil {
+		req.Header.Set("If-None-Match", fmt.Sprintf(`"%d:%s"`, current.revision, current.snapshot.Fingerprint()))
+	}
+	if my.signer != nil {
+		if _, ok := core.IdentityFromContext(ctx); ok {
+			token, signErr := my.signer.Sign(ctx, operationDigest(request{}, "manifest"))
+			if signErr != nil {
+				return signErr
+			}
+			req.Header.Set("Authorization", delegationScheme+token)
+		}
+	}
+	response, err := my.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("remote manifest unavailable: %w", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotModified {
+		return nil
+	}
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("remote manifest status %d", response.StatusCode)
 	}
@@ -268,6 +454,15 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 	if manifest.Version != endpointProtocolVersion || manifest.EndpointID != my.id {
 		return fmt.Errorf("remote manifest identity or protocol mismatch")
 	}
+	current := my.state.Load()
+	if current != nil {
+		if manifest.Revision < current.revision {
+			return fmt.Errorf("%w: %d", core.ErrControlStale, manifest.Revision)
+		}
+		if manifest.Revision != 0 && manifest.Revision == current.revision && current.snapshot.Fingerprint() != manifest.Fingerprint {
+			return fmt.Errorf("%w: %d", core.ErrControlConflict, manifest.Revision)
+		}
+	}
 	parsed, err := gqlparser.LoadSchema(&ast.Source{Name: "remote.graphql", Input: manifest.Schema})
 	if err != nil || (parsed.Subscription != nil) != manifest.Subscription || (manifest.Subscription && my.subscribe == "") {
 		return fmt.Errorf("remote subscription manifest is inconsistent")
@@ -279,8 +474,8 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	next := &remoteState{snapshot: snapshot, subscriptionAvailable: manifest.Subscription, healthAvailable: manifest.Health}
-	if current := my.state.Load(); current != nil && current.snapshot.Fingerprint() != snapshot.Fingerprint() {
+	next := &remoteState{snapshot: snapshot, revision: manifest.Revision, subscriptionAvailable: manifest.Subscription, healthAvailable: manifest.Health}
+	if current != nil && current.snapshot.Fingerprint() != snapshot.Fingerprint() {
 		my.historyMu.Lock()
 		for index, revision := range my.order {
 			if revision == snapshot.Fingerprint() {
@@ -335,7 +530,7 @@ func (my *RemoteEndpoint) executeOperation(ctx context.Context, query string, va
 		if signErr != nil {
 			return nil, signErr
 		}
-		request.Header.Set("Authorization", "GQL-Delegation "+token)
+		request.Header.Set("Authorization", delegationScheme+token)
 	}
 	response, err := my.client.Do(request)
 	if err != nil {
@@ -345,6 +540,9 @@ func (my *RemoteEndpoint) executeOperation(ctx context.Context, query string, va
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType != responseType {
 		return nil, fmt.Errorf("remote execute status %d content type %q", response.StatusCode, mediaType)
+	}
+	if fingerprint != "" && response.Header.Get("GQL-Snapshot") != fingerprint {
+		return nil, fmt.Errorf("remote execute snapshot mismatch")
 	}
 	return readLimited(response.Body, my.maxResponse)
 }
@@ -377,7 +575,7 @@ func (my *RemoteEndpoint) subscribeOperation(ctx context.Context, query string, 
 		if signErr != nil {
 			return nil, signErr
 		}
-		request.Header.Set("Authorization", "GQL-Delegation "+token)
+		request.Header.Set("Authorization", delegationScheme+token)
 	}
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	request = request.WithContext(streamCtx)

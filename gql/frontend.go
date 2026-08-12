@@ -68,16 +68,25 @@ func loadQuery(schema *ast.Schema, source string, maxTokens int, rules *validato
 }
 
 func normalizeSelectionWithSchema(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]interface{}, schema *ast.Schema) (ast.SelectionSet, error) {
-	return normalizeSelections(set, fragments, variables, make(map[string]bool), schema)
+	return normalizeSelections(set, fragments, variables, make(map[string]bool), schema, false)
 }
 
-func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]interface{}, active map[string]bool, schema *ast.Schema) (ast.SelectionSet, error) {
+func normalizeSelectionTemplate(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]interface{}, schema *ast.Schema) (ast.SelectionSet, error) {
+	return normalizeSelections(set, fragments, variables, make(map[string]bool), schema, true)
+}
+
+func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]interface{}, active map[string]bool, schema *ast.Schema, copyNodes bool) (ast.SelectionSet, error) {
 	out := make(ast.SelectionSet, 0, len(set))
 	for _, selection := range set {
 		var directives ast.DirectiveList
 		var nested ast.SelectionSet
 		switch node := selection.(type) {
 		case *ast.Field:
+			if copyNodes {
+				copied := *node
+				copied.Arguments = cloneArguments(node.Arguments)
+				node, selection = &copied, &copied
+			}
 			directives, nested = node.Directives, node.SelectionSet
 		case *ast.FragmentSpread:
 			directives = node.Directives
@@ -99,7 +108,7 @@ func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 				}
 			}
 			active[node.Name] = true
-			expanded, err := normalizeSelections(fragment.SelectionSet, fragments, variables, active, schema)
+			expanded, err := normalizeSelections(fragment.SelectionSet, fragments, variables, active, schema, copyNodes)
 			delete(active, node.Name)
 			if err != nil {
 				return nil, err
@@ -114,6 +123,10 @@ func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 			out = append(out, expanded...)
 			continue
 		case *ast.InlineFragment:
+			if copyNodes {
+				copied := *node
+				node, selection = &copied, &copied
+			}
 			directives, nested = node.Directives, node.SelectionSet
 		default:
 			continue
@@ -129,7 +142,7 @@ func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 			}
 		}
 		if nested != nil {
-			expanded, err := normalizeSelections(nested, fragments, variables, active, schema)
+			expanded, err := normalizeSelections(nested, fragments, variables, active, schema, copyNodes)
 			if err != nil {
 				return nil, err
 			}
@@ -158,6 +171,35 @@ func normalizeSelections(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 		out = append(out, selection)
 	}
 	return mergeSelectionSet(out), nil
+}
+
+func cloneArguments(arguments ast.ArgumentList) ast.ArgumentList {
+	if len(arguments) == 0 {
+		return nil
+	}
+	out := make(ast.ArgumentList, len(arguments))
+	for i, argument := range arguments {
+		copy := *argument
+		copy.Value = cloneValue(argument.Value)
+		out[i] = &copy
+	}
+	return out
+}
+
+func cloneValue(value *ast.Value) *ast.Value {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	if len(value.Children) > 0 {
+		copy.Children = make(ast.ChildValueList, len(value.Children))
+		for i, child := range value.Children {
+			childCopy := child
+			childCopy.Value = cloneValue(child.Value)
+			copy.Children[i] = childCopy
+		}
+	}
+	return &copy
 }
 
 func validateFragmentCondition(fragment, parent *ast.Definition) error {

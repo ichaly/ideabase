@@ -138,11 +138,12 @@ func (my *_DialectSuite) TestGovernanceRelationUpdateInjectsTargetPolicy() {
 			},
 			"Post": {
 				Table: "sys_post", Operations: []string{protocol.OP_UPDATE},
+				Where: []internal.PredicateConfig{{Column: "active", Operator: "eq", Value: true}},
 				Permissions: map[string]*internal.PermissionConfig{"writer": {
 					Update: []string{"userId"}, Filter: []internal.PredicateConfig{{Column: "ownerId", Operator: "eq", Context: "userId"}},
 				}},
 				Fields: map[string]*internal.FieldConfig{
-					"id": {Type: "ID", Column: "id", IsPrimary: true}, "ownerId": {Type: "ID", Column: "owner_id"},
+					"id": {Type: "ID", Column: "id", IsPrimary: true}, "ownerId": {Type: "ID", Column: "owner_id"}, "active": {Type: "Boolean", Column: "active"},
 					"userId":    {Type: "ID", Column: "user_id", Relation: &internal.RelationConfig{TargetClass: "User", TargetField: "id", Type: "ManyToOne"}},
 					"updatedAt": {Type: "DateTime", Column: "updated_at", UpdatePreset: &internal.ValueConfig{Context: "now"}},
 				},
@@ -157,6 +158,7 @@ func (my *_DialectSuite) TestGovernanceRelationUpdateInjectsTargetPolicy() {
 	my.Require().NoError(err)
 	my.Contains(sql, `UPDATE "public"."sys_post" SET "user_id"`)
 	my.Contains(sql, `"updated_at" = CURRENT_TIMESTAMP`)
+	my.Contains(sql, `"sys_post"."active" = $`)
 	my.Contains(sql, `"sys_post"."owner_id" = $`)
 }
 

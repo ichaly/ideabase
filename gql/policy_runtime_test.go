@@ -3,6 +3,7 @@ package gql
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -247,6 +248,118 @@ func TestPolicyProviderCreateCheckRejectsBeforeWrite(t *testing.T) {
 	require.Zero(t, count)
 	allowed := executor.run(ctx, `mutation { createUser(input: { name: "Allowed", email: "policy-allowed@x.com" }) { id } }`, nil, "")
 	require.Empty(t, allowed.Errors, "%v", allowed.Errors)
+}
+
+func TestPolicyProviderUpdateCheckReadsUnsubmittedColumns(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	var user struct {
+		ID int64
+	}
+	require.NoError(t, db.Raw(`INSERT INTO users(name, email) VALUES (?, ?) RETURNING id`, "Allowed", "partial-check@x.com").Scan(&user).Error)
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{
+			Allow: true, Fields: request.Fields,
+			Check: []TypedPredicate{{Column: "name", Operator: "eq", Value: "Allowed"}},
+		}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity),
+		`mutation ($id: ID!) { updateUser(input: { email: "partial-check-updated@x.com" }, id: $id) { id email } }`, map[string]any{"id": user.ID}, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	var email string
+	require.NoError(t, db.Table("users").Where("email = ?", "partial-check-updated@x.com").Pluck("email", &email).Error)
+	require.Equal(t, "partial-check-updated@x.com", email)
+
+	var denied struct{ ID int64 }
+	require.NoError(t, db.Raw(`INSERT INTO users(name, email) VALUES (?, ?) RETURNING id`, "Denied", "post-state@x.com").Scan(&denied).Error)
+	allowed := executor.run(WithIdentity(context.Background(), identity),
+		`mutation ($id: ID!) { updateUser(input: { name: "Allowed" }, id: $id) { id name } }`, map[string]any{"id": denied.ID}, "")
+	require.Empty(t, allowed.Errors, "%v", allowed.Errors)
+	rejected := executor.run(WithIdentity(context.Background(), identity),
+		`mutation ($id: ID!) { updateUser(input: { name: "Denied" }, id: $id) { id name } }`, map[string]any{"id": denied.ID}, "")
+	require.Nil(t, rejected.Data["updateUser"])
+	var name string
+	require.NoError(t, db.Table("users").Where("id = ?", denied.ID).Pluck("name", &name).Error)
+	require.Equal(t, "Allowed", name)
+}
+
+func TestPolicyProviderUpdateKeepsRoleFilterAndCheckAtomic(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	var user struct{ ID int64 }
+	require.NoError(t, db.Raw(`INSERT INTO users(name, email) VALUES (?, ?) RETURNING id`, "Before", "a@x.com").Scan(&user).Error)
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{Allow: true, Fields: request.Fields, RoleBranches: []RolePolicyBranch{
+			{Role: "a", RowPredicates: []TypedPredicate{{Column: "email", Operator: "eq", Value: "a@x.com"}}, Check: []TypedPredicate{{Column: "name", Operator: "eq", Value: "Allowed"}}},
+			{Role: "b", RowPredicates: []TypedPredicate{{Column: "email", Operator: "eq", Value: "b@x.com"}}, Check: []TypedPredicate{{Column: "name", Operator: "eq", Value: "Denied"}}},
+		}}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity),
+		`mutation ($id: ID!) { updateUser(input: { name: "Denied" }, id: $id) { id } }`, map[string]any{"id": user.ID}, "")
+	require.Nil(t, reply.Data["updateUser"])
+	var name string
+	require.NoError(t, db.Table("users").Where("id = ?", user.ID).Pluck("name", &name).Error)
+	require.Equal(t, "Before", name, "filter from one role must not combine with check from another")
+}
+
+func TestPolicyProviderChecksRelationOnlyParentAndTargetUpdates(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	type row struct{ ID int64 }
+	var owner, denied, allowed row
+	for target, values := range map[*row][2]string{&owner: {"Owner", "owner@x.com"}, &denied: {"Denied", "denied@x.com"}, &allowed: {"Allowed", "allowed@x.com"}} {
+		require.NoError(t, db.Raw(`INSERT INTO users(name, email) VALUES (?, ?) RETURNING id`, values[0], values[1]).Scan(target).Error)
+	}
+	var posts []row
+	require.NoError(t, db.Raw(`INSERT INTO posts(title, user_id) VALUES ('first', ?), ('second', ?) RETURNING id`, owner.ID, owner.ID).Scan(&posts).Error)
+	require.Len(t, posts, 2)
+	first, second := posts[0], posts[1]
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		decision := PolicyDecision{Allow: true, Fields: request.Fields}
+		if request.Resource == "User" && operationInList(request.Actions, protocol.OP_UPDATE) {
+			decision.Check = []TypedPredicate{{Column: "name", Operator: "eq", Value: "Allowed"}}
+		}
+		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_UPDATE) {
+			decision.Check = []TypedPredicate{{Column: "user_id", Operator: "in", Value: []any{owner.ID, denied.ID}}}
+		}
+		return decision, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	for _, mutation := range []string{
+		fmt.Sprintf(`mutation { updateUser(input: { posts: { connect: [%d] } }, id: %d) { id } }`, first.ID, denied.ID),
+		fmt.Sprintf(`mutation { updateUser(input: { posts: { connect: [%d] } }, id: %d) { id } }`, second.ID, allowed.ID),
+	} {
+		_ = executor.run(ctx, mutation, nil, "")
+	}
+	var owners []int64
+	require.NoError(t, db.Table("posts").Where("id IN ?", []int64{first.ID, second.ID}).Order("id").Pluck("user_id", &owners).Error)
+	require.Equal(t, []int64{owner.ID, owner.ID}, owners)
+}
+
+func TestMutationRelationOpsDoNotCreateRowsWithoutParent(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	beforePosts, beforeTags := int64(0), int64(0)
+	require.NoError(t, db.Table("posts").Count(&beforePosts).Error)
+	require.NoError(t, db.Table("tags").Count(&beforeTags).Error)
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	postCreate := executor.run(ctx, `mutation { updateUser(input: { posts: { create: [{ title: "orphan" }] } }, id: 999999) { id } }`, nil, "")
+	require.Empty(t, postCreate.Errors, "%v", postCreate.Errors)
+	tagCreate := executor.run(ctx, `mutation { updatePost(input: { tags: { create: [{ name: "orphan-tag" }] } }, id: 999999) { id } }`, nil, "")
+	require.Empty(t, tagCreate.Errors, "%v", tagCreate.Errors)
+	var afterPosts, afterTags int64
+	require.NoError(t, db.Table("posts").Count(&afterPosts).Error)
+	require.NoError(t, db.Table("tags").Count(&afterTags).Error)
+	require.Equal(t, beforePosts, afterPosts)
+	require.Equal(t, beforeTags, afterTags)
 }
 
 func TestPolicyProviderAuthorizesNestedRelationTarget(t *testing.T) {

@@ -66,7 +66,8 @@ singleflight；依赖请求临时状态的 provider 不声明缓存身份，引�
 ```go
 mux.Handle("/graphql", transport.NewHandler(engine))
 mux.Handle("/graphql/stream", transport.NewSubscriptionHandler(engine)) // 仅在有 CDC 时挂载
-mux.Handle("/gql/manifest", transport.NewManifestHandler("accounts", engine))
+mux.Handle("/gql/manifest", transport.NewManifestHandler("accounts", engine, authenticateManifest))
+mux.Handle("/gql/effective-schema", transport.NewEffectiveSchemaHandler(engine, delegationVerifier))
 mux.Handle("/health/gql", transport.NewHealthHandler(engine))
 
 gateway, err := gql.NewGateway("public-api",
@@ -88,9 +89,11 @@ snapshot 保留为滚动发布兼容窗口，执行中的请求继续固定启�
 并校验 endpoint identity、manifest、snapshot fingerprint、响应大小和返回类型。身份通过
 短期签名 delegation envelope 传播，child 仍必须按自己的 policy 再授权；客户端伪造
 tenant/role header 不构成可信身份。
-`DelegationConfig.Replay` 必须显式提供；单实例可用 `NewMemoryReplayStore`，多实例必须接入
-共享且原子的 `ReplayStore.Consume`（例如 Redis `SET NX PX` 或数据库唯一键）。重放返回
-`ErrReplay`，共享存储故障保留原始错误且一律 fail closed。
+`DelegationConfig.Replay` 必须显式提供；单实例可用 `NewMemoryReplayStore`，多实例直接使用
+`NewPostgresReplayStore`（部署迁移执行 `PostgresReplayDDL`），或实现等价的共享原子
+`ReplayStore.Consume`。重放返回 `ErrReplay`，共享存储故障保留原始错误且一律 fail closed。
+远程 Gateway 必须同时配置 manifest 与 effective-schema 地址；后者携带 delegation identity，
+父 Gateway 的自省和 capability 目录因此与 child 实际可执行权限保持一致。
 `AllowHTTP` 仅用于显式的 localhost/回环测试地址，不会放行内网或公网明文连接。
 `GQL-Snapshot` 会把 HTTP/SSE 请求绑定到不可变修订，不是仅在执行前比较一次指纹。
 

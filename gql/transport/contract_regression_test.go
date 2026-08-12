@@ -65,6 +65,19 @@ func TestContractSnapshotHeaderRejectsHistoricalRevisionWithoutDelegation(t *tes
 	}
 }
 
+func TestContractUnpinnedRequestUsesOneSnapshotRevision(t *testing.T) {
+	current := &contractRevision{contractEndpoint: &contractEndpoint{body: []byte(`{"data":{"revision":"current"}}`)}, snapshot: newArtifact(t, "type Query { current: String }")}
+	pinned := &contractRevision{contractEndpoint: &contractEndpoint{body: []byte(`{"data":{"revision":"pinned"}}`)}, snapshot: current.snapshot}
+	r := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ current }"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Accept", responseType)
+	w := httptest.NewRecorder()
+	NewHandler(&pinningContract{current: current, pinned: pinned}).ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"pinned"`) || w.Header().Get("GQL-Snapshot") != current.snapshot.Fingerprint() {
+		t.Fatalf("status/header/body = %d/%q/%s", w.Code, w.Header().Get("GQL-Snapshot"), w.Body.String())
+	}
+}
+
 func TestContractDelegationBindsSnapshotRevision(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef")
 	signer, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, Replay: core.NewMemoryReplayStore(8)})

@@ -386,13 +386,35 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 // writeInsertValues 写INSERT INTO ... VALUES主体，返回并集列；
 // 列集合取各行并集（首现顺序），行内缺失列填DEFAULT
 func (my *Dialect) writeInsertValues(ctx *compiler.Context, class *protocol.Class, rows []inputRow) ([]string, error) {
+	columns, err := my.insertColumns(class, rows)
+	if err != nil {
+		return nil, err
+	}
+	ctx.Write(`INSERT INTO `)
+	tableRef(ctx, class.Table)
+	ctx.Write(` (`)
+	writeColumns(ctx, "", columns)
+	ctx.Write(`) VALUES `)
+	for i, row := range rows {
+		if i > 0 {
+			ctx.Write(`, `)
+		}
+		ctx.Write(`(`)
+		if err := writeInsertRow(ctx, row, columns); err != nil {
+			return nil, err
+		}
+		ctx.Write(`)`)
+	}
+	return columns, nil
+}
+
+func (my *Dialect) insertColumns(class *protocol.Class, rows []inputRow) ([]string, error) {
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("input不能为空")
 	}
 	if err := my.applyGeneratedID(class, rows); err != nil {
 		return nil, err
 	}
-
 	columns := make([]string, 0, len(rows[0].columns))
 	seen := make(map[string]bool)
 	for _, row := range rows {
@@ -406,33 +428,24 @@ func (my *Dialect) writeInsertValues(ctx *compiler.Context, class *protocol.Clas
 	if len(columns) == 0 {
 		return nil, fmt.Errorf("input不能为空")
 	}
+	return columns, nil
+}
 
-	ctx.Write(`INSERT INTO `)
-	tableRef(ctx, class.Table)
-	ctx.Write(` (`)
-	writeColumns(ctx, "", columns)
-	ctx.Write(`) VALUES `)
-	for i, row := range rows {
+func writeInsertRow(ctx *compiler.Context, row inputRow, columns []string) error {
+	for i, column := range columns {
 		if i > 0 {
 			ctx.Write(`, `)
 		}
-		ctx.Write(`(`)
-		for j, column := range columns {
-			if j > 0 {
-				ctx.Write(`, `)
-			}
-			write, ok := row.values[column]
-			if !ok {
-				ctx.Write(`DEFAULT`)
-				continue
-			}
-			if err := write(ctx); err != nil {
-				return nil, err
-			}
+		write := row.values[column]
+		if write == nil {
+			ctx.Write(`DEFAULT`)
+			continue
 		}
-		ctx.Write(`)`)
+		if err := write(ctx); err != nil {
+			return err
+		}
 	}
-	return columns, nil
+	return nil
 }
 
 // applyGeneratedID 为每行补一个执行期生成槽位；database/空策略保持数据库默认零开销。
@@ -489,7 +502,11 @@ func (my *Dialect) buildUpdate(ctx *compiler.Context, m *mutation) ([]relationOp
 		}
 		ctx.Write(`SELECT * FROM `)
 		tableRef(ctx, m.class.Table)
-		return row.ops, my.buildMutationWhere(ctx, m.class, m.field, protocol.OP_UPDATE, "")
+		var checks []func() error
+		if m.class.Permissions != nil {
+			checks = append(checks, my.updatePolicyConjunct(ctx, m.class, row, nil))
+		}
+		return row.ops, my.buildMutationWhere(ctx, m.class, m.field, protocol.OP_UPDATE, "", checks...)
 	}
 
 	ctx.Write(`UPDATE `)
@@ -504,7 +521,11 @@ func (my *Dialect) buildUpdate(ctx *compiler.Context, m *mutation) ([]relationOp
 			return nil, err
 		}
 	}
-	if err = my.buildMutationWhere(ctx, m.class, m.field, protocol.OP_UPDATE, ""); err != nil {
+	var checks []func() error
+	if m.class.Permissions != nil {
+		checks = append(checks, my.updatePolicyConjunct(ctx, m.class, row, nil))
+	}
+	if err = my.buildMutationWhere(ctx, m.class, m.field, protocol.OP_UPDATE, "", checks...); err != nil {
 		return nil, err
 	}
 	ctx.Write(` RETURNING *`)
@@ -574,7 +595,7 @@ func (my *Dialect) buildPurge(ctx *compiler.Context, m *mutation) error {
 }
 
 // buildMutationWhere 变更条件：强制要求条件，杜绝误操作全表
-func (my *Dialect) buildMutationWhere(ctx *compiler.Context, class *protocol.Class, field *ast.Field, operation, skipColumn string) error {
+func (my *Dialect) buildMutationWhere(ctx *compiler.Context, class *protocol.Class, field *ast.Field, operation, skipColumn string, extra ...func() error) error {
 	sc := scope{class: class, qualifier: class.Table}
 	conditions, err := my.collectConditions(ctx, field.Arguments)
 	if err != nil {
@@ -585,7 +606,12 @@ func (my *Dialect) buildMutationWhere(ctx *compiler.Context, class *protocol.Cla
 	}
 	// 行级作用域：update/delete 强制 AND 作用域，只能改本租户/属主的行
 	conjuncts := my.scopeConjuncts(ctx, sc.qualifier, class)
-	conjuncts = append(conjuncts, my.fixedWhereConjuncts(ctx, sc.qualifier, class, operation, skipColumn)...)
+	if operation == protocol.OP_UPDATE {
+		conjuncts = append(conjuncts, my.predicateConjuncts(ctx, sc.qualifier, class.Where, skipColumn)...)
+	} else {
+		conjuncts = append(conjuncts, my.fixedWhereConjuncts(ctx, sc.qualifier, class, operation, skipColumn)...)
+	}
+	conjuncts = append(conjuncts, extra...)
 	return my.buildWhere(ctx, sc, field.Arguments, conjuncts...)
 }
 
@@ -1033,40 +1059,20 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			if len(op.connect) > 0 {
 				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (INSERT INTO `)
 				tableRef(ctx, through.TableName)
-				ctx.Write(` (`).Quote(through.SourceKey).Write(`, `).Quote(through.TargetKey).Write(`) `)
-				if len(target.Scope) > 0 || len(target.Where) > 0 || target.Permissions != nil {
-					// 目标有作用域：经SELECT校验目标行属当前作用域，防建立跨租户关联（中间表污染）
-					ctx.Write(`SELECT `)
-					anchor(op.rel)
-					ctx.Write(`, `).Column(target.Table, pk).Write(` FROM `)
-					tableRef(ctx, target.Table)
-					ctx.Write(` WHERE `).Column(target.Table, pk).Write(` IN (`)
-					if err := params(op.connect); err != nil {
-						return err
-					}
-					ctx.Write(`)`)
-					my.appendScope(ctx, target.Table, target.Scope)
-					if err := my.appendFixedPolicy(ctx, target.Table, target, protocol.OP_UPDATE); err != nil {
-						return err
-					}
-					ctx.Write(`)`)
-				} else {
-					// 无作用域：INSERT VALUES（参数类型由目标列推断），目标存在性由外键约束保证
-					ctx.Write(`VALUES `)
-					for i, write := range op.connect {
-						if i > 0 {
-							ctx.Write(`, `)
-						}
-						ctx.Write(`(`)
-						anchor(op.rel)
-						ctx.Write(`, `)
-						if err := write(ctx); err != nil {
-							return err
-						}
-						ctx.Write(`)`)
-					}
-					ctx.Write(`)`)
+				ctx.Write(` (`).Quote(through.SourceKey).Write(`, `).Quote(through.TargetKey).Write(`) SELECT `)
+				ctx.Write(`"__parent".`).Quote(scope{class: class}.column(op.rel.SourceField))
+				ctx.Write(`, `).Column(target.Table, pk).Write(` FROM `).Quote(class.Table).Write(` AS "__parent" CROSS JOIN `)
+				tableRef(ctx, target.Table)
+				ctx.Write(` WHERE `).Column(target.Table, pk).Write(` IN (`)
+				if err := params(op.connect); err != nil {
+					return err
 				}
+				ctx.Write(`)`)
+				my.appendScope(ctx, target.Table, target.Scope)
+				if err := my.appendFixedPolicy(ctx, target.Table, target, protocol.OP_UPDATE); err != nil {
+					return err
+				}
+				ctx.Write(`)`)
 			}
 			if len(op.disconnect) > 0 {
 				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (DELETE FROM `)
@@ -1095,21 +1101,26 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			if len(op.create) > 0 {
 				// 先建目标行，再按RETURNING主键建中间表关联
 				ctx.MarkTable(target.Table)
-				made := ctx.NextIndex()
-				ctx.Write(`, `).Quote(`__c_`, made).Write(` AS (`)
 				my.applyPreset(target, op.create, protocol.OP_INSERT)
 				my.applyAudit(target, op.create, protocol.OP_INSERT)
 				my.applyScope(target, op.create) // 嵌套创建的子行也填作用域
-				if _, err := my.writeInsertValues(ctx, target, op.create); err != nil {
+				made, err := my.writeRelationInsertCTEs(ctx, target, op.create, class.Table, pk)
+				if err != nil {
 					return err
 				}
-				ctx.Write(` RETURNING `).Quote(pk).Write(`)`)
 				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (INSERT INTO `)
 				tableRef(ctx, through.TableName)
 				ctx.Write(` (`).Quote(through.SourceKey).Write(`, `).Quote(through.TargetKey).
-					Write(`) SELECT `)
-				anchor(op.rel)
-				ctx.Write(`, `).Quote(pk).Write(` FROM `).Quote(`__c_`, made).Write(`)`)
+					Write(`) `)
+				for i, cte := range made {
+					if i > 0 {
+						ctx.Write(` UNION ALL `)
+					}
+					ctx.Write(`SELECT `)
+					anchor(op.rel)
+					ctx.Write(`, `).Quote(pk).Write(` FROM `).Quote(cte)
+				}
+				ctx.Write(`)`)
 			}
 			continue
 		}
@@ -1121,7 +1132,7 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (UPDATE `)
 			tableRef(ctx, target.Table)
 			ctx.Write(` SET `).Quote(fk).Write(` = `)
-			anchor(op.rel)
+			ctx.Write(`"__parent".`).Quote(scope{class: class}.column(op.rel.SourceField))
 			if err := my.appendUpdatePresets(ctx, target, fk); err != nil {
 				return err
 			}
@@ -1129,13 +1140,20 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			if err := my.appendAuditAssignments(ctx, []string{columns.updatedAt, columns.updatedBy}, false); err != nil {
 				return err
 			}
-			ctx.Write(` WHERE `).Quote(pk).Write(` IN (`)
+			ctx.Write(` FROM `).Quote(class.Table).Write(` AS "__parent"`)
+			ctx.Write(` WHERE `).Column(target.Table, pk).Write(` IN (`)
 			if err := params(op.connect); err != nil {
 				return err
 			}
 			ctx.Write(`)`)
 			my.appendScope(ctx, target.Table, target.Scope) // 只能挂接当前作用域的目标行（防跨租户劫持）
-			if err := my.appendFixedPolicy(ctx, target.Table, target, protocol.OP_UPDATE); err != nil {
+			if err := my.appendMetadataWhere(ctx, target); err != nil {
+				return err
+			}
+			if err := my.appendUpdatePolicy(ctx, target, my.relationUpdateOverrides(ctx, target, fk, func() error {
+				ctx.Write(`"__parent".`).Quote(scope{class: class}.column(op.rel.SourceField))
+				return nil
+			})); err != nil {
 				return err
 			}
 			ctx.Write(`)`)
@@ -1159,7 +1177,13 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			}
 			ctx.Write(`)`)
 			my.appendScope(ctx, target.Table, target.Scope)
-			if err := my.appendFixedPolicy(ctx, target.Table, target, protocol.OP_UPDATE); err != nil {
+			if err := my.appendMetadataWhere(ctx, target); err != nil {
+				return err
+			}
+			if err := my.appendUpdatePolicy(ctx, target, my.relationUpdateOverrides(ctx, target, fk, func() error {
+				ctx.Write(`NULL`)
+				return nil
+			})); err != nil {
 				return err
 			}
 			ctx.Write(`)`)
@@ -1177,14 +1201,12 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 					return nil
 				}
 			}
-			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (`)
 			my.applyPreset(target, op.create, protocol.OP_INSERT)
 			my.applyAudit(target, op.create, protocol.OP_INSERT)
 			my.applyScope(target, op.create) // 嵌套创建的子行也填作用域
-			if _, err := my.writeInsertValues(ctx, target, op.create); err != nil {
+			if _, err := my.writeRelationInsertCTEs(ctx, target, op.create, class.Table, ""); err != nil {
 				return err
 			}
-			ctx.Write(`)`)
 		}
 	}
 	return nil

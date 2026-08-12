@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 自注册PostgreSQL方言
 	"github.com/ichaly/ideabase/gql/internal"
@@ -72,6 +73,94 @@ func TestExecuteReturnsGraphQLBytes(t *testing.T) {
 	out, err := executor.Execute(context.Background(), `query { users { total } }`, nil)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"data":{"users":{"total":0}}}`, string(out))
+}
+
+func TestNestedCreatePreservesDefaultsAcrossRowShapes(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	require.NoError(t, db.Exec(`ALTER TABLE posts ALTER COLUMN content SET DEFAULT 'db-default'`).Error)
+
+	reply := executor.run(context.Background(), `mutation {
+		createUser(input: { name: "shape", email: "shape@x.com", posts: { create: [
+			{ title: "defaulted" },
+			{ title: "explicit", content: "value" }
+		] } }) { id }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+
+	var posts []struct{ Title, Content string }
+	require.NoError(t, db.Table("posts").Where("title IN ?", []string{"defaulted", "explicit"}).Order("title").Find(&posts).Error)
+	require.Equal(t, []struct{ Title, Content string }{{"defaulted", "db-default"}, {"explicit", "value"}}, posts)
+}
+
+func TestEngineCloseRejectsExecuteAndIsIdempotent(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	executor.Close()
+	executor.Close()
+	_, err := executor.Execute(context.Background(), `query { users { total } }`, nil)
+	require.Error(t, err)
+}
+
+func TestEngineCloseClosesActiveSubscription(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	executor.cdc = runtimeTestNotifier{}
+	ctx := context.Background()
+	events, err := executor.subscribe(ctx, `subscription { users { total } }`, nil, "")
+	require.NoError(t, err)
+	select {
+	case <-events:
+	case <-time.After(3 * time.Second):
+		t.Fatal("missing initial subscription result")
+	}
+	executor.Close()
+	select {
+	case _, ok := <-events:
+		require.False(t, ok)
+	case <-time.After(3 * time.Second):
+		t.Fatal("active subscription was not closed")
+	}
+}
+
+func TestLoadDocumentRejectsConflictingOperationName(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	one := `query SameName { users { total } }`
+	two := `query SameName { users { items { name } } }`
+	require.NoError(t, executor.loadDocument(one))
+	require.Error(t, executor.loadDocument(two))
+	require.NoError(t, executor.loadDocument(one))
+}
+
+func TestPersistedConditionalOperationCachesFrontendDocument(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	query := `query Conditional($skip: Boolean!) { users { total items @skip(if: $skip) { name } } }`
+	require.NoError(t, executor.loadDocument(query))
+	cached := executor.documents["Conditional"].doc
+	require.NotNil(t, cached)
+	_, err := executor.plan(query, "Conditional", map[string]any{"skip": true})
+	require.NoError(t, err)
+	plan, err := executor.plan(query, "Conditional", map[string]any{"skip": false})
+	require.NoError(t, err)
+	require.NotEmpty(t, plan.operation.SelectionSet)
+	require.Same(t, cached, executor.documents["Conditional"].doc)
+}
+
+func TestPersistedPrewarmFeedsRuntimePlanWithoutCompile(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	query := `query Warmed { users { total } }`
+	require.NoError(t, executor.loadDocument(query))
+	key := planKey{operation: "Warmed", query: query, view: executor.baseView.artifact.Fingerprint + "\x00" + executor.baseView.artifact.PermissionSignature}
+	warmed, ok := executor.cache.Get(key)
+	require.True(t, ok)
+	_, err := executor.plan(query, "Warmed", nil)
+	require.NoError(t, err)
+	runtime, ok := executor.cache.Get(key)
+	require.True(t, ok)
+	require.Same(t, warmed, runtime)
 }
 
 // TestExecutorRoundTrip 端到端冒烟：增删改查 + 关系查询 + 计划缓存

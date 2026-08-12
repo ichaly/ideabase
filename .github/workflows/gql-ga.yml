@@ -7,8 +7,28 @@ on:
     branches: [main]
 
 jobs:
+  static:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: gql/go.sum
+      - run: GOWORK=off go vet ./...
+
   correctness:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [15, 16, 17, 18]
+    env:
+      GOWORK: "off"
+      GQL_TEST_POSTGRES_IMAGE: postgres:${{ matrix.postgres }}-alpine
     defaults:
       run:
         working-directory: gql
@@ -19,11 +39,12 @@ jobs:
           go-version: 1.26.5
           cache-dependency-path: gql/go.sum
       - run: go test ./... -count=1
-      - run: go test -race . ./transport ./compiler/... -count=1
-      - run: go vet ./...
 
-  performance:
+  race-and-fuzz:
     runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+      GQL_TEST_POSTGRES_IMAGE: postgres:15-alpine
     defaults:
       run:
         working-directory: gql
@@ -33,8 +54,34 @@ jobs:
         with:
           go-version: 1.26.5
           cache-dependency-path: gql/go.sum
-      - run: ./scripts/perf.sh | tee performance.txt
+      - run: go test -race . ./transport ./compiler/... -count=1
+      - run: go test . -run '^$' -fuzz '^FuzzExecutableFrontend$' -fuzztime 10s
+
+  performance:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gql
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: gql/go.sum
+      - run: GOWORK=off ./scripts/perf.sh allocations | tee performance.txt
+      - name: Compare base and head
+        shell: bash
+        run: |
+          base='${{ github.event.pull_request.base.sha }}'
+          if [[ -z "$base" ]]; then base='${{ github.event.before }}'; fi
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then base=HEAD^; fi
+          ./scripts/perf-compare.sh "$base" | tee performance-delta.txt
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: gql-performance
-          path: gql/performance.txt
+          path: |
+            gql/performance.txt
+            gql/performance-delta.txt

@@ -1,8 +1,11 @@
 package pgsql
 
 import (
+	"strings"
+
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -149,6 +152,44 @@ func (my *_DialectSuite) TestMutation() {
 	my.runCases(cases)
 }
 
+func (my *_DialectSuite) TestUpdateCheckUsesSameWritableRole() {
+	t := my.T()
+	class, ok := my.meta.GetNode("User")
+	if !ok {
+		t.Fatal("missing User class")
+	}
+	old := class.Permissions
+	defer func() { class.Permissions = old }()
+	class.Permissions = map[string]*protocol.Permission{
+		"reader": {Select: []string{"id"}, Filter: []protocol.Predicate{{Column: "email", Operator: "eq", Value: "old"}}},
+		"writer": {Update: []string{"name"}, Filter: []protocol.Predicate{{Column: "email", Operator: "eq", Value: "old"}}, Check: []protocol.Predicate{{Column: "name", Operator: "in", Value: []interface{}{"new"}}}},
+	}
+	doc, errs := gqlparser.LoadQuery(my.schema, `mutation { updateUser(input: { name: "new" }, id: 1) { id } }`)
+	if len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql, args, err := compile.Build(doc.Operations[0], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(sql, `DEFAULT`) || !strings.Contains(sql, ` = ANY(`) || !containsArg(args, "writer") || containsArg(args, "reader") {
+		t.Fatalf("update policy SQL = %s", sql)
+	}
+}
+
+func containsArg(args []any, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestMutationGuards 变更安全防护：缺少条件的更新/删除直接报错
 func (my *_DialectSuite) TestMutationGuards() {
 	for name, query := range map[string]string{
@@ -176,7 +217,7 @@ func (my *_DialectSuite) TestRelationOps() {
 			query: `mutation { createUser(input: { name: "A", email: "a@x.com", posts: { connect: [1, 2] } }) { id } }`,
 			args:  []any{"A", "a@x.com", int64(1), int64(2)},
 			expected: `WITH "sys_user" AS (INSERT INTO "public"."sys_user" ("name", "email") VALUES ($1, $2) RETURNING *),
-				"__c_1" AS (UPDATE "public"."sys_post" SET "user_id" = (SELECT "id" FROM "sys_user") WHERE "id" IN ($3, $4))
+				"__c_1" AS (UPDATE "public"."sys_post" SET "user_id" = "__parent"."id" FROM "sys_user" AS "__parent" WHERE "sys_post"."id" IN ($3, $4))
 				SELECT JSONB_BUILD_OBJECT('createUser', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT TO_JSONB("__sr_0".*) AS "json"
@@ -191,7 +232,7 @@ func (my *_DialectSuite) TestRelationOps() {
 			query: `mutation { updatePost(input: { tags: { connect: [10], disconnect: [11] } }, id: 5) { id } }`,
 			args:  []any{int64(5), int64(10), int64(11)},
 			expected: `WITH "sys_post" AS (SELECT * FROM "public"."sys_post" WHERE "sys_post"."id" = $1),
-				"__c_1" AS (INSERT INTO "public"."sys_post_tag" ("post_id", "tag_id") VALUES ((SELECT "id" FROM "sys_post"), $2)),
+				"__c_1" AS (INSERT INTO "public"."sys_post_tag" ("post_id", "tag_id") SELECT "__parent"."id", "sys_tag"."id" FROM "sys_post" AS "__parent" CROSS JOIN "public"."sys_tag" WHERE "sys_tag"."id" IN ($2)),
 				"__c_2" AS (DELETE FROM "public"."sys_post_tag" WHERE "post_id" = (SELECT "id" FROM "sys_post") AND "tag_id" IN ($3))
 				SELECT JSONB_BUILD_OBJECT('updatePost', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
@@ -204,6 +245,19 @@ func (my *_DialectSuite) TestRelationOps() {
 		},
 	}
 	my.runCases(cases)
+}
+
+func (my *_DialectSuite) TestRelationOpsRequireParentCTEAnchor() {
+	doc, gqlErr := gqlparser.LoadQuery(my.schema, `mutation { updateUser(input: { posts: { create: [{ title: "orphan" }] } }, id: 999) { id } }`)
+	my.Require().Empty(gqlErr)
+	compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
+	my.Require().NoError(err)
+	plan, err := compile.Compile(doc.Operations[0], nil)
+	my.Require().NoError(err)
+	// A filtered-out parent must make the child INSERT select zero rows;
+	// writing the parent CTE scalar directly into VALUES creates an orphan
+	// with a NULL foreign key.
+	my.Contains(plan.SQL, `SELECT $2, (SELECT "id" FROM "sys_user") FROM "sys_user"`)
 }
 
 // TestRelationOpGuards 关系操作约束
@@ -262,7 +316,7 @@ func (my *_DialectSuite) TestBulkMutations() {
 			query: `mutation { createUser(input: { name: "A", email: "a@x", posts: { create: [{ title: "P1" }, { title: "P2" }] } }) { id } }`,
 			args:  []any{"A", "a@x", "P1", "P2"},
 			expected: `WITH "sys_user" AS (INSERT INTO "public"."sys_user" ("name", "email") VALUES ($1, $2) RETURNING *),
-				"__c_1" AS (INSERT INTO "public"."sys_post" ("title", "user_id") VALUES ($3, (SELECT "id" FROM "sys_user")), ($4, (SELECT "id" FROM "sys_user")))
+				"__c_1" AS (INSERT INTO "public"."sys_post" ("title", "user_id") SELECT $3, (SELECT "id" FROM "sys_user") FROM "sys_user" UNION ALL SELECT $4, (SELECT "id" FROM "sys_user") FROM "sys_user")
 				SELECT JSONB_BUILD_OBJECT('createUser', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT TO_JSONB("__sr_0".*) AS "json"

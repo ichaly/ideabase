@@ -2,6 +2,8 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,9 +47,21 @@ func newArtifact(t *testing.T, schema string) *core.Snapshot {
 
 type runtimeEndpoint struct {
 	snapshot       *core.Snapshot
+	effective      core.SchemaArtifact
 	identity       core.Identity
 	commitMetadata bool
 	body           []byte
+}
+
+func testManifestHandler(id string, endpoint manifestEndpoint) http.Handler {
+	return NewManifestHandler(id, endpoint, func(*http.Request) bool { return true })
+}
+
+func (e *runtimeEndpoint) EffectiveSchema(context.Context) (core.SchemaArtifact, error) {
+	if e.effective.Schema != "" {
+		return e.effective, nil
+	}
+	return core.SchemaArtifact{Schema: e.snapshot.Schema(), Fingerprint: schemaDigest(e.snapshot.Schema()), StructuralFingerprint: e.snapshot.Fingerprint(), Capabilities: e.snapshot.Capabilities()}, nil
 }
 
 type subscriptionRuntime struct {
@@ -56,6 +70,15 @@ type subscriptionRuntime struct {
 }
 
 type healthyRuntime struct{ *runtimeEndpoint }
+
+type versionedRuntime struct {
+	*runtimeEndpoint
+	revision uint64
+}
+
+func (my *versionedRuntime) ManifestState() (*core.Snapshot, uint64, error) {
+	return my.snapshot, my.revision, nil
+}
 
 func (my *healthyRuntime) Health(context.Context) (core.HealthReport, error) {
 	return core.HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, SnapshotFingerprint: my.snapshot.Fingerprint()}, nil
@@ -85,7 +108,7 @@ func TestRemoteEndpointAcceptsPartialGraphQLResponseStatus(t *testing.T) {
 	snapshot := newArtifact(t, "type Query { hello: String }")
 	endpoint := &runtimeEndpoint{snapshot: snapshot, body: []byte(`{"data":{"hello":null},"errors":[{"message":"failed","path":["hello"]}]}`)}
 	mux := http.NewServeMux()
-	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	mux.Handle("/manifest", testManifestHandler("child", endpoint))
 	mux.Handle("/graphql", NewHandler(endpoint))
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -98,6 +121,139 @@ func TestRemoteEndpointAcceptsPartialGraphQLResponseStatus(t *testing.T) {
 	body, err := remote.Execute(context.Background(), `{ hello }`, nil)
 	if err != nil || string(body) != string(endpoint.body) {
 		t.Fatalf("partial response = %s, %v", body, err)
+	}
+}
+
+func TestRemoteEndpointEffectiveSchemaUsesDelegatedIdentity(t *testing.T) {
+	// The effective schema endpoint is intentionally identity-bound; a static
+	// manifest must not be reused for a privileged caller's schema.
+	snapshot := newArtifact(t, "type Query { public: String secret: String }")
+	key := []byte("0123456789abcdef0123456789abcdef")
+	serverCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
+	clientCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
+	effective := newArtifact(t, "type Query { public: String }")
+	endpoint := &runtimeEndpoint{snapshot: snapshot, effective: core.SchemaArtifact{Schema: effective.Schema(), Fingerprint: schemaDigest(effective.Schema()), StructuralFingerprint: snapshot.Fingerprint(), Capabilities: effective.Capabilities()}}
+	mux := http.NewServeMux()
+	mux.Handle("/manifest", testManifestHandler("child", endpoint))
+	mux.Handle("/effective", NewEffectiveSchemaHandler(endpoint, serverCodec))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{EndpointID: "child", ManifestURL: server.URL + "/manifest", EffectiveSchemaURL: server.URL + "/effective", ExecuteURL: server.URL + "/graphql", Delegation: clientCodec, AllowHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := core.NewIdentity(core.IdentityInput{Tenant: "t", Subject: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := remote.EffectiveSchema(core.WithIdentity(context.Background(), identity))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Fingerprint == snapshot.Fingerprint() {
+		t.Fatal("effective schema fell back to static manifest")
+	}
+	gateway, err := core.NewGateway("parent", core.Namespace{Name: "child", EndpointID: "child", Endpoint: remote})
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed, err := gateway.EffectiveSchema(core.WithIdentity(context.Background(), identity))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(composed.Schema, "secret") {
+		t.Fatalf("parent gateway leaked static child schema: %s", composed.Schema)
+	}
+}
+
+func TestRemoteEndpointStaticManifestComposesWithoutEffectiveURL(t *testing.T) {
+	snapshot := newArtifact(t, "type Query { hello: String }")
+	endpoint := &runtimeEndpoint{snapshot: snapshot}
+	server := httptest.NewServer(testManifestHandler("child", endpoint))
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{EndpointID: "child", ManifestURL: server.URL, ExecuteURL: server.URL, AllowHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := core.NewGateway("parent", core.Namespace{Name: "child", EndpointID: "child", Endpoint: remote})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := gateway.EffectiveSchema(context.Background())
+	if err != nil || !strings.Contains(artifact.Schema, "hello") {
+		t.Fatalf("static remote effective schema = %#v, %v", artifact, err)
+	}
+}
+
+func TestRemoteEndpointRefreshesRevisionWithStableFingerprint(t *testing.T) {
+	endpoint := &versionedRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: newArtifact(t, "type Query { hello: String }")}, revision: 1}
+	server := httptest.NewServer(testManifestHandler("child", endpoint))
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{EndpointID: "child", ManifestURL: server.URL, ExecuteURL: server.URL, AllowHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint.revision = 2
+	if err := remote.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if state := remote.ControlState(); state.Revision != 2 {
+		t.Fatalf("control revision = %d", state.Revision)
+	}
+}
+
+func TestRemoteEndpointRejectsStaleManifestRevision(t *testing.T) {
+	first := newArtifact(t, "type Query { first: String }")
+	second := newArtifact(t, "type Query { second: String }")
+	var revision uint64 = 2
+	endpoint := &runtimeEndpoint{snapshot: first}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Manifest{Version: endpointProtocolVersion, Revision: revision, EndpointID: "child", Schema: endpoint.snapshot.Schema(), Fingerprint: endpoint.snapshot.Fingerprint(), Capabilities: endpoint.snapshot.Capabilities()})
+	}))
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{EndpointID: "child", ManifestURL: server.URL, ExecuteURL: server.URL, AllowHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint.snapshot = second
+	revision = 1
+	if err := remote.Refresh(context.Background()); !errors.Is(err, core.ErrControlStale) {
+		t.Fatalf("stale manifest revision error = %v", err)
+	}
+}
+
+func TestRemoteEndpointAcceptsChangedLegacyZeroRevisionManifest(t *testing.T) {
+	first := newArtifact(t, "type Query { first: String }")
+	second := newArtifact(t, "type Query { second: String }")
+	endpoint := &runtimeEndpoint{snapshot: first}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Manifest{Version: endpointProtocolVersion, EndpointID: "child", Schema: endpoint.snapshot.Schema(), Fingerprint: endpoint.snapshot.Fingerprint(), Capabilities: endpoint.snapshot.Capabilities()})
+	}))
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{EndpointID: "child", ManifestURL: server.URL, ExecuteURL: server.URL, AllowHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint.snapshot = second
+	if err := remote.Refresh(context.Background()); err != nil {
+		t.Fatalf("legacy zero revision refresh error = %v", err)
+	}
+}
+
+func TestRemoteEndpointRejectsMixedVersionExecutionResponse(t *testing.T) {
+	snapshot := newArtifact(t, "type Query { hello: String }")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", responseType)
+		w.Header().Set("GQL-Snapshot", "different-version")
+		_, _ = w.Write([]byte(`{"data":{"hello":"wrong"}}`))
+	}))
+	defer server.Close()
+	remote := &RemoteEndpoint{client: server.Client(), execute: server.URL, timeout: time.Second, maxResponse: 1024}
+	body, err := remote.executeOperation(context.Background(), `{ hello }`, nil, "", snapshot.Fingerprint())
+	if err == nil || body != nil {
+		t.Fatalf("mixed-version response accepted: body=%s err=%v", body, err)
 	}
 }
 
@@ -114,7 +270,7 @@ func TestRemoteEndpointLoadsManifestAndDelegatesIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	mux.Handle("/manifest", testManifestHandler("child", endpoint))
 	mux.Handle("/graphql", NewHandler(endpoint, Options{Delegation: serverCodec}))
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -159,7 +315,7 @@ func TestRemoteEndpointHealthMatchesManifestSnapshot(t *testing.T) {
 	snapshot := newArtifact(t, "type Query { hello: String }")
 	endpoint := &healthyRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}}
 	mux := http.NewServeMux()
-	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	mux.Handle("/manifest", testManifestHandler("child", endpoint))
 	mux.Handle("/graphql", NewHandler(endpoint))
 	mux.Handle("/health", NewHealthHandler(endpoint))
 	server := httptest.NewServer(mux)
@@ -179,7 +335,7 @@ func TestRemoteEndpointHealthMatchesManifestSnapshot(t *testing.T) {
 func TestRemoteEndpointRejectsHealthManifestWithoutHealthURL(t *testing.T) {
 	snapshot := newArtifact(t, "type Query { hello: String }")
 	endpoint := &healthyRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}}
-	server := httptest.NewServer(NewManifestHandler("child", endpoint))
+	server := httptest.NewServer(testManifestHandler("child", endpoint))
 	defer server.Close()
 	_, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
 		EndpointID: "child", ManifestURL: server.URL, ExecuteURL: server.URL + "/graphql", AllowHTTP: true,
@@ -193,7 +349,7 @@ func TestRemoteEndpointRefreshKeepsLastKnownGoodManifest(t *testing.T) {
 	snapshot := newArtifact(t, "type Query { hello: String }")
 	endpoint := &runtimeEndpoint{snapshot: snapshot}
 	mux := http.NewServeMux()
-	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	mux.Handle("/manifest", testManifestHandler("child", endpoint))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
@@ -204,7 +360,7 @@ func TestRemoteEndpointRefreshKeepsLastKnownGoodManifest(t *testing.T) {
 	}
 	endpoint.snapshot = newArtifact(t, "type Query { broken: String }")
 	badMux := http.NewServeMux()
-	badMux.Handle("/manifest", NewManifestHandler("different-id", endpoint))
+	badMux.Handle("/manifest", testManifestHandler("different-id", endpoint))
 	badServer := httptest.NewServer(badMux)
 	defer badServer.Close()
 	remote.manifest = badServer.URL + "/manifest"
@@ -220,7 +376,7 @@ func TestRemoteEndpointRefreshKeepsLastKnownGoodManifest(t *testing.T) {
 func TestRemoteEndpointRetainsRollingSnapshotWindow(t *testing.T) {
 	first := newArtifact(t, "type Query { hello: String }")
 	endpoint := &runtimeEndpoint{snapshot: first}
-	server := httptest.NewServer(NewManifestHandler("child", endpoint))
+	server := httptest.NewServer(testManifestHandler("child", endpoint))
 	defer server.Close()
 	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
 		EndpointID: "child", ManifestURL: server.URL, ExecuteURL: server.URL + "/graphql", AllowHTTP: true,
@@ -239,6 +395,12 @@ func TestRemoteEndpointRetainsRollingSnapshotWindow(t *testing.T) {
 	got, err := pinned.Snapshot()
 	if err != nil || got.Fingerprint() != first.Fingerprint() {
 		t.Fatalf("rolling snapshot = %#v, %v", got, err)
+	}
+	artifact, err := pinned.(interface {
+		EffectiveSchema(context.Context) (core.SchemaArtifact, error)
+	}).EffectiveSchema(context.Background())
+	if err != nil || artifact.StructuralFingerprint != first.Fingerprint() {
+		t.Fatalf("pinned static effective schema = %#v, %v", artifact, err)
 	}
 	endpoint.snapshot = first
 	if err = remote.Refresh(context.Background()); err != nil {
@@ -268,7 +430,7 @@ func TestRemoteGatewaySubscriptionUsesSignedSSEStream(t *testing.T) {
 	serverCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
 	clientCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
 	mux := http.NewServeMux()
-	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	mux.Handle("/manifest", testManifestHandler("child", endpoint))
 	mux.Handle("/graphql", NewHandler(endpoint, Options{Delegation: serverCodec}))
 	mux.Handle("/subscribe", NewSubscriptionHandler(endpoint, Options{Delegation: serverCodec}))
 	server := httptest.NewServer(mux)
@@ -308,7 +470,7 @@ func TestRemoteEndpointRejectsSubscriptionManifestWithoutExecutableStream(t *tes
 	frames := make(chan []byte)
 	endpoint := &subscriptionRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}, events: frames}
 	mux := http.NewServeMux()
-	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	mux.Handle("/manifest", testManifestHandler("child", endpoint))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
@@ -327,7 +489,7 @@ func TestRemoteEndpointRejectsFalseSubscriptionCapability(t *testing.T) {
 	`)
 	endpoint := &runtimeEndpoint{snapshot: snapshot}
 	mux := http.NewServeMux()
-	mux.Handle("/manifest", NewManifestHandler("child", endpoint))
+	mux.Handle("/manifest", testManifestHandler("child", endpoint))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 

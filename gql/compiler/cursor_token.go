@@ -33,8 +33,9 @@ func (e CursorError) Unwrap() error     { return e.Err }
 func (e CursorError) ErrorCode() string { return "BAD_CURSOR" }
 func BadCursor(err error) error         { return CursorError{Err: err} }
 
-// EncodeCursorToken creates a versioned opaque cursor whose contract prevents
-// replay against another schema, policy, tenant, route, coordinate, or ordering.
+// EncodeCursorToken creates a versioned cursor bound to schema, policy,
+// tenant, route, coordinate and ordering. Its tuple is client-visible and
+// untrusted; authorization and row policy are reapplied on every request.
 func EncodeCursorToken(contract CursorContract, tuple []any) (string, error) {
 	if err := validateCursorContract(contract); err != nil {
 		return "", err
@@ -46,7 +47,7 @@ func EncodeCursorToken(contract CursorContract, tuple []any) (string, error) {
 	return "v1." + base64.StdEncoding.EncodeToString(payload), nil
 }
 
-// DecodeCursorToken validates version, integrity, complete contract and tuple.
+// DecodeCursorToken validates version, context contract and tuple shape.
 func DecodeCursorToken(token string, expected CursorContract) ([]any, error) {
 	if err := validateCursorContract(expected); err != nil {
 		return nil, err

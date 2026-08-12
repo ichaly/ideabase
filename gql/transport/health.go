@@ -38,6 +38,12 @@ func NewHealthHandler(endpoint healthEndpoint) http.Handler {
 			return
 		}
 		report, err := endpoint.Health(r.Context())
+		if pinned := r.Header.Get("GQL-Snapshot"); pinned != "" && report.SnapshotFingerprint != pinned {
+			report.Ready, report.SnapshotOK = false, false
+			if err == nil {
+				err = fmt.Errorf("health snapshot unavailable for pinned revision")
+			}
+		}
 		status := http.StatusOK
 		if err != nil || !report.Ready {
 			status = http.StatusServiceUnavailable
@@ -50,6 +56,14 @@ func NewHealthHandler(endpoint healthEndpoint) http.Handler {
 }
 
 func (my *RemoteEndpoint) Health(ctx context.Context) (core.HealthReport, error) {
+	state := my.state.Load()
+	if state == nil || state.snapshot == nil {
+		return core.HealthReport{}, fmt.Errorf("remote health snapshot unavailable")
+	}
+	return my.healthFor(ctx, state.snapshot.Fingerprint())
+}
+
+func (my *RemoteEndpoint) healthFor(ctx context.Context, expected string) (core.HealthReport, error) {
 	if my == nil || my.health == "" {
 		return core.HealthReport{}, fmt.Errorf("remote health unavailable")
 	}
@@ -60,6 +74,9 @@ func (my *RemoteEndpoint) Health(ctx context.Context) (core.HealthReport, error)
 		return core.HealthReport{}, err
 	}
 	request.Header.Set("Accept", "application/json")
+	if expected != "" {
+		request.Header.Set("GQL-Snapshot", expected)
+	}
 	response, err := my.client.Do(request)
 	if err != nil {
 		return core.HealthReport{}, fmt.Errorf("remote health unavailable: %w", err)
@@ -74,8 +91,7 @@ func (my *RemoteEndpoint) Health(ctx context.Context) (core.HealthReport, error)
 		return core.HealthReport{}, fmt.Errorf("remote health response: %w", err)
 	}
 	report := core.HealthReport{Ready: status.Ready, SnapshotOK: status.SnapshotOK, SnapshotFingerprint: status.Snapshot, DatabaseOK: status.DatabaseOK, DatabaseError: status.DatabaseError, CDCConfigured: status.CDCConfigured, CDCConnected: status.CDCConnected, CDCError: status.CDCError, SubscriptionAvailable: status.SubscriptionAvailable}
-	state := my.state.Load()
-	if state == nil || state.snapshot == nil || status.Snapshot != state.snapshot.Fingerprint() {
+	if expected != "" && status.Snapshot != expected {
 		report.Ready, report.SnapshotOK = false, false
 		return report, fmt.Errorf("remote health snapshot mismatch")
 	}

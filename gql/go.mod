@@ -23,7 +23,8 @@ require (
 	github.com/testcontainers/testcontainers-go v0.38.0
 	github.com/valyala/fasthttp v1.72.0
 	github.com/vektah/gqlparser/v2 v2.5.36
-	golang.org/x/sync v0.21.0
+	golang.org/x/perf v0.0.0-20260709024250-82a0b07e230d
+	golang.org/x/sync v0.22.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.2
 )
@@ -32,6 +33,7 @@ require (
 	dario.cat/mergo v1.0.1 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
+	github.com/aclements/go-moremath v0.0.0-20210112150236-f10218a38794 // indirect
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
@@ -120,11 +122,11 @@ require (
 	go.opentelemetry.io/otel/trace v1.37.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.7.1 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.53.0 // indirect
-	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
-	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
+	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

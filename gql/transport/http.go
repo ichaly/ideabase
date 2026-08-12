@@ -46,7 +46,12 @@ const (
 	defaultMaxResponse  = 8 << 20
 	defaultTimeout      = 30 * time.Second
 	responseType        = "application/graphql-response+json"
+	delegationScheme    = "GQL-Delegation "
 )
+
+func delegationToken(r *http.Request) (string, bool) {
+	return strings.CutPrefix(r.Header.Get("Authorization"), delegationScheme)
+}
 
 // NewHandler returns a GraphQL-over-HTTP handler.
 func NewHandler(endpoint Endpoint, options ...Options) http.Handler {
@@ -151,21 +156,21 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx = core.WithMutationCommitMetadata(ctx)
 	}
 	if h.options.Delegation != nil {
-		const scheme = "GQL-Delegation "
-		authorization := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authorization, scheme) {
+		token, ok := delegationToken(r)
+		if !ok {
 			http.Error(w, "delegation required", http.StatusUnauthorized)
 			return
 		}
 		var authErr error
-		ctx, authErr = h.options.Delegation.Verify(ctx, strings.TrimPrefix(authorization, scheme), operationDigest(req, r.Header.Get("GQL-Snapshot")))
+		ctx, authErr = h.options.Delegation.Verify(ctx, token, operationDigest(req, r.Header.Get("GQL-Snapshot")))
 		if authErr != nil {
 			http.Error(w, "invalid delegation", http.StatusUnauthorized)
 			return
 		}
 	}
 	execution := h.endpoint
-	if revision := r.Header.Get("GQL-Snapshot"); revision != "" {
+	revision := r.Header.Get("GQL-Snapshot")
+	if revision != "" {
 		if h.options.Delegation == nil {
 			source, ok := h.endpoint.(manifestEndpoint)
 			if !ok {
@@ -199,6 +204,24 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if revision == "" {
+		if source, ok := h.endpoint.(manifestEndpoint); ok {
+			if pinner, pinnable := h.endpoint.(snapshotPinner); pinnable {
+				snapshot, snapshotErr := source.Snapshot()
+				if snapshotErr != nil || snapshot == nil {
+					http.Error(w, "snapshot unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				pinned, pinErr := pinner.ForSnapshot(snapshot.Fingerprint())
+				var executable bool
+				execution, executable = pinned.(Endpoint)
+				if pinErr != nil || !executable {
+					http.Error(w, "snapshot revision changed", http.StatusConflict)
+					return
+				}
+			}
+		}
+	}
 	if r.Method == http.MethodGet && req.Query == "" {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "GET requires an explicit query operation", http.StatusMethodNotAllowed)
@@ -221,6 +244,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var body []byte
 	var err error
+	if source, ok := execution.(manifestEndpoint); ok {
+		if snapshot, snapshotErr := source.Snapshot(); snapshotErr == nil && snapshot != nil {
+			w.Header().Set("GQL-Snapshot", snapshot.Fingerprint())
+		}
+	}
 	body, err = execution.ExecuteOperation(ctx, req.Query, req.Variables, req.OperationName)
 	if len(body) != 0 {
 		if int64(len(body)) > h.options.MaxResponseBytes {

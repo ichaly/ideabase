@@ -122,6 +122,22 @@ func TestPrepareFrontendSharesCoercionAndSelectionNormalization(t *testing.T) {
 	require.Equal(t, []string{"id", "name"}, fieldNames(user.SelectionSet))
 }
 
+func TestNormalizeSelectionTemplateDeepCopiesArgumentValues(t *testing.T) {
+	schema := loadFrontendSchema(t, `type Query { user(id: ID): String }`)
+	doc, errs := gqlparser.LoadQuery(schema, `{ user(id: "1") }`)
+	require.Empty(t, errs)
+	template := doc.Operations[0].SelectionSet
+	copySet, err := normalizeSelectionTemplate(template, nil, nil, schema)
+	require.NoError(t, err)
+	meta := &Metadata{}
+	meta.setCodecs([]Codec{idCodec{}})
+	decodeLiterals(schema, copySet, meta)
+	require.Equal(t, ast.IntValue, copySet[0].(*ast.Field).Arguments[0].Value.Kind)
+	require.Equal(t, "1", copySet[0].(*ast.Field).Arguments[0].Value.Raw)
+	require.Equal(t, ast.StringValue, template[0].(*ast.Field).Arguments[0].Value.Kind)
+	require.Equal(t, "1", template[0].(*ast.Field).Arguments[0].Value.Raw)
+}
+
 func loadFrontendSchema(t *testing.T, input string) *ast.Schema {
 	t.Helper()
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "frontend.graphql", Input: input})

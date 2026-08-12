@@ -456,7 +456,7 @@ func (my *Context) addCursor(name string, value any, index int) int {
 	return len(my.slots)
 }
 
-// SetCursorContract enables strict opaque cursor validation for subsequent slots.
+// SetCursorContract enables strict context-bound cursor validation for subsequent slots.
 func (my *Context) SetCursorContract(contract CursorContract) { my.cursorContract = &contract }
 func (my *Context) SetCursorFingerprint(fingerprint string)   { my.cursorFingerprint = fingerprint }
 func (my *Context) CursorFingerprint() string                 { return my.cursorFingerprint }

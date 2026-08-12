@@ -22,7 +22,7 @@ func (my *Engine) runOperation(ctx context.Context, operationName string, variab
 	if !ok {
 		return gqlReply{Errors: gqlerror.List{gqlerror.Errorf("未找到名为'%s'的持久化操作", operationName)}}
 	}
-	return my.queryData(ctx, query, variables, operationName)
+	return my.queryData(ctx, query.query, variables, operationName)
 }
 
 func (my *Engine) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {

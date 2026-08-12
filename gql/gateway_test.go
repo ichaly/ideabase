@@ -487,9 +487,9 @@ func TestGatewayApplyRejectsStaleAndConflictingClusterUpdates(t *testing.T) {
 	_, err = gateway.Apply(update)
 	require.NoError(t, err, "an identical control-plane delivery must be idempotent")
 	_, err = gateway.Apply(GatewayUpdate{Revision: 3, Namespaces: []Namespace{{Name: "crm", Endpoint: endpoint("split-brain")}}})
-	require.ErrorContains(t, err, "conflicting")
+	require.ErrorIs(t, err, ErrControlConflict)
 	_, err = gateway.Apply(GatewayUpdate{Revision: 2, Namespaces: []Namespace{{Name: "crm", Endpoint: endpoint("v2")}}})
-	require.ErrorContains(t, err, "stale")
+	require.ErrorIs(t, err, ErrControlStale)
 }
 
 func TestGAGatewayApplyCannotRollBackUnderConcurrentControlPlaneLoad(t *testing.T) {

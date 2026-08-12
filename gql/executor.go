@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
@@ -123,21 +124,21 @@ func (my gqlReply) mutationCommit(ctx context.Context, state string) gqlReply {
 // 负责解析GraphQL查询、编译为SQL并执行查询，支持多种数据库方言
 // 可作为Fiber插件集成到Web服务中，提供标准的GraphQL API
 type Engine struct {
-	intro             *intro.Handler      // 自省处理器，处理__schema和__type查询
-	schema            *ast.Schema         // GraphQL模式定义
-	database          *gorm.DB            // 数据库连接，用于执行生成的SQL
-	metadata          *Metadata           // 元数据信息，包含表结构、关系等
-	compiler          *Compiler           // 编译器，将GraphQL查询编译为SQL
-	cache             *planCache          // 执行计划缓存，命中路径零解析零编译
-	policyCache       *planCache          // 外部策略形状计划；请求值只留参数槽
-	flight            singleflight.Group  // 未命中收敛：并发的同一冷查询只解析编译一次
-	feedMu            sync.Mutex          // 保护feeds及各feed的订阅者集合
-	feeds             map[string]*feed    // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
-	resolvers         map[string]Resolver // 自定义字段解析器注册表
-	source            string              // 原始schema文本，启动期注册声明合并时重建的基底
-	documents         map[string]string   // 持久化查询文档：操作名 -> 查询文本
-	remotes           map[string]Remote   // 远程数据源注册表：数据源名 -> 实现
-	cdc               notifier            // CDC唤醒源（按数据库驱动从注册表选取）
+	intro             *intro.Handler               // 自省处理器，处理__schema和__type查询
+	schema            *ast.Schema                  // GraphQL模式定义
+	database          *gorm.DB                     // 数据库连接，用于执行生成的SQL
+	metadata          *Metadata                    // 元数据信息，包含表结构、关系等
+	compiler          *Compiler                    // 编译器，将GraphQL查询编译为SQL
+	cache             *planCache                   // 执行计划缓存，命中路径零解析零编译
+	policyCache       *planCache                   // 外部策略形状计划；请求值只留参数槽
+	flight            singleflight.Group           // 未命中收敛：并发的同一冷查询只解析编译一次
+	feedMu            sync.Mutex                   // 保护feeds及各feed的订阅者集合
+	feeds             map[string]*feed             // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
+	resolvers         map[string]Resolver          // 自定义字段解析器注册表
+	source            string                       // 原始schema文本，启动期注册声明合并时重建的基底
+	documents         map[string]persistedDocument // 持久化查询文档：操作名 -> 已验证模板
+	remotes           map[string]Remote            // 远程数据源注册表：数据源名 -> 实现
+	cdc               notifier                     // CDC唤醒源（按数据库驱动从注册表选取）
 	finalizeOnce      sync.Once
 	snapshot          *Snapshot
 	snapshotErr       error
@@ -151,6 +152,15 @@ type Engine struct {
 	effectiveFlight   singleflight.Group
 	subscriptionLease time.Duration
 	observer          Observer
+	closed            atomic.Bool
+	streamWG          sync.WaitGroup
+	refreshSem        chan struct{}
+	tenantRefresh     [64]chan struct{}
+}
+
+type persistedDocument struct {
+	query string
+	doc   *ast.QueryDocument
 }
 
 // options 读取schema级选项（元数据未配置时为零值安全默认）
@@ -161,12 +171,25 @@ func (my *Engine) options() internal.SchemaConfig {
 	return my.metadata.cfg.Schema
 }
 
-// Close 释放后台资源：CDC复制连接与重连循环退出；
-// 存续的共享订阅流不再被唤醒，随各订阅者ctx结束
+// Close 释放CDC与所有共享订阅流，并等待后台循环退出。
 func (my *Engine) Close() {
+	if my == nil || !my.closed.CompareAndSwap(false, true) {
+		return
+	}
+	my.feedMu.Lock()
+	for key, f := range my.feeds {
+		f.stop()
+		for ch := range f.subs {
+			close(ch)
+		}
+		f.subs = nil
+		delete(my.feeds, key)
+	}
+	my.feedMu.Unlock()
 	if my.cdc != nil {
 		my.cdc.close()
 	}
+	my.streamWG.Wait()
 }
 
 // register 是 Builder 唯一使用的启动期装配入口：Resolver/Remote 按实现路由
@@ -264,9 +287,13 @@ func newEngine(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Engine, erro
 		effectiveCache: newEffectiveCache(128),
 		feeds:          make(map[string]*feed),
 		resolvers:      make(map[string]Resolver),
-		documents:      make(map[string]string),
+		documents:      make(map[string]persistedDocument),
+		refreshSem:     make(chan struct{}, 16),
 		remotes:        make(map[string]Remote),
 		validation:     validatorrules.NewDefaultRules(),
+	}
+	for i := range executor.tenantRefresh {
+		executor.tenantRefresh[i] = make(chan struct{}, 4)
 	}
 
 	s, err := gqlparser.LoadSchema(&ast.Source{
@@ -370,6 +397,11 @@ func (my *Engine) loadDocument(content string) error {
 		if operation.Name == "" {
 			return fmt.Errorf("持久化文档中的操作必须命名")
 		}
+		if existing, ok := my.documents[operation.Name]; ok && existing.query != content {
+			return fmt.Errorf("持久化操作名已注册且内容不同: %s", operation.Name)
+		}
+	}
+	for _, operation := range doc.Operations {
 		if !conditional {
 			// Static documents can be guarded before prewarm. Conditional documents
 			// are normalized and checked per request after skipped fields disappear.
@@ -378,7 +410,7 @@ func (my *Engine) loadDocument(content string) error {
 				return err
 			}
 		}
-		my.documents[operation.Name] = content
+		my.documents[operation.Name] = persistedDocument{query: content, doc: doc}
 		// Conditional directives depend on request variables; never prewarm a
 		// directive-free AST into the shared cache for these documents.
 		if conditional {
@@ -402,8 +434,13 @@ func (my *Engine) loadDocument(content string) error {
 			})
 			continue
 		}
-		if _, _, err := my.compile(key, operation, introspection, nil); err != nil {
+		entry, _, err := my.compile(key, operation, introspection, nil)
+		if err != nil {
 			log.Warn().Err(err).Str("operation", operation.Name).Msg("持久化文档预热编译失败，执行期将重试编译")
+		} else if _, snapshotErr := my.Snapshot(); snapshotErr == nil && my.baseView != nil {
+			// Startup prewarm and runtime lookup share the effective-view key.
+			my.cache.Put(planKey{operation: operation.Name, query: content,
+				view: my.baseView.artifact.Fingerprint + "\x00" + my.baseView.artifact.PermissionSignature}, entry)
 		}
 	}
 	return nil
@@ -428,6 +465,9 @@ func (my *Engine) Execute(ctx context.Context, query string, variables map[strin
 }
 
 func (my *Engine) executeBytes(ctx context.Context, query string, variables map[string]interface{}, operationName string) ([]byte, error) {
+	if my == nil || my.closed.Load() {
+		return nil, fmt.Errorf("gql engine is closed")
+	}
 	done := my.startPhase(ctx, PhaseExecute)
 	reply := my.execute(ctx, query, variables, operationName)
 	body, err := reply.MarshalJSON()
@@ -1011,6 +1051,32 @@ func (my *Engine) parse(query, operationName string, variables map[string]interf
 }
 
 func (my *Engine) parseWithView(view *effectiveView, query, operationName string, variables map[string]interface{}) (*ast.OperationDefinition, error) {
+	if cached, ok := my.documents[operationName]; ok && cached.query == query && cached.doc != nil {
+		doc := cached.doc
+		operation := doc.Operations.ForName(operationName)
+		if operation == nil && operationName == "" && len(doc.Operations) == 1 {
+			operation = doc.Operations[0]
+		}
+		if operation == nil {
+			return nil, fmt.Errorf("未找到名为'%s'的操作", operationName)
+		}
+		coerced, err := coerceVariables(view.schema, operation, variables)
+		if err != nil {
+			return nil, err
+		}
+		selection, err := normalizeSelectionTemplate(operation.SelectionSet, doc.Fragments, coerced, view.schema)
+		if err != nil {
+			return nil, err
+		}
+		copied := *operation
+		operation = &copied
+		operation.SelectionSet = selection
+		if err := my.validateMaxDepth(operation); err != nil {
+			return nil, err
+		}
+		decodeLiterals(view.schema, operation.SelectionSet, my.metadata)
+		return operation, nil
+	}
 	prepared, err := prepareFrontend(view.schema, query, operationName, variables, my.metadata.MaxTokens(), my.validation)
 	if err != nil {
 		return nil, err

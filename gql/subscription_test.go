@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,41 @@ import (
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSubscriptionRetriesUntilDatabaseRecovers(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	if executor.cdc != nil {
+		executor.cdc.close()
+	}
+	executor.cdc = runtimeTestNotifier{}
+	plan, err := executor.plan(`subscription { users { total } }`, "", nil)
+	require.NoError(t, err)
+	plan.SQL = strings.ReplaceAll(plan.SQL, `"public"."users"`, `"public"."retry_users"`)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &watcher{wake: make(chan struct{}, 1)}
+	events := make(chan gqlReply, 2)
+	f := &feed{key: "retry", subs: map[chan gqlReply]bool{events: true}, stop: cancel, done: ctx.Done()}
+	executor.streamWG.Add(1)
+	go executor.stream(ctx, plan, nil, w, f)
+
+	select {
+	case reply := <-events:
+		require.NotEmpty(t, reply.Errors)
+	case <-time.After(3 * time.Second):
+		t.Fatal("missing initial database error")
+	}
+	require.NoError(t, db.Exec(`CREATE VIEW retry_users AS SELECT * FROM users`).Error)
+	select {
+	case reply := <-events:
+		require.Empty(t, reply.Errors)
+		require.EqualValues(t, 0, reply.Data["users"].(map[string]any)["total"])
+	case <-time.After(3 * time.Second):
+		t.Fatal("subscription did not recover through retry")
+	}
+}
 
 // TestSubscribe CDC订阅：首推当前结果，WAL变更触发推送，取消后通道关闭
 func TestSubscribe(t *testing.T) {
@@ -173,4 +209,11 @@ func TestSubscribeScope(t *testing.T) {
 	users := reply.Data["users"].(map[string]interface{})
 	require.EqualValues(t, 1, users["total"])
 	require.Equal(t, "t1u", users["items"].([]interface{})[0].(map[string]interface{})["name"])
+}
+
+func TestSubscriptionRetryDelayIsBoundedAndExponential(t *testing.T) {
+	a := subscriptionRetryDelay(0)
+	b := subscriptionRetryDelay(1)
+	require.Greater(t, b, a)
+	require.LessOrEqual(t, subscriptionRetryDelay(20), 30*time.Second)
 }

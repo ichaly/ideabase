@@ -82,6 +82,17 @@ type GatewayUpdate struct {
 	Namespaces []Namespace
 }
 
+var (
+	ErrControlStale    = errors.New("stale control revision")
+	ErrControlConflict = errors.New("conflicting control revision")
+)
+
+// ControlState is the machine-readable publication state of a gateway.
+type ControlState struct {
+	Revision    uint64 `json:"revision"`
+	Fingerprint string `json:"fingerprint"`
+}
+
 type gatewayState struct {
 	id              string
 	schema          *ast.Schema
@@ -377,6 +388,31 @@ func namespaceIdentity(namespace Namespace) (string, error) {
 }
 
 func (my *Gateway) EndpointID() string { return my.id }
+func (my *Gateway) ManifestRevision() uint64 {
+	_, revision, _ := my.ManifestState()
+	return revision
+}
+func (my *Gateway) ControlState() ControlState {
+	snapshot, revision, _ := my.ManifestState()
+	if snapshot == nil {
+		return ControlState{}
+	}
+	return ControlState{Revision: revision, Fingerprint: snapshot.Fingerprint()}
+}
+
+// ManifestState returns one atomic control-plane view for transport publication.
+func (my *Gateway) ManifestState() (*Snapshot, uint64, error) {
+	if my == nil {
+		return nil, 0, fmt.Errorf("gateway不可用")
+	}
+	my.refresh.Lock()
+	defer my.refresh.Unlock()
+	state := my.state.Load()
+	if state == nil {
+		return nil, my.revision, fmt.Errorf("gateway不可用")
+	}
+	return state.snapshot, my.revision, nil
+}
 func (my *Gateway) effectiveSchemaAware() bool {
 	state := my.current()
 	return state != nil && state.identityAware
@@ -458,6 +494,12 @@ func (my *Gateway) Apply(update GatewayUpdate) (*Snapshot, error) {
 	if update.Revision == 0 {
 		return nil, fmt.Errorf("gateway revision is required")
 	}
+	my.refresh.Lock()
+	stale := update.Revision < my.revision
+	my.refresh.Unlock()
+	if stale {
+		return nil, fmt.Errorf("%w: %d", ErrControlStale, update.Revision)
+	}
 	state, err := buildGatewayState(my.id, update.Namespaces)
 	if err != nil {
 		return nil, err
@@ -466,13 +508,13 @@ func (my *Gateway) Apply(update GatewayUpdate) (*Snapshot, error) {
 	defer my.refresh.Unlock()
 	current := my.state.Load()
 	if update.Revision < my.revision {
-		return nil, fmt.Errorf("stale gateway revision %d", update.Revision)
+		return nil, fmt.Errorf("%w: %d", ErrControlStale, update.Revision)
 	}
 	if update.Revision == my.revision {
 		if current != nil && current.snapshot.Fingerprint() == state.snapshot.Fingerprint() {
 			return current.snapshot, nil
 		}
-		return nil, fmt.Errorf("conflicting gateway revision %d", update.Revision)
+		return nil, fmt.Errorf("%w: %d", ErrControlConflict, update.Revision)
 	}
 	for issued := my.issued.Load(); issued < update.Revision && !my.issued.CompareAndSwap(issued, update.Revision); issued = my.issued.Load() {
 	}
@@ -648,7 +690,10 @@ func (my *gatewayState) forwardSubscription(ctx context.Context, events chan<- [
 			child, err := decodeEndpointReply(body)
 			if err != nil {
 				frame, _ := (gqlReply{Data: map[string]any{responseKey(field): nil}, Errors: endpointProtocolError(responseKey(field), field)}).MarshalJSON()
-				events <- frame
+				select {
+				case events <- frame:
+				case <-ctx.Done():
+				}
 				return
 			}
 			definition := my.schema.Subscription.Fields.ForName(field.Name)

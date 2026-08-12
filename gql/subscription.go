@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
+	"math/rand"
 	"net/url"
 	"sort"
 	"strings"
@@ -26,6 +27,54 @@ type feed struct {
 	last gqlReply // 最近一次推送，后来的订阅者立即补发（免重查）
 	live bool     // last是否已有效
 	stop context.CancelFunc
+	done <-chan struct{}
+}
+
+func subscriptionRetryDelay(attempt int) time.Duration {
+	if attempt > 10 {
+		attempt = 10
+	}
+	d := 100 * time.Millisecond * time.Duration(1<<attempt)
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	return d/2 + time.Duration(rand.Int63n(int64(d/2)+1))
+}
+
+func (my *Engine) acquireRefresh(ctx context.Context) func() {
+	select {
+	case my.refreshSem <- struct{}{}:
+	case <-ctx.Done():
+		return func() {}
+	}
+	tenant := ""
+	if identity, ok := IdentityFromContext(ctx); ok {
+		tenant = identity.Tenant()
+	} else if route, ok := PinnedRoute(ctx); ok && route.Tenant != "" {
+		tenant = route.Tenant
+	} else if scope := scopeValues(ctx); scope != nil {
+		tenant = fmt.Sprint(scope["tenant"])
+	}
+	sem := my.tenantRefresh[tenantRefreshSlot(tenant)]
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		<-my.refreshSem
+		return func() {}
+	}
+	return func() { <-sem; <-my.refreshSem }
+}
+
+func tenantRefreshSlot(tenant string) uint64 {
+	const (
+		offset = uint64(14695981039346656037)
+		prime  = uint64(1099511628211)
+	)
+	hash := offset
+	for i := 0; i < len(tenant); i++ {
+		hash = (hash ^ uint64(tenant[i])) * prime
+	}
+	return hash % 64
 }
 
 // subscribe 订阅查询：基于WAL逻辑复制(CDC)的变更推送
@@ -34,6 +83,9 @@ type feed struct {
 // 首次立即推送当前结果；ctx取消后通道关闭
 // 依赖数据库 wal_level=logical 与连接账号的REPLICATION权限
 func (my *Engine) subscribe(ctx context.Context, query string, variables map[string]interface{}, operationName string) (<-chan gqlReply, error) {
+	if my == nil || my.closed.Load() {
+		return nil, fmt.Errorf("gql engine is closed")
+	}
 	if _, err := my.Snapshot(); err != nil {
 		return nil, err
 	}
@@ -94,6 +146,10 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 	events := make(chan gqlReply, 1)
 
 	my.feedMu.Lock()
+	if my.closed.Load() {
+		my.feedMu.Unlock()
+		return nil, fmt.Errorf("gql engine is closed")
+	}
 	f := my.feeds[key]
 	if f == nil {
 		w, err := my.cdc.watch(subscriptionTableIdentities(my.metadata.SchemaName(), plan.tables))
@@ -102,8 +158,9 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 			return nil, err
 		}
 		fctx, stop := context.WithCancel(WithScope(context.WithoutCancel(ctx), scope))
-		f = &feed{key: key, subs: make(map[chan gqlReply]bool), stop: stop}
+		f = &feed{key: key, subs: make(map[chan gqlReply]bool), stop: stop, done: fctx.Done()}
 		my.feeds[key] = f
+		my.streamWG.Add(1)
 		go my.stream(fctx, plan, variables, w, f)
 	}
 	f.subs[events] = true
@@ -112,12 +169,19 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 	}
 	my.feedMu.Unlock()
 
-	go func() { <-ctx.Done(); my.leave(key, f, events) }()
+	go func() {
+		select {
+		case <-ctx.Done():
+			my.leave(key, f, events)
+		case <-f.done:
+		}
+	}()
 	return events, nil
 }
 
 // stream 共享流事件循环：首查推送，之后表变更唤醒重查，变化结果扇出给全部订阅者
 func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]interface{}, w *watcher, f *feed) {
+	defer my.streamWG.Done()
 	defer my.cdc.unwatch(w)
 
 	var last uint64
@@ -130,15 +194,58 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 		defer ticker.Stop()
 	}
 	digest := fnv.New64a() // stream单goroutine持有，tick内Reset复用免每次分配
-	publish := func() {
-		if reply, changed := my.tick(ctx, plan, variables, digest, &last); changed {
-			my.feedMu.Lock()
-			f.last, f.live = reply, true
-			for ch := range f.subs {
-				push(ch, reply)
-			}
-			my.feedMu.Unlock()
+	attempt := 0
+	var retry *time.Timer
+	var retryC <-chan time.Time
+	defer func() {
+		if retry != nil {
+			retry.Stop()
 		}
+	}()
+	stopRetry := func() {
+		attempt = 0
+		retryC = nil
+		if retry != nil && !retry.Stop() {
+			select {
+			case <-retry.C:
+			default:
+			}
+		}
+	}
+	scheduleRetry := func() {
+		attempt++
+		delay := subscriptionRetryDelay(attempt)
+		if retry == nil {
+			retry = time.NewTimer(delay)
+		} else {
+			if !retry.Stop() {
+				select {
+				case <-retry.C:
+				default:
+				}
+			}
+			retry.Reset(delay)
+		}
+		retryC = retry.C
+	}
+	publish := func() {
+		release := my.acquireRefresh(ctx)
+		defer release()
+		reply, changed := my.tick(ctx, plan, variables, digest, &last)
+		if reply.Errors != nil {
+			scheduleRetry()
+		} else {
+			stopRetry()
+		}
+		if !changed {
+			return
+		}
+		my.feedMu.Lock()
+		f.last, f.live = reply, true
+		for ch := range f.subs {
+			push(ch, reply)
+		}
+		my.feedMu.Unlock()
 	}
 	publish()
 	for {
@@ -161,6 +268,8 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 				}
 			}
 		case <-w.wake:
+			publish()
+		case <-retryC:
 			publish()
 		case <-ctx.Done():
 			return
@@ -326,9 +435,10 @@ func (my *Engine) UpgradeContext(rc *fasthttp.RequestCtx, ctx context.Context) e
 
 // socketSession 单个WebSocket连接的订阅会话
 type socketSession struct {
-	mu   sync.Mutex
-	conn *websocket.Conn
-	subs map[string]*socketSubscription
+	mu      sync.Mutex
+	writeMu sync.Mutex
+	conn    *websocket.Conn
+	subs    map[string]*socketSubscription
 }
 
 type socketSubscription struct{ stop context.CancelFunc }
@@ -338,11 +448,21 @@ type socketSubscription struct{ stop context.CancelFunc }
 // configuration surface is introduced.
 const maxActiveSubscriptions = 100
 
+var wsWriteTimeout = time.Second
+
 // write 串行化并发写
 func (my *socketSession) write(message wsReply) error {
-	my.mu.Lock()
-	defer my.mu.Unlock()
-	return my.conn.WriteJSON(message)
+	my.writeMu.Lock()
+	defer my.writeMu.Unlock()
+	if err := my.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
+		return err
+	}
+	err := my.conn.WriteJSON(message)
+	_ = my.conn.SetWriteDeadline(time.Time{})
+	if err != nil {
+		_ = my.conn.Close()
+	}
+	return err
 }
 
 // wsInitTimeout connection_init握手时限，超时按协议关4408（测试可缩短）
