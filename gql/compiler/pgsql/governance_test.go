@@ -1,6 +1,7 @@
 package pgsql
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql"
@@ -42,8 +43,9 @@ func TestGovernancePermissionsAreStableRoleDisjunction(t *testing.T) {
 func TestGovernanceUpsertConflictUsesUpdatePolicy(t *testing.T) {
 	c := &protocol.Class{Name: "User", Table: "users", PrimaryKeys: []string{"id"}, Fields: map[string]*protocol.Field{
 		"id": {Name: "id", Column: "id"}, "name": {Name: "name", Column: "name"},
+		"status": {Name: "status", Column: "status", UpdatePreset: &protocol.ValueSource{Value: "locked"}},
 	}, Where: []protocol.Predicate{{Column: "active", Operator: "eq", Value: true}}, Permissions: map[string]*protocol.Permission{
-		"writer": {Insert: []string{"name"}, Update: []string{"name"}, Filter: []protocol.Predicate{{Column: "owner_id", Operator: "eq", Context: "userId"}}},
+		"writer": {Insert: []string{"name"}, Update: []string{"name"}, Filter: []protocol.Predicate{{Column: "owner_id", Operator: "eq", Context: "userId"}}, Check: []protocol.Predicate{{Column: "name", Operator: "eq", Value: "allowed"}, {Column: "status", Operator: "eq", Value: "locked"}}},
 	}}
 	ctx := compiler.NewContext(testHoster{class: c}, `"`, nil)
 	defer ctx.Release()
@@ -55,6 +57,23 @@ func TestGovernanceUpsertConflictUsesUpdatePolicy(t *testing.T) {
 	require.Contains(t, ctx.String(), `WHERE`)
 	require.Contains(t, ctx.String(), `"users"."active" =`)
 	require.Contains(t, ctx.String(), `"users"."owner_id" =`)
+	require.Contains(t, ctx.String(), `EXCLUDED."name" =`)
+	require.NotContains(t, ctx.String(), `EXCLUDED."status"`, "check must use the committed update preset")
+	require.Equal(t, 1, strings.Count(ctx.String(), ` = ANY(`), "one role must bind its filter and check atomically")
+}
+
+func TestLegacyResultUsesRequestedAliases(t *testing.T) {
+	ctx := compiler.NewContext(nil, `"`, nil)
+	defer ctx.Release()
+	d := &Dialect{}
+	c := &protocol.Class{Name: "User", Table: "users", PrimaryKeys: []string{"id"}, Fields: map[string]*protocol.Field{"id": {Name: "id", Column: "id"}}}
+	u := &unit{class: c, field: &ast.Field{Name: "users", SelectionSet: ast.SelectionSet{
+		&ast.Field{Name: "items", Alias: "rows", SelectionSet: ast.SelectionSet{&ast.Field{Name: "id", Alias: "uid"}}},
+		&ast.Field{Name: "total", Alias: "count"},
+	}}, shape: shapeResult, index: 0, args: ast.ArgumentList{}}
+	require.NoError(t, d.buildResultWrap(ctx, u))
+	require.Contains(t, ctx.String(), `'rows'`)
+	require.Contains(t, ctx.String(), `'count'`)
 }
 
 func TestGovernanceEmptyPermissionsDeny(t *testing.T) {

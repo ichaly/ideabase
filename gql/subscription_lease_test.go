@@ -2,6 +2,8 @@ package gql
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,4 +83,83 @@ func TestSubscriptionLeaseExpiresWithoutDatabaseWake(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("lease did not expire without a CDC wake")
 	}
+}
+
+func TestSubscriptionWakeChecksLeaseBeforeFetch(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	barrier := NewRevocationBarrier(1, map[string]TenantSecurityState{"t1": {}})
+	executor.revocation = barrier
+	identity, err := NewIdentity(IdentityInput{Tenant: "t1", Subject: "u", PolicyRevision: 1})
+	require.NoError(t, err)
+	route := TenantRoute{Tenant: "t1", Revision: 1, CacheKey: "route"}
+	ctx, cancel := context.WithCancel(PinRoute(WithIdentity(context.Background(), identity), route))
+	defer cancel()
+	plan, err := executor.plan(`subscription { users { total } }`, "", nil)
+	require.NoError(t, err)
+	watch := &watcher{wake: make(chan struct{}, 1)}
+	events := make(chan gqlReply, 2)
+	feed := &feed{subs: map[chan gqlReply]bool{events: true}, stop: cancel, done: ctx.Done()}
+	lease := subscriptionLease{Barrier: barrier, Identity: identity, Route: route, Interval: time.Hour}
+	streamCtx := withSubscriptionLease(ctx, lease)
+	executor.streamWG.Add(1)
+	go executor.stream(streamCtx, plan, nil, watch, feed)
+	select {
+	case first := <-events:
+		require.Empty(t, first.Errors)
+	case <-time.After(3 * time.Second):
+		t.Fatal("missing initial subscription result")
+	}
+
+	require.NoError(t, barrier.Replace(2, map[string]TenantSecurityState{"t1": {Disabled: true}}))
+
+	// The lease interval is deliberately long: only the CDC wake can end it.
+	watch.wake <- struct{}{}
+	select {
+	case expired, ok := <-events:
+		require.True(t, ok)
+		require.Contains(t, expired.Errors.Error(), "disabled")
+	case <-time.After(time.Second):
+		t.Fatal("revoked subscription did not publish an error")
+	}
+}
+
+func TestSubscriptionWaitsForBoundedCDCReconnect(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	plan, err := executor.plan(`subscription { users { total } }`, "", nil)
+	require.NoError(t, err)
+	connected := atomic.Bool{}
+	connected.Store(true)
+	outage := atomic.Int64{}
+	watch := &watcher{wake: make(chan struct{}, 1), status: func() (bool, string) {
+		if connected.Load() {
+			return true, ""
+		}
+		return false, "CDC replication connection lost"
+	}, outage: func() time.Duration { return time.Duration(outage.Load()) }}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan gqlReply, 2)
+	feed := &feed{subs: map[chan gqlReply]bool{events: true}, stop: cancel, done: ctx.Done()}
+	executor.streamWG.Add(1)
+	go executor.stream(ctx, plan, nil, watch, feed)
+	select {
+	case first := <-events:
+		require.Empty(t, first.Errors)
+	case <-time.After(3 * time.Second):
+		t.Fatal("missing initial subscription result")
+	}
+	connected.Store(false)
+	watch.wake <- struct{}{}
+	select {
+	case event := <-events:
+		t.Fatalf("transient disconnect unexpectedly ended feed: %v", event.Errors)
+	case <-time.After(50 * time.Millisecond):
+	}
+	outage.Store(int64(cdcReconnectGrace))
+	watch.wake <- struct{}{}
+	failed, ok := <-events
+	require.True(t, ok)
+	require.Contains(t, fmt.Sprint(failed.Errors), "CDC replication connection lost")
 }

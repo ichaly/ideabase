@@ -125,6 +125,7 @@ func (my *_DialectSuite) TestCursorGuards() {
 		"after需要first": {`query ($c: Cursor) { users(after: $c) { items { id } } }`, "必须配合first/last"},
 		"pageInfo需要游标": {`query { users { items { id } pageInfo { hasNext } } }`, "需要配合first/last"},
 		"first字面量须正":   {`query { users(first: 0) { items { id } } }`, "必须是正整数或变量"},
+		"first变量须正":    {`query ($n: Int) { users(first: $n) { items { id } } }`, "必须是正整数"},
 		"排序方向须字面量":     {`query ($d: SortDirection) { users(first: 2, sort: { name: $d }) { items { id } } }`, "无效的排序方向"},
 		"排序键须非空列":      {`query { users(first: 2, sort: { age: DESC }) { items { id } } }`, "非空列"},
 	} {
@@ -134,7 +135,11 @@ func (my *_DialectSuite) TestCursorGuards() {
 
 			compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
 			my.Require().NoError(err)
-			_, _, err = compile.Build(doc.Operations[0], nil)
+			var vars map[string]interface{}
+			if name == "first变量须正" {
+				vars = map[string]interface{}{"n": 0}
+			}
+			_, _, err = compile.Build(doc.Operations[0], vars)
 			my.Assert().ErrorContains(err, c.wants)
 		})
 	}

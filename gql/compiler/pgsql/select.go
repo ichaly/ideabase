@@ -188,7 +188,7 @@ func (my *Dialect) buildConnectionWrap(ctx *compiler.Context, u *unit) error {
 			typeNames = append(typeNames, f)
 		}
 	}
-	page, err := newPager(scope{class: u.class}, u.args)
+	page, err := newPager(ctx, scope{class: u.class}, u.args)
 	if err != nil {
 		return err
 	}
@@ -198,7 +198,7 @@ func (my *Dialect) buildConnectionWrap(ctx *compiler.Context, u *unit) error {
 			limit = protocol.DEFAULT_PAGE_SIZE
 		}
 		u.args = append(u.args, &ast.Argument{Name: protocol.FIRST, Value: &ast.Value{Kind: ast.IntValue, Raw: strconv.Itoa(limit)}})
-		page, err = newPager(scope{class: u.class}, u.args)
+		page, err = newPager(ctx, scope{class: u.class}, u.args)
 		if err != nil {
 			return err
 		}
@@ -294,13 +294,16 @@ func (my *Dialect) buildConnectionTotal(ctx *compiler.Context, u *unit) error {
 // buildResultWrap 根字段的 items/total/pageInfo 包装
 func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	var items, typeNames []*ast.Field
+	itemsAlias, totalAlias := protocol.ITEMS, protocol.TOTAL
 	var pageInfo *ast.Field
 	var hasTotal bool
 	for _, f := range compiler.FieldsOf(u.field.SelectionSet) {
 		switch f.Name {
 		case protocol.ITEMS:
+			itemsAlias = f.Alias
 			items = compiler.FieldsOf(f.SelectionSet)
 		case protocol.TOTAL:
+			totalAlias = f.Alias
 			hasTotal = true
 		case protocol.PAGE_INFO:
 			pageInfo = f
@@ -312,7 +315,7 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 		return fmt.Errorf("查询 %s 缺少items选择集", u.field.Name)
 	}
 
-	page, err := newPager(scope{class: u.class}, u.args)
+	page, err := newPager(ctx, scope{class: u.class}, u.args)
 	if err != nil {
 		return err
 	}
@@ -339,7 +342,11 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	if len(items) > 0 {
 		next()
 		// items聚合：游标模式剔除辅助列、按行号FILTER并保持显示顺序
-		ctx.Write(`'`, protocol.ITEMS, `', COALESCE(JSONB_AGG(`)
+		if itemsAlias == protocol.ITEMS {
+			ctx.Write(`'items', COALESCE(JSONB_AGG(`)
+		} else {
+			ctx.Write(`'`, itemsAlias, `', COALESCE(JSONB_AGG(`)
+		}
 		if page == nil {
 			ctx.Write(`TO_JSONB(`)
 			sr().Write(`.*)`)
@@ -373,7 +380,11 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 
 	if hasTotal {
 		next()
-		ctx.Write(`'`, protocol.TOTAL, `', COALESCE(MIN(`)
+		if totalAlias == protocol.TOTAL {
+			ctx.Write(`'total', COALESCE(MIN(`)
+		} else {
+			ctx.Write(`'`, totalAlias, `', COALESCE(MIN(`)
+		}
 		sr().Write(`."__total"), 0)`)
 	}
 	if pageInfo != nil {
@@ -819,6 +830,12 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 		}
 		ctx.Space(strings.ToUpper(name))
 		if arg.Value.Kind == ast.Variable {
+			if value, ok := ctx.Variable(arg.Value.Raw); ok && value != nil {
+				count, valid := paginationInt(value)
+				if !valid || count < 0 {
+					return fmt.Errorf("%s必须是非负整数，得到 %v", name, value)
+				}
+			}
 			ctx.Write(my.Placeholder(ctx.AddVariable(arg.Value.Raw)))
 			continue
 		}

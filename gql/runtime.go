@@ -23,6 +23,10 @@ func (my *Engine) Subscribe(ctx context.Context, query string, variables map[str
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	query, err := my.operationDocument(ctx, query, operationName)
+	if err != nil {
+		return nil, err
+	}
 	source, err := my.subscribe(ctx, query, variables, operationName)
 	if err != nil {
 		return nil, err
@@ -71,26 +75,27 @@ func (my *Engine) Schema() (string, error) {
 
 // ExecuteOperation executes one named operation from a multi-operation document.
 func (my *Engine) ExecuteOperation(ctx context.Context, query string, variables map[string]any, operationName string) ([]byte, error) {
-	if my == nil {
-		return nil, errors.New("gql engine is unavailable")
-	}
-	if my.options().PersistedOnly {
-		if strings.TrimSpace(query) != "" {
-			return marshalGatewayError(errors.New("仅允许执行持久化操作"))
-		}
-		persisted, ok := my.documents[operationName]
-		if !ok {
-			return marshalGatewayError(fmt.Errorf("未找到名为'%s'的持久化操作", operationName))
-		}
-		query = persisted.query
-	} else if strings.TrimSpace(query) == "" {
-		if persisted, ok := my.documents[operationName]; ok {
-			query = persisted.query
-		} else {
-			return marshalGatewayError(fmt.Errorf("未找到名为'%s'的持久化操作", operationName))
-		}
+	query, err := my.operationDocument(ctx, query, operationName)
+	if err != nil {
+		return marshalGatewayError(err)
 	}
 	return my.executeBytes(ctx, query, variables, operationName)
+}
+
+func (my *Engine) operationDocument(ctx context.Context, query, operationName string) (string, error) {
+	if my == nil {
+		return "", errors.New("gql engine is unavailable")
+	}
+	if strings.TrimSpace(query) != "" {
+		if my.options().PersistedOnly && !delegatedExecution(ctx) {
+			return "", errors.New("仅允许执行持久化操作")
+		}
+		return query, nil
+	}
+	if persisted, ok := my.documents[operationName]; ok {
+		return persisted.query, nil
+	}
+	return "", fmt.Errorf("未找到名为'%s'的持久化操作", operationName)
 }
 
 // Capabilities returns a deep copy of the frozen Engine catalog.
@@ -115,6 +120,18 @@ type HealthReport struct {
 	SubscriptionAvailable bool
 }
 
+type delegatedExecutionKey struct{}
+
+// WithDelegatedExecution marks a document already admitted by a trusted gateway.
+func WithDelegatedExecution(ctx context.Context) context.Context {
+	return context.WithValue(ctx, delegatedExecutionKey{}, true)
+}
+
+func delegatedExecution(ctx context.Context) bool {
+	trusted, _ := ctx.Value(delegatedExecutionKey{}).(bool)
+	return trusted
+}
+
 // Health verifies the immutable contract and database connectivity. CDC is
 // reported as a capability and never makes an otherwise healthy Engine fail.
 func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
@@ -126,6 +143,9 @@ func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 	if my != nil {
 		if status, ok := my.cdc.(interface{ status() (bool, string) }); ok {
 			report.CDCConnected, report.CDCError = status.status()
+		} else if report.CDCConfigured {
+			// Notifiers predating the optional status hook are assumed healthy.
+			report.CDCConnected = true
 		}
 	}
 	if my == nil || (my.schema == nil && my.snapshot == nil) {
@@ -139,7 +159,7 @@ func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 	report.SnapshotFingerprint = snapshot.Fingerprint()
 	if my.database == nil {
 		report.DatabaseOK = true
-		report.Ready = true
+		report.Ready = !report.CDCConfigured || report.CDCConnected
 		return report, nil
 	}
 	sqlDB, err := my.database.DB()
@@ -151,6 +171,6 @@ func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 		return report, err
 	}
 	report.DatabaseOK = true
-	report.Ready = true
+	report.Ready = !report.CDCConfigured || report.CDCConnected
 	return report, nil
 }

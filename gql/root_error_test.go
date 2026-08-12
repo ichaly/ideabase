@@ -91,9 +91,7 @@ func TestNullableMutationRootErrorContinuesButRollsBack(t *testing.T) {
 		NewResolver[Root, struct{}, string]("Mutation", "lastWrite", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) { return "last", insert(ctx, "last") }, Result("String")),
 	))
 	reply := executor.run(context.Background(), `mutation { firstWrite failWrite lastWrite }`, nil, "")
-	require.Equal(t, "first", reply.Data["firstWrite"])
-	require.Nil(t, reply.Data["failWrite"])
-	require.Equal(t, "last", reply.Data["lastWrite"])
+	require.Nil(t, reply.Data, "rolled-back writes must not be reported as committed values")
 	require.Len(t, reply.Errors, 1)
 	require.Equal(t, true, reply.Errors[0].Extensions["transactionRolledBack"])
 	var count int64

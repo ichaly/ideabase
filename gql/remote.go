@@ -3,6 +3,7 @@ package gql
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
@@ -35,7 +36,15 @@ func (my *remoteJob) fetch(ctx context.Context, remotes map[string]Remote) {
 	seen := make(map[any]bool, len(my.sources))
 	keys := make([]any, 0, len(my.sources))
 	for _, source := range my.sources {
-		if k, ok := source[my.binding.Key]; ok && k != nil && !seen[k] {
+		k, ok := source[my.binding.Key]
+		if !ok || k == nil {
+			continue
+		}
+		if !reflect.TypeOf(k).Comparable() {
+			my.err = fmt.Errorf("远程数据源 %s 键不可比较: %T", my.binding.Name, k)
+			return
+		}
+		if !seen[k] {
 			seen[k] = true
 			keys = append(keys, k)
 		}
@@ -76,7 +85,12 @@ func (my *remoteJob) fetch(ctx context.Context, remotes map[string]Remote) {
 // （多个远程可共用同一宿主键列，此处剥除会让后回填者读不到键值）
 func (my *remoteJob) fill() {
 	for _, source := range my.sources {
-		if v, ok := my.values[source[my.binding.Key]]; ok {
+		key, comparable := source[my.binding.Key]
+		if key == nil || !comparable || !reflect.TypeOf(key).Comparable() {
+			source[my.binding.Field] = nil
+			continue
+		}
+		if v, ok := my.values[key]; ok {
 			source[my.binding.Field] = v
 		} else {
 			source[my.binding.Field] = nil

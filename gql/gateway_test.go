@@ -55,7 +55,8 @@ type gatewayHealthyEndpoint struct {
 
 type gatewayEffectiveEndpoint struct {
 	*gatewayEndpoint
-	effective SchemaArtifact
+	effective   SchemaArtifact
+	effectiveFn func(context.Context) (SchemaArtifact, error)
 }
 
 type gatewayEffectiveSubscriptionEndpoint struct {
@@ -64,6 +65,9 @@ type gatewayEffectiveSubscriptionEndpoint struct {
 }
 
 func (my *gatewayEffectiveEndpoint) EffectiveSchema(context.Context) (SchemaArtifact, error) {
+	if my.effectiveFn != nil {
+		return my.effectiveFn(context.Background())
+	}
 	return my.effective, nil
 }
 
@@ -752,6 +756,35 @@ func TestGatewayRunsNamespacesInParallelAndBatchesOneNamespace(t *testing.T) {
 	require.JSONEq(t, `{"data":{"crm":{"first":{"id":"1"},"second":{"id":"2"}},"erp":{"first":{"id":"1"},"second":{"id":"2"}}}}`, string(body))
 	require.Equal(t, int32(1), crm.calls.Load())
 	require.Equal(t, int32(1), erp.calls.Load())
+}
+
+func TestGatewayLoadsEffectiveNamespacesInParallel(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	endpoint := func(id string) *gatewayEffectiveEndpoint {
+		base := newGatewayEndpoint(id, gatewayChildSchema, nil)
+		artifact := SchemaArtifact{Schema: gatewayChildSchema, Fingerprint: digest(gatewayChildSchema), StructuralFingerprint: base.snapshot.Fingerprint(), Capabilities: base.snapshot.Capabilities()}
+		return &gatewayEffectiveEndpoint{gatewayEndpoint: base, effectiveFn: func(context.Context) (SchemaArtifact, error) {
+			started <- struct{}{}
+			<-release
+			return artifact, nil
+		}}
+	}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint("crm")}, Namespace{Name: "erp", Endpoint: endpoint("erp")})
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() { _, err := gateway.current().effective(context.Background()); done <- err }()
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("effective schemas were loaded serially")
+		}
+	}
+	releaseOnce.Do(func() { close(release) })
+	require.NoError(t, <-done)
 }
 
 func TestGatewaySingleNamespaceExecutesInline(t *testing.T) {

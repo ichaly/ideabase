@@ -461,6 +461,10 @@ func (my *Engine) Path() string {
 // 数据库生成的JSON在无Resolver时原样直通，不构造map/slice对象树；GraphQL字段错误
 // 编码在响应体的errors中，返回的error仅表示响应序列化失败。
 func (my *Engine) Execute(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
+	query, err := my.operationDocument(ctx, query, "")
+	if err != nil {
+		return marshalGatewayError(err)
+	}
 	return my.executeBytes(ctx, query, variables, "")
 }
 

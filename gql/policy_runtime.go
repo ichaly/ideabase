@@ -470,12 +470,12 @@ func evaluatePolicyChecks(target policyTarget, decision PolicyDecision, variable
 		// Update checks are enforced by mutation SQL against the post-update
 		// row. The request only contains submitted columns, so untouched columns
 		// must be resolved by the database rather than rejected here.
-		if !operationInList(target.capability.Actions, protocol.OP_UPDATE) {
+		if !operationInList(target.capability.Actions, protocol.OP_UPDATE) || operationInList(target.capability.Actions, protocol.OP_INSERT) {
 			if err := matchPolicyPredicates(target.class, decision.Check, values, scope); err != nil {
 				return err
 			}
 		}
-		if len(decision.RoleBranches) > 0 && !operationInList(target.capability.Actions, protocol.OP_UPDATE) {
+		if len(decision.RoleBranches) > 0 && (!operationInList(target.capability.Actions, protocol.OP_UPDATE) || operationInList(target.capability.Actions, protocol.OP_INSERT)) {
 			matched := false
 			for _, branch := range decision.RoleBranches {
 				if matchPolicyPredicates(target.class, branch.Check, values, scope) == nil {
@@ -836,7 +836,7 @@ func policyFilterPredicates(actions []string, decision PolicyDecision, branch Ro
 	filters := append(append([]TypedPredicate(nil), decision.RowPredicates...), branch.RowPredicates...)
 	// Check is a post-write invariant for updates, not an old-row filter.
 	// Delete/restore still use it as a precondition over the existing row.
-	if operationInList(actions, protocol.OP_DELETE) || operationInList(actions, protocol.OP_RESTORE) {
+	if operationInList(actions, protocol.OP_DELETE) || operationInList(actions, protocol.OP_PURGE) || operationInList(actions, protocol.OP_RESTORE) {
 		filters = append(filters, decision.Check...)
 		filters = append(filters, branch.Check...)
 	}

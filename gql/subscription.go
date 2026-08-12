@@ -30,6 +30,8 @@ type feed struct {
 	done <-chan struct{}
 }
 
+const cdcReconnectGrace = 30 * time.Second
+
 func subscriptionRetryDelay(attempt int) time.Duration {
 	if attempt > 10 {
 		attempt = 10
@@ -228,7 +230,26 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 		}
 		retryC = retry.C
 	}
-	publish := func() {
+	publish := func() bool {
+		if hasLease {
+			if err := lease.Check(ctx); err != nil {
+				my.expireFeed(f, err)
+				return false
+			}
+		}
+		if w.status != nil {
+			if connected, message := w.status(); !connected {
+				if w.outage == nil || w.outage() < cdcReconnectGrace {
+					scheduleRetry()
+					return true
+				}
+				if message == "" {
+					message = "CDC connection unavailable"
+				}
+				my.expireFeed(f, fmt.Errorf("%s", message))
+				return false
+			}
+		}
 		release := my.acquireRefresh(ctx)
 		defer release()
 		reply, changed := my.tick(ctx, plan, variables, digest, &last)
@@ -238,7 +259,7 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 			stopRetry()
 		}
 		if !changed {
-			return
+			return true
 		}
 		my.feedMu.Lock()
 		f.last, f.live = reply, true
@@ -246,8 +267,11 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 			push(ch, reply)
 		}
 		my.feedMu.Unlock()
+		return true
 	}
-	publish()
+	if !publish() {
+		return
+	}
 	for {
 		select {
 		case <-leaseTick:
@@ -268,9 +292,13 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 				}
 			}
 		case <-w.wake:
-			publish()
+			if !publish() {
+				return
+			}
 		case <-retryC:
-			publish()
+			if !publish() {
+				return
+			}
 		case <-ctx.Done():
 			return
 		}

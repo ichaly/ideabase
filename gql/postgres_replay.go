@@ -9,6 +9,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const replayPruneBatch = 256
+
 // PostgresReplayDDL is the shared delegation replay table migration.
 // Applications apply it with their normal migration tool before serving.
 const PostgresReplayDDL = `CREATE TABLE IF NOT EXISTS gql_delegation_replay (
@@ -46,9 +48,18 @@ func (store *postgresReplayStore) Consume(ctx context.Context, key ReplayKey, ex
 	}
 	now, nextPrune := time.Now().Unix(), store.nextPrune.Load()
 	if now >= nextPrune && store.nextPrune.CompareAndSwap(nextPrune, now+60) {
-		if err := store.db.WithContext(ctx).Exec(`DELETE FROM gql_delegation_replay WHERE expires_at <= clock_timestamp()`).Error; err != nil {
+		result := store.db.WithContext(ctx).Exec(`DELETE FROM gql_delegation_replay WHERE ctid IN (
+  SELECT ctid FROM gql_delegation_replay
+  WHERE expires_at <= clock_timestamp()
+  ORDER BY expires_at
+  LIMIT ?
+)`, replayPruneBatch)
+		if err := result.Error; err != nil {
 			store.nextPrune.Store(now)
 			return fmt.Errorf("prune delegation replay: %w", err)
+		}
+		if result.RowsAffected == replayPruneBatch {
+			store.nextPrune.Store(now + 1)
 		}
 	}
 	var consumed bool

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	core "github.com/ichaly/ideabase/gql"
+	jsoniter "github.com/json-iterator/go"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
 )
@@ -54,11 +55,12 @@ func delegationToken(r *http.Request) (string, bool) {
 }
 
 // NewHandler returns a GraphQL-over-HTTP handler.
-func NewHandler(endpoint Endpoint, options ...Options) http.Handler {
-	var opts Options
-	if len(options) != 0 {
-		opts = options[0]
-	}
+func NewHandler(endpoint Endpoint, opts Options) http.Handler {
+	opts = defaultOptions(opts)
+	return &handler{endpoint: endpoint, options: opts}
+}
+
+func defaultOptions(opts Options) Options {
 	if opts.MaxBodyBytes <= 0 {
 		opts.MaxBodyBytes = defaultMaxBodyBytes
 	}
@@ -68,7 +70,7 @@ func NewHandler(endpoint Endpoint, options ...Options) http.Handler {
 	if opts.Timeout <= 0 {
 		opts.Timeout = defaultTimeout
 	}
-	return &handler{endpoint: endpoint, options: opts}
+	return opts
 }
 
 type handler struct {
@@ -167,6 +169,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid delegation", http.StatusUnauthorized)
 			return
 		}
+		ctx = core.WithDelegatedExecution(ctx)
 	}
 	execution := h.endpoint
 	revision := r.Header.Get("GQL-Snapshot")
@@ -364,22 +367,8 @@ func requestOperation(query, operationName string) (ast.Operation, int, error) {
 }
 
 func writeGraphQL(w http.ResponseWriter, body []byte, mediaType string) bool {
-	var response map[string]json.RawMessage
-	if err := decodeJSON(body, &response); err != nil {
-		return false
-	}
-	_, data := response["data"]
-	rawErrors, errors := response["errors"]
-	if !data && !errors {
-		return false
-	}
-	if errors {
-		var list []json.RawMessage
-		if err := json.Unmarshal(rawErrors, &list); err != nil || len(list) == 0 {
-			return false
-		}
-	}
-	if data && !errors && string(bytes.TrimSpace(response["data"])) == "null" {
+	data, _, valid := graphQLResponseShape(body)
+	if !valid {
 		return false
 	}
 	status := http.StatusOK
@@ -393,6 +382,35 @@ func writeGraphQL(w http.ResponseWriter, body []byte, mediaType string) bool {
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 	return true
+}
+
+func graphQLResponseShape(body []byte) (data, errors, valid bool) {
+	if !json.Valid(body) {
+		return false, false, false
+	}
+	iter := jsoniter.ConfigFastest.BorrowIterator(body)
+	defer jsoniter.ConfigFastest.ReturnIterator(iter)
+	dataValue := false
+	iter.ReadObjectCB(func(iter *jsoniter.Iterator, field string) bool {
+		switch field {
+		case "data":
+			data = true
+			if iter.WhatIsNext() == jsoniter.NilValue {
+				iter.ReadNil()
+			} else {
+				dataValue = true
+				iter.Skip()
+			}
+		case "errors":
+			count := 0
+			iter.ReadArrayCB(func(iter *jsoniter.Iterator) bool { count++; iter.Skip(); return true })
+			errors = count > 0
+		default:
+			iter.Skip()
+		}
+		return true
+	})
+	return data, errors, iter.Error == nil && (errors || data && dataValue)
 }
 
 func writeGraphQLRequestError(w http.ResponseWriter, status int, err error, mediaType string) {

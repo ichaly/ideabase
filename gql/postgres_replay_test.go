@@ -67,3 +67,18 @@ func TestPostgresReplayStorePrunesExpiredRecordsOffTheHotPath(t *testing.T) {
 	require.NoError(t, db.Table("gql_delegation_replay").Where("issuer = ?", "old").Count(&count).Error)
 	require.Zero(t, count)
 }
+
+func TestPostgresReplayStoreBoundsEachPruneBatch(t *testing.T) {
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+	require.NoError(t, db.Exec(PostgresReplayDDL).Error)
+	require.NoError(t, db.Exec(`INSERT INTO gql_delegation_replay (issuer, audience, token_id, expires_at)
+		SELECT 'old', 'old', generate_series(1, 300)::text, clock_timestamp() - interval '1 minute'`).Error)
+	store, err := NewPostgresReplayStore(db)
+	require.NoError(t, err)
+	store.(*postgresReplayStore).nextPrune.Store(0)
+	require.NoError(t, store.Consume(context.Background(), ReplayKey{Issuer: "new", Audience: "new", ID: "new"}, time.Now().Add(time.Minute)))
+	var remaining int64
+	require.NoError(t, db.Table("gql_delegation_replay").Where("issuer = ?", "old").Count(&remaining).Error)
+	require.Positive(t, remaining, "one authentication must not prune an unbounded table")
+}

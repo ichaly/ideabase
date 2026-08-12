@@ -1,10 +1,12 @@
 package pgsql
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -30,6 +32,28 @@ func TestCursorParamsRejectsCrossEntityAndOrderingBeforeSQL(t *testing.T) {
 		t.Fatal("cursor with a different ordering must fail before SQL")
 	}
 	ctx.Release()
+}
+
+func TestVariablePaginationRangeMatchesLiteralValidation(t *testing.T) {
+	class := &protocol.Class{Name: "User", PrimaryKeys: []string{"id"}, Fields: map[string]*protocol.Field{"id": {Name: "id", Column: "id"}}}
+	for _, tc := range []struct {
+		name string
+		args ast.ArgumentList
+		vars map[string]interface{}
+		want string
+	}{
+		{"first", ast.ArgumentList{{Name: protocol.FIRST, Value: &ast.Value{Kind: ast.Variable, Raw: "n"}}}, map[string]interface{}{"n": 0}, "正整数"},
+		{"last", ast.ArgumentList{{Name: protocol.LAST, Value: &ast.Value{Kind: ast.Variable, Raw: "n"}}}, map[string]interface{}{"n": -1}, "正整数"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := compiler.NewContext(nil, `"`, tc.vars)
+			defer ctx.Release()
+			_, err := newPager(ctx, scope{class: class}, tc.args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q, got %v", tc.want, err)
+			}
+		})
+	}
 }
 
 func (my *_DialectSuite) TestConnectionUsesEdgesAndPageInfoContract() {

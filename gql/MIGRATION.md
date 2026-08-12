@@ -50,3 +50,9 @@ Schema/拓扑刷新失败可继续服务已验证的旧 snapshot。
 内置 CDC 订阅是 latest-state 查询流：重连会重新读取当前结果，不回放断线期间的每个
 事件。需要 durable replay 时使用 outbox/事件表建立显式业务契约，不要把临时 WAL slot
 当作事件存储。
+
+## 6. HTTP transport 只接受一个配置对象
+
+`transport.NewHandler` 与 `transport.NewSubscriptionHandler` 统一要求显式传入一个
+`transport.Options`。无自定义配置时传 `transport.Options{}`；不要再传多个 options，避免
+安全配置被静默覆盖。

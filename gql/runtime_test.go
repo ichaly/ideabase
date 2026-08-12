@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,20 @@ func (runtimeTestNotifier) watch(tables []string) (*watcher, error) {
 
 func (runtimeTestNotifier) unwatch(*watcher) {}
 func (runtimeTestNotifier) close()           {}
+
+type runtimeStatusNotifier struct{ connected atomic.Bool }
+
+func (n *runtimeStatusNotifier) watch(tables []string) (*watcher, error) {
+	return &watcher{tables: map[string]bool{}, wake: make(chan struct{}, 1), status: n.status}, nil
+}
+func (*runtimeStatusNotifier) unwatch(*watcher) {}
+func (*runtimeStatusNotifier) close()           {}
+func (n *runtimeStatusNotifier) status() (bool, string) {
+	if n.connected.Load() {
+		return true, ""
+	}
+	return false, "CDC unavailable"
+}
 
 func TestExecutorRuntimeSubscribeEmitsJSONAndClosesOnCancel(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
@@ -111,4 +126,25 @@ func TestExecutorHealthWithoutDatabaseStillReportsSnapshot(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, report.Ready)
 	require.False(t, report.SnapshotOK)
+}
+
+func TestExecutorHealthReadinessTracksCDCConnection(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	if source := executor.cdc; source != nil {
+		source.close()
+	}
+	notifier := &runtimeStatusNotifier{}
+	executor.cdc = notifier
+	report, err := executor.Health(context.Background())
+	require.NoError(t, err)
+	require.True(t, report.CDCConfigured)
+	require.False(t, report.CDCConnected)
+	require.False(t, report.Ready)
+
+	notifier.connected.Store(true)
+	report, err = executor.Health(context.Background())
+	require.NoError(t, err)
+	require.True(t, report.CDCConnected)
+	require.True(t, report.Ready)
 }

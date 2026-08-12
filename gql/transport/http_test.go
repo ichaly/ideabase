@@ -6,10 +6,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestTransportConstructorsHaveOneOptionsContract(t *testing.T) {
+	if reflect.TypeOf(NewHandler).IsVariadic() || reflect.TypeOf(NewSubscriptionHandler).IsVariadic() {
+		t.Fatal("transport constructors must not silently accept multiple option sets")
+	}
+}
 
 type testEndpoint struct {
 	query string
@@ -39,7 +46,7 @@ func req(method, contentType, accept, body string) *http.Request {
 
 func TestPOSTExecutesJSONWithNumberAndGraphQLResponse(t *testing.T) {
 	ep := &testEndpoint{body: []byte(`{"data":{"ok":true}}`)}
-	h := NewHandler(ep)
+	h := NewHandler(ep, Options{})
 	r := req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"query X($id: ID!) { thing }","operationName":"X","variables":{"id":9007199254740993}}`)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -59,7 +66,7 @@ func TestLegacyJSONAndMissingAcceptRemainCompatible(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ep := &testEndpoint{body: []byte(`{"data":{"ok":true}}`)}
 			w := httptest.NewRecorder()
-			NewHandler(ep).ServeHTTP(w, req(http.MethodPost, "application/json", accept, `{"query":"{x}"}`))
+			NewHandler(ep, Options{}).ServeHTTP(w, req(http.MethodPost, "application/json", accept, `{"query":"{x}"}`))
 			if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/json" {
 				t.Fatalf("legacy response = %d/%q", w.Code, w.Header().Get("Content-Type"))
 			}
@@ -68,7 +75,7 @@ func TestLegacyJSONAndMissingAcceptRemainCompatible(t *testing.T) {
 
 	ep := &testEndpoint{body: []byte(`{"errors":[{"message":"invalid"}]}`)}
 	w := httptest.NewRecorder()
-	NewHandler(ep).ServeHTTP(w, req(http.MethodPost, "application/json", "application/json", `{"query":"{x}"}`))
+	NewHandler(ep, Options{}).ServeHTTP(w, req(http.MethodPost, "application/json", "application/json", `{"query":"{x}"}`))
 	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/json" {
 		t.Fatalf("legacy request error = %d/%q", w.Code, w.Header().Get("Content-Type"))
 	}
@@ -84,7 +91,7 @@ func TestPOSTRejectsTrailingJSONAndWrongMediaTypes(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			NewHandler(&testEndpoint{}).ServeHTTP(w, r)
+			NewHandler(&testEndpoint{}, Options{}).ServeHTTP(w, r)
 			if w.Code < 400 || w.Code >= 500 {
 				t.Fatalf("status = %d", w.Code)
 			}
@@ -95,16 +102,29 @@ func TestPOSTRejectsTrailingJSONAndWrongMediaTypes(t *testing.T) {
 func TestRejectsInvalidEndpointGraphQLResponse(t *testing.T) {
 	for _, body := range []string{`not-json`, `{}`, `{"data":null}`, `{"errors":[]}`} {
 		w := httptest.NewRecorder()
-		NewHandler(&testEndpoint{body: []byte(body)}).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
+		NewHandler(&testEndpoint{body: []byte(body)}, Options{}).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
 		if w.Code != http.StatusInternalServerError || w.Header().Get("Content-Type") == responseType {
 			t.Fatalf("invalid endpoint response %q = %d/%q", body, w.Code, w.Header().Get("Content-Type"))
 		}
 	}
 }
 
+func TestGraphQLResponseShapeDoesNotCopyLargeData(t *testing.T) {
+	body := []byte(`{"data":{"value":"` + strings.Repeat("x", 1<<20) + `"}}`)
+	allocations := testing.AllocsPerRun(100, func() {
+		data, errors, valid := graphQLResponseShape(body)
+		if !valid || !data || errors {
+			t.Fatal("valid response shape rejected")
+		}
+	})
+	if allocations > 2 {
+		t.Fatalf("response validation allocated %.0f times", allocations)
+	}
+}
+
 func TestGETAllowsQueryButRejectsMutation(t *testing.T) {
 	ep := &testEndpoint{body: []byte(`{"data":{}}`)}
-	h := NewHandler(ep)
+	h := NewHandler(ep, Options{})
 	query := httptest.NewRequest(http.MethodGet, "/graphql?query=%7Bhello%7D", nil)
 	query.Header.Set("Accept", "application/graphql-response+json")
 	w := httptest.NewRecorder()
@@ -138,7 +158,7 @@ func TestGETAllowsQueryButRejectsMutation(t *testing.T) {
 func TestRequestErrorUses422AndKeepsGraphQLBody(t *testing.T) {
 	ep := &testEndpoint{body: []byte(`{"errors":[{"message":"failed"}]}`), err: io.ErrUnexpectedEOF}
 	w := httptest.NewRecorder()
-	NewHandler(ep).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
+	NewHandler(ep, Options{}).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
 	if w.Code != http.StatusUnprocessableEntity || w.Body.String() != string(ep.body) {
 		t.Fatalf("response = %d %s", w.Code, w.Body)
 	}
@@ -147,7 +167,7 @@ func TestRequestErrorUses422AndKeepsGraphQLBody(t *testing.T) {
 func TestPartialExecutionUses200AndKeepsGraphQLBody(t *testing.T) {
 	ep := &testEndpoint{body: []byte(`{"data":null,"errors":[{"message":"failed"}]}`)}
 	w := httptest.NewRecorder()
-	NewHandler(ep).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
+	NewHandler(ep, Options{}).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
 	if w.Code != http.StatusOK || w.Body.String() != string(ep.body) {
 		t.Fatalf("response = %d %s", w.Code, w.Body)
 	}
@@ -167,7 +187,7 @@ func TestMalformedDocumentAndRequestShapeFailBeforeExecution(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ep := &testEndpoint{}
 			w := httptest.NewRecorder()
-			NewHandler(ep).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", test.body))
+			NewHandler(ep, Options{}).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", test.body))
 			if w.Code != test.status || ep.ctx != nil {
 				t.Fatalf("response/called = %d/%v", w.Code, ep.ctx != nil)
 			}

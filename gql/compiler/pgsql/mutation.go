@@ -330,6 +330,14 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 			}
 		}
 	}
+	checkOverrides := make(map[string]expression, len(updateColumns))
+	for _, column := range updateColumns {
+		if column == "created_at" || column == "created_by" || skip[column] {
+			continue
+		}
+		column := column
+		checkOverrides[column] = func() error { return my.writeUpsertUpdateValue(ctx, m.class, column) }
+	}
 	for _, column := range updateColumns {
 		if column == "created_at" || column == "created_by" {
 			continue
@@ -342,24 +350,16 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 		}
 		written++
 		ctx.Quote(column).Write(` = `)
-		if column == "updated_at" || column == "updated_by" {
-			if err := my.auditWriter(column)(ctx); err != nil {
-				return err
-			}
-		} else if field := fieldByColumn(m.class, column); field != nil && field.UpdatePreset != nil {
-			if err := my.writePreset(ctx, field.UpdatePreset); err != nil {
-				return err
-			}
-		} else {
-			ctx.Write(`EXCLUDED.`).Quote(column)
+		if err := my.writeUpsertUpdateValue(ctx, m.class, column); err != nil {
+			return err
 		}
 	}
 	if written == 0 {
 		return fmt.Errorf("upsert没有可更新的非冲突列")
 	}
 	// 冲突分支是真实 UPDATE：同时受作用域、默认谓词和角色行权限约束。
-	conjuncts := my.fixedWhereConjuncts(ctx, m.class.Table, m.class, protocol.OP_UPDATE, "")
-	if len(m.class.Scope) > 0 || len(conjuncts) > 0 {
+	conjuncts := my.predicateConjuncts(ctx, m.class.Table, m.class.Where, "")
+	if len(m.class.Scope) > 0 || len(conjuncts) > 0 || m.class.Permissions != nil {
 		ctx.Space(`WHERE`)
 		written := false
 		for _, rule := range m.class.Scope {
@@ -378,8 +378,27 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 			}
 			written = true
 		}
+		if m.class.Permissions != nil {
+			if written {
+				ctx.Space(`AND`)
+			}
+			if err := my.updatePolicyConjunct(ctx, m.class, inputRow{}, checkOverrides)(); err != nil {
+				return err
+			}
+		}
 	}
 	ctx.Write(` RETURNING *`)
+	return nil
+}
+
+func (my *Dialect) writeUpsertUpdateValue(ctx *compiler.Context, class *protocol.Class, column string) error {
+	if column == "updated_at" || column == "updated_by" {
+		return my.auditWriter(column)(ctx)
+	}
+	if field := fieldByColumn(class, column); field != nil && field.UpdatePreset != nil {
+		return my.writePreset(ctx, field.UpdatePreset)
+	}
+	ctx.Write(`EXCLUDED.`).Quote(column)
 	return nil
 }
 

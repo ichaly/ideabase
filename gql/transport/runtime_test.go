@@ -109,7 +109,7 @@ func TestRemoteEndpointAcceptsPartialGraphQLResponseStatus(t *testing.T) {
 	endpoint := &runtimeEndpoint{snapshot: snapshot, body: []byte(`{"data":{"hello":null},"errors":[{"message":"failed","path":["hello"]}]}`)}
 	mux := http.NewServeMux()
 	mux.Handle("/manifest", testManifestHandler("child", endpoint))
-	mux.Handle("/graphql", NewHandler(endpoint))
+	mux.Handle("/graphql", NewHandler(endpoint, Options{}))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
@@ -316,7 +316,7 @@ func TestRemoteEndpointHealthMatchesManifestSnapshot(t *testing.T) {
 	endpoint := &healthyRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}}
 	mux := http.NewServeMux()
 	mux.Handle("/manifest", testManifestHandler("child", endpoint))
-	mux.Handle("/graphql", NewHandler(endpoint))
+	mux.Handle("/graphql", NewHandler(endpoint, Options{}))
 	mux.Handle("/health", NewHealthHandler(endpoint))
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -479,6 +479,12 @@ func TestRemoteEndpointRejectsSubscriptionManifestWithoutExecutableStream(t *tes
 	})
 	if err == nil {
 		t.Fatal("subscription manifest was accepted without SubscribeURL")
+	}
+}
+
+func TestRemoteDeclaresEffectiveSchemaCapabilityExplicitly(t *testing.T) {
+	if (&RemoteEndpoint{}).EffectiveSchemaAvailable() || !(&RemoteEndpoint{effective: "https://child.test/effective"}).EffectiveSchemaAvailable() {
+		t.Fatal("effective schema capability does not match endpoint configuration")
 	}
 }
 

@@ -101,3 +101,14 @@ func TestRemoteSharedKey(t *testing.T) {
 	assert.Equal(t, "silver", item["profileB"].(map[string]interface{})["level"])
 	assert.NotContains(t, item, "__rk_id", "内部键最终仍须剥除")
 }
+
+func TestRemoteIncomparableKeyDoesNotPanic(t *testing.T) {
+	job := &remoteJob{
+		binding: binding{Name: "profiles", Field: "profile", Key: "id"},
+		sources: []map[string]any{{"id": []string{"not-comparable"}}},
+	}
+	job.fetch(context.Background(), map[string]Remote{})
+	require.Error(t, job.err)
+	job.fill()
+	require.Nil(t, job.sources[0]["profile"])
+}

@@ -16,17 +16,8 @@ type subscriptionEndpoint interface {
 }
 
 // NewSubscriptionHandler exposes one GraphQL SSE single-operation stream.
-func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) http.Handler {
-	var opts Options
-	if len(options) > 0 {
-		opts = options[0]
-	}
-	if opts.MaxBodyBytes <= 0 {
-		opts.MaxBodyBytes = defaultMaxBodyBytes
-	}
-	if opts.MaxResponseBytes <= 0 {
-		opts.MaxResponseBytes = defaultMaxResponse
-	}
+func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Handler {
+	opts = defaultOptions(opts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if endpoint == nil {
 			http.Error(w, "subscription unavailable", http.StatusServiceUnavailable)
@@ -63,9 +54,11 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 				http.Error(w, "invalid delegation", http.StatusUnauthorized)
 				return
 			}
+			ctx = core.WithDelegatedExecution(ctx)
 		}
 		execution := endpoint
-		if revision := r.Header.Get("GQL-Snapshot"); revision != "" {
+		revision := r.Header.Get("GQL-Snapshot")
+		if revision != "" {
 			if opts.Delegation == nil {
 				source, ok := endpoint.(manifestEndpoint)
 				if !ok {
@@ -99,6 +92,25 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 				}
 			}
 		}
+		if revision == "" {
+			if source, ok := endpoint.(manifestEndpoint); ok {
+				if pinner, pinnable := endpoint.(snapshotPinner); pinnable {
+					snapshot, snapshotErr := source.Snapshot()
+					if snapshotErr != nil || snapshot == nil {
+						http.Error(w, "snapshot unavailable", http.StatusServiceUnavailable)
+						return
+					}
+					revision = snapshot.Fingerprint()
+					pinned, pinErr := pinner.ForSnapshot(revision)
+					var subscribable bool
+					execution, subscribable = pinned.(subscriptionEndpoint)
+					if pinErr != nil || !subscribable {
+						http.Error(w, "snapshot revision changed", http.StatusConflict)
+						return
+					}
+				}
+			}
+		}
 		events, err := execution.Subscribe(ctx, params.Query, params.Variables, params.OperationName)
 		if err != nil || events == nil {
 			writeSubscriptionError(w, err)
@@ -111,6 +123,13 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, options ...Options) h
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-store")
+		if revision != "" {
+			w.Header().Set("GQL-Snapshot", revision)
+		} else if source, ok := execution.(manifestEndpoint); ok {
+			if snapshot, snapshotErr := source.Snapshot(); snapshotErr == nil && snapshot != nil {
+				w.Header().Set("GQL-Snapshot", snapshot.Fingerprint())
+			}
+		}
 		w.WriteHeader(http.StatusOK)
 		for {
 			select {

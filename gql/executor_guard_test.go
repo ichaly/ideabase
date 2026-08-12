@@ -64,3 +64,28 @@ func TestExecuteOperationIsThePersistedOperationBoundary(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(body), "持久化")
 }
+
+func TestPersistedOnlyRejectsDirectExecute(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	body, err := executor.Execute(context.Background(), `query { users { total } }`, nil)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "持久化")
+}
+
+func TestPersistedOnlyRejectsDirectSubscriptionDocument(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	_, err := executor.Subscribe(context.Background(), `subscription { users { total } }`, nil, "")
+	require.ErrorContains(t, err, "持久化")
+}
+
+func TestPersistedOnlyAcceptsGatewayAdmittedDocument(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	gateway, err := NewGateway("root", Namespace{Name: "db", EndpointID: "db", Endpoint: executor})
+	require.NoError(t, err)
+	body, err := gateway.Execute(context.Background(), `{ db { users { total } } }`, nil)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"total":0`)
+}

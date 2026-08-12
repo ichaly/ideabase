@@ -211,14 +211,18 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 		return nil, err
 	}
 	allowed := make(map[string]map[FieldUse][]string)
-	shapeSeen := make(map[string]bool)
+	shapeSeen := make(map[string]map[FieldUse]bool)
+	outputs := make(map[string][]string)
+	outputSeen := make(map[string]bool)
 	writes := make(map[string]map[string][]string)
 	writeSeen := make(map[string]map[string]bool)
 	denied := make(map[string]bool)
 	relationActions := make(map[string]map[string]bool)
 	var signatures []string
 	for _, capability := range my.snapshot.Capabilities() {
-		if capability.Resource == "" || len(capability.Actions) == 0 || capability.Parent != "Query" && capability.Parent != "Mutation" && capability.Parent != "Subscription" {
+		root := capability.Parent == "Query" || capability.Parent == "Mutation" || capability.Parent == "Subscription"
+		custom := capability.Handler == HandlerResolver || capability.Handler == HandlerRemote
+		if capability.Resource == "" || len(capability.Actions) == 0 || !root && !custom {
 			continue
 		}
 		request := PolicyRequest{Identity: identity, Route: route, Coordinate: capability.Coordinate, Resource: capability.Resource, Actions: capability.Actions, FieldUses: allFieldUses, Values: scopeValues(ctx)}
@@ -248,9 +252,6 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 		// nil means the provider does not shape fields; a non-nil map is an
 		// explicit shape, including an empty deny-all shape.
 		hasFieldShape := decision.Fields != nil
-		if governed && hasFieldShape && allowed[class.Name] == nil {
-			allowed[class.Name] = make(map[FieldUse][]string)
-		}
 		signatures = append(signatures, decision.PermissionSignature+":"+decision.ShapeSignature)
 		if !decision.Allow {
 			denied[capability.Coordinate] = true
@@ -259,7 +260,10 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 		if capability.Handler != HandlerSQL && hasRowPolicy(decision) && !capability.PolicyAware {
 			return nil, fmt.Errorf("policy %s requires a policy-aware handler", capability.Coordinate)
 		}
-		if governed && hasFieldShape {
+		if governed && hasFieldShape && capability.Handler == HandlerSQL {
+			if allowed[class.Name] == nil {
+				allowed[class.Name] = make(map[FieldUse][]string)
+			}
 			if err := ValidateDecisionCatalog(class, decision); err != nil {
 				return nil, err
 			}
@@ -276,15 +280,41 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 				uses = make(map[FieldUse][]string)
 				allowed[class.Name] = uses
 			}
-			if !shapeSeen[class.Name] {
+			if shapeSeen[class.Name] == nil {
+				shapeSeen[class.Name] = make(map[FieldUse]bool)
+			}
+			selectFields, selects := decision.Fields[FieldUseSelect]
+			returnFields, returns := decision.Fields[FieldUseReturn]
+			if selects || returns {
+				output := append(append([]string(nil), selectFields...), returnFields...)
+				if !outputSeen[class.Name] {
+					outputs[class.Name], outputSeen[class.Name] = sortedUnique(output), true
+				} else {
+					outputs[class.Name] = intersectFieldNames(outputs[class.Name], output)
+				}
+			}
+			if len(shapeSeen[class.Name]) == 0 {
 				for use, fields := range decision.Fields {
 					if use != FieldUseWrite {
 						uses[use] = append([]string(nil), fields...)
+						shapeSeen[class.Name][use] = true
 					}
 				}
-				shapeSeen[class.Name] = true
 			} else {
-				intersectFieldShape(uses, decision.Fields)
+				for use, current := range uses {
+					if use == FieldUseWrite {
+						continue
+					}
+					if fields, ok := decision.Fields[use]; ok {
+						uses[use] = intersectFieldNames(current, fields)
+					}
+				}
+				for use, fields := range decision.Fields {
+					if use != FieldUseWrite && !shapeSeen[class.Name][use] {
+						uses[use] = append([]string(nil), fields...)
+						shapeSeen[class.Name][use] = true
+					}
+				}
 			}
 			if len(decision.Fields[FieldUseWrite]) > 0 {
 				if writes[class.Name] == nil {
@@ -330,7 +360,7 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 	}
 	for resource, uses := range allowed {
 		class, _ := my.metadata.GetNode(resource)
-		filterEffectiveTypes(schema, class, uses, writes[resource])
+		filterEffectiveTypes(schema, class, uses, outputs[resource], writes[resource])
 	}
 	if err := pruneEffectiveSchema(schema); err != nil {
 		return nil, err
@@ -380,7 +410,9 @@ func intersectFieldShape(current map[FieldUse][]string, next map[FieldUse][]stri
 		if use == FieldUseWrite {
 			continue
 		}
-		current[use] = intersectFieldNames(fields, next[use])
+		if allowed, ok := next[use]; ok {
+			current[use] = intersectFieldNames(fields, allowed)
+		}
 	}
 }
 
@@ -462,11 +494,11 @@ func effectiveProviderCacheIdentity(ctx context.Context, provider PolicyProvider
 	return cacheIdentity.PolicyCacheIdentity(ctx, identity, route, scopeValues(ctx))
 }
 
-func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[FieldUse][]string, writes map[string][]string) {
+func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[FieldUse][]string, output []string, writes map[string][]string) {
 	if class == nil {
 		return
 	}
-	output := append(append([]string(nil), uses[FieldUseSelect]...), uses[FieldUseReturn]...)
+	output = append([]string(nil), output...)
 	for _, name := range uses[FieldUseJoin] {
 		field := class.Fields[name]
 		dependencies := []string(nil)
@@ -495,7 +527,19 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 	filterEffectiveInput(schema.Types[class.Name+protocol.SUFFIX_UPDATE_INPUT], class, writes[protocol.OP_UPDATE], uses[FieldUseJoin])
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_UPDATE_ROW_INPUT], class, writes[protocol.OP_UPDATE], false)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_WHERE_INPUT], class, uses[FieldUseFilter], true)
-	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_SORT_INPUT], class, uses[FieldUseOrder], true)
+	visibleOrder := make([]string, 0, len(uses[FieldUseOrder]))
+	for _, field := range class.Fields {
+		if allowedColumn(uses[FieldUseOrder], field) && allowedColumn(output, field) {
+			visibleOrder = append(visibleOrder, field.Name)
+		}
+	}
+	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_SORT_INPUT], class, visibleOrder, true)
+	for _, primary := range class.PrimaryKeys {
+		if !allowedColumn(output, class.Fields[primary]) {
+			removeCursorArguments(schema, class.Name)
+			break
+		}
+	}
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_KEY_INPUT], class, uses[FieldUseFilter], true)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_HAVING_INPUT], class, uses[FieldUseGroup], true)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_STATS], class, uses[FieldUseAggregate], true)
@@ -505,6 +549,23 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 	}
 	if !filterEffectiveEnum(schema.Types[class.Name+protocol.SUFFIX_GROUP_FIELD], class, uses[FieldUseGroup]) {
 		removeFieldArgument(schema.Types["Query"], strcase.ToLowerCamel(class.Name)+protocol.SUFFIX_STATS, protocol.GROUP_BY)
+	}
+}
+
+func removeCursorArguments(schema *ast.Schema, className string) {
+	for _, root := range []*ast.Definition{schema.Query, schema.Subscription} {
+		if root == nil {
+			continue
+		}
+		connection := strcase.ToLowerCamel(className) + protocol.SUFFIX_CONNECTION
+		root.Fields = removeSchemaField(root.Fields, connection)
+		for _, fieldName := range []string{queryField(className), strcase.ToLowerCamel(className) + protocol.SUFFIX_CONNECTION} {
+			if field := root.Fields.ForName(fieldName); field != nil {
+				for _, argument := range []string{protocol.FIRST, protocol.AFTER, protocol.LAST, protocol.BEFORE} {
+					field.Arguments = removeSchemaArgument(field.Arguments, argument)
+				}
+			}
+		}
 	}
 }
 

@@ -67,6 +67,79 @@ func TestEffectiveSchemaCacheIncludesScopeValues(t *testing.T) {
 	require.True(t, strings.Contains(wide.Schema, "name"))
 }
 
+func TestIntersectFieldShapePreservesUsesMissingFromNextDecision(t *testing.T) {
+	current := map[FieldUse][]string{
+		FieldUseSelect: {"id", "name"},
+		FieldUseReturn: {"id", "name"},
+	}
+	intersectFieldShape(current, map[FieldUse][]string{FieldUseReturn: {"name"}})
+	require.Equal(t, []string{"id", "name"}, current[FieldUseSelect])
+	require.Equal(t, []string{"name"}, current[FieldUseReturn])
+}
+
+func TestEffectiveSchemaIntersectsOutputAcrossSelectAndReturn(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		fields := request.Fields
+		switch request.Coordinate {
+		case "Query.users":
+			fields = map[FieldUse][]string{FieldUseSelect: {"id", "name"}}
+		case "Mutation.createUser":
+			fields = map[FieldUse][]string{FieldUseWrite: {"name", "email"}, FieldUseReturn: {"id"}}
+		}
+		return PolicyDecision{Allow: true, Fields: fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	artifact, err := executor.EffectiveSchema(WithIdentity(context.Background(), identity))
+	require.NoError(t, err)
+	schema, gqlErr := gqlparser.LoadSchema(&ast.Source{Name: "effective.graphql", Input: artifact.Schema})
+	require.Empty(t, gqlErr)
+	require.NotNil(t, schema.Types["User"].Fields.ForName("id"))
+	require.Nil(t, schema.Types["User"].Fields.ForName("name"))
+}
+
+func TestEffectiveSchemaRemovesDeniedNestedResolver(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	require.NoError(t, executor.register(NewResolver[Source, struct{}, string]("User", "secret", "", func(context.Context, Source, struct{}) (string, error) {
+		return "hidden", nil
+	}, Access("User", protocol.OP_SELECT))))
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{Allow: request.Coordinate != "User.secret", Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	artifact, err := executor.EffectiveSchema(WithIdentity(context.Background(), identity))
+	require.NoError(t, err)
+	require.NotContains(t, artifact.Schema, "secret:")
+}
+
+func TestEffectiveSchemaDoesNotExposeCursorsForHiddenOrderingValues(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		fields := request.Fields
+		if request.Coordinate == "Query.users" {
+			fields = map[FieldUse][]string{FieldUseSelect: {"name"}, FieldUseOrder: {"email"}}
+		}
+		return PolicyDecision{Allow: true, Fields: fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	artifact, err := executor.EffectiveSchema(WithIdentity(context.Background(), identity))
+	require.NoError(t, err)
+	schema, gqlErr := gqlparser.LoadSchema(&ast.Source{Name: "effective.graphql", Input: artifact.Schema})
+	require.Empty(t, gqlErr)
+	users := schema.Query.Fields.ForName("users")
+	require.Nil(t, users.Arguments.ForName(protocol.FIRST), "cursor tuple includes the hidden primary key")
+	require.Nil(t, schema.Query.Fields.ForName("userConnection"), "connections always emit a cursor containing the primary key")
+	if sortInput := schema.Types["UserSortInput"]; sortInput != nil {
+		require.Nil(t, sortInput.Fields.ForName("email"), "cursor sorting must not expose a hidden field value")
+	}
+}
+
 func TestEffectiveSchemaCacheIsBoundedLRU(t *testing.T) {
 	cache := newEffectiveCache(2)
 	a := &effectiveView{}

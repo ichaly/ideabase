@@ -19,6 +19,7 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	validatorrules "github.com/vektah/gqlparser/v2/validator/rules"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -56,6 +57,8 @@ type HealthEndpoint interface {
 type EffectiveSchemaEndpoint interface {
 	EffectiveSchema(context.Context) (SchemaArtifact, error)
 }
+
+type EffectiveSchemaCapability interface{ EffectiveSchemaAvailable() bool }
 
 type effectiveSchemaAware interface{ effectiveSchemaAware() bool }
 
@@ -155,25 +158,41 @@ func (my *gatewayState) effective(ctx context.Context) (*gatewayState, error) {
 	type effectiveNamespace struct {
 		contract *namespaceContract
 		artifact *SchemaArtifact
+		revision string
 	}
-	sources := make([]effectiveNamespace, 0, len(names))
-	for _, name := range names {
+	sources := make([]effectiveNamespace, len(names))
+	group, groupCtx := errgroup.WithContext(ctx)
+	for index, name := range names {
 		contract := my.contracts[name]
-		endpoint := contract.endpoint
-		resolved := effectiveNamespace{contract: contract}
-		if endpointSource, ok := endpoint.(EffectiveSchemaEndpoint); ok {
-			artifact, err := safelyCall(func() (SchemaArtifact, error) { return endpointSource.EffectiveSchema(ctx) })
+		sources[index].contract = contract
+		endpointSource, ok := contract.endpoint.(EffectiveSchemaEndpoint)
+		if capability, declared := contract.endpoint.(EffectiveSchemaCapability); declared && !capability.EffectiveSchemaAvailable() {
+			ok = false
+		}
+		if !ok {
+			continue
+		}
+		index, contract := index, contract
+		group.Go(func() error {
+			artifact, err := safelyCall(func() (SchemaArtifact, error) { return endpointSource.EffectiveSchema(groupCtx) })
 			if err != nil {
-				return nil, fmt.Errorf("namespace %s effective schema: %w", contract.name, err)
+				return fmt.Errorf("namespace %s effective schema: %w", contract.name, err)
 			}
 			revision, err := effectiveArtifactRevision(artifact)
 			if err != nil {
-				return nil, fmt.Errorf("namespace %s effective artifact: %w", contract.name, err)
+				return fmt.Errorf("namespace %s effective artifact: %w", contract.name, err)
 			}
-			resolved.artifact = &artifact
-			revisions = append(revisions, contract.name+"="+revision)
+			sources[index].artifact, sources[index].revision = &artifact, revision
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	for _, source := range sources {
+		if source.artifact != nil {
+			revisions = append(revisions, source.contract.name+"="+source.revision)
 		}
-		sources = append(sources, resolved)
 	}
 	key := strings.Join(revisions, "\x00")
 	if cached, ok := my.effectiveCache.Get(key); ok {
@@ -187,6 +206,23 @@ func (my *gatewayState) effective(ctx context.Context) (*gatewayState, error) {
 		for _, source := range sources {
 			contract, endpoint := source.contract, source.contract.endpoint
 			if source.artifact != nil {
+				structural := source.artifact.StructuralFingerprint
+				if structural == "" {
+					baseSnapshot, err := safelyCall(endpoint.Snapshot)
+					if err != nil {
+						return nil, fmt.Errorf("namespace %s effective artifact snapshot: %w", contract.name, err)
+					}
+					structural = baseSnapshot.Fingerprint()
+				}
+				if pinner, ok := endpoint.(SnapshotEndpoint); ok {
+					pinned, err := safelyCall(func() (Endpoint, error) {
+						return pinner.ForSnapshot(structural)
+					})
+					if err != nil {
+						return nil, fmt.Errorf("namespace %s effective artifact snapshot: %w", contract.name, err)
+					}
+					endpoint = pinned
+				}
 				snapshot, err := snapshotFromEffectiveArtifact(*source.artifact)
 				if err != nil {
 					return nil, fmt.Errorf("namespace %s effective artifact: %w", contract.name, err)
@@ -332,6 +368,9 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 	effective := false
 	for _, contract := range contracts {
 		_, effectiveChild := contract.endpoint.(EffectiveSchemaEndpoint)
+		if capability, ok := contract.endpoint.(EffectiveSchemaCapability); ok {
+			effectiveChild = capability.EffectiveSchemaAvailable()
+		}
 		if aware, ok := contract.endpoint.(effectiveSchemaAware); ok {
 			effectiveChild = aware.effectiveSchemaAware()
 		}
@@ -1223,11 +1262,13 @@ func responseKey(field *ast.Field) string {
 }
 
 func executeChild(ctx context.Context, endpoint Endpoint, query string, variables map[string]any) (body []byte, err error) {
-	return safelyCall(func() ([]byte, error) { return endpoint.Execute(ctx, query, variables) })
+	return safelyCall(func() ([]byte, error) { return endpoint.Execute(WithDelegatedExecution(ctx), query, variables) })
 }
 
 func subscribeChild(ctx context.Context, endpoint SubscriptionEndpoint, query string, variables map[string]any) (events <-chan []byte, err error) {
-	return safelyCall(func() (<-chan []byte, error) { return endpoint.Subscribe(ctx, query, variables, "") })
+	return safelyCall(func() (<-chan []byte, error) {
+		return endpoint.Subscribe(WithDelegatedExecution(ctx), query, variables, "")
+	})
 }
 
 func endpointError(key string, field *ast.Field, _ error) gqlerror.List {

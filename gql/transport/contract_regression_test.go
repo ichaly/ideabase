@@ -45,7 +45,7 @@ func TestContractBlankQueryForwardsOperationName(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", responseType)
 	w := httptest.NewRecorder()
-	NewHandler(e).ServeHTTP(w, r)
+	NewHandler(e, Options{}).ServeHTTP(w, r)
 	if w.Code != http.StatusOK || e.query != "" || e.name != "Persisted" {
 		t.Fatalf("status/query/name = %d/%q/%q", w.Code, e.query, e.name)
 	}
@@ -59,7 +59,7 @@ func TestContractSnapshotHeaderRejectsHistoricalRevisionWithoutDelegation(t *tes
 	r.Header.Set("Accept", responseType)
 	r.Header.Set("GQL-Snapshot", old.snapshot.Fingerprint())
 	w := httptest.NewRecorder()
-	NewHandler(&pinningContract{current: newer, pinned: old}).ServeHTTP(w, r)
+	NewHandler(&pinningContract{current: newer, pinned: old}, Options{}).ServeHTTP(w, r)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status/body = %d/%s", w.Code, w.Body.String())
 	}
@@ -72,7 +72,7 @@ func TestContractUnpinnedRequestUsesOneSnapshotRevision(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", responseType)
 	w := httptest.NewRecorder()
-	NewHandler(&pinningContract{current: current, pinned: pinned}).ServeHTTP(w, r)
+	NewHandler(&pinningContract{current: current, pinned: pinned}, Options{}).ServeHTTP(w, r)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"pinned"`) || w.Header().Get("GQL-Snapshot") != current.snapshot.Fingerprint() {
 		t.Fatalf("status/header/body = %d/%q/%s", w.Code, w.Header().Get("GQL-Snapshot"), w.Body.String())
 	}
@@ -108,10 +108,13 @@ func TestContractHealthRoundTripsAllFields(t *testing.T) {
 	report := core.HealthReport{Ready: true, SnapshotOK: true, SnapshotFingerprint: "rev", DatabaseOK: false, DatabaseError: "db down", CDCConfigured: true, SubscriptionAvailable: true}
 	w := httptest.NewRecorder()
 	NewHealthHandler(healthStub{report: report}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
-	for _, want := range []string{`"databaseOk":false`, `"databaseError":"db down"`, `"cdcConfigured":true`, `"subscriptionAvailable":true`} {
+	for _, want := range []string{`"databaseOk":false`, `"databaseCode":"UNAVAILABLE"`, `"cdcConfigured":true`, `"subscriptionAvailable":true`} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Fatalf("health body missing %s: %s", want, w.Body)
 		}
+	}
+	if strings.Contains(w.Body.String(), "db down") {
+		t.Fatalf("public health leaked internal failure: %s", w.Body)
 	}
 }
 

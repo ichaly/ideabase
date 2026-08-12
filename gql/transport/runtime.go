@@ -229,6 +229,9 @@ func (my *remoteRevision) EffectiveSchema(ctx context.Context) (core.SchemaArtif
 	}
 	return my.endpoint.effectiveSchema(ctx, my.snapshot.Fingerprint())
 }
+func (my *remoteRevision) EffectiveSchemaAvailable() bool {
+	return my.endpoint.EffectiveSchemaAvailable()
+}
 
 func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpoint, error) {
 	if options.EndpointID == "" || options.ManifestURL == "" || options.ExecuteURL == "" {
@@ -285,6 +288,8 @@ func (my *RemoteEndpoint) EffectiveSchema(ctx context.Context) (core.SchemaArtif
 	}
 	return my.effectiveSchema(ctx, state.snapshot.Fingerprint())
 }
+
+func (my *RemoteEndpoint) EffectiveSchemaAvailable() bool { return my != nil && my.effective != "" }
 
 func (my *RemoteEndpoint) effectiveSchema(ctx context.Context, structural string) (core.SchemaArtifact, error) {
 	if my == nil {
@@ -621,6 +626,11 @@ func (my *RemoteEndpoint) subscribeOperation(ctx context.Context, query string, 
 		cancelStream()
 		response.Body.Close()
 		return nil, fmt.Errorf("remote subscription content type %q", mediaType)
+	}
+	if fingerprint != "" && response.Header.Get("GQL-Snapshot") != fingerprint {
+		cancelStream()
+		response.Body.Close()
+		return nil, fmt.Errorf("remote subscription snapshot mismatch")
 	}
 	events := make(chan []byte, 1)
 	go func() {

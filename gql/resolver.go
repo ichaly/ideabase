@@ -768,6 +768,7 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 		state := "indeterminate"
 		if mutationRollback {
 			state = "rolled_back"
+			return gqlReply{Errors: append(executionErrors, warnings...), nullData: true}.mutationCommit(ctx, state)
 		}
 		if stop {
 			return gqlReply{Errors: executionErrors, nullData: true}.mutationCommit(ctx, state)

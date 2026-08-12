@@ -64,8 +64,8 @@ singleflight；依赖请求临时状态的 provider 不声明缓存身份，引�
 健康检查只是薄适配器，因此嵌入 Fiber、Gin、gRPC 或命令行时无需改变执行内核：
 
 ```go
-mux.Handle("/graphql", transport.NewHandler(engine))
-mux.Handle("/graphql/stream", transport.NewSubscriptionHandler(engine)) // 仅在有 CDC 时挂载
+mux.Handle("/graphql", transport.NewHandler(engine, transport.Options{}))
+mux.Handle("/graphql/stream", transport.NewSubscriptionHandler(engine, transport.Options{})) // 仅在有 CDC 时挂载
 mux.Handle("/gql/manifest", transport.NewManifestHandler("accounts", engine, authenticateManifest))
 mux.Handle("/gql/effective-schema", transport.NewEffectiveSchemaHandler(engine, delegationVerifier))
 mux.Handle("/health/gql", transport.NewHealthHandler(engine))

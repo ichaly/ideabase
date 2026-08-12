@@ -58,6 +58,7 @@ func newPostgresNotifier(db *gorm.DB, cfg internal.SubscriptionConfig) (notifier
 		listener.close()
 		return nil, err
 	}
+	listener.setStatus(true, nil) // validated and idle until the first watcher starts replication
 	return listener, nil
 }
 
@@ -65,6 +66,8 @@ func newPostgresNotifier(db *gorm.DB, cfg internal.SubscriptionConfig) (notifier
 type watcher struct {
 	tables map[string]bool
 	wake   chan struct{}
+	status func() (bool, string)
+	outage func() time.Duration
 }
 
 // listener WAL监听器：一个进程一条复制连接，表变更扇出给关注它的watcher
@@ -74,12 +77,13 @@ type listener struct {
 	started  bool                         // 复制连接是否已启动；失败不置位，下次Subscribe自动重试
 	watchers map[string]map[*watcher]bool // 表名 -> 关注该表的watcher集合
 
-	ctx         context.Context // 监听器生命周期：close取消后接收与重连循环退出
-	cancel      context.CancelFunc
-	dsn         string
-	publication string
-	connected   atomic.Bool
-	lastError   atomic.Pointer[string]
+	ctx            context.Context // 监听器生命周期：close取消后接收与重连循环退出
+	cancel         context.CancelFunc
+	dsn            string
+	publication    string
+	connected      atomic.Bool
+	disconnectedAt atomic.Int64
+	lastError      atomic.Pointer[string]
 }
 
 // newListener 构造监听器（连接延迟到首个订阅时建立）
@@ -110,6 +114,7 @@ func (my *listener) watch(tables []string) (*watcher, error) {
 	if !my.started {
 		conn, err := my.connect()
 		if err != nil {
+			my.setStatus(false, err)
 			my.mu.Unlock()
 			return nil, fmt.Errorf("CDC监听启动失败（确认 wal_level=logical 与REPLICATION权限）: %w", err)
 		}
@@ -118,7 +123,7 @@ func (my *listener) watch(tables []string) (*watcher, error) {
 		go my.run(conn)
 	}
 
-	w := &watcher{tables: make(map[string]bool, len(tables)), wake: make(chan struct{}, 1)}
+	w := &watcher{tables: make(map[string]bool, len(tables)), wake: make(chan struct{}, 1), status: my.status, outage: my.outage}
 	for _, table := range tables {
 		w.tables[table] = true
 		group := my.watchers[table]
@@ -270,6 +275,7 @@ func (my *listener) run(conn *pgconn.PgConn) {
 	for {
 		my.receive(conn)
 		my.setStatus(false, fmt.Errorf("CDC replication connection lost"))
+		my.notify() // wake existing feeds so they fail explicitly instead of going stale
 		my.closeConn(conn)
 		if my.ctx.Err() != nil {
 			return
@@ -303,11 +309,21 @@ func (my *listener) run(conn *pgconn.PgConn) {
 func (my *listener) setStatus(connected bool, err error) {
 	my.connected.Store(connected)
 	if err == nil {
+		my.disconnectedAt.Store(0)
 		my.lastError.Store(nil)
 		return
 	}
+	my.disconnectedAt.CompareAndSwap(0, time.Now().UnixNano())
 	message := err.Error()
 	my.lastError.Store(&message)
+}
+
+func (my *listener) outage() time.Duration {
+	started := my.disconnectedAt.Load()
+	if started == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, started))
 }
 
 func (my *listener) status() (bool, string) {
