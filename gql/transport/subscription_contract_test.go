@@ -2,15 +2,91 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	core "github.com/ichaly/ideabase/gql"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
+
+type flushErrorWriter struct {
+	header http.Header
+	writes int
+}
+
+type heartbeatWriter struct {
+	header http.Header
+	wrote  chan string
+	mu     sync.Mutex
+}
+
+func (w *heartbeatWriter) Header() http.Header { return w.header }
+func (w *heartbeatWriter) WriteHeader(int)     {}
+func (w *heartbeatWriter) Flush()              {}
+func (w *heartbeatWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	select {
+	case w.wrote <- string(p):
+	default:
+	}
+	return len(p), nil
+}
+
+func (w *flushErrorWriter) Header() http.Header         { return w.header }
+func (w *flushErrorWriter) WriteHeader(int)             {}
+func (w *flushErrorWriter) Write(p []byte) (int, error) { w.writes++; return len(p), nil }
+func (w *flushErrorWriter) Flush()                      {}
+func (w *flushErrorWriter) FlushError() error           { return errors.New("client gone") }
+
+func TestSubscriptionHandlerStopsAfterFlushError(t *testing.T) {
+	events := make(chan []byte, 2)
+	events <- []byte(`{"data":{"value":"first"}}`)
+	events <- []byte(`{"data":{"value":"second"}}`)
+	close(events)
+	w := &flushErrorWriter{header: make(http.Header)}
+	r := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { value }"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Accept", "text/event-stream")
+	NewSubscriptionHandler(subscriptionStub{events: events}, Options{}).ServeHTTP(w, r)
+	if w.writes != 1 {
+		t.Fatalf("writes = %d, want 1 after FlushError", w.writes)
+	}
+}
+
+func TestSubscriptionHandlerKeepsIdleStreamAlive(t *testing.T) {
+	events := make(chan []byte)
+	ctx, cancel := context.WithCancel(context.Background())
+	r := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { value }"}`)).WithContext(ctx)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Accept", "text/event-stream")
+	w := &heartbeatWriter{header: make(http.Header), wrote: make(chan string, 1)}
+	done := make(chan struct{})
+	go func() {
+		NewSubscriptionHandler(subscriptionStub{events: events}, Options{Timeout: 20 * time.Millisecond}).ServeHTTP(w, r)
+		close(done)
+	}()
+	select {
+	case frame := <-w.wrote:
+		if frame != ": keepalive\n\n" {
+			t.Fatalf("heartbeat = %q", frame)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle subscription emitted no heartbeat")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("subscription handler did not stop")
+	}
+}
 
 type subscriptionRevision struct {
 	snapshot *core.Snapshot

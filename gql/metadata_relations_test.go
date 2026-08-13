@@ -97,6 +97,51 @@ func TestRelationsSingleFKNamingUnchanged(t *testing.T) {
 	require.NotNil(t, meta.Nodes["User"].Fields["posts"], "单关系反向保持posts")
 }
 
+type mismatchedRelationLoader struct{}
+
+func (mismatchedRelationLoader) Name() string  { return "mismatched-relation" }
+func (mismatchedRelationLoader) Priority() int { return 0 }
+func (mismatchedRelationLoader) Support() bool { return true }
+func (mismatchedRelationLoader) Load(h protocol.Hoster) error {
+	relation := &protocol.Relation{
+		Type: protocol.MANY_TO_ONE, SourceClass: "Order", TargetClass: "Customer",
+		SourceField: "customerId", SourceFields: []string{"customerId", "regionId"},
+		TargetField: "id", TargetFields: []string{"id"},
+	}
+	if err := h.PutNode("Customer", &protocol.Class{Name: "Customer", Table: "customers", Fields: map[string]*protocol.Field{
+		"id": {Name: "id", Column: "id", Type: "ID"},
+	}}); err != nil {
+		return err
+	}
+	return h.PutNode("Order", &protocol.Class{Name: "Order", Table: "orders", Relations: []*protocol.Relation{relation}, Fields: map[string]*protocol.Field{
+		"customerId": {Name: "customerId", Column: "customer_id", Type: "ID"},
+		"regionId":   {Name: "regionId", Column: "region_id", Type: "ID"},
+	}})
+}
+
+type nilRelationLoader struct{ mismatchedRelationLoader }
+
+func (nilRelationLoader) Name() string { return "nil-relation" }
+func (nilRelationLoader) Load(h protocol.Hoster) error {
+	return h.PutNode("Broken", &protocol.Class{Name: "Broken", Table: "broken", Relations: []*protocol.Relation{nil}, Fields: map[string]*protocol.Field{}})
+}
+
+func TestMetadataRejectsMismatchedCompositeRelation(t *testing.T) {
+	_, err := NewMetadata(failClosedKonfig(t), nil,
+		WithoutLoader("pgsql", "mysql", "file", "config"),
+		WithLoader(mismatchedRelationLoader{}),
+	)
+	require.ErrorContains(t, err, "source_fields 与 target_fields 必须非空且等长")
+}
+
+func TestMetadataRejectsNilRelation(t *testing.T) {
+	_, err := NewMetadata(failClosedKonfig(t), nil,
+		WithoutLoader("pgsql", "mysql", "file", "config"),
+		WithLoader(nilRelationLoader{}),
+	)
+	require.ErrorContains(t, err, "包含空关系")
+}
+
 func fieldNamesOf(class *protocol.Class) []string {
 	var names []string
 	for key, f := range class.Fields {

@@ -648,20 +648,10 @@ func (my *Dialect) applyScope(class *protocol.Class, rows []inputRow) {
 	for _, rule := range class.Scope {
 		for i := range rows {
 			row := &rows[i]
-			found := false
-			for _, column := range row.columns {
-				if column == rule.Column {
-					found = true
-					break
-				}
-			}
-			if !found {
-				row.columns = append(row.columns, rule.Column)
-			}
-			row.values[rule.Column] = func(c *compiler.Context) error {
+			setInputValue(row, rule.Column, func(c *compiler.Context) error {
 				c.Write(my.Placeholder(c.AddContextSlot(rule.Context)))
 				return nil
-			}
+			})
 		}
 	}
 }
@@ -682,19 +672,20 @@ func (my *Dialect) applyPreset(class *protocol.Class, rows []inputRow, operation
 		}
 		for i := range rows {
 			row := &rows[i]
-			seen := false
-			for _, c := range row.columns {
-				if c == f.Column {
-					seen = true
-					break
-				}
-			}
-			if !seen {
-				row.columns = append(row.columns, f.Column)
-			}
-			row.values[f.Column] = func(c *compiler.Context) error { return my.writePreset(c, source) }
+			setInputValue(row, f.Column, func(c *compiler.Context) error { return my.writePreset(c, source) })
 		}
 	}
+}
+
+func setInputValue(row *inputRow, column string, value paramWriter) {
+	for _, existing := range row.columns {
+		if existing == column {
+			row.values[column] = value
+			return
+		}
+	}
+	row.columns = append(row.columns, column)
+	row.values[column] = value
 }
 
 func (my *Dialect) writePreset(ctx *compiler.Context, source *protocol.ValueSource) error {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"reflect"
 	"runtime/debug"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -604,11 +603,7 @@ func (my *Engine) rebuild() error {
 		}
 	}
 
-	names := make([]string, 0, len(defines))
-	for name := range defines {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := sortedMapKeys(defines)
 
 	var sb strings.Builder
 	sb.WriteString(my.source)

@@ -385,9 +385,6 @@ func writeGraphQL(w http.ResponseWriter, body []byte, mediaType string) bool {
 }
 
 func graphQLResponseShape(body []byte) (data, errors, valid bool) {
-	if !json.Valid(body) {
-		return false, false, false
-	}
 	iter := jsoniter.ConfigFastest.BorrowIterator(body)
 	defer jsoniter.ConfigFastest.ReturnIterator(iter)
 	dataValue := false

@@ -73,7 +73,7 @@ func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
 	add := func(parent, name string, class *protocol.Class, shape compiler.OperationShape, operation string, actions ...string) {
 		catalog[parent+"."+name] = operationCapability{class: class, actions: actions, operation: operation, shape: shape}
 	}
-	for _, name := range sortedNodeNames(metadata) {
+	for _, name := range sortedMapKeys(metadata.Nodes) {
 		class := metadata.Nodes[name]
 		if class == nil || name != class.Name || class.Table == "" || class.Hidden {
 			continue
@@ -476,21 +476,8 @@ func formatSchema(schema *ast.Schema) string {
 	return out.String()
 }
 
-func sortedNodeNames(metadata *Metadata) []string {
-	names := make([]string, 0, len(metadata.Nodes))
-	for name := range metadata.Nodes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
 func sortedDefinitions(schema *ast.Schema) []*ast.Definition {
-	names := make([]string, 0, len(schema.Types))
-	for name := range schema.Types {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := sortedMapKeys(schema.Types)
 	definitions := make([]*ast.Definition, 0, len(names))
 	for _, name := range names {
 		definitions = append(definitions, schema.Types[name])

@@ -150,11 +150,7 @@ func (my *effectiveSubscriptionEndpoint) Subscribe(ctx context.Context, query st
 
 func (my *gatewayState) effective(ctx context.Context) (*gatewayState, error) {
 	revisions := []string{my.snapshot.Fingerprint()}
-	names := make([]string, 0, len(my.contracts))
-	for name := range my.contracts {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := sortedMapKeys(my.contracts)
 	type effectiveNamespace struct {
 		contract *namespaceContract
 		artifact *SchemaArtifact
@@ -617,15 +613,15 @@ func (my *Gateway) Health(ctx context.Context) (HealthReport, error) {
 		return HealthReport{}, fmt.Errorf("gateway health unavailable")
 	}
 	report := HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, CDCConnected: true, SnapshotFingerprint: state.snapshot.Fingerprint(), SubscriptionAvailable: state.schema.Subscription != nil}
-	names := make([]string, 0, len(state.contracts))
-	for name := range state.contracts {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var failures []error
-	for _, name := range names {
+	names := sortedMapKeys(state.contracts)
+	results := collectHealth(names, func(name string) (HealthReport, error) {
 		contract := state.contracts[name]
-		child, err := safelyCall(func() (HealthReport, error) { return contract.endpoint.(HealthEndpoint).Health(ctx) })
+		return safelyCall(func() (HealthReport, error) { return contract.endpoint.(HealthEndpoint).Health(ctx) })
+	})
+	var failures []error
+	for index, name := range names {
+		contract := state.contracts[name]
+		child, err := results[index].report, results[index].err
 		report.SnapshotOK = report.SnapshotOK && child.SnapshotOK
 		report.DatabaseOK = report.DatabaseOK && child.DatabaseOK
 		report.CDCConfigured = report.CDCConfigured || child.CDCConfigured

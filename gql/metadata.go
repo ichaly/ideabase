@@ -22,7 +22,6 @@ import (
 	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
-	"github.com/samber/lo"
 	"github.com/sony/sonyflake"
 	"gorm.io/gorm"
 )
@@ -281,6 +280,9 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	if len(my.Nodes) == 0 && !cfg.IsDebug() {
 		return nil, fmt.Errorf("元数据加载失败：所有加载器执行后无任何实体（请检查数据库连接、metadata.file 或 metadata.classes 配置）")
 	}
+	if err := my.rejectNilRelations(); err != nil {
+		return nil, err
+	}
 	// 进行驼峰命名和过滤处理
 	my.normalize()
 	// 启动期把命名策略绑定为函数；database/空策略完全不进入生成路径。
@@ -303,12 +305,54 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	}
 	// 字段级关系声明（config/旧格式文件）收进类级关系集合
 	my.collectRelations()
+	if err := my.validateRelations(); err != nil {
+		return nil, err
+	}
 	// 统一关系处理
 	my.processRelations()
 	// 类型定型：结构推导 + Codec认领
 	my.finalize()
 	my.operations = buildOperationCatalog(my)
 	return my, nil
+}
+
+func (my *Metadata) rejectNilRelations() error {
+	var invalid error
+	my.eachClass(func(class *protocol.Class) {
+		if invalid == nil && slices.Contains(class.Relations, nil) {
+			invalid = fmt.Errorf("实体 %s 包含空关系", class.Name)
+		}
+	})
+	return invalid
+}
+
+func (my *Metadata) validateRelations() error {
+	var invalid error
+	my.eachClass(func(class *protocol.Class) {
+		for _, relation := range class.Relations {
+			if invalid != nil {
+				continue
+			}
+			source, target := relation.SourceColumns(), relation.TargetColumns()
+			if len(source) == 0 || len(source) != len(target) {
+				invalid = fmt.Errorf("关系 %s.%s 的 source_fields 与 target_fields 必须非空且等长", class.Name, relation.SourceField)
+				continue
+			}
+			targetClass := my.Nodes[relation.TargetClass]
+			if targetClass == nil {
+				// Catalog filtering may intentionally remove one side of a database
+				// relation. processRelations already ignores that dangling edge.
+				continue
+			}
+			for index := range source {
+				if class.Fields[source[index]] == nil || targetClass.Fields[target[index]] == nil {
+					invalid = fmt.Errorf("关系 %s.%s 引用了不存在的字段 %s -> %s", class.Name, relation.SourceField, source[index], target[index])
+					break
+				}
+			}
+		}
+	})
+	return invalid
 }
 
 func (my *Metadata) cloneCatalog() {
@@ -482,7 +526,7 @@ func (my *Metadata) CatalogFingerprint() (string, error) {
 		return ref
 	}
 	classes := make([]classShape, 0)
-	for _, name := range sortedNodeNames(my) {
+	for _, name := range sortedMapKeys(my.Nodes) {
 		class := my.Nodes[name]
 		if class == nil || name != class.Name {
 			continue
@@ -1007,7 +1051,7 @@ func (my *Metadata) normalize() error {
 		fields := make(map[string]*protocol.Field)
 		for fieldKey, field := range class.Fields {
 			// 跳过需要忽略的字段
-			if field.Column != "" && lo.IndexOf(config.ExcludeFields, field.Column) > -1 {
+			if field.Column != "" && slices.Contains(config.ExcludeFields, field.Column) {
 				continue
 			}
 			if field.Column == "" {

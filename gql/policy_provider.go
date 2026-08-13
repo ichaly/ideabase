@@ -381,10 +381,9 @@ func (p *ProtocolPolicyProvider) Decide(_ context.Context, request PolicyRequest
 		d, err := NormalizeDecision(request, PolicyDecision{})
 		return d, err
 	}
-	var selectFields []string
+	readAction := operationInList(request.Actions, protocol.OP_SELECT) || operationInList(request.Actions, protocol.OP_AGGREGATE)
 	for _, role := range authorizedRoles {
 		permission := byRole[role]
-		selectFields = append(selectFields, permission.Select...)
 		branch := RolePolicyBranch{Role: role}
 		for _, predicate := range permission.Filter {
 			value, _ := cloneClaim(predicate.Value)
@@ -398,7 +397,8 @@ func (p *ProtocolPolicyProvider) Decide(_ context.Context, request PolicyRequest
 		// empty branch is the explicit unrestricted arm of the role union.
 		d.RoleBranches = append(d.RoleBranches, branch)
 	}
-	if len(selectFields) > 0 {
+	selectFields := intersectPermissionFields(authorizedRoles, byRole, func(permission *protocol.Permission) []string { return permission.Select })
+	if readAction {
 		for _, use := range []FieldUse{FieldUseSelect, FieldUseFilter, FieldUseOrder, FieldUseGroup, FieldUseAggregate, FieldUseReturn} {
 			d.Fields[use] = append([]string(nil), selectFields...)
 		}
@@ -427,10 +427,9 @@ func (p *ProtocolPolicyProvider) PolicyCacheIdentity(_ context.Context, identity
 	return strings.Join(roles, "\x00"), true
 }
 
-// policyWriteFields unions grants across roles but intersects the actions of
-// one operation. An upsert input is executable on both INSERT and UPDATE
-// branches, so exposing a field granted on only one branch would be a write
-// escalation when the other branch runs.
+// policyWriteFields intersects grants across roles and actions. A role branch
+// owns its fields together with its row filter/check; exposing a union would
+// let one role's row scope use another role's field grant.
 func policyWriteFields(actions, roles []string, permissions map[string]*protocol.Permission) []string {
 	var result []string
 	first := true
@@ -438,25 +437,28 @@ func policyWriteFields(actions, roles []string, permissions map[string]*protocol
 		if action != protocol.OP_INSERT && action != protocol.OP_UPDATE {
 			continue
 		}
-		var fields []string
-		for _, role := range roles {
-			permission := permissions[role]
+		fields := intersectPermissionFields(roles, permissions, func(permission *protocol.Permission) []string {
 			if action == protocol.OP_INSERT {
-				fields = append(fields, permission.Insert...)
-			} else {
-				fields = append(fields, permission.Update...)
+				return permission.Insert
 			}
-		}
-		fields = sortedUnique(fields)
+			return permission.Update
+		})
 		if first {
 			result, first = fields, false
 			continue
 		}
-		allowed := make(map[string]struct{}, len(fields))
-		for _, field := range fields {
-			allowed[field] = struct{}{}
-		}
-		result = slices.DeleteFunc(result, func(field string) bool { _, ok := allowed[field]; return !ok })
+		result = intersectFieldNames(result, fields)
+	}
+	return result
+}
+
+func intersectPermissionFields(roles []string, permissions map[string]*protocol.Permission, fields func(*protocol.Permission) []string) []string {
+	if len(roles) == 0 {
+		return nil
+	}
+	result := sortedUnique(fields(permissions[roles[0]]))
+	for _, role := range roles[1:] {
+		result = intersectFieldNames(result, fields(permissions[role]))
 	}
 	return result
 }

@@ -353,9 +353,12 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName, column string
 		if relConfig.TargetField != "" {
 			rel.TargetField = relConfig.TargetField
 		}
-		if len(relConfig.SourceFields) > 1 { // 复合外键列组（首列冗余进单列字段，消费方统一经SourceColumns读取）
+		if len(relConfig.SourceFields) > 0 { // 显式列组覆盖单列字段；首列冗余供旧消费方读取
 			rel.SourceFields, rel.SourceField = relConfig.SourceFields, relConfig.SourceFields[0]
-			rel.TargetFields, rel.TargetField = relConfig.TargetFields, relConfig.TargetFields[0]
+			rel.TargetFields = relConfig.TargetFields
+			if len(rel.TargetFields) > 0 {
+				rel.TargetField = rel.TargetFields[0]
+			}
 		}
 		if relConfig.Type != "" {
 			rel.Type = protocol.RelationType(relConfig.Type)
@@ -483,39 +486,28 @@ func (my *ConfigLoader) applyGovernance(class *protocol.Class, config *internal.
 			}
 		}
 	}
+	appendPredicate := func(predicate protocol.Predicate) {
+		for _, existing := range class.Where {
+			if samePredicate(existing, predicate) {
+				return
+			}
+		}
+		class.Where = append(class.Where, predicate)
+	}
 	if config.SoftDelete != nil {
 		field, err := my.resolveColumn(class, config.SoftDelete.Column)
 		if err != nil {
 			return fmt.Errorf("soft-delete: %w", err)
 		}
 		class.SoftDelete = &protocol.SoftDelete{Column: field.Column}
-		p := protocol.Predicate{Column: field.Column, Operator: "is-null"}
-		found := false
-		for _, existing := range class.Where {
-			if samePredicate(existing, p) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			class.Where = append(class.Where, p)
-		}
+		appendPredicate(protocol.Predicate{Column: field.Column, Operator: "is-null"})
 	}
 	where, err := my.resolvePredicates(class, config.Where)
 	if err != nil {
 		return fmt.Errorf("where: %w", err)
 	}
 	for _, p := range where {
-		found := false
-		for _, existing := range class.Where {
-			if samePredicate(existing, p) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			class.Where = append(class.Where, p)
-		}
+		appendPredicate(p)
 	}
 	if config.Permissions == nil {
 		return nil

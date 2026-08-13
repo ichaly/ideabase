@@ -273,8 +273,11 @@ func (my *listener) auditPublication(ctx context.Context, conn *pgconn.PgConn) e
 func (my *listener) run(conn *pgconn.PgConn) {
 	backoff := time.Second
 	for {
-		my.receive(conn)
-		my.setStatus(false, fmt.Errorf("CDC replication connection lost"))
+		err := my.receive(conn)
+		if err == nil {
+			err = fmt.Errorf("CDC replication connection lost")
+		}
+		my.setStatus(false, err)
 		my.notify() // wake existing feeds so they fail explicitly instead of going stale
 		my.closeConn(conn)
 		if my.ctx.Err() != nil {
@@ -334,7 +337,7 @@ func (my *listener) status() (bool, string) {
 }
 
 // receive 单连接接收循环，出错返回交由run重连
-func (my *listener) receive(conn *pgconn.PgConn) {
+func (my *listener) receive(conn *pgconn.PgConn) error {
 	position := pglogrepl.LSN(0)
 	relations := make(map[uint32]string) // relation id -> 表名
 	touched := make(map[string]bool)     // 当前事务内变更过的表，Commit时统一扇出
@@ -348,7 +351,7 @@ func (my *listener) receive(conn *pgconn.PgConn) {
 				pglogrepl.StandbyStatusUpdate{WALWritePosition: position})
 			if err != nil {
 				cancel()
-				return
+				return err
 			}
 			cancel()
 			deadline = time.Now().Add(statusInterval)
@@ -361,7 +364,7 @@ func (my *listener) receive(conn *pgconn.PgConn) {
 			if pgconn.Timeout(err) && my.ctx.Err() == nil {
 				continue
 			}
-			return
+			return err
 		}
 
 		message, ok := raw.(*pgproto3.CopyData)
@@ -373,7 +376,7 @@ func (my *listener) receive(conn *pgconn.PgConn) {
 		case pglogrepl.PrimaryKeepaliveMessageByteID:
 			keepalive, err := pglogrepl.ParsePrimaryKeepaliveMessage(message.Data[1:])
 			if err != nil {
-				return
+				return err
 			}
 			if keepalive.ServerWALEnd > position {
 				position = keepalive.ServerWALEnd
@@ -384,22 +387,24 @@ func (my *listener) receive(conn *pgconn.PgConn) {
 		case pglogrepl.XLogDataByteID:
 			data, err := pglogrepl.ParseXLogData(message.Data[1:])
 			if err != nil {
-				return
+				return err
 			}
 			if data.WALStart > position {
 				position = data.WALStart
 			}
-			my.dispatch(data.WALData, relations, touched)
+			if err := my.dispatch(data.WALData, relations, touched); err != nil {
+				return fmt.Errorf("decode pgoutput: %w", err)
+			}
 		}
 	}
 }
 
 // dispatch 解码pgoutput消息：维护关系表映射，行变更累积到事务的touched集合，
 // Commit时统一扇出——通知次数从行数降到每事务的去重表数，批量写入不放大
-func (my *listener) dispatch(walData []byte, relations map[uint32]string, touched map[string]bool) {
+func (my *listener) dispatch(walData []byte, relations map[uint32]string, touched map[string]bool) error {
 	message, err := pglogrepl.Parse(walData)
 	if err != nil {
-		return
+		return err
 	}
 	switch m := message.(type) {
 	case *pglogrepl.RelationMessage:
@@ -432,6 +437,7 @@ func (my *listener) dispatch(walData []byte, relations map[uint32]string, touche
 			my.notify(tables...)
 		}
 	}
+	return nil
 }
 
 // statusInterval 复制进度上报间隔

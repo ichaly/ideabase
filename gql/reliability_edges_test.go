@@ -35,8 +35,14 @@ func TestDispatchUnknownRelationDoesNotTouchEmptyTable(t *testing.T) {
 	relations := map[uint32]string{}
 	touched := map[string]bool{}
 	// A malformed/unknown relation id must not create the empty table key.
-	l.dispatch([]byte{0}, relations, touched)
+	require.Error(t, l.dispatch([]byte{0}, relations, touched))
 	require.NotContains(t, touched, "")
+}
+
+func TestDispatchParseErrorIsReturnedToReconnectLoop(t *testing.T) {
+	l := newListener("", "")
+	err := l.dispatch([]byte{0}, map[uint32]string{}, map[string]bool{})
+	require.Error(t, err)
 }
 
 func TestSocketSessionHasActiveSubscriptionLimit(t *testing.T) {

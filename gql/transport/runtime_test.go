@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,6 +74,15 @@ type subscriptionRuntime struct {
 
 type healthyRuntime struct{ *runtimeEndpoint }
 
+type deadlineHealthRuntime struct {
+	*runtimeEndpoint
+	deadline bool
+}
+
+type stuckHealthRuntime struct{}
+
+func (stuckHealthRuntime) Health(context.Context) (core.HealthReport, error) { select {} }
+
 type versionedRuntime struct {
 	*runtimeEndpoint
 	revision uint64
@@ -82,6 +94,41 @@ func (my *versionedRuntime) ManifestState() (*core.Snapshot, uint64, error) {
 
 func (my *healthyRuntime) Health(context.Context) (core.HealthReport, error) {
 	return core.HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, SnapshotFingerprint: my.snapshot.Fingerprint()}, nil
+}
+
+func (my *deadlineHealthRuntime) Health(ctx context.Context) (core.HealthReport, error) {
+	_, my.deadline = ctx.Deadline()
+	return core.HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, SnapshotFingerprint: my.snapshot.Fingerprint()}, nil
+}
+
+func TestHealthHandlerAlwaysBoundsDownstreamWork(t *testing.T) {
+	endpoint := &deadlineHealthRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: newArtifact(t, "type Query { hello: String }")}}
+	request := httptest.NewRequest(http.MethodGet, "/health", nil)
+	recorder := httptest.NewRecorder()
+	NewHealthHandler(endpoint).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !endpoint.deadline {
+		t.Fatalf("status/deadline = %d/%t", recorder.Code, endpoint.deadline)
+	}
+}
+
+func TestHealthHandlerReturnsWhenEndpointIgnoresContext(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/health", nil)
+	ctx, cancel := context.WithTimeout(request.Context(), 10*time.Millisecond)
+	defer cancel()
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		NewHealthHandler(stuckHealthRuntime{}).ServeHTTP(recorder, request.WithContext(ctx))
+		close(done)
+	}()
+	select {
+	case <-done:
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d", recorder.Code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("health handler ignored its deadline")
+	}
 }
 
 func (my *subscriptionRuntime) SubscriptionAvailable() bool { return true }
@@ -505,6 +552,158 @@ func TestRemoteEndpointRejectsFalseSubscriptionCapability(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("schema-only subscription capability was accepted")
+	}
+}
+
+func TestRemoteEndpointReconnectsTransientSSEEOFWithFixedSnapshot(t *testing.T) {
+	snapshot := newArtifact(t, "type Subscription { changed: String }")
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("GQL-Snapshot"); got != snapshot.Fingerprint() {
+			t.Errorf("snapshot = %q, want %q", got, snapshot.Fingerprint())
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("GQL-Snapshot", snapshot.Fingerprint())
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		if attempts.Add(1) == 1 {
+			_, _ = w.Write([]byte("event: next\ndata: {\"data\":{\"changed\":\"first\"}}\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			return
+		}
+		_, _ = w.Write([]byte("event: next\ndata: {\"data\":{\"changed\":\"second\"}}\n\n"))
+		_, _ = w.Write([]byte("event: complete\n\n"))
+	}))
+	defer server.Close()
+	remote := &RemoteEndpoint{client: server.Client(), subscribe: server.URL, timeout: time.Second, maxResponse: 1024}
+	events, err := remote.subscribeOperation(context.Background(), "subscription { changed }", nil, "", snapshot.Fingerprint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for frame := range events {
+		got = append(got, string(frame))
+	}
+	if len(got) != 2 || !strings.Contains(got[0], "first") || !strings.Contains(got[1], "second") {
+		t.Fatalf("events = %#v", got)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts.Load())
+	}
+}
+
+func TestRemoteEndpointKeepsRetryingWhenReconnectHandshakeFails(t *testing.T) {
+	snapshot := newArtifact(t, "type Subscription { changed: String }")
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		switch attempts.Add(1) {
+		case 1:
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("GQL-Snapshot", snapshot.Fingerprint())
+			_, _ = w.Write([]byte("event: next\ndata: {\"data\":{\"changed\":\"first\"}}\n\n"))
+		case 2:
+			http.Error(w, "temporary", http.StatusServiceUnavailable)
+		default:
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("GQL-Snapshot", snapshot.Fingerprint())
+			_, _ = w.Write([]byte("event: next\ndata: {\"data\":{\"changed\":\"recovered\"}}\n\nevent: complete\n\n"))
+		}
+	}))
+	defer server.Close()
+	remote := &RemoteEndpoint{client: server.Client(), subscribe: server.URL, timeout: time.Second, maxResponse: 1024}
+	events, err := remote.subscribeOperation(context.Background(), "subscription { changed }", nil, "", snapshot.Fingerprint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frames []string
+	for frame := range events {
+		frames = append(frames, string(frame))
+	}
+	if len(frames) != 2 || !strings.Contains(frames[1], "recovered") || attempts.Load() != 3 {
+		t.Fatalf("frames/attempts = %#v/%d", frames, attempts.Load())
+	}
+}
+
+func TestRemoteEndpointResetsRetryBudgetAfterProgress(t *testing.T) {
+	snapshot := newArtifact(t, "type Subscription { changed: String }")
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempt := attempts.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("GQL-Snapshot", snapshot.Fingerprint())
+		_, _ = fmt.Fprintf(w, "event: next\ndata: {\"data\":{\"changed\":%d}}\n\n", attempt)
+		if attempt == 6 {
+			_, _ = w.Write([]byte("event: complete\n\n"))
+		}
+	}))
+	defer server.Close()
+	remote := &RemoteEndpoint{client: server.Client(), subscribe: server.URL, timeout: time.Second, maxResponse: 1024}
+	events, err := remote.subscribeOperation(context.Background(), "subscription { changed }", nil, "", snapshot.Fingerprint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frames int
+	for range events {
+		frames++
+	}
+	if frames != 6 || attempts.Load() != 6 {
+		t.Fatalf("frames/attempts = %d/%d, want 6/6", frames, attempts.Load())
+	}
+}
+
+func TestRemoteSubscriptionIdleWatchdogUnblocksRead(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer writer.Close()
+	remote := &RemoteEndpoint{maxResponse: 1024, idleTimeout: 10 * time.Millisecond}
+	done := make(chan error, 1)
+	go func() {
+		_, err := remote.readSubscription(context.Background(), reader, make(chan []byte, 1))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !retryableReadError(err) {
+			t.Fatalf("idle error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle SSE read was not released")
+	}
+}
+
+func TestRemoteSubscriptionRejectsOversizedTokenWithoutRetry(t *testing.T) {
+	remote := &RemoteEndpoint{maxResponse: 4096, idleTimeout: time.Second}
+	_, err := remote.readSubscription(context.Background(), io.NopCloser(strings.NewReader("data: "+strings.Repeat("x", 5000)+"\n\n")), make(chan []byte, 1))
+	if err == nil || retryableReadError(err) || !strings.Contains(err.Error(), "response limit") {
+		t.Fatalf("oversized token error = %v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
+
+func TestRemoteSubscriptionHandshakeTimeoutCancelsAttempt(t *testing.T) {
+	canceled := make(chan struct{})
+	remote := &RemoteEndpoint{
+		client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			<-request.Context().Done()
+			close(canceled)
+			return nil, request.Context().Err()
+		})},
+		subscribe: "https://child.example/subscription", timeout: 10 * time.Millisecond,
+	}
+	_, err, _ := remote.openSubscription(context.Background(), request{}, []byte(`{}`), "")
+	if err == nil {
+		t.Fatal("handshake timeout succeeded")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("timed out handshake request was not canceled")
 	}
 }
 

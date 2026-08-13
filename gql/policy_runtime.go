@@ -658,11 +658,7 @@ func (my *Engine) policyPlan(ctx context.Context, base *Plan, variables map[stri
 	}
 	overlay := newPolicyOverlay(my.metadata)
 
-	coordinates := make([]string, 0, len(decisions))
-	for coordinate := range decisions {
-		coordinates = append(coordinates, coordinate)
-	}
-	sort.Strings(coordinates)
+	coordinates := sortedMapKeys(decisions)
 	roles := make([]string, 0, len(coordinates))
 	scope := my.policyDecisionScope(decisions)
 	for coordinateIndex, coordinate := range coordinates {
@@ -726,6 +722,7 @@ func (my *Engine) policyPlan(ctx context.Context, base *Plan, variables map[stri
 
 func applyDecisionFields(permission *protocol.Permission, actions []string, fields map[FieldUse][]string) {
 	read := append([]string(nil), fields[FieldUseSelect]...)
+	_, readRestricted := fields[FieldUseSelect]
 	for _, use := range []FieldUse{FieldUseFilter, FieldUseOrder, FieldUseGroup, FieldUseAggregate, FieldUseJoin, FieldUseReturn, FieldUseInternalDependency} {
 		read = append(read, fields[use]...)
 	}
@@ -734,7 +731,7 @@ func applyDecisionFields(permission *protocol.Permission, actions []string, fiel
 		switch action {
 		case protocol.OP_SELECT:
 			permission.Select = append(permission.Select, read...)
-			if len(read) == 0 {
+			if len(read) == 0 && !readRestricted {
 				permission.Select = append(permission.Select, "*")
 			}
 		case protocol.OP_AGGREGATE:
@@ -810,11 +807,7 @@ func applyPolicyPresets(overlay *policyOverlay, class *protocol.Class, actions [
 }
 
 func (my *Engine) policyDecisionScope(decisions map[string]PolicyDecision) map[string]any {
-	coordinates := make([]string, 0, len(decisions))
-	for coordinate := range decisions {
-		coordinates = append(coordinates, coordinate)
-	}
-	sort.Strings(coordinates)
+	coordinates := sortedMapKeys(decisions)
 	scope := make(map[string]any)
 	for coordinateIndex, coordinate := range coordinates {
 		decision := decisions[coordinate]
@@ -853,10 +846,10 @@ func putPolicyValues(scope map[string]any, prefix string, predicates []TypedPred
 
 func policyPlanSignature(decisions map[string]PolicyDecision) string {
 	parts := make([]string, 0, len(decisions))
-	for coordinate, decision := range decisions {
+	for _, coordinate := range sortedMapKeys(decisions) {
+		decision := decisions[coordinate]
 		parts = append(parts, fmt.Sprintf("%s:%d:%s:%s", coordinate, decision.PolicyRevision, decision.PermissionSignature, decision.ShapeSignature))
 	}
-	sort.Strings(parts)
 	return strings.Join(parts, "\x00")
 }
 
@@ -865,7 +858,8 @@ func policyPlanSignature(decisions map[string]PolicyDecision) string {
 // the values feeding that SQL change.
 func policyRuntimeSignature(decisions map[string]PolicyDecision) string {
 	parts := make([]string, 0, len(decisions))
-	for coordinate, decision := range decisions {
+	for _, coordinate := range sortedMapKeys(decisions) {
+		decision := decisions[coordinate]
 		value, _ := stdjson.Marshal(struct {
 			Row      []TypedPredicate
 			Preset   []TypedPredicate
@@ -874,6 +868,5 @@ func policyRuntimeSignature(decisions map[string]PolicyDecision) string {
 		}{decision.RowPredicates, decision.Preset, decision.Check, decision.RoleBranches})
 		parts = append(parts, coordinate+"\x00"+string(value))
 	}
-	sort.Strings(parts)
 	return policyPlanSignature(decisions) + "\x00" + strings.Join(parts, "\x00")
 }

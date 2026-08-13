@@ -1,11 +1,13 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	core "github.com/ichaly/ideabase/gql"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -131,34 +133,60 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 			}
 		}
 		w.WriteHeader(http.StatusOK)
+		heartbeatInterval := min(opts.Timeout/2, 15*time.Second)
+		heartbeat := time.NewTicker(heartbeatInterval)
+		defer heartbeat.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-heartbeat.C:
+				if err := writeSSEFrame(w, flusher, opts.Timeout, []byte(": keepalive\n\n")); err != nil {
+					return
+				}
 			case frame, open := <-events:
 				if !open {
-					_, _ = fmt.Fprint(w, "event: complete\n\n")
-					flusher.Flush()
+					_ = writeSSEFrame(w, flusher, opts.Timeout, []byte("event: complete\n\n"))
 					return
 				}
-				eventBytes := int64(len("event: next\n\n"))
-				for _, line := range strings.Split(string(frame), "\n") {
-					eventBytes += int64(len("data: ")) + int64(len(line)) + 1
-				}
+				newlines := int64(bytes.Count(frame, []byte{'\n'}))
+				lines := newlines + 1
+				eventBytes := int64(len("event: next\n\n")) + int64(len(frame)) + lines*int64(len("data: ")+1)
 				if eventBytes > opts.MaxResponseBytes {
-					_, _ = fmt.Fprint(w, "event: next\ndata: {\"errors\":[{\"message\":\"subscription event exceeds response limit\",\"extensions\":{\"code\":\"LIMIT_EXCEEDED\"}}]}\n\nevent: complete\n\n")
-					flusher.Flush()
+					_ = writeSSEFrame(w, flusher, opts.Timeout, []byte("event: next\ndata: {\"errors\":[{\"message\":\"subscription event exceeds response limit\",\"extensions\":{\"code\":\"LIMIT_EXCEEDED\"}}]}\n\nevent: complete\n\n"))
 					return
 				}
-				_, _ = fmt.Fprint(w, "event: next\n")
-				for _, line := range strings.Split(string(frame), "\n") {
-					_, _ = fmt.Fprintf(w, "data: %s\n", line)
+				payload := bytes.NewBuffer(make([]byte, 0, int(eventBytes)))
+				payload.WriteString("event: next\n")
+				for line := range bytes.SplitSeq(frame, []byte{'\n'}) {
+					payload.WriteString("data: ")
+					payload.Write(line)
+					payload.WriteByte('\n')
 				}
-				_, _ = fmt.Fprint(w, "\n")
-				flusher.Flush()
+				payload.WriteByte('\n')
+				if err := writeSSEFrame(w, flusher, opts.Timeout, payload.Bytes()); err != nil {
+					return
+				}
 			}
 		}
 	})
+}
+
+func writeSSEFrame(w http.ResponseWriter, flusher http.Flusher, timeout time.Duration, frame []byte) error {
+	controller := http.NewResponseController(w)
+	_ = controller.SetWriteDeadline(time.Now().Add(timeout))
+	if _, err := w.Write(frame); err != nil {
+		return err
+	}
+	if flushErr, ok := w.(interface{ FlushError() error }); ok {
+		if err := flushErr.FlushError(); err != nil {
+			return err
+		}
+	} else {
+		flusher.Flush()
+	}
+	_ = controller.SetWriteDeadline(time.Time{})
+	return nil
 }
 
 func writeSubscriptionError(w http.ResponseWriter, cause error) {

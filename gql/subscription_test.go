@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"hash/fnv"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,20 @@ import (
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSubscriptionUnpackFailureDoesNotCommitFingerprint(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	plan := &Plan{SQL: `SELECT '{'::text`}
+	digest := fnv.New64a()
+	var last uint64
+	for attempt := 0; attempt < 2; attempt++ {
+		reply, changed := executor.tick(context.Background(), plan, nil, digest, &last)
+		require.True(t, changed)
+		require.NotEmpty(t, reply.Errors)
+		require.Zero(t, last, "failed post-processing must remain retryable for identical database bytes")
+	}
+}
 
 func TestSubscriptionRetriesUntilDatabaseRecovers(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)

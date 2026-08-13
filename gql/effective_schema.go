@@ -461,7 +461,7 @@ func hasMetadataPermissions(metadata *Metadata) bool {
 
 func metadataPolicy(metadata *Metadata) PolicyProvider {
 	permissions := make(map[string]map[string]*protocol.Permission)
-	for _, name := range sortedNodeNames(metadata) {
+	for _, name := range sortedMapKeys(metadata.Nodes) {
 		class := metadata.Nodes[name]
 		if class != nil && name == class.Name && len(class.Permissions) > 0 {
 			permissions[class.Name] = class.Permissions

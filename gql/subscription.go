@@ -372,18 +372,13 @@ func (my *Engine) tick(ctx context.Context, plan *Plan, variables map[string]int
 			return r, false
 		}
 		r.Errors = GraphQLErrors(err)
-		data = []byte(err.Error()) // 错误同样参与指纹：持续故障只推送一次，恢复或换错才再推
+		return r, true // 不提交指纹；相同数据恢复时仍须重试
 	}
-
 	digest.Reset()
 	_, _ = digest.Write(data)
 	sum := digest.Sum64()
 	if sum == *last {
 		return r, false
-	}
-	*last = sum
-	if r.Errors != nil {
-		return r, true
 	}
 
 	// 订阅始终解包为Data供程序化消费（变更推送频率低，非热路径），
@@ -395,6 +390,9 @@ func (my *Engine) tick(ctx context.Context, plan *Plan, variables map[string]int
 	}
 	materialize(result)
 	r.Errors, r.Data = warnings, result
+	// Only commit after unpack and resolver post-processing succeed. A transient
+	// post-processing failure must retry even when database bytes are unchanged.
+	*last = sum
 	return r, true
 }
 
@@ -478,6 +476,10 @@ const maxActiveSubscriptions = 100
 
 var wsWriteTimeout = time.Second
 
+// wsPongWait bounds half-open connections. Each received frame or pong slides
+// the read deadline forward.
+var wsPongWait = 60 * time.Second
+
 // write 串行化并发写
 func (my *socketSession) write(message wsReply) error {
 	my.writeMu.Lock()
@@ -531,8 +533,13 @@ func (my *Engine) serveSocket(conn *websocket.Conn, ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	conn.SetReadLimit(wsReadLimit)
+	pongWait, initTimeout := wsPongWait, wsInitTimeout
 
 	session := &socketSession{conn: conn, subs: make(map[string]*socketSubscription)}
+	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
 	defer func() {
 		session.mu.Lock()
 		for _, subscription := range session.subs {
@@ -542,9 +549,35 @@ func (my *Engine) serveSocket(conn *websocket.Conn, ctx context.Context) {
 		}
 		session.mu.Unlock()
 	}()
+	pingDone := make(chan struct{})
+	defer close(pingDone)
+	go func() {
+		interval := pongWait / 2
+		if interval <= 0 {
+			interval = time.Second
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				session.writeMu.Lock()
+				_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+				err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsWriteTimeout))
+				_ = conn.SetWriteDeadline(time.Time{})
+				session.writeMu.Unlock()
+				if err != nil {
+					_ = conn.Close()
+					return
+				}
+			case <-pingDone:
+				return
+			}
+		}
+	}()
 
 	ready := false // 已完成init/ack握手
-	watchdog := time.AfterFunc(wsInitTimeout, func() {
+	watchdog := time.AfterFunc(initTimeout, func() {
 		closeSocket(conn, 4408, "Connection initialisation timeout")
 	})
 	defer watchdog.Stop()
@@ -555,6 +588,7 @@ func (my *Engine) serveSocket(conn *websocket.Conn, ctx context.Context) {
 			closeSocket(conn, 4400, "Invalid WebSocket message")
 			return
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 
 		switch message.Type {
 		case wsConnectionInit:

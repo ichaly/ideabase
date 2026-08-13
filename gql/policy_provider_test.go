@@ -91,6 +91,50 @@ func TestBuiltinPolicyProviderPreservesUnrestrictedRoleBranch(t *testing.T) {
 	require.Empty(t, decision.RoleBranches[0].RowPredicates)
 }
 
+func TestBuiltinPolicyProviderKeepsFieldsAtomicAcrossRoles(t *testing.T) {
+	provider := NewProtocolPolicyProvider(map[string]map[string]*protocol.Permission{"users": {
+		"owner": {
+			Select: []string{"id", "secret"}, Update: []string{"secret"},
+			Filter: []protocol.Predicate{{Column: "owner_id", Operator: "eq", Context: "subject"}},
+		},
+		"tenant": {
+			Select: []string{"id", "name"}, Update: []string{"name"},
+			Filter: []protocol.Predicate{{Column: "tenant_id", Operator: "eq", Context: "tenant"}},
+		},
+	}})
+	identity, err := NewIdentity(IdentityInput{Tenant: "t1", Subject: "u", Roles: []string{"owner", "tenant"}})
+	require.NoError(t, err)
+	request := PolicyRequest{Identity: identity, Route: TenantRoute{Tenant: "t1"}, Coordinate: "Query.users", Resource: "users", Actions: []string{"select"}, FieldUses: []FieldUse{FieldUseSelect}}
+	decision, err := provider.Decide(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, decision.Fields[FieldUseSelect], "fields must be granted by every role whose row branch can match")
+
+	request.Actions = []string{"update"}
+	request.FieldUses = []FieldUse{FieldUseWrite}
+	decision, err = provider.Decide(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, []string(nil), decision.Fields[FieldUseWrite], "write fields must not combine grants with another role's filter")
+}
+
+func TestBuiltinPolicyProviderIntersectsWildcardWithExplicitGrant(t *testing.T) {
+	provider := NewProtocolPolicyProvider(map[string]map[string]*protocol.Permission{"users": {
+		"admin":  {Select: []string{"*"}},
+		"reader": {Select: []string{"id", "name"}},
+	}})
+	identity, err := NewIdentity(IdentityInput{Tenant: "t1", Subject: "u", Roles: []string{"admin", "reader"}})
+	require.NoError(t, err)
+	decision, err := provider.Decide(context.Background(), PolicyRequest{Identity: identity, Coordinate: "Query.users", Resource: "users", Actions: []string{"select"}, FieldUses: []FieldUse{FieldUseSelect}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "name"}, decision.Fields[FieldUseSelect])
+}
+
+func TestBuiltinPolicyProviderIntersectsUpsertWildcardAcrossActions(t *testing.T) {
+	fields := policyWriteFields([]string{protocol.OP_INSERT, protocol.OP_UPDATE}, []string{"editor"}, map[string]*protocol.Permission{
+		"editor": {Insert: []string{"*"}, Update: []string{"name"}},
+	})
+	require.Equal(t, []string{"name"}, fields)
+}
+
 func TestNormalizeDecisionRejectsInvalidRoleBranch(t *testing.T) {
 	request := PolicyRequest{Identity: mustPolicyIdentity(t, "u"), Route: TenantRoute{Tenant: "t1"}, Coordinate: "Query.users", Resource: "users"}
 	request.Actions = []string{"select"}

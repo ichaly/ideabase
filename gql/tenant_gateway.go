@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
-	"sort"
+	"slices"
 )
 
 // NewTenantGateway builds a routing-only Engine over independently built,
@@ -58,7 +59,7 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 	}
 	targets := make(map[string]*Engine, len(sources))
 	var canonical *Snapshot
-	for _, name := range sortedTenantSources(sources) {
+	for _, name := range sortedMapKeys(sources) {
 		engine := sources[name]
 		if name == "" || engine == nil {
 			return nil, fmt.Errorf("tenant datasource %q is invalid", name)
@@ -207,9 +208,11 @@ func (my *TenantGateway) Health(ctx context.Context) (HealthReport, error) {
 	if my.snapshot != nil {
 		report.SnapshotFingerprint = my.snapshot.Fingerprint()
 	}
+	names := sortedMapKeys(my.sources)
+	results := collectHealth(names, func(name string) (HealthReport, error) { return my.sources[name].Health(ctx) })
 	var failures []error
-	for _, name := range sortedTenantSources(my.sources) {
-		child, err := my.sources[name].Health(ctx)
+	for index, name := range names {
+		child, err := results[index].report, results[index].err
 		report.SnapshotOK = report.SnapshotOK && child.SnapshotOK
 		report.DatabaseOK = report.DatabaseOK && child.DatabaseOK
 		report.CDCConfigured = report.CDCConfigured && child.CDCConfigured
@@ -254,13 +257,8 @@ func marshalGatewayError(err error) ([]byte, error) {
 	return marshalSubscriptionReply(gqlReply{Errors: GraphQLErrors(err)}), nil
 }
 
-func sortedTenantSources[T any](sources map[string]T) []string {
-	names := make([]string, 0, len(sources))
-	for name := range sources {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+func sortedMapKeys[T any](sources map[string]T) []string {
+	return slices.Sorted(maps.Keys(sources))
 }
 
 func validateRLSTables(metadata *Metadata, tables []RLSTable) error {
@@ -270,7 +268,7 @@ func validateRLSTables(metadata *Metadata, tables []RLSTable) error {
 			configured[table.Name] = true
 		}
 	}
-	for _, name := range sortedNodeNames(metadata) {
+	for _, name := range sortedMapKeys(metadata.Nodes) {
 		class := metadata.Nodes[name]
 		if class != nil && name == class.Name && class.Table != "" && !class.Global && !configured[class.Table] {
 			return fmt.Errorf("tenant table %s is missing RLS protection", class.Table)
@@ -280,7 +278,7 @@ func validateRLSTables(metadata *Metadata, tables []RLSTable) error {
 }
 
 func validateSharedTenantScope(metadata *Metadata) error {
-	for _, name := range sortedNodeNames(metadata) {
+	for _, name := range sortedMapKeys(metadata.Nodes) {
 		class := metadata.Nodes[name]
 		if class == nil || name != class.Name || class.Table == "" || class.Global {
 			continue

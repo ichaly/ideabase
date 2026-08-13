@@ -26,6 +26,7 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 	ctx.MarkTable(u.class.Table)
 
 	groups := u.groups
+	groupColumns := columnsOf(sc, groups)
 
 	// 投影：选择驱动，逐字段生成聚合表达式
 	column := func(name string) {
@@ -88,7 +89,7 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 	if u.ordered {
 		next()
 		ctx.Write(`ROW_NUMBER() OVER (ORDER BY `)
-		writeColumns(ctx, u.class.Table, columnsOf(sc, groups))
+		writeColumns(ctx, u.class.Table, groupColumns)
 		ctx.Write(`) AS "__rn"`)
 	}
 	ctx.Space(`FROM`)
@@ -101,14 +102,14 @@ func (my *Dialect) buildStatsCore(ctx *compiler.Context, u *unit) error {
 	}
 	if len(groups) > 0 {
 		ctx.Space(`GROUP BY`)
-		writeColumns(ctx, u.class.Table, columnsOf(sc, groups))
+		writeColumns(ctx, u.class.Table, groupColumns)
 	}
 	if err := my.buildHaving(ctx, sc, u.args); err != nil {
 		return err
 	}
 	if u.ordered {
 		ctx.Space(`ORDER BY`)
-		writeColumns(ctx, u.class.Table, columnsOf(sc, groups))
+		writeColumns(ctx, u.class.Table, groupColumns)
 	}
 	return my.buildLimit(ctx, u)
 }

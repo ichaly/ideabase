@@ -53,6 +53,13 @@ type gatewayHealthyEndpoint struct {
 	report *HealthReport
 }
 
+type concurrentHealthEndpoint struct {
+	*gatewayEndpoint
+	entered *atomic.Int32
+	ready   chan struct{}
+	once    *sync.Once
+}
+
 type gatewayEffectiveEndpoint struct {
 	*gatewayEndpoint
 	effective   SchemaArtifact
@@ -80,6 +87,33 @@ func (my *gatewayHealthyEndpoint) Health(context.Context) (HealthReport, error) 
 		return *my.report, nil
 	}
 	return HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, SnapshotFingerprint: my.snapshot.Fingerprint()}, nil
+}
+
+func (my *concurrentHealthEndpoint) Health(ctx context.Context) (HealthReport, error) {
+	if my.entered.Add(1) == 2 {
+		my.once.Do(func() { close(my.ready) })
+	}
+	select {
+	case <-my.ready:
+		return HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true}, nil
+	case <-ctx.Done():
+		return HealthReport{}, ctx.Err()
+	}
+}
+
+func TestGatewayHealthChecksChildrenConcurrently(t *testing.T) {
+	var entered atomic.Int32
+	ready := make(chan struct{})
+	once := new(sync.Once)
+	first := &concurrentHealthEndpoint{gatewayEndpoint: newGatewayEndpoint("first", gatewayChildSchema, nil), entered: &entered, ready: ready, once: once}
+	second := &concurrentHealthEndpoint{gatewayEndpoint: newGatewayEndpoint("second", gatewayChildSchema, nil), entered: &entered, ready: ready, once: once}
+	gateway, err := NewGateway("root", Namespace{Name: "first", Endpoint: first}, Namespace{Name: "second", Endpoint: second})
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	report, err := gateway.Health(ctx)
+	require.NoError(t, err)
+	require.True(t, report.Ready)
 }
 
 func (my *gatewaySubscriptionEndpoint) Subscribe(context.Context, string, map[string]any, string) (<-chan []byte, error) {

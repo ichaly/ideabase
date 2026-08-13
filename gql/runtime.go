@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/vektah/gqlparser/v2/gqlerror"
+	"golang.org/x/sync/errgroup"
 )
 
 // SubscriptionAvailable reports whether the Engine has an executable CDC
@@ -118,6 +119,25 @@ type HealthReport struct {
 	CDCConnected          bool
 	CDCError              string
 	SubscriptionAvailable bool
+}
+
+type healthResult struct {
+	report HealthReport
+	err    error
+}
+
+func collectHealth(names []string, check func(string) (HealthReport, error)) []healthResult {
+	results := make([]healthResult, len(names))
+	var group errgroup.Group
+	group.SetLimit(8)
+	for index, name := range names {
+		group.Go(func() error {
+			results[index].report, results[index].err = check(name)
+			return nil
+		})
+	}
+	_ = group.Wait()
+	return results
 }
 
 type delegatedExecutionKey struct{}

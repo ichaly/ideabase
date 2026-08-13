@@ -6,8 +6,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"mime"
 	"net"
 	"net/http"
@@ -171,6 +173,7 @@ type RemoteEndpoint struct {
 	}
 	maxResponse int64
 	timeout     time.Duration
+	idleTimeout time.Duration
 	subscribe   string
 	health      string
 	state       atomic.Pointer[remoteState]
@@ -179,6 +182,13 @@ type RemoteEndpoint struct {
 	history     map[string]*remoteState
 	order       []string
 }
+
+const (
+	remoteSSEMaxRetries = 3
+	remoteSSEBackoff    = 10 * time.Millisecond
+)
+
+var errRemoteSSEStream = errors.New("remote subscription stream failed")
 
 func (my *RemoteEndpoint) ControlState() core.ControlState {
 	state := my.state.Load()
@@ -269,8 +279,9 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 	remote := &RemoteEndpoint{
 		id: options.EndpointID, manifest: options.ManifestURL, effective: options.EffectiveSchemaURL, execute: options.ExecuteURL,
 		client: client, signer: options.Delegation, maxResponse: options.MaxResponseBytes, timeout: options.Timeout, subscribe: options.SubscribeURL,
-		health:  options.HealthURL,
-		history: make(map[string]*remoteState, 8),
+		health:      options.HealthURL,
+		idleTimeout: 30 * time.Second,
+		history:     make(map[string]*remoteState, 8),
 	}
 	if err := remote.Refresh(ctx); err != nil {
 		return nil, err
@@ -566,9 +577,58 @@ func (my *RemoteEndpoint) subscribeOperation(ctx context.Context, query string, 
 	if err != nil {
 		return nil, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, my.subscribe, bytes.NewReader(body))
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	response, err, _ := my.openSubscription(streamCtx, payload, body, fingerprint)
 	if err != nil {
+		cancelStream()
 		return nil, err
+	}
+	events := make(chan []byte, 1)
+	go func() {
+		defer cancelStream()
+		defer close(events)
+		attempt := 0
+		for {
+			complete, readErr := my.readSubscription(streamCtx, response.Body, events)
+			response.Body.Close()
+			if complete || streamCtx.Err() != nil {
+				return
+			}
+			if readErr != nil && !retryableReadError(readErr) {
+				sendStreamError(streamCtx, events, readErr.Error())
+				return
+			}
+			for {
+				if attempt >= remoteSSEMaxRetries {
+					sendStreamError(streamCtx, events, "remote subscription retry limit exceeded")
+					return
+				}
+				if err := waitSubscriptionRetry(streamCtx, attempt); err != nil {
+					return
+				}
+				var retryable bool
+				response, err, retryable = my.openSubscription(streamCtx, payload, body, fingerprint)
+				if err == nil {
+					attempt = 0
+					break
+				}
+				if !retryable {
+					sendStreamError(streamCtx, events, err.Error())
+					return
+				}
+				attempt++
+			}
+		}
+	}()
+	return events, nil
+}
+
+func (my *RemoteEndpoint) openSubscription(ctx context.Context, payload request, body []byte, fingerprint string) (*http.Response, error, bool) {
+	attemptCtx, cancelAttempt := context.WithCancel(ctx)
+	request, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, my.subscribe, bytes.NewReader(body))
+	if err != nil {
+		cancelAttempt()
+		return nil, err, false
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
@@ -578,19 +638,18 @@ func (my *RemoteEndpoint) subscribeOperation(ctx context.Context, query string, 
 	if my.signer != nil {
 		token, signErr := my.signer.Sign(ctx, operationDigest(payload, fingerprint))
 		if signErr != nil {
-			return nil, signErr
+			cancelAttempt()
+			return nil, signErr, false
 		}
 		request.Header.Set("Authorization", delegationScheme+token)
 	}
-	streamCtx, cancelStream := context.WithCancel(ctx)
-	request = request.WithContext(streamCtx)
 	result := make(chan struct {
 		response *http.Response
 		err      error
 	}, 1)
 	go func() {
 		response, err := my.client.Do(request)
-		if streamCtx.Err() != nil && response != nil {
+		if attemptCtx.Err() != nil && response != nil {
 			response.Body.Close()
 			response = nil
 		}
@@ -601,52 +660,61 @@ func (my *RemoteEndpoint) subscribeOperation(ctx context.Context, query string, 
 	}()
 	timer := time.NewTimer(my.timeout)
 	defer timer.Stop()
-	var resultValue struct {
+	var value struct {
 		response *http.Response
 		err      error
 	}
 	select {
-	case resultValue = <-result:
+	case value = <-result:
 	case <-timer.C:
-		cancelStream()
-		return nil, fmt.Errorf("remote subscription handshake timeout")
+		cancelAttempt()
+		return nil, fmt.Errorf("remote subscription handshake timeout"), true
 	}
-	response, err := resultValue.response, resultValue.err
-	if err != nil {
-		cancelStream()
-		return nil, fmt.Errorf("remote subscription unavailable: %w", err)
+	if value.err != nil {
+		cancelAttempt()
+		return nil, fmt.Errorf("remote subscription unavailable: %w", value.err), true
 	}
+	response := value.response
+	response.Body = &cancelReadCloser{ReadCloser: response.Body, cancel: cancelAttempt}
 	if response.StatusCode != http.StatusOK {
-		cancelStream()
 		response.Body.Close()
-		return nil, fmt.Errorf("remote subscription status %d", response.StatusCode)
+		return nil, fmt.Errorf("remote subscription status %d", response.StatusCode), response.StatusCode >= 500
 	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType != "text/event-stream" {
-		cancelStream()
 		response.Body.Close()
-		return nil, fmt.Errorf("remote subscription content type %q", mediaType)
+		return nil, fmt.Errorf("remote subscription content type %q", mediaType), false
 	}
 	if fingerprint != "" && response.Header.Get("GQL-Snapshot") != fingerprint {
-		cancelStream()
 		response.Body.Close()
-		return nil, fmt.Errorf("remote subscription snapshot mismatch")
+		return nil, fmt.Errorf("remote subscription snapshot mismatch"), false
 	}
-	events := make(chan []byte, 1)
-	go func() {
-		defer cancelStream()
-		my.readSubscription(ctx, response.Body, events)
-	}()
-	return events, nil
+	return response, nil, true
 }
 
-func (my *RemoteEndpoint) readSubscription(ctx context.Context, body io.ReadCloser, events chan<- []byte) {
-	defer body.Close()
-	defer close(events)
+type cancelReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (my *cancelReadCloser) Close() error {
+	err := my.ReadCloser.Close()
+	my.cancel()
+	return err
+}
+
+func (my *RemoteEndpoint) readSubscription(ctx context.Context, body io.ReadCloser, events chan<- []byte) (bool, error) {
+	idle := my.idleTimeout
+	if idle <= 0 {
+		idle = 30 * time.Second
+	}
+	watchdog := time.AfterFunc(idle, func() { _ = body.Close() })
+	defer watchdog.Stop()
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 4096), int(my.maxResponse))
 	event, data := "", make([]byte, 0, 1024)
 	for scanner.Scan() {
+		watchdog.Reset(idle)
 		line := scanner.Text()
 		switch {
 		case strings.HasPrefix(line, "event:"):
@@ -654,8 +722,7 @@ func (my *RemoteEndpoint) readSubscription(ctx context.Context, body io.ReadClos
 		case strings.HasPrefix(line, "data:"):
 			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if int64(len(data)+len(payload)+1) > my.maxResponse {
-				sendStreamError(ctx, events, "remote subscription response limit exceeded")
-				return
+				return false, fmt.Errorf("remote subscription response limit exceeded")
 			}
 			if len(data) > 0 {
 				data = append(data, '\n')
@@ -663,21 +730,47 @@ func (my *RemoteEndpoint) readSubscription(ctx context.Context, body io.ReadClos
 			data = append(data, payload...)
 		case line == "":
 			if event == "complete" {
-				return
+				return true, nil
 			}
 			if event == "next" && len(data) > 0 {
 				frame := append([]byte(nil), data...)
 				select {
 				case events <- frame:
 				case <-ctx.Done():
-					return
+					return false, ctx.Err()
 				}
 			}
 			event, data = "", data[:0]
 		}
 	}
-	if scanner.Err() != nil && ctx.Err() == nil {
-		sendStreamError(ctx, events, "remote subscription stream failed")
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if errors.Is(scanner.Err(), bufio.ErrTooLong) {
+		return false, fmt.Errorf("remote subscription response limit exceeded")
+	}
+	if scanner.Err() != nil {
+		return false, fmt.Errorf("%w: %v", errRemoteSSEStream, scanner.Err())
+	}
+	return false, io.EOF
+}
+
+func retryableReadError(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, errRemoteSSEStream)
+}
+
+func waitSubscriptionRetry(ctx context.Context, attempt int) error {
+	delay := remoteSSEBackoff * time.Duration(1<<attempt)
+	if jitter := delay / 2; jitter > 0 {
+		delay += time.Duration(rand.Int63n(int64(jitter)))
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

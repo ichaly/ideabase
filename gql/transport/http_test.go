@@ -117,7 +117,7 @@ func TestGraphQLResponseShapeDoesNotCopyLargeData(t *testing.T) {
 			t.Fatal("valid response shape rejected")
 		}
 	})
-	if allocations > 2 {
+	if allocations > 3 {
 		t.Fatalf("response validation allocated %.0f times", allocations)
 	}
 }

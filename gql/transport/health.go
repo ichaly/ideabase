@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"time"
 
 	core "github.com/ichaly/ideabase/gql"
 )
+
+const healthTimeout = 5 * time.Second
 
 type healthEndpoint interface {
 	Health(context.Context) (core.HealthReport, error)
@@ -37,7 +40,27 @@ func NewHealthHandler(endpoint healthEndpoint) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		report, err := endpoint.Health(r.Context())
+		ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
+		defer cancel()
+		result := make(chan struct {
+			report core.HealthReport
+			err    error
+		}, 1)
+		go func() {
+			report, err := endpoint.Health(ctx)
+			result <- struct {
+				report core.HealthReport
+				err    error
+			}{report, err}
+		}()
+		var report core.HealthReport
+		var err error
+		select {
+		case value := <-result:
+			report, err = value.report, value.err
+		case <-ctx.Done():
+			err = ctx.Err()
+		}
 		if pinned := r.Header.Get("GQL-Snapshot"); pinned != "" && report.SnapshotFingerprint != pinned {
 			report.Ready, report.SnapshotOK = false, false
 			if err == nil {

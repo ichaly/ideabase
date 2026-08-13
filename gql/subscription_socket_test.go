@@ -88,4 +88,18 @@ func TestSocketProtocolGuards(t *testing.T) {
 		writeJSON(t, conn, subscribe)
 		expectClose(t, conn, 4409)
 	})
+
+	t.Run("半开连接超过pong期限后关闭", func(t *testing.T) {
+		old := wsPongWait
+		wsPongWait = 200 * time.Millisecond
+		defer func() { wsPongWait = old }()
+		conn := dial(t)
+		defer conn.Close()
+		writeJSON(t, conn, map[string]any{"type": "connection_init"})
+		var ack map[string]any
+		require.NoError(t, conn.ReadJSON(&ack))
+		require.Equal(t, "connection_ack", ack["type"])
+		time.Sleep(2 * wsPongWait)
+		expectClose(t, conn, 4400)
+	})
 }

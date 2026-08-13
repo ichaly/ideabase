@@ -426,6 +426,8 @@ ctx = gql.WithIdentity(ctx, identity)
 - 每个 Engine 必须配置一个显式 `PolicyProvider`，或由非空 `permissions` 自动生成；两者同时存在或同时缺失都拒绝启动
 - `select` / `insert` / `update` 是字段白名单，`*` 表示全部，空列表表示拒绝；
   filter/sort/distinct/groupBy/having/search 同样受读取字段白名单约束
+- 一个 Identity 同时具有多个角色时，字段白名单先取交集，再对这些角色的行级分支取并集；
+  因而任一可命中的行分支都授权同一字段形状，不允许跨角色拼接字段权限与行范围
 - `filter` 在 SQL 中限制可见/可改行；`check` 在发 SQL 前逐行验证新值，批量任一行失败则整次拒绝
 
 明确的 mutation 契约与旧字段并存：
