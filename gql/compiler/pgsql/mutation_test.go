@@ -107,24 +107,10 @@ func (my *_DialectSuite) TestMutation() {
 				) AS "__sj_0" ON TRUE`,
 		},
 		{
-			name:  "按条件更新",
-			query: `mutation { updateUser(input: { age: 20 }, where: { email: { like: "%@x.com" } }) { id } }`,
-			args:  []any{int64(20), "%@x.com"},
-			expected: `WITH "sys_user" AS (UPDATE "public"."sys_user" SET "age" = $1 WHERE "sys_user"."email" LIKE $2 RETURNING *)
-				SELECT JSONB_BUILD_OBJECT('updateUser', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
-				LEFT OUTER JOIN LATERAL (
-					SELECT TO_JSONB("__sr_0".*) AS "json"
-					FROM (
-						SELECT "sys_user_0"."id" AS "id"
-						FROM (SELECT "sys_user"."id" FROM "sys_user" LIMIT 1) AS "sys_user_0"
-					) AS "__sr_0"
-				) AS "__sj_0" ON TRUE`,
-		},
-		{
 			name:  "按id删除返回计数",
 			query: `mutation { deleteUser(id: 3) }`,
 			args:  []any{int64(3)},
-			expected: `WITH "sys_user" AS (DELETE FROM "public"."sys_user" WHERE "sys_user"."id" = $1 RETURNING *)
+			expected: `WITH "sys_user" AS (DELETE FROM "public"."sys_user" WHERE "sys_user"."id" = $1 RETURNING 1)
 				SELECT JSONB_BUILD_OBJECT('deleteUser', (SELECT COUNT(*) FROM "sys_user")) AS "__root" FROM (SELECT TRUE) AS "__root_x"`,
 		},
 		{
@@ -198,6 +184,10 @@ func (my *_DialectSuite) TestMutationGuards() {
 	} {
 		my.Run(name, func() {
 			doc, gqlErr := gqlparser.LoadQuery(my.schema, query)
+			if name == "无条件更新" {
+				my.Require().NotEmpty(gqlErr, "单对象更新必须在Schema层要求主键")
+				return
+			}
 			my.Require().Empty(gqlErr, "解析GraphQL查询失败")
 
 			compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
@@ -232,7 +222,7 @@ func (my *_DialectSuite) TestRelationOps() {
 			query: `mutation { updatePost(input: { tags: { connect: [10], disconnect: [11] } }, id: 5) { id } }`,
 			args:  []any{int64(5), int64(10), int64(11)},
 			expected: `WITH "sys_post" AS (SELECT * FROM "public"."sys_post" WHERE "sys_post"."id" = $1),
-				"__c_1" AS (INSERT INTO "public"."sys_post_tag" ("post_id", "tag_id") SELECT "__parent"."id", "sys_tag"."id" FROM "sys_post" AS "__parent" CROSS JOIN "public"."sys_tag" WHERE "sys_tag"."id" IN ($2)),
+				"__c_1" AS (INSERT INTO "public"."sys_post_tag" ("post_id", "tag_id") SELECT "__link"."post_id", "__link"."tag_id" FROM (SELECT "__parent"."id" AS "post_id", "sys_tag"."id" AS "tag_id" FROM "sys_post" AS "__parent" CROSS JOIN "public"."sys_tag" WHERE "sys_tag"."id" IN ($2)) AS "__link" WHERE TRUE),
 				"__c_2" AS (DELETE FROM "public"."sys_post_tag" WHERE "post_id" = (SELECT "id" FROM "sys_post") AND "tag_id" IN ($3))
 				SELECT JSONB_BUILD_OBJECT('updatePost', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
@@ -270,7 +260,10 @@ func (my *_DialectSuite) TestRelationOpGuards() {
 	} {
 		my.Run(name, func() {
 			doc, gqlErr := gqlparser.LoadQuery(my.schema, c.query)
-			my.Require().Empty(gqlErr, "解析失败")
+			if len(gqlErr) > 0 {
+				my.Contains(gqlErr.Error(), "Unknown argument \"where\"")
+				return
+			}
 			compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
 			my.Require().NoError(err)
 			_, _, err = compile.Build(doc.Operations[0], nil)

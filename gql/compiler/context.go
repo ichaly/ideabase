@@ -157,6 +157,7 @@ func (my *Context) Release() {
 	my.usesCursor = false
 	my.usesAudit = false
 	my.cursorRoot = ""
+	clear(my.slots)
 	my.slots = my.slots[:0]
 	contextPool.Put(my)
 }
@@ -520,7 +521,7 @@ func (my *Context) Wrap(with string, list ...any) *Context {
 // writeQuoted 写带引号标识符 "s"，零分配（不经可变参数）
 func (my *Context) writeQuoted(s string) {
 	my.buf.WriteString(my.quote)
-	my.buf.WriteString(s)
+	my.buf.WriteString(strings.ReplaceAll(s, my.quote, my.quote+my.quote))
 	my.buf.WriteString(my.quote)
 }
 
@@ -549,7 +550,16 @@ func (my *Context) SpaceAfter(content ...any) *Context {
 
 // Quote 添加引号
 func (my *Context) Quote(list ...any) *Context {
-	return my.Wrap(my.quote, list...)
+	my.buf.WriteString(my.quote)
+	for _, value := range list {
+		if text, ok := value.(string); ok {
+			my.buf.WriteString(strings.ReplaceAll(text, my.quote, my.quote+my.quote))
+			continue
+		}
+		my.Write(value)
+	}
+	my.buf.WriteString(my.quote)
+	return my
 }
 
 // Column 写入（可选限定符的）带引号列引用："限定符"."列"

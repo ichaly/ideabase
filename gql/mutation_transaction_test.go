@@ -9,6 +9,7 @@ import (
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
+	"gorm.io/gorm"
 )
 
 type mutationCountDialect struct {
@@ -29,12 +30,12 @@ func TestMutationRootFieldsExecuteSerially(t *testing.T) {
 
 	operation := `mutation SerialMutation($email: String!) {
 		created: createUser(input: { name: "Alice", email: $email }) { id }
-		updated: updateUser(input: { name: "Bob" }, where: { email: { eq: $email } }) { name }
+		updated: updateUsers(input: { name: "Bob" }, where: { email: { eq: $email } }) { returning { name } }
 	}`
 	for _, email := range []string{"serial-1@x.com", "serial-2@x.com"} {
 		reply := executor.run(context.Background(), operation, map[string]any{"email": email}, "")
 		require.Empty(t, reply.Errors, "%v", reply.Errors)
-		require.Equal(t, "Bob", reply.Data["updated"].(map[string]any)["name"])
+		require.Equal(t, "Bob", reply.Data["updated"].(map[string]any)["returning"].([]any)[0].(map[string]any)["name"])
 	}
 	require.Equal(t, 2, dialect.mutations, "非volatile子计划在热请求中不得重复编译")
 }
@@ -47,7 +48,7 @@ func TestMutationRootPlansOnlyCacheNonVolatileFields(t *testing.T) {
 
 	operation := `mutation VolatileMutation($input: UserCreateInput!, $email: String!) {
 		createUser(input: $input) { id }
-		updateUser(input: { name: "Updated" }, where: { email: { eq: $email } }) { name }
+		updateUsers(input: { name: "Updated" }, where: { email: { eq: $email } }) { affectedCount }
 	}`
 	for _, email := range []string{"volatile-1@x.com", "volatile-2@x.com"} {
 		reply := executor.run(context.Background(), operation, map[string]any{
@@ -113,6 +114,20 @@ func TestMutationFailureRollsBackEarlierRootFields(t *testing.T) {
 	require.Zero(t, count, "失败必须同时回滚默认CRUD和Resolver写入")
 }
 
+func TestRootTransactionTreatsRollbackConnectionLossAsIndeterminate(t *testing.T) {
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+	sentinel := errors.New("mutation failed")
+	err, rolledBack := runRootTransaction(context.Background(), db, func(tx *gorm.DB) error {
+		var pid int
+		require.NoError(t, tx.Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error)
+		require.NoError(t, db.Exec(`SELECT pg_terminate_backend(?)`, pid).Error)
+		return sentinel
+	})
+	require.Error(t, err)
+	require.False(t, rolledBack)
+}
+
 func TestMutationResolverSharesTransactionWithDefaultFields(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
@@ -131,11 +146,11 @@ func TestMutationResolverSharesTransactionWithDefaultFields(t *testing.T) {
 
 	reply := executor.run(context.Background(), `mutation {
 		seedUser
-		updated: updateUser(input: { name: "Shared" }, where: { email: { eq: "resolver-tx@x.com" } }) { name }
+		updated: updateUsers(input: { name: "Shared" }, where: { email: { eq: "resolver-tx@x.com" } }) { returning { name } }
 	}`, nil, "")
 
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.Equal(t, "Shared", reply.Data["updated"].(map[string]any)["name"])
+	require.Equal(t, "Shared", reply.Data["updated"].(map[string]any)["returning"].([]any)[0].(map[string]any)["name"])
 }
 
 func TestMutationResolverWithoutDatabase(t *testing.T) {
@@ -195,7 +210,7 @@ func TestPersistedRootPlanPrewarmKeepsGovernanceFlags(t *testing.T) {
 	}`
 	require.NoError(t, executor.loadDocument(content))
 
-	entry, ok := executor.cache.Get(planKey{operation: "PersistedGoverned", query: content})
+	entry, ok := executor.cache.Get(planKeyFor("PersistedGoverned", content, "", ""))
 	require.True(t, ok)
 	require.True(t, entry.rootResolver)
 }
@@ -208,7 +223,7 @@ func TestNestedMutationReusesOuterTransaction(t *testing.T) {
 		func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
 			reply := executor.execute(ctx, `mutation {
 				createUser(input: { name: "Nested", email: "nested@x.com" }) { id }
-				updateUser(input: { name: "Inner" }, where: { email: { eq: "nested@x.com" } }) { id }
+				updateUsers(input: { name: "Inner" }, where: { email: { eq: "nested@x.com" } }) { affectedCount }
 			}`, nil, "")
 			if len(reply.Errors) > 0 {
 				return false, reply.Errors
@@ -229,4 +244,32 @@ func TestNestedMutationReusesOuterTransaction(t *testing.T) {
 	var count int64
 	require.NoError(t, db.Table("users").Where("email = ?", "nested@x.com").Count(&count).Error)
 	require.Zero(t, count, "嵌套mutation必须随外层事务一起回滚")
+}
+
+func TestCaughtNestedMutationFailureRollsBackOnlyItsSavepoint(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+
+	fail := NewResolver("Mutation", "failNestedMutation", "", func(context.Context, Root, struct{}) (bool, error) {
+		return false, errors.New("nested secret failure")
+	})
+	catch := NewResolver("Mutation", "catchNestedMutation", "", func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
+		reply := executor.execute(ctx, `mutation {
+			createUser(input: { name: "Inner", email: "inner-savepoint@x.com" }) { id }
+			failNestedMutation
+		}`, nil, "")
+		return len(reply.Errors) > 0, nil
+	})
+	require.NoError(t, executor.register(fail, catch))
+
+	reply := executor.run(context.Background(), `mutation {
+		catchNestedMutation
+		createUser(input: { name: "Outer", email: "outer-savepoint@x.com" }) { id }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	var inner, outer int64
+	require.NoError(t, db.Table("users").Where("email = ?", "inner-savepoint@x.com").Count(&inner).Error)
+	require.NoError(t, db.Table("users").Where("email = ?", "outer-savepoint@x.com").Count(&outer).Error)
+	require.Zero(t, inner)
+	require.EqualValues(t, 1, outer)
 }

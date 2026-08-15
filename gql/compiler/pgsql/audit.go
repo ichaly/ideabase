@@ -53,7 +53,7 @@ func (writer OutboxAuditWriter) WritePurge(ctx *compiler.Context, dialect *Diale
 	ctx.Write(`"event_key", "tenant", "actor", "action", "resource", "request_id", "snapshot", "policy_revision", "affected_count") SELECT `)
 	ctx.Write(request, `::text || ':' || `, tenant, `::text || ':purge:`, event.Resource, `:`, strconv.Itoa(event.Occurrence), `', `, tenant, `, `, actor, `, 'purge', '`, event.Resource, `', `)
 	ctx.Write(request, `, `, snapshot, `, `, revision, `, COUNT(*) FROM `).Quote(event.Source)
-	ctx.Write(` HAVING COUNT(*) > 0 ON CONFLICT ("event_key") DO NOTHING RETURNING "event_key")`)
+	ctx.Write(` HAVING COUNT(*) > 0 RETURNING "event_key")`)
 }
 
 func (my *Dialect) buildPurgeAudit(ctx *compiler.Context, m *mutation) {

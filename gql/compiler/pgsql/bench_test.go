@@ -55,6 +55,13 @@ func benchCompiler(b testing.TB) (*gql.Compiler, *ast.Schema) {
 				"name": {Type: "String", Column: "name"},
 			},
 		},
+		"PostTag": {
+			Table: "sys_post_tag", PrimaryKeys: []string{"postId", "tagId"},
+			Fields: map[string]*internal.FieldConfig{
+				"postId": {Type: "ID", Column: "post_id", IsPrimary: true},
+				"tagId":  {Type: "ID", Column: "tag_id", IsPrimary: true},
+			},
+		},
 	})
 
 	meta, err := gql.NewMetadata(k, nil)

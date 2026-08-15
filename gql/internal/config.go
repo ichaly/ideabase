@@ -43,7 +43,7 @@ type SchemaConfig struct {
 	// GraphQL schema文件路径（配置后优先从文件加载，生产环境推荐）
 	File string `mapstructure:"file"`
 
-	// 默认分页限制
+	// 默认分页限制；非正数使用协议安全默认值
 	DefaultLimit int `mapstructure:"default-limit"`
 
 	// 查询选择集最大嵌套深度（0=不限制）

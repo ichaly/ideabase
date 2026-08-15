@@ -2,6 +2,7 @@ package gql
 
 import (
 	"container/list"
+	"crypto/sha256"
 	"sync"
 
 	"github.com/vektah/gqlparser/v2/ast"
@@ -10,9 +11,13 @@ import (
 // planKey 缓存键：结构体避免每请求拼接字符串的分配
 type planKey struct {
 	operation string
-	query     string
+	query     [sha256.Size]byte
 	shape     string
 	view      string
+}
+
+func planKeyFor(operation, query, shape, view string) planKey {
+	return planKey{operation: operation, query: sha256.Sum256([]byte(query)), shape: shape, view: view}
 }
 
 // planEntry 缓存值：恒存operation（变量声明的唯一事实源，入参解码用）；

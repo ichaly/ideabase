@@ -6,6 +6,10 @@ date: 2026-08-08
 deepened: 2026-08-08
 ---
 
+> **GA scope update (2026-08-14):** 发布基线是 Go 1.26.6+、当前引擎 operation/golden
+> corpus 与标准 `net/http` transport。fish-ai-api、旧 Fiber plugin 和 Go 1.25 兼容目标已被
+> 后续决策移出 GA；下文相关历史条目仅保留决策背景，不再是验收条件。
+
 # refactor: 构建可组合的多租户 GQL 网关引擎
 
 ## Overview

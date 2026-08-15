@@ -72,3 +72,10 @@ func TestConfigLoaderNoMutation(t *testing.T) {
 		"两次构建的字段类型应一致")
 	assert.Equal(t, len(first.Fields), len(second.Fields), "两次构建的字段集合应一致")
 }
+
+func TestConfigLoaderRejectsNilClassConfigWithCoordinate(t *testing.T) {
+	cfg := &internal.Config{Metadata: internal.MetadataConfig{Classes: map[string]*internal.ClassConfig{"User": nil}}}
+	err := NewConfigLoader(cfg).Load(newFakeHoster())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata.classes.User")
+}

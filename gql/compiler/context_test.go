@@ -3,7 +3,28 @@ package compiler
 import (
 	"encoding/base64"
 	"testing"
+
+	"github.com/ichaly/ideabase/gql/protocol"
 )
+
+func TestContextReleaseClearsPooledSlotReferences(t *testing.T) {
+	ctx := NewContext(nil, `"`, nil)
+	ctx.slots = append(ctx.slots, Slot{Value: &struct{}{}, Generate: protocol.IDGenerator(func() (any, error) { return 1, nil }), CursorContract: &CursorContract{Tenant: "t"}})
+	retained := ctx.slots[:cap(ctx.slots)]
+	ctx.Release()
+	if retained[0].Value != nil || retained[0].Generate != nil || retained[0].CursorContract != nil {
+		t.Fatal("released context retained slot references")
+	}
+}
+
+func TestQuoteEscapesEmbeddedDoubleQuotes(t *testing.T) {
+	ctx := NewContext(nil, `"`, nil)
+	defer ctx.Release()
+	ctx.Quote(`a"b`)
+	if got := ctx.String(); got != `"a""b"` {
+		t.Fatalf("quoted identifier = %q, want %q", got, `"a""b"`)
+	}
+}
 
 func TestCursorTokenBindsContractAndTuple(t *testing.T) {
 	contract := CursorContract{StructuralFingerprint: "shape-a", PolicyRevision: 7, Tenant: "tenant-a", Route: "route-3", Coordinate: "Query.users", Sort: []string{"name:ASC", "id:ASC"}}

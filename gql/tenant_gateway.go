@@ -26,7 +26,7 @@ func WithSecurityState(provider SecurityStateProvider) TenantGatewayOption {
 // WithRLS validates PostgreSQL role/table facts for shared-table datasources
 // and enables transaction-local verified identity on those source engines.
 func WithRLS(config map[string]RLSConfig) TenantGatewayOption {
-	return func(options *tenantGatewayConfig) { options.rls = config }
+	return func(options *tenantGatewayConfig) { options.rls = maps.Clone(config) }
 }
 
 // TenantGateway is a routing runtime. It deliberately does not embed Engine:
@@ -36,7 +36,7 @@ type TenantGateway struct {
 	sources    map[string]*Engine
 	snapshot   *Snapshot
 	revocation SecurityStateProvider
-	rls        map[string]RLSConfig
+	rls        map[string]struct{}
 }
 
 type tenantRLSKey struct{}
@@ -107,6 +107,7 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 		return nil, fmt.Errorf("tenant SecurityStateProvider is required")
 	}
 	if router.mode == TenantModeSharedTable {
+		enabled := make(map[string]struct{}, len(config.rls))
 		for source, target := range targets {
 			rls, configured := config.rls[source]
 			production := target.database != nil && target.database.Name() == "postgres" && target.metadata.cfg != nil && !target.metadata.cfg.IsDebug()
@@ -127,17 +128,14 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 			if err := validateRLSTables(target.metadata, rls.Tables); err != nil {
 				return nil, fmt.Errorf("shared-table datasource %s: %w", source, err)
 			}
-			if config.rls == nil {
-				config.rls = make(map[string]RLSConfig)
-			}
-			config.rls[source] = rls
+			enabled[source] = struct{}{}
 		}
+		return &TenantGateway{router: router, sources: targets, snapshot: canonical, revocation: config.revocation, rls: enabled}, nil
 	}
-	return &TenantGateway{router: router, sources: targets, snapshot: canonical, revocation: config.revocation, rls: config.rls}, nil
+	return &TenantGateway{router: router, sources: targets, snapshot: canonical, revocation: config.revocation}, nil
 }
 
 func (my *TenantGateway) EndpointID() string { return "tenant-gateway" }
-func (my *TenantGateway) Path() string       { return "/graphql" }
 func (my *TenantGateway) Snapshot() (*Snapshot, error) {
 	if my == nil || my.snapshot == nil {
 		return nil, fmt.Errorf("gql snapshot is unavailable")
@@ -150,7 +148,7 @@ func (my *TenantGateway) route(ctx context.Context) (*Engine, context.Context, T
 	}
 	identity, ok := IdentityFromContext(ctx)
 	if !ok {
-		return nil, ctx, TenantRoute{}, fmt.Errorf("verified identity is required for tenant gateway")
+		return nil, ctx, TenantRoute{}, &publicFailure{"verified identity is required for tenant gateway", "IDENTITY_REQUIRED"}
 	}
 	route, err := my.router.Resolve(ctx, identity)
 	if err != nil {
@@ -176,7 +174,7 @@ func (my *TenantGateway) Execute(ctx context.Context, query string, variables ma
 	if err != nil {
 		return marshalGatewayError(err)
 	}
-	return target.Execute(routed, query, variables)
+	return target.ExecuteOperation(routed, query, variables, "")
 }
 func (my *TenantGateway) ExecuteOperation(ctx context.Context, query string, variables map[string]any, operationName string) ([]byte, error) {
 	target, routed, _, err := my.route(ctx)
@@ -204,7 +202,7 @@ func (my *TenantGateway) Health(ctx context.Context) (HealthReport, error) {
 	if my == nil || len(my.sources) == 0 {
 		return HealthReport{}, fmt.Errorf("tenant gateway is unavailable")
 	}
-	report := HealthReport{Ready: true, SnapshotOK: my.snapshot != nil, DatabaseOK: true, CDCConfigured: true, CDCConnected: true, SubscriptionAvailable: true}
+	report := HealthReport{Ready: true, SnapshotOK: my.snapshot != nil, RouteRevision: my.router.revision, DatabaseOK: true, CDCConfigured: true, CDCConnected: true, SubscriptionAvailable: true}
 	if my.snapshot != nil {
 		report.SnapshotFingerprint = my.snapshot.Fingerprint()
 	}
@@ -251,10 +249,8 @@ func (my *TenantGateway) SubscriptionAvailable() bool {
 	}
 	return true
 }
-func (my *TenantGateway) Close() {}
-
 func marshalGatewayError(err error) ([]byte, error) {
-	return marshalSubscriptionReply(gqlReply{Errors: GraphQLErrors(err)}), nil
+	return marshalReply(context.Background(), gqlReply{Errors: GraphQLErrors(err)})
 }
 
 func sortedMapKeys[T any](sources map[string]T) []string {

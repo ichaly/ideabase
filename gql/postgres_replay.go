@@ -34,6 +34,40 @@ func NewPostgresReplayStore(db *gorm.DB) (ReplayStore, error) {
 	if db == nil {
 		return nil, fmt.Errorf("postgres replay store requires a database")
 	}
+	if err := postgresPreflight(context.Background(), db, "delegation replay", func(tx *gorm.DB) error {
+		const key = `'gql-preflight-' || pg_backend_pid()::text || '-' || clock_timestamp()::text`
+		if err := tx.Exec(`INSERT INTO gql_delegation_replay (issuer, audience, token_id, expires_at)
+VALUES ('preflight', 'preflight', ` + key + `, clock_timestamp())`).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(`UPDATE gql_delegation_replay SET expires_at=clock_timestamp()
+WHERE issuer='preflight' AND audience='preflight' AND token_id LIKE 'gql-preflight-%'`).Error; err != nil {
+			return err
+		}
+		result := tx.Exec(`DELETE FROM gql_delegation_replay
+WHERE issuer='preflight' AND audience='preflight'
+	  AND token_id LIKE 'gql-preflight-' || pg_backend_pid()::text || '-%'`)
+		if result.Error != nil {
+			return fmt.Errorf("delete delegation replay preflight probe: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("delete delegation replay preflight probe: expected one row, affected %d", result.RowsAffected)
+		}
+		var indexed bool
+		if err := tx.Raw(`SELECT EXISTS (
+  SELECT 1 FROM pg_indexes
+  WHERE schemaname=current_schema() AND tablename='gql_delegation_replay'
+    AND indexdef ILIKE '%(expires_at)%'
+)`).Scan(&indexed).Error; err != nil {
+			return err
+		}
+		if !indexed {
+			return fmt.Errorf("expires_at index is unavailable")
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	store := &postgresReplayStore{db: db}
 	store.nextPrune.Store(time.Now().Add(time.Minute).Unix())
 	return store, nil
@@ -53,25 +87,22 @@ func (store *postgresReplayStore) Consume(ctx context.Context, key ReplayKey, ex
   WHERE expires_at <= clock_timestamp()
   ORDER BY expires_at
   LIMIT ?
-)`, replayPruneBatch)
-		if err := result.Error; err != nil {
-			store.nextPrune.Store(now)
-			return fmt.Errorf("prune delegation replay: %w", err)
-		}
-		if result.RowsAffected == replayPruneBatch {
+		)`, replayPruneBatch)
+		if result.Error == nil && result.RowsAffected == replayPruneBatch {
 			store.nextPrune.Store(now + 1)
 		}
 	}
 	var consumed bool
 	err := store.db.WithContext(ctx).Raw(`WITH accepted AS (
   INSERT INTO gql_delegation_replay (issuer, audience, token_id, expires_at)
-  VALUES (?, ?, ?, ?)
+  SELECT ?, ?, ?, ?
+  WHERE ?::timestamptz > clock_timestamp()
   ON CONFLICT (issuer, audience, token_id) DO UPDATE
     SET expires_at = EXCLUDED.expires_at
     WHERE gql_delegation_replay.expires_at <= clock_timestamp()
   RETURNING 1
 )
-SELECT EXISTS (SELECT 1 FROM accepted)`, key.Issuer, key.Audience, key.ID, expiry).Scan(&consumed).Error
+SELECT EXISTS (SELECT 1 FROM accepted)`, key.Issuer, key.Audience, key.ID, expiry, expiry).Scan(&consumed).Error
 	if err != nil {
 		return fmt.Errorf("consume delegation replay: %w", err)
 	}

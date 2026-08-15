@@ -70,6 +70,47 @@ func (my *Dialect) appendUpdatePolicy(ctx *compiler.Context, class *protocol.Cla
 	return my.updatePolicyConjunct(ctx, class, inputRow{}, overrides)()
 }
 
+// appendInsertPolicy authorizes database-derived rows, such as many-to-many
+// links, whose complete values are unavailable to the request pre-check.
+func (my *Dialect) appendInsertPolicy(ctx *compiler.Context, qualifier string, class *protocol.Class) error {
+	for _, predicate := range my.predicateConjuncts(ctx, qualifier, class.Where, "") {
+		ctx.Space(`AND`)
+		if err := predicate(); err != nil {
+			return err
+		}
+	}
+	if class.Permissions == nil {
+		return nil
+	}
+	roles := make([]string, 0, len(class.Permissions))
+	for role, permission := range class.Permissions {
+		if permission != nil && len(permission.Insert) > 0 {
+			roles = append(roles, role)
+		}
+	}
+	sort.Strings(roles)
+	if len(roles) == 0 {
+		ctx.Space(`AND FALSE`)
+		return nil
+	}
+	ctx.Space(`AND`).Write(`(`)
+	for i, role := range roles {
+		if i > 0 {
+			ctx.Space(`OR`)
+		}
+		ctx.Write(`(`).Write(my.Placeholder(ctx.AddParam(role))).Write(` = ANY(`).Write(my.Placeholder(ctx.AddContextListSlot(protocol.CONTEXT_ROLES))).Write(`)`)
+		for _, predicate := range class.Permissions[role].Check {
+			ctx.Space(`AND`)
+			if err := my.writePredicate(ctx, qualifier, predicate); err != nil {
+				return err
+			}
+		}
+		ctx.Write(`)`)
+	}
+	ctx.Write(`)`)
+	return nil
+}
+
 func (my *Dialect) appendMetadataWhere(ctx *compiler.Context, class *protocol.Class) error {
 	for _, predicate := range my.predicateConjuncts(ctx, class.Table, class.Where, "") {
 		ctx.Space(`AND`)

@@ -249,6 +249,7 @@ type nullBoundary struct {
 type nonNullResolverError struct{ errors gqlerror.List }
 
 func (e *nonNullResolverError) Error() string { return e.errors.Error() }
+func (e *nonNullResolverError) Unwrap() error { return e.errors }
 
 func hostRefs(root map[string]interface{}, binding binding) []hostRef {
 	refs := []hostRef{{value: root}}
@@ -451,7 +452,7 @@ func batchRequestKey(b binding, args map[string]interface{}) string {
 
 func resolverFieldErrors(b binding, hostPath ast.Path, err error) gqlerror.List {
 	path := append(append(ast.Path(nil), hostPath...), ast.PathName(b.Field))
-	originals := GraphQLErrors(err)
+	originals := GraphQLErrors(resolverFailure(err))
 	if len(originals) == 0 {
 		return gqlerror.List{gqlerror.ErrorPathf(path, "resolver failed")}
 	}
@@ -466,7 +467,7 @@ func resolverFieldErrors(b binding, hostPath ast.Path, err error) gqlerror.List 
 		for key, value := range copy.Extensions {
 			extensions[key] = value
 		}
-		if _, ok := extensions["code"]; !ok {
+		if current, ok := extensions["code"]; !ok || current == "EXECUTION_ERROR" {
 			extensions["code"] = "RESOLVER_ERROR"
 		}
 		copy.Extensions = extensions
@@ -699,7 +700,7 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 	var warnings gqlerror.List
 	var executionErrors gqlerror.List
 	stop := false
-	mutationRollback := operation.Operation == ast.Mutation && (my.database != nil || Tx(ctx) != nil)
+	rollbackConfirmed := false
 	execute := func(ctx context.Context) error {
 		for _, s := range operation.SelectionSet {
 			if stop {
@@ -719,7 +720,7 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 				if my.resolvers[typename+"."+f.Name] != nil {
 					code = "RESOLVER_ERROR"
 				}
-				executionErrors = append(executionErrors, rootFieldExecutionErrors(f, err, code, mutationRollback)...)
+				executionErrors = append(executionErrors, rootFieldExecutionErrors(f, err, code, false)...)
 				data[f.Alias] = nil
 				if f.Definition != nil && f.Definition.Type != nil && f.Definition.Type.NonNull {
 					stop = true
@@ -732,8 +733,16 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 		return nil
 	}
 	var err error
-	if my.database != nil && Tx(ctx) == nil && (operation.Operation == ast.Mutation || my.rls || tenantRLSRequested(ctx)) {
-		err = my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if operation.Operation == ast.Mutation && Tx(ctx) != nil {
+		err, rollbackConfirmed = runMutationSavepoint(ctx, Tx(ctx), func() error {
+			if err := execute(ctx); len(executionErrors) > 0 {
+				return errRootTransactionRollback
+			} else {
+				return err
+			}
+		})
+	} else if my.database != nil && Tx(ctx) == nil && (operation.Operation == ast.Mutation || my.rls || tenantRLSRequested(ctx)) {
+		err, rollbackConfirmed = runRootTransaction(ctx, my.database, func(tx *gorm.DB) error {
 			if my.rls || tenantRLSRequested(ctx) {
 				if err := my.prepareRLS(ctx, tx); err != nil {
 					return err
@@ -755,14 +764,19 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 	if err != nil && len(executionErrors) == 0 {
 		reply := gqlReply{Errors: GraphQLErrors(err)}
 		if operation.Operation == ast.Mutation {
-			return reply.mutationCommit(ctx, "rolled_back")
+			state := "indeterminate"
+			if rollbackConfirmed {
+				state = "rolled_back"
+			}
+			return reply.mutationCommit(ctx, state)
 		}
 		return reply
 	}
 	if len(executionErrors) > 0 {
 		state := "indeterminate"
-		if mutationRollback {
+		if rollbackConfirmed && operation.Operation == ast.Mutation {
 			state = "rolled_back"
+			markTransactionRolledBack(executionErrors)
 			return gqlReply{Errors: append(executionErrors, warnings...), nullData: true}.mutationCommit(ctx, state)
 		}
 		if stop {
@@ -777,12 +791,59 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 	return reply
 }
 
+func runRootTransaction(ctx context.Context, database *gorm.DB, execute func(*gorm.DB) error) (error, bool) {
+	tx := database.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return tx.Error, false
+	}
+	if err := execute(tx); err != nil {
+		if rollbackErr := tx.Rollback().Error; rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("mutation rollback failed: %w", rollbackErr)), false
+		}
+		return err, true
+	}
+	return tx.Commit().Error, false
+}
+
+// runMutationSavepoint makes a nested mutation atomic without taking ownership
+// of the caller's transaction. PostgreSQL permits nested savepoints with the
+// same name; RELEASE/ROLLBACK always address the innermost one.
+func runMutationSavepoint(ctx context.Context, tx *gorm.DB, execute func() error) (error, bool) {
+	tx = tx.WithContext(ctx)
+	const name = "gql_mutation"
+	if err := tx.SavePoint(name).Error; err != nil {
+		return err, false
+	}
+	if err := execute(); err != nil {
+		if rollbackErr := tx.RollbackTo(name).Error; rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("mutation savepoint rollback failed: %w", rollbackErr)), false
+		}
+		if releaseErr := tx.Exec("RELEASE SAVEPOINT " + name).Error; releaseErr != nil {
+			return errors.Join(err, releaseErr), true
+		}
+		return err, true
+	}
+	return tx.Exec("RELEASE SAVEPOINT " + name).Error, false
+}
+
+func markTransactionRolledBack(errors gqlerror.List) {
+	for _, err := range errors {
+		if err.Extensions == nil {
+			err.Extensions = make(map[string]any)
+		}
+		err.Extensions["transactionRolledBack"] = true
+	}
+}
+
 func rootFieldExecutionErrors(field *ast.Field, err error, code string, rolledBack bool) gqlerror.List {
 	alias := field.Alias
 	if alias == "" {
 		alias = field.Name
 	}
 	prefix := ast.Path{ast.PathName(alias)}
+	if code == "RESOLVER_ERROR" {
+		err = resolverFailure(err)
+	}
 	result := GraphQLErrors(err)
 	for i, original := range result {
 		copy := *original
@@ -794,7 +855,7 @@ func rootFieldExecutionErrors(field *ast.Field, err error, code string, rolledBa
 		for k, v := range original.Extensions {
 			ext[k] = v
 		}
-		if _, ok := ext["code"]; !ok {
+		if current, ok := ext["code"]; !ok || current == "EXECUTION_ERROR" {
 			ext["code"] = code
 		}
 		if rolledBack {
@@ -969,21 +1030,66 @@ func (my *Engine) enrich(ctx context.Context, operation *ast.OperationDefinition
 		return result, nil, false, nil
 	}
 	switch result.(type) {
-	case map[string]interface{}, []interface{}:
+	case []interface{}:
 		return result, nil, false, nil
 	}
 	if my.metadata == nil || f.Definition == nil || f.Definition.Type == nil {
 		return result, nil, false, nil
 	}
 	className := f.Definition.Type.Name()
-	if _, ok := my.metadata.GetNode(className); !ok {
+	class, ok := my.metadata.GetNode(className)
+	if !ok {
 		return result, nil, false, nil
 	}
-	// 类型化Resolver返回实体结构体：取Id触发回查，与返回标量id等价
-	if v := reflect.Indirect(reflect.ValueOf(result)); v.Kind() == reflect.Struct {
-		if id := v.FieldByName("Id"); id.IsValid() {
-			result = id.Interface()
+	primaryKeys := class.PrimaryKeyFields()
+	composite := len(primaryKeys) > 1
+	var values map[string]interface{}
+	if encoded, err := jsonNumeric.Marshal(result); err == nil {
+		var decoded map[string]interface{}
+		if jsonNumeric.Unmarshal(encoded, &decoded) == nil {
+			values = decoded
 		}
+	}
+	if values != nil {
+		complete := true
+		for _, selection := range f.SelectionSet {
+			field, fieldOK := selection.(*ast.Field)
+			if !fieldOK || field.Name == "__typename" {
+				continue
+			}
+			_, complete = values[field.Alias]
+			if !complete {
+				break
+			}
+		}
+		if complete {
+			return result, nil, false, nil
+		}
+		key := make(map[string]interface{}, len(primaryKeys))
+		var single interface{}
+		for _, name := range primaryKeys {
+			field := class.Fields[name]
+			graphqlName := name
+			if field != nil && field.Name != "" {
+				graphqlName = field.Name
+			}
+			value, exists := values[graphqlName]
+			if !exists {
+				value, exists = values[name]
+			}
+			if !exists {
+				return result, nil, false, nil
+			}
+			key[graphqlName] = value
+			single = value
+		}
+		if composite {
+			result = key
+		} else if len(primaryKeys) == 1 {
+			result = single
+		}
+	} else if composite {
+		return result, nil, false, nil
 	}
 
 	// 主键与选择集引用到的原变量均经变量通道传入：不内联字面量（map经json序列化
@@ -1001,7 +1107,14 @@ func (my *Engine) enrich(ctx context.Context, operation *ast.OperationDefinition
 	var sb strings.Builder
 	sb.WriteString("query ($")
 	sb.WriteString(pk)
-	sb.WriteString(": ID!")
+	if composite {
+		sb.WriteString(": ")
+		sb.WriteString(className)
+		sb.WriteString(protocol.SUFFIX_KEY_INPUT)
+		sb.WriteString("!")
+	} else {
+		sb.WriteString(": ID!")
+	}
 	for _, vd := range operation.VariableDefinitions {
 		if !used[vd.Variable] {
 			continue
@@ -1020,7 +1133,11 @@ func (my *Engine) enrich(ctx context.Context, operation *ast.OperationDefinition
 	}
 	sb.WriteString(") { ")
 	sb.WriteString(fieldName)
-	sb.WriteString("(id: $")
+	if composite {
+		sb.WriteString("(key: $")
+	} else {
+		sb.WriteString("(id: $")
+	}
 	sb.WriteString(pk)
 	sb.WriteString(", limit: 1) { ")
 	sb.WriteString(protocol.ITEMS)

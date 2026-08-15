@@ -127,7 +127,8 @@ func TestResolver(t *testing.T) {
 	delete(executor.resolvers, "User.greeting")
 	reply = executor.run(ctx, `query { users { items { id greeting } } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "未注册resolver应报错")
-	require.Contains(t, reply.Errors[0].Message, "resolver未注册")
+	require.Equal(t, "internal execution error", reply.Errors[0].Message)
+	require.Equal(t, "EXECUTION_ERROR", reply.Errors[0].Extensions["code"])
 }
 
 // TestResolverArgs resolver字段参数（注册即声明新增能力）：
@@ -425,4 +426,55 @@ func TestRootResolverVariablePassthrough(t *testing.T) {
 		require.Equal(t, "Bob", user["name"])
 		require.NotNil(t, user["posts"], "回查嵌套选择集应生效")
 	}
+}
+
+type Membership struct {
+	TenantId string `json:"tenantId"`
+	Code     string `json:"code"`
+}
+
+type LookupRecord struct {
+	UserId int64 `json:"userId"`
+}
+
+func TestRootResolverEnrichesCompositeKeyEntity(t *testing.T) {
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+	require.NoError(t, db.Exec(`CREATE TABLE memberships (
+		tenant_id text NOT NULL,
+		code text NOT NULL,
+		value text NOT NULL,
+		PRIMARY KEY (tenant_id, code)
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE lookup_records (
+		user_id bigint PRIMARY KEY,
+		value text NOT NULL
+	)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO memberships VALUES ('acme', 'admin', 'resolved')`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO lookup_records VALUES (1, 'single-resolved')`).Error)
+
+	k, err := std.NewKonfig()
+	require.NoError(t, err)
+	k.Set("mode", "dev")
+	k.Set("app.root", t.TempDir())
+	k.Set("schema.schema", "public")
+	meta, err := NewMetadata(k, db)
+	require.NoError(t, err)
+	compile, err := NewCompiler(meta, nil)
+	require.NoError(t, err)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
+	require.NoError(t, err)
+	defer executor.Close()
+	require.NoError(t, executor.register(NewResolver("Query", "membershipLookup", "", func(context.Context, Root, struct{}) (Membership, error) {
+		return Membership{TenantId: "acme", Code: "admin"}, nil
+	}, Result("Membership")), NewResolver("Query", "recordLookup", "", func(context.Context, Root, struct{}) (LookupRecord, error) {
+		return LookupRecord{UserId: 1}, nil
+	}, Result("LookupRecord"))))
+
+	reply := executor.run(context.Background(), `{ membershipLookup { tenantId code value } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, "resolved", reply.Data["membershipLookup"].(map[string]interface{})["value"])
+	reply = executor.run(context.Background(), `{ recordLookup { userId value } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, "single-resolved", reply.Data["recordLookup"].(map[string]interface{})["value"])
 }

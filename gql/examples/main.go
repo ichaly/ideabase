@@ -6,15 +6,16 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/gql"
 	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 自注册PostgreSQL方言
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/gql/transport"
 	"github.com/ichaly/ideabase/std"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -198,21 +199,25 @@ func main() {
 	engine, err := buildEngine(db)
 	die(err)
 
-	// 2. HTTP服务：POST /graphql 查询变更，GET /graphql 订阅WebSocket升级
-	app := fiber.New()
+	// 2. HTTP服务：标准 net/http 查询与 SSE 订阅；WebSocket 不在示例中提供。
+	mux := http.NewServeMux()
+	graphql := transport.NewHandler(engine, transport.Options{})
+	stream := transport.NewSubscriptionHandler(engine, transport.Options{})
 	// 演示服务端作用域注入。生产应从认证声明读取，不能信任客户端Header。
-	app.Use(func(c fiber.Ctx) error {
-		tenant, _ := strconv.Atoi(strings.TrimSpace(c.Get("X-Demo-Tenant")))
-		if tenant == 0 {
-			tenant = 1
-		}
-		c.SetContext(demoContext(c.Context(), tenant))
-		return c.Next()
-	})
-	engine.Bind(app.Group(engine.Path()))
+	withDemoContext := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tenant, _ := strconv.Atoi(strings.TrimSpace(r.Header.Get("X-Demo-Tenant")))
+			if tenant == 0 {
+				tenant = 1
+			}
+			next.ServeHTTP(w, r.WithContext(demoContext(r.Context(), tenant)))
+		})
+	}
+	mux.Handle("/graphql", withDemoContext(graphql))
+	mux.Handle("/graphql/stream", withDemoContext(stream))
 
 	fmt.Println("GraphQL服务: http://localhost:8080/graphql （示例见 examples/README.md）")
-	die(app.Listen(":8080"))
+	die(http.ListenAndServe(":8080", mux))
 }
 
 func die(err error) {

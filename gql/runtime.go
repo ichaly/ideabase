@@ -2,12 +2,10 @@ package gql
 
 import (
 	"context"
-	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
-	"github.com/vektah/gqlparser/v2/gqlerror"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -43,7 +41,10 @@ func (my *Engine) Subscribe(ctx context.Context, query string, variables map[str
 				if !ok {
 					return
 				}
-				body := marshalSubscriptionReply(reply)
+				body, err := marshalSubscriptionReply(ctx, reply)
+				if err != nil {
+					return
+				}
 				select {
 				case events <- body:
 				case <-ctx.Done():
@@ -55,14 +56,18 @@ func (my *Engine) Subscribe(ctx context.Context, query string, variables map[str
 	return events, nil
 }
 
-func marshalSubscriptionReply(reply gqlReply) []byte {
-	body, err := stdjson.Marshal(reply)
-	if err == nil {
-		return body
+func marshalSubscriptionReply(ctx context.Context, reply gqlReply) ([]byte, error) {
+	if reply.encoded != nil {
+		if limit := ResponseLimit(ctx); limit > 0 && int64(len(reply.encoded)) > limit {
+			return marshalReply(ctx, gqlReply{Errors: GraphQLErrors(errResponseLimit)})
+		}
+		return append([]byte(nil), reply.encoded...), nil
 	}
-	fallback := gqlReply{Errors: gqlerror.List{gqlerror.Wrap(errors.New("subscription response serialization failed"))}}
-	body, _ = stdjson.Marshal(fallback)
-	return body
+	body, err := marshalReply(ctx, reply)
+	if err == nil {
+		return body, nil
+	}
+	return marshalReply(ctx, gqlReply{Errors: GraphQLErrors(err)})
 }
 
 // Schema returns the frozen SDL contract used by this Engine.
@@ -87,16 +92,19 @@ func (my *Engine) operationDocument(ctx context.Context, query, operationName st
 	if my == nil {
 		return "", errors.New("gql engine is unavailable")
 	}
+	if len(query) > maxDocumentBytes {
+		return "", &publicFailure{"GraphQL document size limit exceeded", "LIMIT_EXCEEDED"}
+	}
 	if strings.TrimSpace(query) != "" {
 		if my.options().PersistedOnly && !delegatedExecution(ctx) {
-			return "", errors.New("仅允许执行持久化操作")
+			return "", &publicFailure{"仅允许执行持久化操作", "PERSISTED_OPERATION_REQUIRED"}
 		}
 		return query, nil
 	}
 	if persisted, ok := my.documents[operationName]; ok {
 		return persisted.query, nil
 	}
-	return "", fmt.Errorf("未找到名为'%s'的持久化操作", operationName)
+	return "", &publicFailure{fmt.Sprintf("未找到名为'%s'的持久化操作", operationName), "PERSISTED_OPERATION_NOT_FOUND"}
 }
 
 // Capabilities returns a deep copy of the frozen Engine catalog.
@@ -113,6 +121,9 @@ type HealthReport struct {
 	Ready                 bool
 	SnapshotOK            bool
 	SnapshotFingerprint   string
+	ControlRevision       uint64
+	RouteRevision         uint64
+	SecurityRevision      uint64
 	DatabaseOK            bool
 	DatabaseError         string
 	CDCConfigured         bool
@@ -159,6 +170,17 @@ func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 		ctx = context.Background()
 	}
 	report := HealthReport{CDCConfigured: my != nil && my.cdc != nil}
+	if my != nil {
+		if source, ok := my.revocation.(interface {
+			Revision(context.Context) (uint64, error)
+		}); ok {
+			var err error
+			report.SecurityRevision, err = source.Revision(ctx)
+			if err != nil {
+				return report, err
+			}
+		}
+	}
 	report.SubscriptionAvailable = report.CDCConfigured
 	if my != nil {
 		if status, ok := my.cdc.(interface{ status() (bool, string) }); ok {

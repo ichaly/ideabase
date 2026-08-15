@@ -77,6 +77,13 @@ func (my *_DialectSuite) SetupSuite() {
 				"name": {Type: "String", Column: "name"},
 			},
 		},
+		"PostTag": {
+			Table: "sys_post_tag", PrimaryKeys: []string{"postId", "tagId"},
+			Fields: map[string]*internal.FieldConfig{
+				"postId": {Type: "ID", Column: "post_id", IsPrimary: true},
+				"tagId":  {Type: "ID", Column: "tag_id", IsPrimary: true},
+			},
+		},
 		"Comment": {
 			Table: "sys_comment",
 			Fields: map[string]*internal.FieldConfig{

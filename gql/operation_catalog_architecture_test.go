@@ -63,7 +63,7 @@ func TestBuiltInOperationSDLHasUniqueExecutableDescriptor(t *testing.T) {
 
 	delete(executor.metadata.operations, "Mutation.createUser")
 	delete(executor.metadata.operations, "Mutation.createUsers")
-	delete(executor.metadata.operations, "Mutation.updateUserByPk")
+	delete(executor.metadata.operations, "Mutation.updateUser")
 	source, err := NewRenderer(executor.metadata).Render()
 	require.NoError(t, err)
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "catalog.graphql", Input: source})

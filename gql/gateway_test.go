@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 const gatewayChildSchema = `
@@ -71,15 +72,43 @@ type gatewayEffectiveSubscriptionEndpoint struct {
 	effective SchemaArtifact
 }
 
-func (my *gatewayEffectiveEndpoint) EffectiveSchema(context.Context) (SchemaArtifact, error) {
+type gatewayExplicitStaticEndpoint struct{ *gatewayEndpoint }
+type gatewayRawEffectiveEndpoint struct {
+	*gatewayEndpoint
+	artifact SchemaArtifact
+}
+
+type gatewayCacheIdentityEndpoint struct {
+	*gatewayEffectiveEndpoint
+	cacheKey       string
+	effectiveCalls atomic.Int32
+}
+
+func (my *gatewayCacheIdentityEndpoint) EffectiveSchemaCacheIdentity(context.Context) (string, bool) {
+	return my.cacheKey, my.cacheKey != ""
+}
+
+func (my *gatewayCacheIdentityEndpoint) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) {
+	my.effectiveCalls.Add(1)
+	return my.gatewayEffectiveEndpoint.EffectiveSchema(ctx)
+}
+
+func (gatewayExplicitStaticEndpoint) EffectiveSchemaAvailable() bool { return false }
+
+func (my *gatewayEffectiveEndpoint) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) {
 	if my.effectiveFn != nil {
-		return my.effectiveFn(context.Background())
+		artifact, err := my.effectiveFn(ctx)
+		return FinalizeSchemaArtifact(artifact), err
 	}
-	return my.effective, nil
+	return FinalizeSchemaArtifact(my.effective), nil
 }
 
 func (my *gatewayEffectiveSubscriptionEndpoint) EffectiveSchema(context.Context) (SchemaArtifact, error) {
-	return my.effective, nil
+	return FinalizeSchemaArtifact(my.effective), nil
+}
+
+func (my *gatewayRawEffectiveEndpoint) EffectiveSchema(context.Context) (SchemaArtifact, error) {
+	return my.artifact, nil
 }
 
 func (my *gatewayHealthyEndpoint) Health(context.Context) (HealthReport, error) {
@@ -169,7 +198,7 @@ func TestGatewayHealthAggregatesChildCapabilitiesAndDatabaseFailure(t *testing.T
 
 func TestGatewayPrefixesChildErrorsAndKeepsNullableNamespace(t *testing.T) {
 	child := newGatewayEndpoint("crm-service", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
-		return []byte(`{"data":{"user":null},"errors":[{"message":"denied","path":["user"],"extensions":{"code":"FORBIDDEN"}}]}`), nil
+		return []byte(`{"data":{"user":null},"errors":[{"message":"denied: sql=secret","path":["user"],"extensions":{"code":"FORBIDDEN","token":"secret"}}]}`), nil
 	})
 	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
 	require.NoError(t, err)
@@ -177,8 +206,20 @@ func TestGatewayPrefixesChildErrorsAndKeepsNullableNamespace(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{
 		"data":{"sales":null},
-		"errors":[{"message":"denied","path":["sales","user"],"locations":[{"line":1,"column":22}],"extensions":{"code":"FORBIDDEN"}}]
+		"errors":[{"message":"endpoint execution failed","path":["sales","user"],"locations":[{"line":1,"column":22}],"extensions":{"code":"FORBIDDEN"}}]
 	}`, string(body))
+	require.NotContains(t, string(body), "secret")
+}
+
+func TestGatewaySanitizesUnknownChildErrorExtensions(t *testing.T) {
+	err := gqlerror.Errorf("stack and token secret")
+	err.Path = ast.Path{ast.PathName("user")}
+	err.Extensions = map[string]any{"code": "INTERNAL_SECRET", "debug": map[string]any{"token": "secret"}}
+	field := &ast.Field{Name: "crm", SelectionSet: ast.SelectionSet{&ast.Field{Name: "user"}}}
+	prefixErrors(gqlerror.List{err}, "crm", field)
+	require.Equal(t, "endpoint execution failed", err.Message)
+	require.Equal(t, map[string]any{"code": "REMOTE_ERROR"}, err.Extensions)
+	require.Equal(t, ast.Path{ast.PathName("crm"), ast.PathName("user")}, err.Path)
 }
 
 func TestGatewayRejectsNullChildErrorsWithoutPanicking(t *testing.T) {
@@ -347,7 +388,7 @@ func TestGatewayMutationContinuesAfterNullableErrorInDocumentOrder(t *testing.T)
 	require.Equal(t, []string{"crm", "erp", "crm"}, order)
 	require.JSONEq(t, `{
 		"data":{"first":{"id":"1"},"second":null,"third":{"id":"1"}},
-		"errors":[{"message":"rejected","path":["second"],"locations":[{"line":3,"column":3}]}],
+		"errors":[{"message":"endpoint execution failed","path":["second"],"locations":[{"line":3,"column":3}],"extensions":{"code":"REMOTE_ERROR"}}],
 		"extensions":{"committedNamespaces":["crm"]}
 	}`, string(body))
 }
@@ -377,7 +418,7 @@ func TestGatewayMutationStopsAfterRootNonNullFailure(t *testing.T) {
 	require.Equal(t, int32(2), calls.Load())
 	require.JSONEq(t, `{
 		"data":null,
-		"errors":[{"message":"failed","path":["second"],"locations":[{"line":3,"column":3}]}],
+		"errors":[{"message":"endpoint execution failed","path":["second"],"locations":[{"line":3,"column":3}],"extensions":{"code":"REMOTE_ERROR"}}],
 		"extensions":{"committedNamespaces":["crm"]}
 	}`, string(body))
 }
@@ -474,7 +515,7 @@ func TestGatewayRefreshAtomicallyKeepsInflightAndLastKnownGoodSnapshots(t *testi
 	close(release)
 	oldRevision, err := gateway.ForSnapshot(oldSnapshot.Fingerprint())
 	require.NoError(t, err)
-	pinned, err := oldRevision.Execute(context.Background(), `{ crm { user { id } } }`, nil)
+	pinned, err := oldRevision.ExecuteOperation(context.Background(), `{ crm { user { id } } }`, nil, "")
 	require.NoError(t, err)
 	require.JSONEq(t, `{"data":{"crm":{"user":{"id":"old"}}}}`, string(pinned))
 	require.JSONEq(t, `{"data":{"crm":{"user":{"id":"old"}}}}`, string(<-oldResult))
@@ -603,6 +644,9 @@ func (my *gatewayEndpoint) Execute(ctx context.Context, query string, variables 
 	my.calls.Add(1)
 	return my.execute(ctx, query, variables)
 }
+func (my *gatewayEndpoint) ExecuteOperation(ctx context.Context, query string, variables map[string]any, _ string) ([]byte, error) {
+	return my.Execute(ctx, query, variables)
+}
 
 func TestGatewayPrefixesImportedTypesAndIntrospectsNamespaces(t *testing.T) {
 	child := func(id string) *gatewayEndpoint {
@@ -723,12 +767,152 @@ func TestNestedGatewayPropagatesChildEffectiveSchema(t *testing.T) {
 	require.NotContains(t, string(body), `"name":"status"`)
 }
 
+func TestGatewayBindsEffectiveExecutionPinToChildContext(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, func(ctx context.Context, _ string, _ map[string]any) ([]byte, error) {
+		pin, ok := ExecutionPinFromContext(ctx)
+		if !ok || pin == "" {
+			t.Fatalf("child context missing effective execution pin")
+		}
+		return []byte(`{"data":{"user":{"id":"1"}}}`), nil
+	})
+	artifact := SchemaArtifact{Version: SchemaArtifactVersion, Schema: gatewayChildSchema, Fingerprint: digest(gatewayChildSchema), StructuralFingerprint: child.snapshot.Fingerprint()}
+	artifact.ExecutionPin = schemaArtifactExecutionPin(artifact)
+	endpoint := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effective: artifact}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint})
+	require.NoError(t, err)
+	_, err = gateway.Execute(context.Background(), `{ crm { user { id } } }`, nil)
+	require.NoError(t, err)
+}
+
+func TestGatewayAppliesResponseLimitAtExecutionBoundary(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+		return []byte(`{"data":{"user":{"id":"12345678901234567890","name":"abcdefghijklmnopqrstuvwxyz"}}}`), nil
+	})
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	body, err := gateway.Execute(WithResponseLimit(context.Background(), 32), `{ crm { user { id name } } }`, nil)
+	require.Nil(t, body)
+	require.ErrorContains(t, err, "response size limit")
+}
+
+func TestGatewaySharesResponseLimitAcrossConcurrentNamespaces(t *testing.T) {
+	body := []byte(`{"data":{"user":{"id":"x"},"noise":"` + strings.Repeat("x", 180) + `"}}`)
+	makeChild := func(name string) *gatewayEndpoint {
+		return newGatewayEndpoint(name, gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+			return body, nil
+		})
+	}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: makeChild("crm")}, Namespace{Name: "erp", Endpoint: makeChild("erp")})
+	require.NoError(t, err)
+	result, err := gateway.Execute(WithResponseLimit(context.Background(), int64(len(body)+32)), `{ crm { user { id } } erp { user { id } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(result), `"code":"LIMIT_EXCEEDED"`)
+}
+
+func TestGatewayBoundsConcurrentChildResponses(t *testing.T) {
+	started := make(chan struct{}, gatewayMaxFanout)
+	release := make(chan struct{})
+	namespaces := make([]Namespace, 0, gatewayMaxConcurrent+2)
+	var query strings.Builder
+	query.WriteByte('{')
+	for i := range gatewayMaxConcurrent + 2 {
+		name := fmt.Sprintf("n%d", i)
+		child := newGatewayEndpoint(name, gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+			started <- struct{}{}
+			<-release
+			return []byte(`{"data":{"user":{"id":"x"}}}`), nil
+		})
+		namespaces = append(namespaces, Namespace{Name: name, Endpoint: child})
+		fmt.Fprintf(&query, " %s { user { id } }", name)
+	}
+	query.WriteByte('}')
+	gateway, err := NewGateway("root", namespaces...)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() {
+		_, executeErr := gateway.Execute(context.Background(), query.String(), nil)
+		done <- executeErr
+	}()
+	for range gatewayMaxConcurrent {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("gateway did not fill bounded child window")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("gateway exceeded bounded child window")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-done)
+}
+
+func TestGatewaySharesResponseLimitAcrossMutationsInOrder(t *testing.T) {
+	body := []byte(`{"data":{"setName":{"id":"x"},"noise":"` + strings.Repeat("x", 300) + `"}}`)
+	makeChild := func(name string) *gatewayEndpoint {
+		return newGatewayEndpoint(name, gatewayChildSchema, func(context.Context, string, map[string]any) ([]byte, error) {
+			return body, nil
+		})
+	}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: makeChild("crm")}, Namespace{Name: "erp", Endpoint: makeChild("erp")})
+	require.NoError(t, err)
+	result, err := gateway.Execute(WithResponseLimit(context.Background(), 500), `mutation { crm_setName(input: { name: "a" }) { id } erp_setName(input: { name: "b" }) { id } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(result), `"code":"LIMIT_EXCEEDED"`)
+	require.Contains(t, string(result), `"indeterminateNamespaces":["erp"]`)
+	require.NotContains(t, string(result), `"committedNamespaces":["crm","erp"]`)
+}
+
+func TestGatewaySubscriptionAppliesResponseLimitAtExecutionBoundary(t *testing.T) {
+	events := make(chan []byte, 1)
+	events <- []byte(`{"data":{"changed":{"id":"` + strings.Repeat("x", 1024) + `"}}}`)
+	close(events)
+	child := newGatewayEndpoint("crm", gatewaySubscriptionSchema, nil)
+	subscriber := &gatewaySubscriptionEndpoint{gatewayEndpoint: child, events: events}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: subscriber})
+	require.NoError(t, err)
+	stream, err := gateway.Subscribe(WithResponseLimit(context.Background(), 256), `subscription { crm { changed { id } } }`, nil, "")
+	require.NoError(t, err)
+	body, open := <-stream
+	require.True(t, open)
+	require.Contains(t, string(body), "LIMIT_EXCEEDED")
+	require.LessOrEqual(t, len(body), 256)
+	_, open = <-stream
+	require.False(t, open)
+}
+
 func TestStaticNestedGatewayAvoidsEffectiveSchemaHotPath(t *testing.T) {
 	inner, err := NewGateway("inner", Namespace{Name: "crm", Endpoint: newGatewayEndpoint("crm", gatewayChildSchema, nil)})
 	require.NoError(t, err)
 	outer, err := NewGateway("outer", Namespace{Name: "platform", Endpoint: inner})
 	require.NoError(t, err)
 	require.False(t, outer.current().identityAware)
+}
+
+func TestGatewayRejectsUnmarkedStaticEndpointWhenIdentityAwareChildIsPresent(t *testing.T) {
+	child := newGatewayEndpoint("effective", gatewayChildSchema, nil)
+	effectiveSchema := strings.Replace(gatewayChildSchema, ", status: Status", "", 1)
+	effective := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effective: SchemaArtifact{Schema: effectiveSchema, Fingerprint: digest(effectiveSchema)}}
+	static := newGatewayEndpoint("static", gatewayChildSchema, nil)
+	_, err := NewGateway("root", Namespace{Name: "effective", Endpoint: effective}, Namespace{Name: "static", Endpoint: static})
+	require.ErrorContains(t, err, "identity-aware effective schema")
+}
+
+func TestGatewayRejectsEffectiveCapabilityWithoutEffectiveEndpoint(t *testing.T) {
+	// The endpoint claims identity-aware materialization but does not expose it.
+	_, err := NewGateway("root", Namespace{Name: "declared", Endpoint: effectiveCapabilityEndpoint{gatewayEndpoint: newGatewayEndpoint("declared", gatewayChildSchema, nil)}})
+	require.ErrorContains(t, err, "EffectiveSchemaEndpoint")
+}
+
+func TestGatewayAllowsExplicitStaticEndpointWhenIdentityAwareChildIsPresent(t *testing.T) {
+	child := newGatewayEndpoint("effective", gatewayChildSchema, nil)
+	effectiveSchema := strings.Replace(gatewayChildSchema, ", status: Status", "", 1)
+	effective := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effective: SchemaArtifact{Schema: effectiveSchema, Fingerprint: digest(effectiveSchema)}}
+	static := &gatewayExplicitStaticEndpoint{gatewayEndpoint: newGatewayEndpoint("static", gatewayChildSchema, nil)}
+	_, err := NewGateway("root", Namespace{Name: "effective", Endpoint: effective}, Namespace{Name: "static", Endpoint: static})
+	require.NoError(t, err)
 }
 
 func TestGatewayRejectsForgedEffectiveArtifactFingerprint(t *testing.T) {
@@ -738,7 +922,20 @@ func TestGatewayRejectsForgedEffectiveArtifactFingerprint(t *testing.T) {
 	require.NoError(t, err)
 	body, err := gateway.Execute(context.Background(), `{ crm { user { id } } }`, nil)
 	require.NoError(t, err)
-	require.Contains(t, string(body), "effective artifact fingerprint mismatch")
+	require.Contains(t, string(body), `"code":"BAD_GATEWAY_RESPONSE"`)
+	require.NotContains(t, string(body), "fingerprint mismatch")
+	require.Zero(t, child.calls.Load())
+}
+
+func TestGatewayRejectsEffectiveArtifactWithoutVersionOrExecutionPin(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
+	endpoint := &gatewayRawEffectiveEndpoint{gatewayEndpoint: child, artifact: SchemaArtifact{Schema: gatewayChildSchema, Fingerprint: digest(gatewayChildSchema)}}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint})
+	require.NoError(t, err)
+	body, err := gateway.Execute(context.Background(), `{ crm { user { id } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"code":"BAD_GATEWAY_RESPONSE"`)
+	require.NotContains(t, string(body), "execution pin mismatch")
 	require.Zero(t, child.calls.Load())
 }
 
@@ -821,6 +1018,25 @@ func TestGatewayLoadsEffectiveNamespacesInParallel(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
+func TestGatewayEffectiveCachePrefetchesStableChildIdentity(t *testing.T) {
+	child := &gatewayCacheIdentityEndpoint{
+		gatewayEffectiveEndpoint: &gatewayEffectiveEndpoint{
+			gatewayEndpoint: newGatewayEndpoint("crm", gatewayChildSchema, nil),
+			effective: SchemaArtifact{Schema: gatewayChildSchema, Fingerprint: digest(gatewayChildSchema),
+				StructuralFingerprint: "crm-snapshot", CacheIdentity: "stable"},
+		},
+		cacheKey: "stable",
+	}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
+	require.NoError(t, err)
+	ctx := context.Background()
+	_, err = gateway.EffectiveSchema(ctx)
+	require.NoError(t, err)
+	_, err = gateway.EffectiveSchema(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), child.effectiveCalls.Load())
+}
+
 func TestGatewaySingleNamespaceExecutesInline(t *testing.T) {
 	caller := gatewayGoroutineID()
 	var childGoroutine atomic.Int64
@@ -894,7 +1110,7 @@ func TestGatewayRejectsOversizedEmbeddedRequestBeforeCallingChild(t *testing.T) 
 	require.Contains(t, string(body), "LIMIT_EXCEEDED")
 	require.Zero(t, child.calls.Load())
 
-	body, err = gateway.Execute(context.Background(), "#"+strings.Repeat("x", gatewayMaxDocumentBytes)+"\n{ crm { user { id } } }", nil)
+	body, err = gateway.Execute(context.Background(), "#"+strings.Repeat("x", maxDocumentBytes)+"\n{ crm { user { id } } }", nil)
 	require.NoError(t, err)
 	require.Contains(t, string(body), "LIMIT_EXCEEDED")
 	require.Zero(t, child.calls.Load())
@@ -912,7 +1128,7 @@ func TestGatewayCachesStaticOperationAndLimitsExpandedRootFragments(t *testing.T
 		require.NoError(t, err)
 	}
 	state := gateway.current()
-	_, cached := state.cache.Get(planKey{query: query, view: state.snapshot.Fingerprint()})
+	_, cached := state.cache.Get(planKeyFor("", query, "", state.snapshot.Fingerprint()))
 	require.True(t, cached)
 
 	var document strings.Builder
@@ -940,7 +1156,7 @@ func TestGatewayDoesNotCacheVariableConditionalSelection(t *testing.T) {
 	body, err = gateway.Execute(context.Background(), query, map[string]any{"show": true})
 	require.NoError(t, err)
 	require.JSONEq(t, `{"data":{"crm":{"user":{"id":"1","name":"Ada"}}}}`, string(body))
-	_, cached := gateway.current().cache.Get(planKey{query: query})
+	_, cached := gateway.current().cache.Get(planKeyFor("", query, "", ""))
 	require.False(t, cached)
 }
 

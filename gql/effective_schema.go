@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	stdjson "encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -16,17 +17,78 @@ import (
 )
 
 type SchemaArtifact struct {
-	Schema                string
-	Fingerprint           string
-	StructuralFingerprint string
-	PermissionSignature   string
-	PolicyRevision        uint64
-	RouteRevision         uint64
-	Capabilities          []Capability
+	Version               string       `json:"version"`
+	Schema                string       `json:"schema"`
+	Fingerprint           string       `json:"fingerprint"`
+	StructuralFingerprint string       `json:"structuralFingerprint"`
+	PermissionSignature   string       `json:"permissionSignature"`
+	PolicyRevision        uint64       `json:"policyRevision"`
+	RouteRevision         uint64       `json:"routeRevision"`
+	CacheIdentity         string       `json:"cacheIdentity,omitempty"`
+	ExecutionPin          string       `json:"executionPin"`
+	Capabilities          []Capability `json:"capabilities"`
+}
+
+const SchemaArtifactVersion = "schema-artifact-v1"
+
+type executionPinContextKey struct{}
+
+// WithExecutionPin binds an effective schema artifact to delegated child
+// execution. It is intentionally transport-neutral; transports may project
+// it to a request header at a network boundary.
+func WithExecutionPin(ctx context.Context, pin string) context.Context {
+	if strings.TrimSpace(pin) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, executionPinContextKey{}, pin)
+}
+
+func ExecutionPinFromContext(ctx context.Context) (string, bool) {
+	pin, ok := ctx.Value(executionPinContextKey{}).(string)
+	return pin, ok && strings.TrimSpace(pin) != ""
+}
+
+func schemaArtifactExecutionPin(artifact SchemaArtifact) string {
+	parts := []string{SchemaArtifactVersion, artifact.Fingerprint, artifact.StructuralFingerprint,
+		artifact.PermissionSignature, fmt.Sprint(artifact.PolicyRevision), fmt.Sprint(artifact.RouteRevision)}
+	if artifact.CacheIdentity != "" {
+		parts = append(parts, artifact.CacheIdentity)
+	}
+	capabilities, _ := stdjson.Marshal(artifact.Capabilities)
+	parts = append(parts, string(capabilities))
+	return digest(strings.Join(parts, "\x00"))
+}
+
+func enforceExecutionPin(ctx context.Context, artifact SchemaArtifact) error {
+	pin, ok := ExecutionPinFromContext(ctx)
+	if !ok || pin == FinalizeSchemaArtifact(artifact).ExecutionPin {
+		return nil
+	}
+	return &publicFailure{"effective schema execution pin changed", "SNAPSHOT_CONFLICT"}
+}
+
+// FinalizeSchemaArtifact applies the versioned execution envelope after all
+// schema, policy, route, and cache identity fields have been populated.
+func FinalizeSchemaArtifact(artifact SchemaArtifact) SchemaArtifact {
+	artifact.Version = SchemaArtifactVersion
+	artifact.ExecutionPin = schemaArtifactExecutionPin(artifact)
+	return artifact
+}
+
+// ValidateSchemaArtifact verifies the complete identity-independent artifact
+// envelope before it is used for composition or delegated execution.
+func ValidateSchemaArtifact(artifact SchemaArtifact) error {
+	if artifact.Version != SchemaArtifactVersion || artifact.ExecutionPin == "" || artifact.ExecutionPin != schemaArtifactExecutionPin(artifact) {
+		return fmt.Errorf("effective artifact version or execution pin mismatch")
+	}
+	if artifact.Schema == "" || artifact.Fingerprint != digest(artifact.Schema) {
+		return fmt.Errorf("effective artifact fingerprint mismatch")
+	}
+	return nil
 }
 
 type SchemaProfile struct {
-	Name string
+	Name string `json:"name"`
 	SchemaArtifact
 }
 
@@ -65,72 +127,180 @@ func CheckProfileCompatibility(previous, next SchemaProfile) error {
 	if err != nil {
 		return fmt.Errorf("next schema profile: %w", err)
 	}
-	var breaking []string
+	var breaking []SchemaCompatibilityViolation
+	add := func(category, coordinate, message string) {
+		breaking = append(breaking, SchemaCompatibilityViolation{Category: category, Coordinate: coordinate, Message: message})
+	}
 	for name, oldType := range before.Types {
 		if strings.HasPrefix(name, "__") {
 			continue
 		}
 		newType := after.Types[name]
 		if newType == nil {
-			breaking = append(breaking, "removed type "+name)
+			add("type_removed", name, "removed type "+name)
 			continue
 		}
 		if newType.Kind != oldType.Kind {
-			breaking = append(breaking, "changed type kind "+name)
+			add("type_kind_changed", name, "changed type kind "+name)
 			continue
 		}
 		for _, oldField := range oldType.Fields {
 			newField := newType.Fields.ForName(oldField.Name)
 			if newField == nil {
-				breaking = append(breaking, "removed field "+name+"."+oldField.Name)
+				add("field_removed", name+"."+oldField.Name, "removed field "+name+"."+oldField.Name)
 			} else if newField.Type.String() != oldField.Type.String() {
-				breaking = append(breaking, "changed field "+name+"."+oldField.Name)
-			} else if oldType.Kind == ast.InputObject && oldField.DefaultValue != nil && newField.DefaultValue == nil && newField.Type.NonNull {
-				breaking = append(breaking, "removed required input default "+name+"."+oldField.Name)
+				add("field_type_changed", name+"."+oldField.Name, "changed field "+name+"."+oldField.Name)
+			} else if oldType.Kind == ast.InputObject && defaultValueChanged(oldField.DefaultValue, newField.DefaultValue) {
+				add("input_default_changed", name+"."+oldField.Name, "changed input default "+name+"."+oldField.Name)
 			} else if oldType.Kind != ast.InputObject {
-				breaking = append(breaking, incompatibleArguments(name+"."+oldField.Name, oldField.Arguments, newField.Arguments)...)
+				for _, violation := range incompatibleArguments(name+"."+oldField.Name, oldField.Arguments, newField.Arguments) {
+					add(violation.Category, violation.Coordinate, violation.Message)
+				}
 			}
 		}
 		if oldType.Kind == ast.InputObject {
 			for _, field := range newType.Fields {
 				if oldType.Fields.ForName(field.Name) == nil && field.Type.NonNull && field.DefaultValue == nil {
-					breaking = append(breaking, "added required input field "+name+"."+field.Name)
+					add("input_field_required", name+"."+field.Name, "added required input field "+name+"."+field.Name)
 				}
 			}
 		}
 		if oldType.Kind == ast.Enum {
 			for _, value := range oldType.EnumValues {
 				if newType.EnumValues.ForName(value.Name) == nil {
-					breaking = append(breaking, "removed enum value "+name+"."+value.Name)
+					add("enum_value_removed", name+"."+value.Name, "removed enum value "+name+"."+value.Name)
+				}
+			}
+		}
+		if oldType.Kind == ast.Union {
+			for _, member := range oldType.Types {
+				if !slices.Contains(newType.Types, member) {
+					add("union_member_removed", name+"."+member, "removed union member "+name+"."+member)
+				}
+			}
+		}
+		if oldType.Kind == ast.Object {
+			for _, iface := range oldType.Interfaces {
+				if !slices.Contains(newType.Interfaces, iface) {
+					add("interface_implementation_removed", name+" implements "+iface, "removed interface implementation "+name+" implements "+iface)
 				}
 			}
 		}
 	}
+	for _, root := range []struct {
+		name          string
+		before, after *ast.Definition
+	}{{"query", before.Query, after.Query}, {"mutation", before.Mutation, after.Mutation}, {"subscription", before.Subscription, after.Subscription}} {
+		beforeName, afterName := "", ""
+		if root.before != nil {
+			beforeName = root.before.Name
+		}
+		if root.after != nil {
+			afterName = root.after.Name
+		}
+		if beforeName != "" && beforeName != afterName {
+			add("schema_root_changed", "schema."+root.name, fmt.Sprintf("changed schema %s root from %q to %q", root.name, beforeName, afterName))
+		}
+	}
+	for name, oldDirective := range before.Directives {
+		if strings.HasPrefix(name, "__") {
+			continue
+		}
+		newDirective := after.Directives[name]
+		if newDirective == nil {
+			add("directive_removed", "@"+name, "removed directive @"+name)
+			continue
+		}
+		if oldDirective.IsRepeatable && !newDirective.IsRepeatable {
+			add("directive_repeatability_changed", "@"+name, "changed directive repeatability @"+name)
+		}
+		for _, location := range oldDirective.Locations {
+			if !slices.Contains(newDirective.Locations, location) {
+				add("directive_location_removed", "@"+name, "removed directive location @"+name+" "+string(location))
+			}
+		}
+		for _, arg := range oldDirective.Arguments {
+			nextArg := newDirective.Arguments.ForName(arg.Name)
+			if nextArg == nil {
+				add("directive_argument_removed", fmt.Sprintf("@%s(%s)", name, arg.Name), "removed directive argument "+name+"("+arg.Name+")")
+				continue
+			}
+			if nextArg.Type.String() != arg.Type.String() {
+				add("directive_argument_type_changed", fmt.Sprintf("@%s(%s)", name, arg.Name), "changed directive argument "+name+"("+arg.Name+")")
+			}
+			if defaultValueChanged(arg.DefaultValue, nextArg.DefaultValue) {
+				add("directive_argument_default_changed", fmt.Sprintf("@%s(%s)", name, arg.Name), "changed directive argument default "+name+"("+arg.Name+")")
+			}
+		}
+		for _, arg := range newDirective.Arguments {
+			if oldDirective.Arguments.ForName(arg.Name) == nil && arg.Type.NonNull && arg.DefaultValue == nil {
+				add("directive_argument_required", fmt.Sprintf("@%s(%s)", name, arg.Name), "added required directive argument "+name+"("+arg.Name+")")
+			}
+		}
+	}
 	if len(breaking) > 0 {
-		sort.Strings(breaking)
-		return fmt.Errorf("incompatible schema profile: %s", strings.Join(breaking, ", "))
+		sort.Slice(breaking, func(i, j int) bool {
+			if breaking[i].Coordinate == breaking[j].Coordinate {
+				return breaking[i].Category < breaking[j].Category
+			}
+			return breaking[i].Coordinate < breaking[j].Coordinate
+		})
+		return SchemaCompatibilityError{Violations: breaking}
 	}
 	return nil
 }
 
-func incompatibleArguments(coordinate string, before, after ast.ArgumentDefinitionList) []string {
-	var breaking []string
+// SchemaCompatibilityViolation identifies one client-breaking contract change.
+type SchemaCompatibilityViolation struct {
+	Category   string `json:"category"`
+	Coordinate string `json:"coordinate"`
+	Message    string `json:"message"`
+}
+
+func (my SchemaCompatibilityViolation) String() string {
+	return fmt.Sprintf("category=%s coordinate=%s: %s", my.Category, my.Coordinate, my.Message)
+}
+
+type SchemaCompatibilityError struct {
+	Violations []SchemaCompatibilityViolation
+}
+
+func (my SchemaCompatibilityError) Error() string {
+	parts := make([]string, len(my.Violations))
+	for i, violation := range my.Violations {
+		parts[i] = violation.String()
+	}
+	return "incompatible schema profile: " + strings.Join(parts, ", ")
+}
+
+func incompatibleArguments(coordinate string, before, after ast.ArgumentDefinitionList) []SchemaCompatibilityViolation {
+	var breaking []SchemaCompatibilityViolation
 	for _, argument := range before {
 		next := after.ForName(argument.Name)
 		if next == nil {
-			breaking = append(breaking, "removed argument "+coordinate+"("+argument.Name+")")
+			breaking = append(breaking, SchemaCompatibilityViolation{"argument_removed", coordinate + "(" + argument.Name + ")", "removed argument " + coordinate + "(" + argument.Name + ")"})
 		} else if next.Type.String() != argument.Type.String() {
-			breaking = append(breaking, "changed argument "+coordinate+"("+argument.Name+")")
-		} else if argument.DefaultValue != nil && next.DefaultValue == nil && next.Type.NonNull {
-			breaking = append(breaking, "removed required argument default "+coordinate+"("+argument.Name+")")
+			breaking = append(breaking, SchemaCompatibilityViolation{"argument_type_changed", coordinate + "(" + argument.Name + ")", "changed argument " + coordinate + "(" + argument.Name + ")"})
+		} else if defaultValueChanged(argument.DefaultValue, next.DefaultValue) {
+			breaking = append(breaking, SchemaCompatibilityViolation{"argument_default_changed", coordinate + "(" + argument.Name + ")", "changed argument default " + coordinate + "(" + argument.Name + ")"})
 		}
 	}
 	for _, argument := range after {
 		if before.ForName(argument.Name) == nil && argument.Type.NonNull && argument.DefaultValue == nil {
-			breaking = append(breaking, "added required argument "+coordinate+"("+argument.Name+")")
+			breaking = append(breaking, SchemaCompatibilityViolation{"argument_required", coordinate + "(" + argument.Name + ")", "added required argument " + coordinate + "(" + argument.Name + ")"})
 		}
 	}
 	return breaking
+}
+
+func defaultValueChanged(before, after *ast.Value) bool {
+	if before == nil && after == nil {
+		return false
+	}
+	if before == nil || after == nil {
+		return true
+	}
+	return before.String() != after.String()
 }
 
 type effectiveView struct {
@@ -153,8 +323,29 @@ func (my *Engine) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) {
 		return SchemaArtifact{}, err
 	}
 	artifact := view.artifact
+	artifact = FinalizeSchemaArtifact(artifact)
 	artifact.Capabilities = cloneCapabilities(artifact.Capabilities)
 	return artifact, nil
+}
+
+// EffectiveSchemaCacheIdentity returns a stable provider-declared key without
+// materializing the effective schema. Empty means the schema is uncacheable.
+func (my *Engine) EffectiveSchemaCacheIdentity(ctx context.Context) (string, bool) {
+	if _, err := my.Snapshot(); err != nil {
+		return "", false
+	}
+	if err := my.checkSecurity(ctx); err != nil {
+		return "", false
+	}
+	provider, identity, builtin, err := my.effectivePolicy(ctx)
+	if err != nil || provider == nil {
+		return "", false
+	}
+	if builtin {
+		return "builtin", true
+	}
+	key, ok := effectiveProviderCacheIdentity(ctx, provider, identity)
+	return key, ok && strings.TrimSpace(key) != ""
 }
 
 func (my *Engine) effectiveIntrospection(ctx context.Context) (*intro.Handler, error) {
@@ -165,7 +356,12 @@ func (my *Engine) effectiveIntrospection(ctx context.Context) (*intro.Handler, e
 	return view.intro, nil
 }
 
-func (my *Engine) effectiveSchema(ctx context.Context) (*effectiveView, error) {
+func (my *Engine) effectiveSchema(ctx context.Context) (view *effectiveView, err error) {
+	defer func() {
+		if err == nil && view != nil {
+			err = enforceExecutionPin(ctx, view.artifact)
+		}
+	}()
 	if _, err := my.Snapshot(); err != nil {
 		return nil, err
 	}
@@ -183,8 +379,12 @@ func (my *Engine) effectiveSchema(ctx context.Context) (*effectiveView, error) {
 		my.effectiveCache = newEffectiveCache(128)
 	}
 	cacheable := builtin
+	providerKey := ""
 	if !builtin {
-		_, cacheable = effectiveProviderCacheIdentity(ctx, provider, identity)
+		providerKey, cacheable = effectiveProviderCacheIdentity(ctx, provider, identity)
+		cacheable = cacheable && strings.TrimSpace(providerKey) != ""
+	} else {
+		providerKey = "builtin"
 	}
 	key := my.effectiveSchemaKey(ctx, identity, provider)
 	if !cacheable {
@@ -197,11 +397,11 @@ func (my *Engine) effectiveSchema(ctx context.Context) (*effectiveView, error) {
 		if cached, ok := my.effectiveCache.Get(key); ok {
 			return cached, nil
 		}
-		return my.effectiveSchemaBuild(shared, provider, identity, key, true)
+		return my.effectiveSchemaBuild(shared, provider, identity, key, true, providerKey)
 	})
 }
 
-func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvider, identity Identity, key string, cacheable bool) (*effectiveView, error) {
+func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvider, identity Identity, key string, cacheable bool, cacheIdentity ...string) (*effectiveView, error) {
 	route, _ := PinnedRoute(ctx)
 	if route.Tenant == "" {
 		route.Tenant = identity.Tenant()
@@ -258,7 +458,7 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 			continue
 		}
 		if capability.Handler != HandlerSQL && hasRowPolicy(decision) && !capability.PolicyAware {
-			return nil, fmt.Errorf("policy %s requires a policy-aware handler", capability.Coordinate)
+			return nil, fmt.Errorf("%w: %s", publicPolicyFailure("POLICY_HANDLER_REQUIRED", "policy requires a policy-aware handler"), capability.Coordinate)
 		}
 		if governed && hasFieldShape && capability.Handler == HandlerSQL {
 			if allowed[class.Name] == nil {
@@ -374,6 +574,9 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 		PermissionSignature: permission, PolicyRevision: identity.PolicyRevision(), RouteRevision: route.Revision,
 		Capabilities: schemaCapabilities(schema, my.snapshot.Capabilities()),
 	}, schema: schema, intro: intro.New(schema)}
+	if cacheable && len(cacheIdentity) > 0 {
+		view.artifact.CacheIdentity = cacheIdentity[0]
+	}
 	if cacheable {
 		my.effectiveCache.Put(key, view)
 	}

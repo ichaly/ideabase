@@ -186,7 +186,7 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	k.SetDefault("schema.default-limit", 10)
 	k.SetDefault("schema.max-depth", 20)
 	k.SetDefault("schema.max-tokens", 15000)
-	k.SetDefault("schema.max-cost", uint64(0))
+	k.SetDefault("schema.max-cost", uint64(100_000))
 	k.SetDefault("schema.introspection", true)
 	k.SetDefault("schema.table-prefix", []string{})
 	k.SetDefault("schema.exclude-tables", []string{})
@@ -200,6 +200,9 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 
 	if err := k.Unmarshal(cfg); err != nil {
 		return nil, err
+	}
+	if !cfg.IsDebug() && cfg.Schema.MaxCost == 0 {
+		return nil, fmt.Errorf("production schema.max-cost must be greater than zero")
 	}
 
 	my := &Metadata{
@@ -681,10 +684,11 @@ func (my *Metadata) SchemaName() string {
 	return my.cfg.Schema.Schema
 }
 
-// DefaultLimit 返回列表查询缺省LIMIT（实现compiler.Limiter），0=不注入
+// DefaultLimit 返回列表查询缺省LIMIT。所有列表都有同一条有界路径；
+// 零值元数据也使用协议默认值，避免成本模型、权限预算与 SQL 行为分叉。
 func (my *Metadata) DefaultLimit() int {
-	if my.cfg == nil {
-		return 0
+	if my.cfg == nil || my.cfg.Schema.DefaultLimit <= 0 {
+		return protocol.DEFAULT_PAGE_SIZE
 	}
 	return my.cfg.Schema.DefaultLimit
 }
@@ -942,6 +946,7 @@ func (my *Metadata) collectManyToMany(class *protocol.Class, rel *protocol.Relat
 	fields := []relationField{my.listField(class, rel.TargetClass, false, rel.Clone(protocol.MANY_TO_MANY, false))}
 	if through := rel.Through; through != nil {
 		if throughClass := my.Nodes[through.TableName]; throughClass != nil {
+			throughClass.IsThrough = true
 			// 指向中间表本身是普通一对多：源类主键 -> 中间表的源外键
 			fields = append(fields, my.listField(class, throughClass.Name, true, &protocol.Relation{
 				Type:        protocol.ONE_TO_MANY,

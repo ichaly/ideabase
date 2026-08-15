@@ -1,0 +1,12 @@
+{
+  "valid": {
+    "data": {"users": {"items": [{"id": 1, "name": "Alice", "email": "alice@example.com"}]}}
+  },
+  "invalid": {
+    "errors": [{
+      "message": "Cannot query field \"doesNotExist\" on type \"User\".",
+      "locations": [{"line": 1, "column": 25}],
+      "extensions": {"code": "GRAPHQL_ERROR", "file": "query.graphql"}
+    }]
+  }
+}

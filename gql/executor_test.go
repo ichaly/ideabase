@@ -153,7 +153,7 @@ func TestPersistedPrewarmFeedsRuntimePlanWithoutCompile(t *testing.T) {
 	defer cleanup()
 	query := `query Warmed { users { total } }`
 	require.NoError(t, executor.loadDocument(query))
-	key := planKey{operation: "Warmed", query: query, view: executor.baseView.artifact.Fingerprint + "\x00" + executor.baseView.artifact.PermissionSignature}
+	key := planKeyFor("Warmed", query, "", executor.baseView.artifact.Fingerprint+"\x00"+executor.baseView.artifact.PermissionSignature)
 	warmed, ok := executor.cache.Get(key)
 	require.True(t, ok)
 	_, err := executor.plan(query, "Warmed", nil)
@@ -205,7 +205,7 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Equal(t, "Hello", posts[0].(map[string]interface{})["title"])
 
 	// 4. 更新
-	reply = executor.run(ctx, `mutation ($id: ID) {
+	reply = executor.run(ctx, `mutation ($id: ID!) {
 		updateUser(input: { name: "Bob" }, id: $id) { id name }
 	}`, map[string]interface{}{"id": userId}, "")
 	require.Empty(t, reply.Errors, "更新用户失败: %v", reply.Errors)
@@ -229,7 +229,7 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Empty(t, reply.Errors, "删除文章失败: %v", reply.Errors)
 	require.EqualValues(t, 1, reply.Data["deletePost"])
 
-	reply = executor.run(ctx, `mutation ($id: ID) { deleteUser(id: $id) }`, map[string]interface{}{"id": userId}, "")
+	reply = executor.run(ctx, `mutation ($id: ID!) { deleteUser(id: $id) }`, map[string]interface{}{"id": userId}, "")
 	require.Empty(t, reply.Errors, "删除用户失败: %v", reply.Errors)
 	require.EqualValues(t, 1, reply.Data["deleteUser"])
 
@@ -364,7 +364,7 @@ func TestExecutorBulk(t *testing.T) {
 	// m2m内联创建：更新文章时内联建新标签并关联
 	postId := run(`mutation ($u: ID!) { createPost(input: { title: "M", userId: $u }) { id } }`,
 		map[string]interface{}{"u": owner["id"]})["createPost"].(map[string]interface{})["id"]
-	run(`mutation ($id: ID) { updatePost(input: { tags: { create: [{ name: "newtag" }] } }, id: $id) { id } }`,
+	run(`mutation ($id: ID!) { updatePost(input: { tags: { create: [{ name: "newtag" }] } }, id: $id) { id } }`,
 		map[string]interface{}{"id": postId})
 	tags := run(`query ($id: ID) { posts(id: $id) { items { tags { name } } } }`,
 		map[string]interface{}{"id": postId})["posts"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["tags"].([]interface{})
@@ -496,7 +496,7 @@ func TestExecutorRelationOps(t *testing.T) {
 	require.Equal(t, "PA", posts[0].(map[string]interface{})["title"])
 
 	// 多对多connect：文章挂两个标签（原子，单语句）
-	run(`mutation ($id: ID, $t1: ID!, $t2: ID!) {
+	run(`mutation ($id: ID!, $t1: ID!, $t2: ID!) {
 		updatePost(input: { tags: { connect: [$t1, $t2] } }, id: $id) { id }
 	}`, map[string]interface{}{"id": orphanA, "t1": tag1, "t2": tag2})
 	data = run(`query ($id: ID) { posts(id: $id) { items { tags { name } } } }`, map[string]interface{}{"id": orphanA})
@@ -504,7 +504,7 @@ func TestExecutorRelationOps(t *testing.T) {
 	require.Len(t, tags, 2)
 
 	// disconnect解除一个
-	run(`mutation ($id: ID, $t: ID!) {
+	run(`mutation ($id: ID!, $t: ID!) {
 		updatePost(input: { tags: { disconnect: [$t] } }, id: $id) { id }
 	}`, map[string]interface{}{"id": orphanA, "t": tag1})
 	data = run(`query ($id: ID) { posts(id: $id) { items { tags { name } } } }`, map[string]interface{}{"id": orphanA})
@@ -760,29 +760,33 @@ func TestExecutorScope(t *testing.T) {
 
 	// 写隔离：update/delete 只能改本租户的行——租户2 改不到租户1 的 new1
 	ctx2 := WithScope(context.Background(), map[string]any{"tenant": 2})
-	reply = executor.run(ctx2, `mutation { updateUser(input: { name: "hacked" }, where: { name: { eq: "new1" } }) { id } }`, nil, "")
+	reply = executor.run(ctx2, `mutation { updateUsers(input: { name: "hacked" }, where: { name: { eq: "new1" } }) { affectedCount } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.Empty(t, reply.Data["updateUser"], "租户2 不应改到租户1 的行")
+	require.EqualValues(t, 0, reply.Data["updateUsers"].(map[string]any)["affectedCount"], "租户2 不应改到租户1 的行")
 	var name string
 	require.NoError(t, db.Raw(`SELECT name FROM users WHERE id = ?`, newID).Scan(&name).Error)
 	require.Equal(t, "new1", name, "租户1 的行未被租户2 篡改")
 
 	// 租户1 自己能改
-	reply = executor.run(ctx1, `mutation { updateUser(input: { name: "own" }, where: { name: { eq: "new1" } }) { id name } }`, nil, "")
+	reply = executor.run(ctx1, `mutation { updateUsers(input: { name: "own" }, where: { name: { eq: "new1" } }) { affectedCount returning { id name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.Equal(t, "own", reply.Data["updateUser"].(map[string]interface{})["name"], "租户1 改自己的行成功")
+	updated := reply.Data["updateUsers"].(map[string]interface{})
+	require.EqualValues(t, 1, updated["affectedCount"])
+	require.Equal(t, "own", updated["returning"].([]any)[0].(map[string]any)["name"], "租户1 改自己的行成功")
 
 	// 安全回归：客户端整体变量 input 偷传作用域列 → 变量强校验先于编译器拒绝（堵整体变量绕过 schema）
-	reply = executor.run(ctx1, `mutation ($i: UserUpdateInput!) { updateUser(input: $i, where: { name: { eq: "own" } }) { id } }`,
+	reply = executor.run(ctx1, `mutation ($i: UserUpdateRowInput!) { updateUsers(input: $i, where: { name: { eq: "own" } }) { affectedCount } }`,
 		map[string]any{"i": map[string]any{"name": "z", "tenantId": 2}}, "")
 	require.NotEmpty(t, reply.Errors, "偷传作用域列应被拒绝")
 	require.Contains(t, reply.Errors[0].Message, "unknown field")
 	require.NoError(t, db.Raw(`SELECT name FROM users WHERE id = ?`, newID).Scan(&name).Error)
 	require.Equal(t, "own", name, "被拒绝后行未被篡改")
 
-	// 安全回归：别租户用本租户行的唯一键 upsert → DO UPDATE 被作用域 WHERE 阻止，不劫持
+	// 安全回归：全局唯一键不含 tenant_id，upsert 不得出现在作用域实体 schema 中，
+	// 避免把跨租户冲突变成存在性探针；生产库应迁移为 (tenant_id, logical_key) unique。
 	reply = executor.run(ctx2, `mutation { upsertUsers(input: [{ name: "hijacked", email: "new1@x.com" }], on: UNIQUE_1) { id } }`, nil, "")
-	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.NotEmpty(t, reply.Errors)
+	require.Contains(t, reply.Errors[0].Message, `Cannot query field "upsertUsers"`)
 	var hijTenant int
 	require.NoError(t, db.Raw(`SELECT name, tenant_id FROM users WHERE email = 'new1@x.com'`).Row().Scan(&name, &hijTenant))
 	require.Equal(t, "own", name, "租户2 不应劫持租户1 的行（DO UPDATE 被作用域 WHERE 阻止）")
@@ -804,6 +808,7 @@ func TestExecutorScopeRelation(t *testing.T) {
 	defer cleanup()
 	require.NoError(t, db.Exec(`ALTER TABLE posts ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
 	require.NoError(t, db.Exec(`ALTER TABLE tags ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
+	require.NoError(t, db.Exec(`ALTER TABLE post_tags ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
@@ -811,8 +816,9 @@ func TestExecutorScopeRelation(t *testing.T) {
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
-		"Post": {Table: "posts", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
-		"Tag":  {Table: "tags", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+		"Post":    {Table: "posts", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+		"Tag":     {Table: "tags", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+		"PostTag": {Table: "post_tags", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
 	})
 	meta, err := NewMetadata(k, db)
 	require.NoError(t, err)
@@ -842,4 +848,13 @@ func TestExecutorScopeRelation(t *testing.T) {
 	reply = executor.run(ctx1, `mutation { updatePost(input: { tags: { connect: [1] } }, id: 1) { id } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	require.Equal(t, 1, count(1), "应能挂接本租户 tag")
+	var linkTenant int
+	require.NoError(t, db.Raw(`SELECT tenant_id FROM post_tags WHERE post_id=1 AND tag_id=1`).Scan(&linkTenant).Error)
+	require.Equal(t, 1, linkTenant, "through row must inherit tenant scope")
+
+	// 即使两端仍属于租户1，中间行的作用域不匹配也不能被删除。
+	require.NoError(t, db.Exec(`UPDATE post_tags SET tenant_id=2 WHERE post_id=1 AND tag_id=1`).Error)
+	reply = executor.run(ctx1, `mutation { updatePost(input: { tags: { disconnect: [1] } }, id: 1) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, 1, count(1), "through scope must protect relation deletion")
 }

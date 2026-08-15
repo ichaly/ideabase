@@ -249,7 +249,7 @@ func (my *Dialect) buildInsert(ctx *compiler.Context, m *mutation) ([]relationOp
 	if _, err = my.writeInsertValues(ctx, m.class, rows); err != nil {
 		return nil, err
 	}
-	ctx.Write(` RETURNING *`)
+	writeMutationReturning(ctx, m)
 	return ops, nil
 }
 
@@ -270,7 +270,7 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 	// 冲突目标只能是catalog已证明的全局unique/primary key；
 	// GraphQL enum标签由protocol与Renderer共用，不接受任意列名。
 	sc := scope{class: m.class}
-	primary, hasPrimary := m.class.PrimaryConflictTarget()
+	primary, hasPrimary := m.class.PrimaryUpsertConflictTarget()
 	label := primary.Name
 	if arg := m.field.Arguments.ForName(protocol.ON); arg != nil && arg.Value != nil {
 		label = arg.Value.Raw
@@ -291,7 +291,7 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 	} else if !hasPrimary {
 		return fmt.Errorf("upsert缺少冲突目标")
 	}
-	key, ok := m.class.ConflictTarget(label)
+	key, ok := m.class.UpsertConflictTarget(label)
 	if !ok {
 		return fmt.Errorf("upsert冲突目标无效: %s", label)
 	}
@@ -387,7 +387,7 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 			}
 		}
 	}
-	ctx.Write(` RETURNING *`)
+	writeMutationReturning(ctx, m)
 	return nil
 }
 
@@ -547,7 +547,7 @@ func (my *Dialect) buildUpdate(ctx *compiler.Context, m *mutation) ([]relationOp
 	if err = my.buildMutationWhere(ctx, m.class, m.field, protocol.OP_UPDATE, "", checks...); err != nil {
 		return nil, err
 	}
-	ctx.Write(` RETURNING *`)
+	writeMutationReturning(ctx, m)
 	return row.ops, nil
 }
 
@@ -565,7 +565,7 @@ func (my *Dialect) buildDelete(ctx *compiler.Context, m *mutation) error {
 			return err
 		}
 		ctx.Space(`AND`).Column(m.class.Table, m.class.SoftDelete.Column).Write(` IS NULL`)
-		ctx.Write(` RETURNING *`)
+		writeMutationReturning(ctx, m)
 		return nil
 	}
 	ctx.Write(`DELETE FROM `)
@@ -573,7 +573,7 @@ func (my *Dialect) buildDelete(ctx *compiler.Context, m *mutation) error {
 	if err := my.buildMutationWhere(ctx, m.class, m.field, protocol.OP_DELETE, ""); err != nil {
 		return err
 	}
-	ctx.Write(` RETURNING *`)
+	writeMutationReturning(ctx, m)
 	return nil
 }
 
@@ -595,8 +595,16 @@ func (my *Dialect) buildRestore(ctx *compiler.Context, m *mutation) error {
 		return err
 	}
 	ctx.Space(`AND`).Column(m.class.Table, m.class.SoftDelete.Column).Write(` IS NOT NULL`)
-	ctx.Write(` RETURNING *`)
+	writeMutationReturning(ctx, m)
 	return nil
+}
+
+func writeMutationReturning(ctx *compiler.Context, m *mutation) {
+	if m.unit == nil {
+		ctx.Write(` RETURNING 1`)
+		return
+	}
+	ctx.Write(` RETURNING *`)
 }
 
 func (my *Dialect) buildPurge(ctx *compiler.Context, m *mutation) error {
@@ -616,7 +624,7 @@ func (my *Dialect) buildPurge(ctx *compiler.Context, m *mutation) error {
 // buildMutationWhere 变更条件：强制要求条件，杜绝误操作全表
 func (my *Dialect) buildMutationWhere(ctx *compiler.Context, class *protocol.Class, field *ast.Field, operation, skipColumn string, extra ...func() error) error {
 	sc := scope{class: class, qualifier: class.Table}
-	conditions, err := my.collectConditions(ctx, field.Arguments)
+	conditions, err := my.collectConditions(ctx, sc, field.Arguments)
 	if err != nil {
 		return err
 	}
@@ -1066,20 +1074,65 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 		if through := op.rel.Through; through != nil {
 			// 多对多：中间表插入/删除/内联创建
 			ctx.MarkTable(through.TableName)
+			throughClass, exists := ctx.GetClass(through.TableName)
+			if !exists || throughClass == nil || !throughClass.IsThrough {
+				return fmt.Errorf("可治理的关系中间表不存在: %s", through.TableName)
+			}
+			linkRows := []inputRow{{columns: []string{through.SourceKey, through.TargetKey}, values: make(map[string]paramWriter)}}
+			my.applyScope(throughClass, linkRows)
+			my.applyPreset(throughClass, linkRows, protocol.OP_INSERT)
+			my.applyAudit(throughClass, linkRows, protocol.OP_INSERT)
+			link := linkRows[0]
+			writeLinkValue := func(column string, source, target func()) error {
+				switch column {
+				case through.SourceKey:
+					source()
+				case through.TargetKey:
+					target()
+				default:
+					if err := link.values[column](ctx); err != nil {
+						return err
+					}
+				}
+				ctx.Write(` AS `).Quote(column)
+				return nil
+			}
+			writeGovernedLink := func(writeCandidates func() error) error {
+				ctx.Write(` (`)
+				writeColumns(ctx, "", link.columns)
+				ctx.Write(`) SELECT `)
+				writeColumns(ctx, "__link", link.columns)
+				ctx.Write(` FROM (`)
+				if err := writeCandidates(); err != nil {
+					return err
+				}
+				ctx.Write(`) AS "__link" WHERE TRUE`)
+				return my.appendInsertPolicy(ctx, "__link", throughClass)
+			}
 			if len(op.connect) > 0 {
 				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (INSERT INTO `)
 				tableRef(ctx, through.TableName)
-				ctx.Write(` (`).Quote(through.SourceKey).Write(`, `).Quote(through.TargetKey).Write(`) SELECT `)
-				ctx.Write(`"__parent".`).Quote(scope{class: class}.column(op.rel.SourceField))
-				ctx.Write(`, `).Column(target.Table, pk).Write(` FROM `).Quote(class.Table).Write(` AS "__parent" CROSS JOIN `)
-				tableRef(ctx, target.Table)
-				ctx.Write(` WHERE `).Column(target.Table, pk).Write(` IN (`)
-				if err := params(op.connect); err != nil {
-					return err
-				}
-				ctx.Write(`)`)
-				my.appendScope(ctx, target.Table, target.Scope)
-				if err := my.appendFixedPolicy(ctx, target.Table, target, protocol.OP_UPDATE); err != nil {
+				err := writeGovernedLink(func() error {
+					ctx.Write(`SELECT `)
+					for i, column := range link.columns {
+						if i > 0 {
+							ctx.Write(`, `)
+						}
+						if err := writeLinkValue(column, func() { ctx.Write(`"__parent".`).Quote(scope{class: class}.column(op.rel.SourceField)) }, func() { ctx.Column(target.Table, pk) }); err != nil {
+							return err
+						}
+					}
+					ctx.Write(` FROM `).Quote(class.Table).Write(` AS "__parent" CROSS JOIN `)
+					tableRef(ctx, target.Table)
+					ctx.Write(` WHERE `).Column(target.Table, pk).Write(` IN (`)
+					if err := params(op.connect); err != nil {
+						return err
+					}
+					ctx.Write(`)`)
+					my.appendScope(ctx, target.Table, target.Scope)
+					return my.appendFixedPolicy(ctx, target.Table, target, protocol.OP_UPDATE)
+				})
+				if err != nil {
 					return err
 				}
 				ctx.Write(`)`)
@@ -1106,7 +1159,12 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 						return err
 					}
 				}
-				ctx.Write(`))`)
+				ctx.Write(`)`)
+				my.appendScope(ctx, through.TableName, throughClass.Scope)
+				if err := my.appendFixedPolicy(ctx, through.TableName, throughClass, protocol.OP_DELETE); err != nil {
+					return err
+				}
+				ctx.Write(`)`)
 			}
 			if len(op.create) > 0 {
 				// 先建目标行，再按RETURNING主键建中间表关联
@@ -1120,15 +1178,26 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 				}
 				ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (INSERT INTO `)
 				tableRef(ctx, through.TableName)
-				ctx.Write(` (`).Quote(through.SourceKey).Write(`, `).Quote(through.TargetKey).
-					Write(`) `)
-				for i, cte := range made {
-					if i > 0 {
-						ctx.Write(` UNION ALL `)
+				err = writeGovernedLink(func() error {
+					for i, cte := range made {
+						if i > 0 {
+							ctx.Write(` UNION ALL `)
+						}
+						ctx.Write(`SELECT `)
+						for j, column := range link.columns {
+							if j > 0 {
+								ctx.Write(`, `)
+							}
+							if err := writeLinkValue(column, func() { anchor(op.rel) }, func() { ctx.Quote(pk) }); err != nil {
+								return err
+							}
+						}
+						ctx.Write(` FROM `).Quote(cte)
 					}
-					ctx.Write(`SELECT `)
-					anchor(op.rel)
-					ctx.Write(`, `).Quote(pk).Write(` FROM `).Quote(cte)
+					return nil
+				})
+				if err != nil {
+					return err
 				}
 				ctx.Write(`)`)
 			}

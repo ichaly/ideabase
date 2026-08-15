@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/gql"
+	"github.com/ichaly/ideabase/gql/transport"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -34,19 +34,15 @@ func benchEngine(b *testing.B) *gql.Engine {
 // runQuery 经公开 HTTP 入口端到端跑一条查询并校验无错（计划缓存首次后命中，测稳态吞吐）
 func runQuery(b *testing.B, query string) {
 	executor := benchEngine(b)
-	app := fiber.New()
-	app.Use(func(c fiber.Ctx) error {
-		c.SetContext(demoContext(c.Context(), 1))
-		return c.Next()
-	})
-	executor.Bind(app.Group(executor.Path()))
+	handler := transport.NewHandler(executor, transport.Options{})
 	body := `{"query":` + strconv.Quote(query) + `}`
 	do := func() {
-		req := httptest.NewRequest("POST", executor.Path(), strings.NewReader(body))
+		req := httptest.NewRequest("POST", "/graphql", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := app.Test(req)
-		if err != nil || resp.StatusCode != 200 {
-			b.Fatalf("查询出错: err=%v status=%v", err, resp)
+		resp := httptest.NewRecorder()
+		handler.ServeHTTP(resp, req.WithContext(demoContext(req.Context(), 1)))
+		if resp.Code != 200 {
+			b.Fatalf("查询出错: status=%v", resp.Code)
 		}
 	}
 	do() // 预热编译缓存

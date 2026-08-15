@@ -6,6 +6,7 @@ package gql
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,6 +76,7 @@ type watcher struct {
 type listener struct {
 	mu       sync.Mutex
 	started  bool                         // 复制连接是否已启动；失败不置位，下次Subscribe自动重试
+	runWG    sync.WaitGroup               // run退出后才允许close返回
 	watchers map[string]map[*watcher]bool // 表名 -> 关注该表的watcher集合
 
 	ctx            context.Context // 监听器生命周期：close取消后接收与重连循环退出
@@ -103,14 +105,21 @@ func newListener(dsn, publication string) *listener {
 
 // close 停止监听：取消生命周期ctx，接收循环随ctx中断、重连循环退出
 func (my *listener) close() {
+	my.mu.Lock()
 	my.connected.Store(false)
 	my.cancel()
+	my.mu.Unlock()
+	my.runWG.Wait()
 }
 
 // watch 注册订阅的唤醒端；首次调用启动复制连接。
 // 建连失败只返回错误不缓存（不用sync.Once），数据库恢复后的下一次订阅会自动重试
 func (my *listener) watch(tables []string) (*watcher, error) {
 	my.mu.Lock()
+	if my.ctx.Err() != nil {
+		my.mu.Unlock()
+		return nil, fmt.Errorf("CDC监听已关闭")
+	}
 	if !my.started {
 		conn, err := my.connect()
 		if err != nil {
@@ -118,8 +127,14 @@ func (my *listener) watch(tables []string) (*watcher, error) {
 			my.mu.Unlock()
 			return nil, fmt.Errorf("CDC监听启动失败（确认 wal_level=logical 与REPLICATION权限）: %w", err)
 		}
+		if my.ctx.Err() != nil {
+			my.closeConn(conn)
+			my.mu.Unlock()
+			return nil, fmt.Errorf("CDC监听已关闭")
+		}
 		my.started = true // 启动后run内部自带退避重连，无需再回退标志
 		my.setStatus(true, nil)
+		my.runWG.Add(1)
 		go my.run(conn)
 	}
 
@@ -138,14 +153,14 @@ func (my *listener) watch(tables []string) (*watcher, error) {
 }
 
 func (my *listener) validate() error {
-	ctx, cancel := context.WithTimeout(my.ctx, 15*time.Second)
-	defer cancel()
-	conn, err := pgconn.Connect(ctx, replicationDSN(my.dsn))
+	// Validate the complete replication path up front: publication-only checks
+	// can pass while the first subscription later fails on slot/start rights.
+	conn, err := my.connect()
 	if err != nil {
 		return fmt.Errorf("验证CDC复制连接失败: %w", err)
 	}
-	defer my.closeConn(conn)
-	return my.ensurePublication(ctx, conn)
+	my.closeConn(conn)
+	return nil
 }
 
 // unwatch 注销唤醒端
@@ -271,11 +286,12 @@ func (my *listener) auditPublication(ctx context.Context, conn *pgconn.PgConn) e
 
 // run 接收循环：解码WAL消息到表级变更；断线退避重连，重连后广播补偿；close后退出
 func (my *listener) run(conn *pgconn.PgConn) {
+	defer my.runWG.Done()
 	backoff := time.Second
 	for {
 		err := my.receive(conn)
 		if err == nil {
-			err = fmt.Errorf("CDC replication connection lost")
+			err = &publicFailure{"CDC replication connection lost", "SUBSCRIPTION_SOURCE_UNAVAILABLE"}
 		}
 		my.setStatus(false, err)
 		my.notify() // wake existing feeds so they fail explicitly instead of going stale
@@ -287,10 +303,11 @@ func (my *listener) run(conn *pgconn.PgConn) {
 		// 退避重连
 		for {
 			log.Warn().Dur("backoff", backoff).Msg("CDC复制连接断开，准备重连")
+			delay := cdcReconnectDelay(backoff)
 			select {
 			case <-my.ctx.Done():
 				return
-			case <-time.After(backoff):
+			case <-time.After(delay):
 			}
 			if backoff < 30*time.Second {
 				backoff *= 2
@@ -307,6 +324,13 @@ func (my *listener) run(conn *pgconn.PgConn) {
 			break
 		}
 	}
+}
+
+func cdcReconnectDelay(backoff time.Duration) time.Duration {
+	if backoff <= 0 {
+		return 0
+	}
+	return backoff/2 + time.Duration(rand.Int63n(int64(backoff/2)+1))
 }
 
 func (my *listener) setStatus(connected bool, err error) {

@@ -30,7 +30,7 @@ func (my *_DialectSuite) TestCompositePrimaryKeyInputCompilesEveryColumn() {
 	my.Equal([]any{7, "A"}, args)
 
 	mutation, gqlErr := gqlparser.LoadQuery(schema, `mutation {
-		updateOrderByPk(key: {tenantId: 7, code: "A"}, input: {note: "ready"}) { code }
+		updateOrder(key: {tenantId: 7, code: "A"}, input: {note: "ready"}) { code }
 	}`)
 	my.Require().Empty(gqlErr)
 	sql, args, err = compile.Build(mutation.Operations[0], nil)

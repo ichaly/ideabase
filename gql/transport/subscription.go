@@ -22,38 +22,38 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 	opts = defaultOptions(opts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if endpoint == nil {
-			http.Error(w, "subscription unavailable", http.StatusServiceUnavailable)
+			writeProblem(w, http.StatusServiceUnavailable, "SUBSCRIPTION_UNAVAILABLE", "subscription unavailable", true)
 			return
 		}
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeProblem(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed", false)
 			return
 		}
 		if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-			http.Error(w, "Accept must include text/event-stream", http.StatusNotAcceptable)
+			writeProblem(w, http.StatusNotAcceptable, "NOT_ACCEPTABLE", "Accept must include text/event-stream", false)
 			return
 		}
 		if !isJSONContentType(r.Header.Get("Content-Type")) {
-			http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+			writeProblem(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json", false)
 			return
 		}
 		var params request
 		if err := decodeLimited(r, opts.MaxBodyBytes, &params); err != nil {
-			http.Error(w, "invalid subscription request", http.StatusBadRequest)
+			writeProblem(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid subscription request", false)
 			return
 		}
-		ctx := r.Context()
+		ctx := core.WithResponseLimit(r.Context(), opts.MaxResponseBytes)
 		if opts.Delegation != nil {
 			token, ok := delegationToken(r)
 			if !ok {
-				http.Error(w, "delegation required", http.StatusUnauthorized)
+				writeProblem(w, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", "delegation required", false)
 				return
 			}
 			var err error
-			ctx, err = opts.Delegation.Verify(ctx, token, operationDigest(params, r.Header.Get("GQL-Snapshot")))
+			ctx, err = opts.Delegation.Verify(ctx, token, operationDigest(params, r.Header.Get("GQL-Snapshot"), r.Header.Get(executionPinHeader)))
 			if err != nil {
-				http.Error(w, "invalid delegation", http.StatusUnauthorized)
+				writeProblem(w, http.StatusUnauthorized, "INVALID_DELEGATION", "invalid delegation", false)
 				return
 			}
 			ctx = core.WithDelegatedExecution(ctx)
@@ -64,12 +64,12 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 			if opts.Delegation == nil {
 				source, ok := endpoint.(manifestEndpoint)
 				if !ok {
-					http.Error(w, "snapshot pinning unavailable", http.StatusConflict)
+					writeProblem(w, http.StatusConflict, "SNAPSHOT_UNAVAILABLE", "snapshot pinning unavailable", true)
 					return
 				}
 				current, snapshotErr := source.Snapshot()
 				if snapshotErr != nil || current == nil || current.Fingerprint() != revision {
-					http.Error(w, "snapshot revision changed", http.StatusConflict)
+					writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
 					return
 				}
 			}
@@ -78,18 +78,18 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 				var subscribable bool
 				execution, subscribable = pinned.(subscriptionEndpoint)
 				if pinErr != nil || !subscribable {
-					http.Error(w, "snapshot revision changed", http.StatusConflict)
+					writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
 					return
 				}
 			} else {
 				source, ok := endpoint.(manifestEndpoint)
 				if !ok {
-					http.Error(w, "snapshot pinning unavailable", http.StatusConflict)
+					writeProblem(w, http.StatusConflict, "SNAPSHOT_UNAVAILABLE", "snapshot pinning unavailable", true)
 					return
 				}
 				snapshot, err := source.Snapshot()
 				if err != nil || snapshot == nil || snapshot.Fingerprint() != revision {
-					http.Error(w, "snapshot revision changed", http.StatusConflict)
+					writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
 					return
 				}
 			}
@@ -99,7 +99,7 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 				if pinner, pinnable := endpoint.(snapshotPinner); pinnable {
 					snapshot, snapshotErr := source.Snapshot()
 					if snapshotErr != nil || snapshot == nil {
-						http.Error(w, "snapshot unavailable", http.StatusServiceUnavailable)
+						writeProblem(w, http.StatusServiceUnavailable, "SNAPSHOT_UNAVAILABLE", "snapshot unavailable", true)
 						return
 					}
 					revision = snapshot.Fingerprint()
@@ -107,11 +107,24 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 					var subscribable bool
 					execution, subscribable = pinned.(subscriptionEndpoint)
 					if pinErr != nil || !subscribable {
-						http.Error(w, "snapshot revision changed", http.StatusConflict)
+						writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
 						return
 					}
 				}
 			}
+		}
+		if pin := r.Header.Get(executionPinHeader); pin != "" {
+			source, ok := execution.(effectiveSchemaEndpoint)
+			if !ok {
+				writeProblem(w, http.StatusConflict, "SNAPSHOT_CONFLICT", "effective schema execution pin unavailable", true)
+				return
+			}
+			artifact, err := source.EffectiveSchema(ctx)
+			if err != nil || artifact.ExecutionPin == "" || artifact.ExecutionPin != pin {
+				writeProblem(w, http.StatusConflict, "SNAPSHOT_CONFLICT", "effective schema execution pin changed", true)
+				return
+			}
+			ctx = core.WithExecutionPin(ctx, pin)
 		}
 		events, err := execution.Subscribe(ctx, params.Query, params.Variables, params.OperationName)
 		if err != nil || events == nil {
@@ -120,7 +133,7 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 		}
 		flusher, ok := w.(http.Flusher)
 		if !ok {
-			http.Error(w, "streaming unavailable", http.StatusInternalServerError)
+			writeProblem(w, http.StatusInternalServerError, "STREAMING_UNAVAILABLE", "streaming unavailable", false)
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -174,8 +187,13 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 
 func writeSSEFrame(w http.ResponseWriter, flusher http.Flusher, timeout time.Duration, frame []byte) error {
 	controller := http.NewResponseController(w)
-	_ = controller.SetWriteDeadline(time.Now().Add(timeout))
-	if _, err := w.Write(frame); err != nil {
+	deadlineErr := controller.SetWriteDeadline(time.Now().Add(timeout))
+	if deadlineErr != nil {
+		// Never issue an unbounded Write when the underlying writer cannot
+		// enforce a deadline. Returning before Write is fail-closed and does
+		// not leave an uncancellable goroutine behind.
+		return fmt.Errorf("SSE write deadline unavailable: %w", deadlineErr)
+	} else if _, err := w.Write(frame); err != nil {
 		return err
 	}
 	if flushErr, ok := w.(interface{ FlushError() error }); ok {
@@ -185,7 +203,9 @@ func writeSSEFrame(w http.ResponseWriter, flusher http.Flusher, timeout time.Dur
 	} else {
 		flusher.Flush()
 	}
-	_ = controller.SetWriteDeadline(time.Time{})
+	if deadlineErr == nil {
+		_ = controller.SetWriteDeadline(time.Time{})
+	}
 	return nil
 }
 
@@ -198,5 +218,10 @@ func writeSubscriptionError(w http.ResponseWriter, cause error) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprintf(w, "event: next\ndata: %s\n\nevent: complete\n\n", body)
+	frame := []byte(fmt.Sprintf("event: next\ndata: %s\n\nevent: complete\n\n", body))
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return
+	}
+	_ = writeSSEFrame(w, flusher, defaultTimeout, frame)
 }

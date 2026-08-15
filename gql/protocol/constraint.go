@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -191,6 +192,31 @@ func (class *Class) ConflictTargets() []Key {
 	return keys
 }
 
+// UpsertConflictTargets returns only arbiters that include every mandatory
+// row-scope column. A global unique key cannot safely arbitrate tenant-scoped
+// inserts because it leaks and couples conflicts across scopes.
+func (class *Class) UpsertConflictTargets() []Key {
+	keys := class.ConflictTargets()
+	if len(class.Scope) == 0 {
+		return keys
+	}
+	return slices.DeleteFunc(keys, func(key Key) bool {
+		columns := make([]string, len(key.Columns))
+		for i, name := range key.Columns {
+			columns[i] = name
+			if field := class.Fields[name]; field != nil && field.Column != "" {
+				columns[i] = field.Column
+			}
+		}
+		for _, rule := range class.Scope {
+			if !slices.Contains(columns, rule.Column) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 func (class *Class) PrimaryConflictTarget() (Key, bool) {
 	for _, key := range class.ConflictTargets() {
 		if key.Primary {
@@ -203,6 +229,24 @@ func (class *Class) PrimaryConflictTarget() (Key, bool) {
 func (class *Class) ConflictTarget(name string) (Key, bool) {
 	for _, key := range class.ConflictTargets() {
 		if key.Name == name {
+			return key, true
+		}
+	}
+	return Key{}, false
+}
+
+func (class *Class) UpsertConflictTarget(name string) (Key, bool) {
+	for _, key := range class.UpsertConflictTargets() {
+		if key.Name == name {
+			return key, true
+		}
+	}
+	return Key{}, false
+}
+
+func (class *Class) PrimaryUpsertConflictTarget() (Key, bool) {
+	for _, key := range class.UpsertConflictTargets() {
+		if key.Primary {
 			return key, true
 		}
 	}

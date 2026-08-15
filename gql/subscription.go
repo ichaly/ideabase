@@ -2,35 +2,75 @@ package gql
 
 import (
 	"context"
-	stdjson "encoding/json"
 	"fmt"
 	"hash"
 	"hash/fnv"
 	"math/rand"
-	"net/url"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/fasthttp/websocket"
-	"github.com/valyala/fasthttp"
 	"github.com/vektah/gqlparser/v2/ast"
-	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 // feed 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查循环，结果扇出。
 // 热点订阅的重查次数与订阅者数解耦：表变更时每份feed只打一条SQL
 type feed struct {
-	key  string
-	subs map[chan gqlReply]bool
-	last gqlReply // 最近一次推送，后来的订阅者立即补发（免重查）
-	live bool     // last是否已有效
-	stop context.CancelFunc
-	done <-chan struct{}
+	key    string
+	tenant string
+	subs   map[chan gqlReply]bool
+	last   gqlReply // 最近一次推送，后来的订阅者立即补发（免重查）
+	live   bool     // last是否已有效
+	stop   context.CancelFunc
+	done   <-chan struct{}
 }
 
 const cdcReconnectGrace = 30 * time.Second
+
+const (
+	maxSubscriptionFeeds       = 1024
+	maxTenantSubscriptionFeeds = 128
+	maxSubscribersPerFeed      = 256
+)
+
+func (my *Engine) checkSubscriptionLimit(tenant string, existing *feed) error {
+	if existing != nil {
+		if len(existing.subs) >= maxSubscribersPerFeed {
+			return &publicFailure{"subscription subscriber limit exceeded", "LIMIT_EXCEEDED"}
+		}
+		return nil
+	}
+	if len(my.feeds) >= maxSubscriptionFeeds {
+		return &publicFailure{"subscription feed limit exceeded", "LIMIT_EXCEEDED"}
+	}
+	count := 0
+	for _, current := range my.feeds {
+		if current.tenant == tenant {
+			count++
+		}
+	}
+	if count >= maxTenantSubscriptionFeeds {
+		return &publicFailure{"tenant subscription feed limit exceeded", "LIMIT_EXCEEDED"}
+	}
+	return nil
+}
+
+func subscriptionTableIdentity(schema, table string) string {
+	if strings.Contains(table, ".") || schema == "" {
+		return table
+	}
+	return schema + "." + table
+}
+
+func subscriptionTableIdentities(schema string, tables []string) []string {
+	result := make([]string, 0, len(tables))
+	for _, table := range tables {
+		if table != "" {
+			result = append(result, subscriptionTableIdentity(schema, table))
+		}
+	}
+	return result
+}
 
 func subscriptionRetryDelay(attempt int) time.Duration {
 	if attempt > 10 {
@@ -153,6 +193,10 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 		return nil, fmt.Errorf("gql engine is closed")
 	}
 	f := my.feeds[key]
+	if err := my.checkSubscriptionLimit(identity.Tenant(), f); err != nil {
+		my.feedMu.Unlock()
+		return nil, err
+	}
 	if f == nil {
 		w, err := my.cdc.watch(subscriptionTableIdentities(my.metadata.SchemaName(), plan.tables))
 		if err != nil {
@@ -160,7 +204,7 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 			return nil, err
 		}
 		fctx, stop := context.WithCancel(WithScope(context.WithoutCancel(ctx), scope))
-		f = &feed{key: key, subs: make(map[chan gqlReply]bool), stop: stop, done: fctx.Done()}
+		f = &feed{key: key, tenant: identity.Tenant(), subs: make(map[chan gqlReply]bool), stop: stop, done: fctx.Done()}
 		my.feeds[key] = f
 		my.streamWG.Add(1)
 		go my.stream(fctx, plan, variables, w, f)
@@ -238,15 +282,12 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 			}
 		}
 		if w.status != nil {
-			if connected, message := w.status(); !connected {
+			if connected, _ := w.status(); !connected {
 				if w.outage == nil || w.outage() < cdcReconnectGrace {
 					scheduleRetry()
 					return true
 				}
-				if message == "" {
-					message = "CDC connection unavailable"
-				}
-				my.expireFeed(f, fmt.Errorf("%s", message))
+				my.expireFeed(f, &publicFailure{"CDC replication connection lost", "SUBSCRIPTION_SOURCE_UNAVAILABLE"})
 				return false
 			}
 		}
@@ -372,13 +413,7 @@ func (my *Engine) tick(ctx context.Context, plan *Plan, variables map[string]int
 			return r, false
 		}
 		r.Errors = GraphQLErrors(err)
-		return r, true // 不提交指纹；相同数据恢复时仍须重试
-	}
-	digest.Reset()
-	_, _ = digest.Write(data)
-	sum := digest.Sum64()
-	if sum == *last {
-		return r, false
+		return r, publishReplyFingerprint(digest, last, 'e', &r)
 	}
 
 	// 订阅始终解包为Data供程序化消费（变更推送频率低，非热路径），
@@ -386,317 +421,33 @@ func (my *Engine) tick(ctx context.Context, plan *Plan, variables map[string]int
 	result, warnings, err := my.unpack(ctx, plan, data, variables)
 	if err != nil {
 		r.Errors = GraphQLErrors(err)
-		return r, true
+		return r, publishReplyFingerprint(digest, last, 'e', &r)
 	}
 	materialize(result)
 	r.Errors, r.Data = warnings, result
-	// Only commit after unpack and resolver post-processing succeed. A transient
-	// post-processing failure must retry even when database bytes are unchanged.
+	return r, publishReplyFingerprint(digest, last, 'd', &r)
+}
+
+func publishReplyFingerprint(digest hash.Hash64, last *uint64, kind byte, reply *gqlReply) bool {
+	payload, err := reply.MarshalJSON()
+	if err != nil {
+		payload = []byte(err.Error())
+	} else {
+		reply.encoded = payload
+	}
+	return publishFingerprint(digest, last, kind, payload)
+}
+
+// publishFingerprint keeps retry state separate from successful data. Errors
+// are retried in the background but identical failures are emitted once.
+func publishFingerprint(digest hash.Hash64, last *uint64, kind byte, payload []byte) bool {
+	digest.Reset()
+	_, _ = digest.Write([]byte{kind, 0})
+	_, _ = digest.Write(payload)
+	sum := digest.Sum64()
+	if sum == *last {
+		return false
+	}
 	*last = sum
-	return r, true
-}
-
-// ---------- graphql-transport-ws 协议 ----------
-
-// wsMessage graphql-transport-ws 协议消息（出站Payload为任意值，入站为原始JSON延迟解析）
-type wsMessage struct {
-	ID      string             `json:"id,omitempty"`
-	Type    string             `json:"type"`
-	Payload stdjson.RawMessage `json:"payload,omitempty"`
-}
-
-// wsReply 出站消息
-type wsReply struct {
-	ID      string `json:"id,omitempty"`
-	Type    string `json:"type"`
-	Payload any    `json:"payload,omitempty"`
-}
-
-// 协议消息类型
-const (
-	wsConnectionInit = "connection_init"
-	wsConnectionAck  = "connection_ack"
-	wsPing           = "ping"
-	wsPong           = "pong"
-	wsSubscribe      = "subscribe"
-	wsNext           = "next"
-	wsError          = "error"
-	wsComplete       = "complete"
-)
-
-var upgrader = websocket.FastHTTPUpgrader{
-	Subprotocols:    []string{"graphql-transport-ws"},
-	CheckOrigin:     subscriptionOriginAllowedByHost,
-	ReadBufferSize:  4096,
-	WriteBufferSize: 4096,
-}
-
-func subscriptionOriginAllowedByHost(ctx *fasthttp.RequestCtx) bool {
-	origin := strings.TrimSpace(string(ctx.Request.Header.Peek("Origin")))
-	if origin == "" {
-		return true
-	}
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Host == "" {
-		return false
-	}
-	return strings.EqualFold(parsed.Host, string(ctx.Host()))
-}
-
-// UpgradeContext 将完整的宿主认证上下文带入 WebSocket 会话。升级后
-// fasthttp 请求上下文不可再作为认证状态来源，因此只从 ctx 派生取消信号，
-// 不重建 context.Background()+scope。
-func (my *Engine) UpgradeContext(rc *fasthttp.RequestCtx, ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	// Detach from fasthttp's request cancellation/value carrier before the
-	// upgrader takes ownership of the request context. Values remain intact,
-	// while the socket gets its own cancellation scope in serveSocket.
-	ctx = context.WithoutCancel(ctx)
-	return upgrader.Upgrade(rc, func(conn *websocket.Conn) {
-		my.serveSocket(conn, ctx)
-	})
-}
-
-// socketSession 单个WebSocket连接的订阅会话
-type socketSession struct {
-	mu      sync.Mutex
-	writeMu sync.Mutex
-	conn    *websocket.Conn
-	subs    map[string]*socketSubscription
-}
-
-type socketSubscription struct{ stop context.CancelFunc }
-
-// maxActiveSubscriptions bounds per-connection fan-out and goroutine usage.
-// It is intentionally a clear protocol-level constant until a public server
-// configuration surface is introduced.
-const maxActiveSubscriptions = 100
-
-var wsWriteTimeout = time.Second
-
-// wsPongWait bounds half-open connections. Each received frame or pong slides
-// the read deadline forward.
-var wsPongWait = 60 * time.Second
-
-// write 串行化并发写
-func (my *socketSession) write(message wsReply) error {
-	my.writeMu.Lock()
-	defer my.writeMu.Unlock()
-	if err := my.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
-		return err
-	}
-	err := my.conn.WriteJSON(message)
-	_ = my.conn.SetWriteDeadline(time.Time{})
-	if err != nil {
-		_ = my.conn.Close()
-	}
-	return err
-}
-
-// wsInitTimeout connection_init握手时限，超时按协议关4408（测试可缩短）
-var wsInitTimeout = 5 * time.Second
-
-const wsReadLimit = 1 << 20
-
-func subscriptionTableIdentity(schema, table string) string {
-	if strings.Contains(table, ".") || schema == "" {
-		return table
-	}
-	return schema + "." + table
-}
-
-func subscriptionTableIdentities(schema string, tables []string) []string {
-	result := make([]string, 0, len(tables))
-	for _, table := range tables {
-		if table != "" {
-			result = append(result, subscriptionTableIdentity(schema, table))
-		}
-	}
-	return result
-}
-
-// closeSocket 按graphql-transport-ws协议码关闭连接（4401/4408/4429/4409...）
-func closeSocket(conn *websocket.Conn, code int, reason string) {
-	_ = conn.WriteControl(websocket.CloseMessage,
-		websocket.FormatCloseMessage(code, reason), time.Now().Add(time.Second))
-	_ = conn.Close()
-}
-
-// serveSocket 连接读循环：init/ack、subscribe、complete、ping/pong。
-// 协议状态机（graphql-transport-ws）：subscribe必须在init/ack之后（否则4401），
-// init超时4408、重复init4429、重复订阅ID4409——鉴权握手不可绕过
-// ctx 为HTTP升级阶段认证完成的完整上下文；只派生连接取消信号，保留
-// Identity、PinnedRoute、scope 以及宿主挂载的 revocation/policy 状态。
-func (my *Engine) serveSocket(conn *websocket.Conn, ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	conn.SetReadLimit(wsReadLimit)
-	pongWait, initTimeout := wsPongWait, wsInitTimeout
-
-	session := &socketSession{conn: conn, subs: make(map[string]*socketSubscription)}
-	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
-	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(pongWait))
-	})
-	defer func() {
-		session.mu.Lock()
-		for _, subscription := range session.subs {
-			if subscription != nil {
-				subscription.stop()
-			}
-		}
-		session.mu.Unlock()
-	}()
-	pingDone := make(chan struct{})
-	defer close(pingDone)
-	go func() {
-		interval := pongWait / 2
-		if interval <= 0 {
-			interval = time.Second
-		}
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				session.writeMu.Lock()
-				_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-				err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsWriteTimeout))
-				_ = conn.SetWriteDeadline(time.Time{})
-				session.writeMu.Unlock()
-				if err != nil {
-					_ = conn.Close()
-					return
-				}
-			case <-pingDone:
-				return
-			}
-		}
-	}()
-
-	ready := false // 已完成init/ack握手
-	watchdog := time.AfterFunc(initTimeout, func() {
-		closeSocket(conn, 4408, "Connection initialisation timeout")
-	})
-	defer watchdog.Stop()
-
-	for {
-		var message wsMessage
-		if err := conn.ReadJSON(&message); err != nil {
-			closeSocket(conn, 4400, "Invalid WebSocket message")
-			return
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
-
-		switch message.Type {
-		case wsConnectionInit:
-			if ready {
-				closeSocket(conn, 4429, "Too many initialisation requests")
-				return
-			}
-			watchdog.Stop()
-			ready = true
-			if err := session.write(wsReply{Type: wsConnectionAck}); err != nil {
-				return
-			}
-		case wsPing:
-			if err := session.write(wsReply{Type: wsPong}); err != nil {
-				return
-			}
-		case wsSubscribe:
-			if !ready {
-				closeSocket(conn, 4401, "Unauthorized")
-				return
-			}
-			if message.ID == "" {
-				closeSocket(conn, 4400, "subscribe消息缺少id")
-				return
-			}
-			if !session.reserve(message.ID) {
-				session.mu.Lock()
-				_, duplicate := session.subs[message.ID]
-				atLimit := len(session.subs) >= maxActiveSubscriptions
-				session.mu.Unlock()
-				if atLimit && !duplicate {
-					closeSocket(conn, 4400, "Too many active subscriptions")
-				} else {
-					closeSocket(conn, 4409, "Subscriber for "+message.ID+" already exists")
-				}
-				return
-			}
-			my.startSubscription(ctx, session, message)
-		case wsComplete:
-			session.mu.Lock()
-			if subscription, ok := session.subs[message.ID]; ok {
-				if subscription != nil {
-					subscription.stop()
-				}
-				delete(session.subs, message.ID)
-			}
-			session.mu.Unlock()
-		}
-	}
-}
-
-// reserve 预占订阅ID（占位nil，startSubscription成功后填入真实stop），重复返回false
-func (my *socketSession) reserve(id string) bool {
-	my.mu.Lock()
-	defer my.mu.Unlock()
-	if _, exists := my.subs[id]; exists || len(my.subs) >= maxActiveSubscriptions {
-		return false
-	}
-	my.subs[id] = nil
 	return true
-}
-
-func (my *socketSession) release(id string, subscription *socketSubscription) {
-	my.mu.Lock()
-	if my.subs[id] == subscription {
-		delete(my.subs, id)
-	}
-	my.mu.Unlock()
-}
-
-// startSubscription 启动单个订阅：消费事件通道并推送next帧
-// 订阅ID已由调用方reserve预占，失败路径须释放占位
-func (my *Engine) startSubscription(ctx context.Context, session *socketSession, message wsMessage) {
-	release := func() {
-		session.mu.Lock()
-		delete(session.subs, message.ID)
-		session.mu.Unlock()
-	}
-	var req gqlQuery
-	if err := jsonNumeric.Unmarshal(message.Payload, &req); err != nil {
-		release()
-		_ = session.write(wsReply{ID: message.ID, Type: wsError,
-			Payload: gqlerror.List{gqlerror.Errorf("无效的subscribe载荷: %v", err)}})
-		return
-	}
-
-	subCtx, stop := context.WithCancel(ctx)
-	events, err := my.subscribe(subCtx, req.Query, req.Variables, req.OperationName)
-	if err != nil {
-		stop()
-		release()
-		_ = session.write(wsReply{ID: message.ID, Type: wsError, Payload: GraphQLErrors(err)})
-		return
-	}
-
-	subscription := &socketSubscription{stop: stop}
-	session.mu.Lock()
-	session.subs[message.ID] = subscription
-	session.mu.Unlock()
-
-	go func() {
-		defer stop()
-		defer session.release(message.ID, subscription)
-		for reply := range events {
-			if err := session.write(wsReply{ID: message.ID, Type: wsNext, Payload: reply}); err != nil {
-				return
-			}
-		}
-		_ = session.write(wsReply{ID: message.ID, Type: wsComplete})
-	}()
 }

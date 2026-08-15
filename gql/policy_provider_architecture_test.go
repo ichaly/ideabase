@@ -30,6 +30,21 @@ func TestProtocolPolicyProviderCanonicalWriteFieldsForUpdateAction(t *testing.T)
 	require.NotContains(t, decision.Fields[FieldUseWrite], "insert_only")
 }
 
+func TestProtocolPolicyProviderAuthorizesDisconnectFilterFields(t *testing.T) {
+	provider := NewProtocolPolicyProvider(map[string]map[string]*protocol.Permission{
+		"PostTag": {"writer": {Delete: true, Select: []string{"postId", "tagId"}}},
+	})
+	request := canonicalPolicyRequest(t, []string{protocol.OP_DELETE}, "writer")
+	request.Resource = "PostTag"
+	request.FieldUses = []FieldUse{FieldUseFilter}
+	request.Fields = map[FieldUse][]string{FieldUseFilter: {"postId", "tagId"}}
+
+	decision, err := provider.Decide(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, decision.Allow)
+	require.ElementsMatch(t, request.Fields[FieldUseFilter], decision.Fields[FieldUseFilter])
+}
+
 func TestProtocolPolicyProviderCanonicalUpsertWriteFieldsFollowActionCombination(t *testing.T) {
 	provider := NewProtocolPolicyProvider(map[string]map[string]*protocol.Permission{
 		"items": {"writer": {Insert: []string{"insert_only", "shared"}, Update: []string{"update_only", "shared"}}},

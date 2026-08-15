@@ -126,7 +126,7 @@ func markRLSPrepared(ctx context.Context, tx *gorm.DB) context.Context {
 
 func NewRLSIdentityStatement(identity Identity) (RLSStatement, error) {
 	if identity.Tenant() == "" || identity.Subject() == "" {
-		return RLSStatement{}, fmt.Errorf("verified identity is required")
+		return RLSStatement{}, &publicFailure{"verified identity is required", "IDENTITY_REQUIRED"}
 	}
 	return RLSStatement{
 		SQL:  "SELECT set_config($1, $2, true), set_config($3, $4, true), set_config($5, $6, true)",
@@ -140,7 +140,7 @@ func (my *Engine) prepareRLS(ctx context.Context, tx *gorm.DB) error {
 	}
 	identity, ok := IdentityFromContext(ctx)
 	if !ok {
-		return fmt.Errorf("verified identity is required for RLS")
+		return &publicFailure{"verified identity is required for RLS", "IDENTITY_REQUIRED"}
 	}
 	statement, err := NewRLSIdentityStatement(identity)
 	if err != nil {

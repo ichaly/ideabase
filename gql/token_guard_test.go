@@ -2,6 +2,8 @@ package gql
 
 import (
 	"context"
+	stdjson "encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -9,6 +11,26 @@ import (
 	"github.com/stretchr/testify/require"
 	validatorrules "github.com/vektah/gqlparser/v2/validator/rules"
 )
+
+func TestEngineRejectsOversizedDocumentBeforeFrontend(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	for _, query := range []string{"#" + strings.Repeat("x", maxDocumentBytes), strings.Repeat(" ", maxDocumentBytes+1)} {
+		body, err := executor.Execute(context.Background(), query, nil)
+		require.NoError(t, err)
+		var reply gqlReply
+		require.NoError(t, stdjson.Unmarshal(body, &reply))
+		require.Equal(t, "LIMIT_EXCEEDED", reply.Errors[0].Extensions["code"])
+	}
+}
+
+func TestPersistedDocumentRejectsOversizedSource(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	err := executor.loadDocument("query Huge { users { total } }\n#" + strings.Repeat("x", maxDocumentBytes))
+	require.ErrorContains(t, err, "document size limit")
+	require.NotContains(t, executor.documents, "Huge")
+}
 
 func TestTokenLimitExactBoundary(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)

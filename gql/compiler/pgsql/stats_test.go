@@ -54,12 +54,15 @@ func (my *_DialectSuite) TestStats() {
 			args:  []any{int64(5), int64(18)},
 			expected: `SELECT JSONB_BUILD_OBJECT('userStats', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
-					SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]') AS "json"
+					SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__rn' ORDER BY "__sr_0"."__rn"), '[]') AS "json"
 					FROM (
-						SELECT COUNT(*) AS "count"
+						SELECT COUNT(*) AS "count",
+							ROW_NUMBER() OVER (ORDER BY "sys_user"."name") AS "__rn"
 						FROM "public"."sys_user"
 						GROUP BY "sys_user"."name"
 						HAVING COUNT(*) > $1 AND AVG("sys_user"."age") >= $2
+						ORDER BY "sys_user"."name"
+						LIMIT 10
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},

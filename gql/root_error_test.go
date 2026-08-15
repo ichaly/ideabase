@@ -24,9 +24,25 @@ func TestNullableRootResolverErrorContinuesWithPathAndLocation(t *testing.T) {
 	require.Len(t, reply.Errors, 1)
 	err := reply.Errors[0]
 	require.Equal(t, "alias", err.Path.String())
-	require.Contains(t, err.Message, "boom")
+	require.Equal(t, "resolver execution failed", err.Message)
 	require.NotEmpty(t, err.Locations)
 	require.Equal(t, "RESOLVER_ERROR", err.Extensions["code"])
+}
+
+func TestRLSQueryKeepsSuccessfulSiblingAfterNullableError(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	executor.rls = true
+	require.NoError(t, executor.register(
+		NewResolver[Root, struct{}, string]("Query", "rlsOK", "", func(context.Context, Root, struct{}) (string, error) { return "ok", nil }, Result("String")),
+		NewResolver[Root, struct{}, string]("Query", "rlsFail", "", func(context.Context, Root, struct{}) (string, error) { return "", errors.New("hidden") }, Result("String")),
+	))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `{ rlsOK rlsFail }`, nil, "")
+	require.Equal(t, "ok", reply.Data["rlsOK"])
+	require.Nil(t, reply.Data["rlsFail"])
+	require.Len(t, reply.Errors, 1)
 }
 
 func TestRootResolverPreservesNestedGQLErrorMetadata(t *testing.T) {

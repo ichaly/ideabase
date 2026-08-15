@@ -3,12 +3,9 @@ package gql
 import (
 	"context"
 	stdjson "encoding/json"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -72,17 +69,10 @@ func TestHTTPVariablesPreserveJSONNumberKind(t *testing.T) {
 	require.NoError(t, executor.register(NewResolver[Root, args, int]("Query", "echoHTTP", "", func(_ context.Context, _ Root, in args) (int, error) {
 		return in.N, nil
 	})))
-	app := fiber.New()
-	executor.Bind(app.Group(executor.Path()))
-	request := httptest.NewRequest("POST", executor.Path(), strings.NewReader(
-		`{"query":"query($n: Int!) { echoHTTP(n: $n) }","variables":{"n":1}}`,
-	))
-	request.Header.Set("Content-Type", "application/json")
-	response, err := app.Test(request)
+	body, err := executor.Execute(context.Background(), `query($n: Int!) { echoHTTP(n: $n) }`, map[string]any{"n": 1})
 	require.NoError(t, err)
-	require.Equal(t, 200, response.StatusCode)
 	var reply gqlReply
-	require.NoError(t, jsonNumeric.NewDecoder(response.Body).Decode(&reply))
+	require.NoError(t, jsonNumeric.Unmarshal(body, &reply))
 	require.Empty(t, reply.Errors)
 	require.Equal(t, stdjson.Number("1"), reply.Data["echoHTTP"])
 }

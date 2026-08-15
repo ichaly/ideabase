@@ -26,6 +26,64 @@ import (
 
 const endpointProtocolVersion = 1
 
+// RemoteProblemError is the bounded, machine-readable control-plane failure
+// contract. It is shared by HTTP and SSE so retry policy never depends on a
+// status-code-only guess.
+type RemoteProblemError struct {
+	Operation       string
+	Version         int
+	Code            string
+	Category        string
+	Retryable       bool
+	Details         map[string]any
+	CurrentRevision uint64
+	Message         string
+}
+
+func (e *RemoteProblemError) Error() string {
+	if e.Message != "" {
+		return e.Operation + ": " + e.Message
+	}
+	return e.Operation + ": " + e.Code
+}
+
+func (e *RemoteProblemError) ErrorCode() string { return e.Code }
+
+type remoteProblemWire struct {
+	Version int `json:"version"`
+	Error   struct {
+		Code            string         `json:"code"`
+		Category        string         `json:"category"`
+		Message         string         `json:"message"`
+		Retryable       bool           `json:"retryable"`
+		Details         map[string]any `json:"details"`
+		CurrentRevision uint64         `json:"currentRevision"`
+	} `json:"error"`
+}
+
+func remoteResponseError(resp *http.Response, operation string, limit int64) error {
+	body, readErr := readLimited(resp.Body, limit)
+	if readErr != nil {
+		return fmt.Errorf("remote %s status %d: %w", operation, resp.StatusCode, readErr)
+	}
+	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if mediaType == "application/problem+json" {
+		var wire remoteProblemWire
+		if err := decodeJSON(body, &wire); err == nil && wire.Error.Code != "" {
+			return &RemoteProblemError{Operation: operation, Version: wire.Version, Code: wire.Error.Code, Category: wire.Error.Category, Retryable: wire.Error.Retryable, Details: wire.Error.Details, CurrentRevision: wire.Error.CurrentRevision, Message: wire.Error.Message}
+		}
+	}
+	return fmt.Errorf("remote %s status %d content type %q", operation, resp.StatusCode, mediaType)
+}
+
+func remoteProblemRetryable(err error, fallback bool) bool {
+	var problem *RemoteProblemError
+	if errors.As(err, &problem) {
+		return problem.Retryable
+	}
+	return fallback
+}
+
 // Manifest is the immutable wire contract used to compose a remote endpoint.
 type Manifest struct {
 	Version      int               `json:"version"`
@@ -63,32 +121,56 @@ func NewEffectiveSchemaHandler(endpoint effectiveSchemaEndpoint, verifier Delega
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeProblem(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed", false)
 			return
 		}
 		if endpoint == nil || verifier == nil {
-			http.Error(w, "effective schema authentication required", http.StatusUnauthorized)
+			writeProblem(w, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", "effective schema authentication required", false)
 			return
 		}
 		token, ok := delegationToken(r)
 		if !ok {
-			http.Error(w, "delegation required", http.StatusUnauthorized)
+			writeProblem(w, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", "delegation required", false)
 			return
 		}
-		ctx, err := verifier.Verify(r.Context(), token, operationDigest(request{}, "effective-schema"))
+		revision := r.Header.Get("GQL-Snapshot")
+		ctx, err := verifier.Verify(r.Context(), token, operationDigest(request{}, "effective-schema", revision))
 		if err != nil {
-			http.Error(w, "invalid delegation", http.StatusUnauthorized)
+			writeProblem(w, http.StatusUnauthorized, "INVALID_DELEGATION", "invalid delegation", false)
 			return
 		}
-		artifact, err := endpoint.EffectiveSchema(ctx)
+		effective := endpoint
+		if revision != "" {
+			pinner, ok := endpoint.(snapshotPinner)
+			if !ok {
+				writeProblem(w, http.StatusConflict, "SNAPSHOT_UNAVAILABLE", "snapshot pinning unavailable", true)
+				return
+			}
+			pinned, pinErr := pinner.ForSnapshot(revision)
+			var effectiveOK bool
+			effective, effectiveOK = pinned.(effectiveSchemaEndpoint)
+			if pinErr != nil || !effectiveOK {
+				writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
+				return
+			}
+		}
+		artifact, err := effective.EffectiveSchema(ctx)
 		if err != nil {
-			http.Error(w, "effective schema unavailable", http.StatusServiceUnavailable)
+			writeProblem(w, http.StatusServiceUnavailable, "EFFECTIVE_SCHEMA_UNAVAILABLE", "effective schema unavailable", true)
 			return
 		}
-		if artifact.Schema == "" || artifact.Fingerprint != schemaDigest(artifact.Schema) {
-			http.Error(w, "invalid effective schema", http.StatusServiceUnavailable)
+		if artifact.Schema == "" || artifact.Fingerprint != schemaDigest(artifact.Schema) || core.ValidateSchemaArtifact(artifact) != nil {
+			writeProblem(w, http.StatusServiceUnavailable, "INVALID_EFFECTIVE_SCHEMA", "invalid effective schema", false)
 			return
 		}
+		if revision != "" && artifact.StructuralFingerprint != revision {
+			writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
+			return
+		}
+		if revision == "" {
+			revision = artifact.StructuralFingerprint
+		}
+		w.Header().Set("GQL-Snapshot", revision)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(artifact)
 	})
@@ -98,21 +180,21 @@ func NewEffectiveSchemaHandler(endpoint effectiveSchemaEndpoint, verifier Delega
 func NewManifestHandler(id string, endpoint manifestEndpoint, authenticate ManifestAuthenticator) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if authenticate == nil || !authenticate(r) {
-			http.Error(w, "manifest authentication required", http.StatusUnauthorized)
+			writeProblem(w, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", "manifest authentication required", false)
 			return
 		}
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeProblem(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed", false)
 			return
 		}
 		if id == "" || endpoint == nil {
-			http.Error(w, "manifest unavailable", http.StatusServiceUnavailable)
+			writeProblem(w, http.StatusServiceUnavailable, "MANIFEST_UNAVAILABLE", "manifest unavailable", true)
 			return
 		}
 		snapshot, revision, err := publishedManifest(endpoint)
 		if err != nil {
-			http.Error(w, "manifest unavailable", http.StatusServiceUnavailable)
+			writeProblem(w, http.StatusServiceUnavailable, "MANIFEST_UNAVAILABLE", "manifest unavailable", true)
 			return
 		}
 		manifest := Manifest{
@@ -158,6 +240,8 @@ type RemoteOptions struct {
 	}
 	Timeout          time.Duration
 	MaxResponseBytes int64
+	MaxConcurrent    int
+	MaxSubscriptions int
 	AllowHTTP        bool
 }
 
@@ -171,21 +255,28 @@ type RemoteEndpoint struct {
 	signer    interface {
 		Sign(context.Context, string) (string, error)
 	}
-	maxResponse int64
-	timeout     time.Duration
-	idleTimeout time.Duration
-	subscribe   string
-	health      string
-	state       atomic.Pointer[remoteState]
-	refresh     sync.Mutex
-	historyMu   sync.RWMutex
-	history     map[string]*remoteState
-	order       []string
+	maxResponse       int64
+	timeout           time.Duration
+	idleTimeout       time.Duration
+	subscribe         string
+	health            string
+	sseRecoveryWindow time.Duration
+	retryDelay        func(int) time.Duration
+	state             atomic.Pointer[remoteState]
+	refresh           sync.Mutex
+	historyMu         sync.RWMutex
+	history           map[string]*remoteState
+	order             []string
+	unarySlots        chan struct{}
+	subscriptionSlots chan struct{}
 }
 
 const (
-	remoteSSEMaxRetries = 3
-	remoteSSEBackoff    = 10 * time.Millisecond
+	remoteSSERecoveryWindow = 30 * time.Second
+	remoteSSEBackoff        = 100 * time.Millisecond
+	remoteSSEMaxBackoff     = 5 * time.Second
+	remoteMaxConcurrent     = 128
+	remoteMaxSubscriptions  = 1024
 )
 
 var errRemoteSSEStream = errors.New("remote subscription stream failed")
@@ -268,6 +359,12 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 	if options.MaxResponseBytes <= 0 {
 		options.MaxResponseBytes = 8 << 20
 	}
+	if options.MaxConcurrent <= 0 {
+		options.MaxConcurrent = remoteMaxConcurrent
+	}
+	if options.MaxSubscriptions <= 0 {
+		options.MaxSubscriptions = remoteMaxSubscriptions
+	}
 	client := options.Client
 	if client == nil {
 		client = &http.Client{}
@@ -282,11 +379,26 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 		health:      options.HealthURL,
 		idleTimeout: 30 * time.Second,
 		history:     make(map[string]*remoteState, 8),
+		unarySlots:  make(chan struct{}, options.MaxConcurrent), subscriptionSlots: make(chan struct{}, options.MaxSubscriptions),
 	}
 	if err := remote.Refresh(ctx); err != nil {
 		return nil, err
 	}
 	return remote, nil
+}
+
+func acquireRemoteSlot(ctx context.Context, slots chan struct{}, operation string) (func(), error) {
+	if slots == nil {
+		return func() {}, nil
+	}
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		return nil, &RemoteProblemError{Operation: operation, Code: "REMOTE_OVERLOADED", Message: "remote endpoint capacity exceeded", Retryable: true}
+	}
 }
 
 // EffectiveSchema fetches an identity-bound schema artifact. It never falls
@@ -315,6 +427,11 @@ func (my *RemoteEndpoint) effectiveSchema(ctx context.Context, structural string
 	}
 	ctx, cancel := context.WithTimeout(ctx, my.timeout)
 	defer cancel()
+	release, err := acquireRemoteSlot(ctx, my.unarySlots, "effective schema")
+	if err != nil {
+		return core.SchemaArtifact{}, err
+	}
+	defer release()
 	reqPayload := request{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, my.effective, nil)
 	if err != nil {
@@ -324,18 +441,19 @@ func (my *RemoteEndpoint) effectiveSchema(ctx context.Context, structural string
 	if my.signer == nil {
 		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema requires delegation")
 	}
-	token, err := my.signer.Sign(ctx, operationDigest(reqPayload, "effective-schema"))
+	token, err := my.signer.Sign(ctx, operationDigest(reqPayload, "effective-schema", structural))
 	if err != nil {
 		return core.SchemaArtifact{}, err
 	}
 	req.Header.Set("Authorization", delegationScheme+token)
+	req.Header.Set("GQL-Snapshot", structural)
 	resp, err := my.client.Do(req)
 	if err != nil {
 		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema unavailable: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema status %d", resp.StatusCode)
+		return core.SchemaArtifact{}, remoteResponseError(resp, "effective schema", my.maxResponse)
 	}
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if mediaType != "application/json" {
@@ -348,14 +466,20 @@ func (my *RemoteEndpoint) effectiveSchema(ctx context.Context, structural string
 	if artifact.Schema == "" || artifact.Fingerprint == "" || artifact.StructuralFingerprint != structural {
 		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema is invalid")
 	}
+	if resp.Header.Get("GQL-Snapshot") != structural {
+		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema snapshot mismatch")
+	}
 	if artifact.Fingerprint != schemaDigest(artifact.Schema) {
 		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema fingerprint mismatch")
+	}
+	if err := core.ValidateSchemaArtifact(artifact); err != nil {
+		return core.SchemaArtifact{}, err
 	}
 	return artifact, nil
 }
 
 func staticSchemaArtifact(snapshot *core.Snapshot) core.SchemaArtifact {
-	return core.SchemaArtifact{Schema: snapshot.Schema(), Fingerprint: schemaDigest(snapshot.Schema()), StructuralFingerprint: snapshot.Fingerprint(), Capabilities: snapshot.Capabilities()}
+	return core.FinalizeSchemaArtifact(core.SchemaArtifact{Schema: snapshot.Schema(), Fingerprint: schemaDigest(snapshot.Schema()), StructuralFingerprint: snapshot.Fingerprint(), Capabilities: snapshot.Capabilities()})
 }
 
 func remoteURLAllowed(raw string, allowHTTP bool) bool {
@@ -404,7 +528,7 @@ func (my *RemoteEndpoint) Snapshot() (*core.Snapshot, error) {
 	return state.snapshot, nil
 }
 
-func (my *RemoteEndpoint) ForSnapshot(fingerprint string) (core.Endpoint, error) {
+func (my *RemoteEndpoint) ForSnapshot(fingerprint string) (core.ComposableEndpoint, error) {
 	state := my.state.Load()
 	if state == nil || state.snapshot == nil || state.snapshot.Fingerprint() != fingerprint {
 		my.historyMu.Lock()
@@ -431,6 +555,11 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 	defer my.refresh.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, my.timeout)
 	defer cancel()
+	release, err := acquireRemoteSlot(ctx, my.unarySlots, "manifest")
+	if err != nil {
+		return err
+	}
+	defer release()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, my.manifest, nil)
 	if err != nil {
 		return err
@@ -441,7 +570,7 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 	}
 	if my.signer != nil {
 		if _, ok := core.IdentityFromContext(ctx); ok {
-			token, signErr := my.signer.Sign(ctx, operationDigest(request{}, "manifest"))
+			token, signErr := my.signer.Sign(ctx, operationDigest(request{}, "manifest", ""))
 			if signErr != nil {
 				return signErr
 			}
@@ -457,7 +586,7 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 		return nil
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("remote manifest status %d", response.StatusCode)
+		return remoteResponseError(response, "manifest", my.maxResponse)
 	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType != "application/json" {
@@ -475,7 +604,7 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 		if manifest.Revision < current.revision {
 			return fmt.Errorf("%w: %d", core.ErrControlStale, manifest.Revision)
 		}
-		if manifest.Revision != 0 && manifest.Revision == current.revision && current.snapshot.Fingerprint() != manifest.Fingerprint {
+		if manifest.Revision == current.revision && current.snapshot.Fingerprint() != manifest.Fingerprint {
 			return fmt.Errorf("%w: %d", core.ErrControlConflict, manifest.Revision)
 		}
 	}
@@ -524,6 +653,11 @@ func (my *RemoteEndpoint) ExecuteOperation(ctx context.Context, query string, va
 func (my *RemoteEndpoint) executeOperation(ctx context.Context, query string, variables map[string]any, operationName, fingerprint string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, my.timeout)
 	defer cancel()
+	release, err := acquireRemoteSlot(ctx, my.unarySlots, "execute")
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	payload := request{Query: query, OperationName: operationName, Variables: variables}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -541,8 +675,12 @@ func (my *RemoteEndpoint) executeOperation(ctx context.Context, query string, va
 	if fingerprint != "" {
 		request.Header.Set("GQL-Snapshot", fingerprint)
 	}
+	pin, _ := core.ExecutionPinFromContext(ctx)
+	if pin != "" {
+		request.Header.Set(executionPinHeader, pin)
+	}
 	if my.signer != nil {
-		token, signErr := my.signer.Sign(ctx, operationDigest(payload, fingerprint))
+		token, signErr := my.signer.Sign(ctx, operationDigest(payload, fingerprint, pin))
 		if signErr != nil {
 			return nil, signErr
 		}
@@ -553,6 +691,9 @@ func (my *RemoteEndpoint) executeOperation(ctx context.Context, query string, va
 		return nil, fmt.Errorf("remote execute unavailable: %w", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, remoteResponseError(response, "execute", my.maxResponse)
+	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType != responseType {
 		return nil, fmt.Errorf("remote execute status %d content type %q", response.StatusCode, mediaType)
@@ -560,7 +701,11 @@ func (my *RemoteEndpoint) executeOperation(ctx context.Context, query string, va
 	if fingerprint != "" && response.Header.Get("GQL-Snapshot") != fingerprint {
 		return nil, fmt.Errorf("remote execute snapshot mismatch")
 	}
-	return readLimited(response.Body, my.maxResponse)
+	limit := my.maxResponse
+	if requested := core.ResponseLimit(ctx); requested > 0 && requested < limit {
+		limit = requested
+	}
+	return readLimited(response.Body, limit)
 }
 
 // Subscribe consumes the GraphQL SSE single-operation protocol.
@@ -572,24 +717,36 @@ func (my *RemoteEndpoint) subscribeOperation(ctx context.Context, query string, 
 	if my.subscribe == "" {
 		return nil, fmt.Errorf("remote subscription unavailable")
 	}
+	release, err := acquireRemoteSlot(ctx, my.subscriptionSlots, "subscription")
+	if err != nil {
+		return nil, err
+	}
 	payload := request{Query: query, OperationName: operationName, Variables: variables}
 	body, err := json.Marshal(payload)
 	if err != nil {
+		release()
 		return nil, err
 	}
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	response, err, _ := my.openSubscription(streamCtx, payload, body, fingerprint)
 	if err != nil {
 		cancelStream()
+		release()
 		return nil, err
 	}
 	events := make(chan []byte, 1)
 	go func() {
+		defer release()
 		defer cancelStream()
 		defer close(events)
 		attempt := 0
+		window := my.sseRecoveryWindow
+		if window <= 0 {
+			window = remoteSSERecoveryWindow
+		}
+		deadline := time.Now().Add(window)
 		for {
-			complete, readErr := my.readSubscription(streamCtx, response.Body, events)
+			complete, readErr, progressed := my.readSubscriptionProgress(streamCtx, response.Body, events)
 			response.Body.Close()
 			if complete || streamCtx.Err() != nil {
 				return
@@ -598,18 +755,29 @@ func (my *RemoteEndpoint) subscribeOperation(ctx context.Context, query string, 
 				sendStreamError(streamCtx, events, readErr.Error())
 				return
 			}
+			if progressed {
+				attempt = 0
+				deadline = time.Now().Add(window)
+			} else {
+				// A successful handshake without a next event is not progress;
+				// count it toward the retry budget to avoid an EOF hot loop.
+				attempt++
+			}
 			for {
-				if attempt >= remoteSSEMaxRetries {
+				if time.Now().After(deadline) {
 					sendStreamError(streamCtx, events, "remote subscription retry limit exceeded")
 					return
 				}
-				if err := waitSubscriptionRetry(streamCtx, attempt); err != nil {
+				delay := my.retryDelay
+				if delay == nil {
+					delay = remoteRetryDelay
+				}
+				if err := waitSubscriptionRetryWith(streamCtx, attempt, delay); err != nil {
 					return
 				}
 				var retryable bool
 				response, err, retryable = my.openSubscription(streamCtx, payload, body, fingerprint)
 				if err == nil {
-					attempt = 0
 					break
 				}
 				if !retryable {
@@ -635,8 +803,12 @@ func (my *RemoteEndpoint) openSubscription(ctx context.Context, payload request,
 	if fingerprint != "" {
 		request.Header.Set("GQL-Snapshot", fingerprint)
 	}
+	pin, _ := core.ExecutionPinFromContext(ctx)
+	if pin != "" {
+		request.Header.Set(executionPinHeader, pin)
+	}
 	if my.signer != nil {
-		token, signErr := my.signer.Sign(ctx, operationDigest(payload, fingerprint))
+		token, signErr := my.signer.Sign(ctx, operationDigest(payload, fingerprint, pin))
 		if signErr != nil {
 			cancelAttempt()
 			return nil, signErr, false
@@ -677,8 +849,9 @@ func (my *RemoteEndpoint) openSubscription(ctx context.Context, payload request,
 	response := value.response
 	response.Body = &cancelReadCloser{ReadCloser: response.Body, cancel: cancelAttempt}
 	if response.StatusCode != http.StatusOK {
+		err := remoteResponseError(response, "subscription", my.maxResponse)
 		response.Body.Close()
-		return nil, fmt.Errorf("remote subscription status %d", response.StatusCode), response.StatusCode >= 500
+		return nil, err, remoteProblemRetryable(err, response.StatusCode >= 500)
 	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType != "text/event-stream" {
@@ -704,15 +877,25 @@ func (my *cancelReadCloser) Close() error {
 }
 
 func (my *RemoteEndpoint) readSubscription(ctx context.Context, body io.ReadCloser, events chan<- []byte) (bool, error) {
+	complete, err, _ := my.readSubscriptionProgress(ctx, body, events)
+	return complete, err
+}
+
+func (my *RemoteEndpoint) readSubscriptionProgress(ctx context.Context, body io.ReadCloser, events chan<- []byte) (bool, error, bool) {
 	idle := my.idleTimeout
 	if idle <= 0 {
 		idle = 30 * time.Second
 	}
 	watchdog := time.AfterFunc(idle, func() { _ = body.Close() })
 	defer watchdog.Stop()
+	limit := my.maxResponse
+	if requested := core.ResponseLimit(ctx); requested > 0 && requested < limit {
+		limit = requested
+	}
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 4096), int(my.maxResponse))
+	scanner.Buffer(make([]byte, 4096), int(limit))
 	event, data := "", make([]byte, 0, 1024)
+	progressed := false
 	for scanner.Scan() {
 		watchdog.Reset(idle)
 		line := scanner.Text()
@@ -721,8 +904,8 @@ func (my *RemoteEndpoint) readSubscription(ctx context.Context, body io.ReadClos
 			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
 			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if int64(len(data)+len(payload)+1) > my.maxResponse {
-				return false, fmt.Errorf("remote subscription response limit exceeded")
+			if int64(len(data)+len(payload)+1) > limit {
+				return false, fmt.Errorf("remote subscription response limit exceeded"), progressed
 			}
 			if len(data) > 0 {
 				data = append(data, '\n')
@@ -730,29 +913,30 @@ func (my *RemoteEndpoint) readSubscription(ctx context.Context, body io.ReadClos
 			data = append(data, payload...)
 		case line == "":
 			if event == "complete" {
-				return true, nil
+				return true, nil, progressed
 			}
 			if event == "next" && len(data) > 0 {
+				progressed = true
 				frame := append([]byte(nil), data...)
 				select {
 				case events <- frame:
 				case <-ctx.Done():
-					return false, ctx.Err()
+					return false, ctx.Err(), progressed
 				}
 			}
 			event, data = "", data[:0]
 		}
 	}
 	if ctx.Err() != nil {
-		return false, ctx.Err()
+		return false, ctx.Err(), progressed
 	}
 	if errors.Is(scanner.Err(), bufio.ErrTooLong) {
-		return false, fmt.Errorf("remote subscription response limit exceeded")
+		return false, fmt.Errorf("remote subscription response limit exceeded"), progressed
 	}
 	if scanner.Err() != nil {
-		return false, fmt.Errorf("%w: %v", errRemoteSSEStream, scanner.Err())
+		return false, fmt.Errorf("%w: %v", errRemoteSSEStream, scanner.Err()), progressed
 	}
-	return false, io.EOF
+	return false, io.EOF, progressed
 }
 
 func retryableReadError(err error) bool {
@@ -760,10 +944,11 @@ func retryableReadError(err error) bool {
 }
 
 func waitSubscriptionRetry(ctx context.Context, attempt int) error {
-	delay := remoteSSEBackoff * time.Duration(1<<attempt)
-	if jitter := delay / 2; jitter > 0 {
-		delay += time.Duration(rand.Int63n(int64(jitter)))
-	}
+	return waitSubscriptionRetryWith(ctx, attempt, remoteRetryDelay)
+}
+
+func waitSubscriptionRetryWith(ctx context.Context, attempt int, delayFunc func(int) time.Duration) error {
+	delay := delayFunc(attempt)
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
@@ -772,6 +957,17 @@ func waitSubscriptionRetry(ctx context.Context, attempt int) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func remoteRetryDelay(attempt int) time.Duration {
+	delay := remoteSSEBackoff * time.Duration(1<<min(attempt, 6))
+	if delay > remoteSSEMaxBackoff {
+		delay = remoteSSEMaxBackoff
+	}
+	if jitter := delay / 2; jitter > 0 {
+		delay += time.Duration(rand.Int63n(int64(jitter)))
+	}
+	return delay
 }
 
 func sendStreamError(ctx context.Context, events chan<- []byte, message string) {

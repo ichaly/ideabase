@@ -3,6 +3,8 @@ package transport
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +12,28 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	core "github.com/ichaly/ideabase/gql"
 )
+
+func requireTransportError(t *testing.T, w *httptest.ResponseRecorder, code string) {
+	t.Helper()
+	if got := w.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Fatalf("content type = %q", got)
+	}
+	var body struct {
+		Error struct {
+			Code      string `json:"code"`
+			Retryable bool   `json:"retryable"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body.Error.Code != code {
+		t.Fatalf("error code = %q, want %q", body.Error.Code, code)
+	}
+}
 
 func TestTransportConstructorsHaveOneOptionsContract(t *testing.T) {
 	if reflect.TypeOf(NewHandler).IsVariadic() || reflect.TypeOf(NewSubscriptionHandler).IsVariadic() {
@@ -25,6 +48,45 @@ type testEndpoint struct {
 	body  []byte
 	err   error
 	name  string
+}
+
+type effectivePinEndpoint struct {
+	testEndpoint
+	artifact core.SchemaArtifact
+}
+
+type acceptVerifier struct{}
+
+func (acceptVerifier) Verify(ctx context.Context, _, _ string) (context.Context, error) {
+	return ctx, nil
+}
+
+type effectiveRevision struct {
+	testEndpoint
+	snapshot *core.Snapshot
+	artifact core.SchemaArtifact
+}
+
+func (e *effectiveRevision) Snapshot() (*core.Snapshot, error) { return e.snapshot, nil }
+func (e *effectiveRevision) EffectiveSchema(context.Context) (core.SchemaArtifact, error) {
+	return e.artifact, nil
+}
+
+type effectiveHistory struct{ current, pinned *effectiveRevision }
+
+func (e *effectiveHistory) Snapshot() (*core.Snapshot, error) { return e.current.snapshot, nil }
+func (e *effectiveHistory) ExecuteOperation(ctx context.Context, query string, variables map[string]any, operationName string) ([]byte, error) {
+	return e.current.ExecuteOperation(ctx, query, variables, operationName)
+}
+func (e *effectiveHistory) ForSnapshot(fingerprint string) (core.ComposableEndpoint, error) {
+	if fingerprint != e.pinned.snapshot.Fingerprint() {
+		return nil, fmt.Errorf("snapshot unavailable")
+	}
+	return e.pinned, nil
+}
+
+func (e *effectivePinEndpoint) EffectiveSchema(context.Context) (core.SchemaArtifact, error) {
+	return e.artifact, nil
 }
 
 func (e *testEndpoint) ExecuteOperation(ctx context.Context, query string, vars map[string]any, name string) ([]byte, error) {
@@ -58,6 +120,67 @@ func TestPOSTExecutesJSONWithNumberAndGraphQLResponse(t *testing.T) {
 	}
 	if ep.name != "X" {
 		t.Fatalf("operationName was not forwarded: %q", ep.name)
+	}
+}
+
+func TestHTTPExecutionPinHeaderIsValidatedWhenPresent(t *testing.T) {
+	ep := &effectivePinEndpoint{testEndpoint: testEndpoint{body: []byte(`{"data":{"ok":true}}`)}, artifact: core.SchemaArtifact{ExecutionPin: "pin"}}
+	h := NewHandler(ep, Options{})
+	for _, tc := range []struct {
+		name, pin    string
+		status, code int
+	}{
+		{name: "matching", pin: "pin", status: http.StatusOK},
+		{name: "mismatch", pin: "stale", status: http.StatusConflict, code: 1},
+		{name: "direct client", status: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`)
+			if tc.pin != "" {
+				r.Header.Set("GQL-Execution-Pin", tc.pin)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != tc.status {
+				t.Fatalf("status = %d, want %d", w.Code, tc.status)
+			}
+			if tc.code != 0 {
+				requireTransportError(t, w, "SNAPSHOT_CONFLICT")
+			}
+			if tc.name == "matching" {
+				if pin, ok := core.ExecutionPinFromContext(ep.ctx); !ok || pin != tc.pin {
+					t.Fatalf("execution context pin = %q/%t", pin, ok)
+				}
+			}
+		})
+	}
+}
+
+func TestHTTPExecutionPinUsesHistoricalSnapshotView(t *testing.T) {
+	oldSnapshot := newArtifact(t, "type Query { x: String }")
+	currentSnapshot := newArtifact(t, "type Query { x: String! }")
+	artifact := func(snapshot *core.Snapshot) core.SchemaArtifact {
+		return core.FinalizeSchemaArtifact(core.SchemaArtifact{Schema: snapshot.Schema(), Fingerprint: schemaDigest(snapshot.Schema()), StructuralFingerprint: snapshot.Fingerprint(), Capabilities: snapshot.Capabilities()})
+	}
+	old := &effectiveRevision{testEndpoint: testEndpoint{body: []byte(`{"data":{"x":"old"}}`)}, snapshot: oldSnapshot, artifact: artifact(oldSnapshot)}
+	current := &effectiveRevision{testEndpoint: testEndpoint{body: []byte(`{"data":{"x":"new"}}`)}, snapshot: currentSnapshot, artifact: artifact(currentSnapshot)}
+	handler := NewHandler(&effectiveHistory{current: current, pinned: old}, Options{Delegation: acceptVerifier{}})
+	request := func(pin string) *http.Request {
+		r := req(http.MethodPost, "application/json", responseType, `{"query":"{x}"}`)
+		r.Header.Set("Authorization", delegationScheme+"token")
+		r.Header.Set("GQL-Snapshot", oldSnapshot.Fingerprint())
+		r.Header.Set(executionPinHeader, pin)
+		return r
+	}
+	matching := httptest.NewRecorder()
+	handler.ServeHTTP(matching, request(old.artifact.ExecutionPin))
+	if matching.Code != http.StatusOK || old.ctx == nil {
+		t.Fatalf("historical execution status/body = %d/%s", matching.Code, matching.Body.String())
+	}
+	mismatch := httptest.NewRecorder()
+	handler.ServeHTTP(mismatch, request(current.artifact.ExecutionPin))
+	if mismatch.Code != http.StatusConflict {
+		t.Fatalf("mismatched pin status/body = %d/%s", mismatch.Code, mismatch.Body.String())
 	}
 }
 
@@ -99,17 +222,39 @@ func TestPOSTRejectsTrailingJSONAndWrongMediaTypes(t *testing.T) {
 	}
 }
 
+func TestTransportFailuresUseStableJSONCodes(t *testing.T) {
+	tests := []struct {
+		name, code string
+		request    *http.Request
+	}{
+		{name: "accept", code: "NOT_ACCEPTABLE", request: req(http.MethodPost, "application/json", "text/plain", `{}`)},
+		{name: "content type", code: "UNSUPPORTED_MEDIA_TYPE", request: req(http.MethodPost, "text/plain", "application/json", `{}`)},
+		{name: "method", code: "METHOD_NOT_ALLOWED", request: req(http.MethodPut, "application/json", "application/json", `{}`)},
+		{name: "missing query", code: "INVALID_REQUEST", request: req(http.MethodPost, "application/json", "application/json", `{}`)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			NewHandler(&testEndpoint{}, Options{}).ServeHTTP(w, test.request)
+			requireTransportError(t, w, test.code)
+		})
+	}
+}
+
 func TestRejectsInvalidEndpointGraphQLResponse(t *testing.T) {
 	for _, body := range []string{`not-json`, `{}`, `{"data":null}`, `{"errors":[]}`} {
 		w := httptest.NewRecorder()
 		NewHandler(&testEndpoint{body: []byte(body)}, Options{}).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
-		if w.Code != http.StatusInternalServerError || w.Header().Get("Content-Type") == responseType {
+		if w.Code != http.StatusInternalServerError || w.Header().Get("Content-Type") != responseType || !bytes.Contains(w.Body.Bytes(), []byte(`"code":"BAD_GATEWAY_RESPONSE"`)) {
 			t.Fatalf("invalid endpoint response %q = %d/%q", body, w.Code, w.Header().Get("Content-Type"))
 		}
 	}
 }
 
 func TestGraphQLResponseShapeDoesNotCopyLargeData(t *testing.T) {
+	if raceDetectorEnabled {
+		t.Skip("race instrumentation changes allocation counts")
+	}
 	body := []byte(`{"data":{"value":"` + strings.Repeat("x", 1<<20) + `"}}`)
 	allocations := testing.AllocsPerRun(100, func() {
 		data, errors, valid := graphQLResponseShape(body)
@@ -195,6 +340,22 @@ func TestMalformedDocumentAndRequestShapeFailBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestGraphQLRequestErrorsAlwaysHaveCode(t *testing.T) {
+	w := httptest.NewRecorder()
+	NewHandler(&testEndpoint{}, Options{}).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{"}`))
+	var body struct {
+		Errors []struct {
+			Extensions map[string]any `json:"extensions"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Errors) != 1 || body.Errors[0].Extensions["code"] != "GRAPHQL_PARSE_FAILED" {
+		t.Fatalf("errors = %#v", body.Errors)
+	}
+}
+
 func TestRequestBodyLimitAndDeadline(t *testing.T) {
 	ep := &testEndpoint{body: []byte(`{"data":{}}`)}
 	h := NewHandler(ep, Options{MaxBodyBytes: 8, Timeout: time.Second})
@@ -219,7 +380,7 @@ func TestResponseBodyLimitRejectsBeforeWritingGraphQL(t *testing.T) {
 	ep := &testEndpoint{body: []byte(`{"data":{"value":"` + strings.Repeat("x", 64) + `"}}`)}
 	w := httptest.NewRecorder()
 	NewHandler(ep, Options{MaxResponseBytes: 32}).ServeHTTP(w, req(http.MethodPost, "application/json", "application/graphql-response+json", `{"query":"{x}"}`))
-	if w.Code != http.StatusInternalServerError || w.Header().Get("Content-Type") == responseType || bytes.Contains(w.Body.Bytes(), ep.body) {
+	if w.Code != http.StatusInternalServerError || w.Header().Get("Content-Type") != responseType || bytes.Contains(w.Body.Bytes(), ep.body) || !bytes.Contains(w.Body.Bytes(), []byte(`"code":"LIMIT_EXCEEDED"`)) {
 		t.Fatalf("oversized response = %d/%q %s", w.Code, w.Header().Get("Content-Type"), w.Body.Bytes())
 	}
 }

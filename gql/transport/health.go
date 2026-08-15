@@ -12,6 +12,7 @@ import (
 )
 
 const healthTimeout = 5 * time.Second
+const healthMaxConcurrent = 8
 
 type healthEndpoint interface {
 	Health(context.Context) (core.HealthReport, error)
@@ -21,6 +22,9 @@ type healthStatus struct {
 	Ready                 bool   `json:"ready"`
 	SnapshotOK            bool   `json:"snapshotOk"`
 	Snapshot              string `json:"snapshot,omitempty"`
+	ControlRevision       uint64 `json:"controlRevision"`
+	RouteRevision         uint64 `json:"routeRevision"`
+	SecurityRevision      uint64 `json:"securityRevision"`
 	DatabaseOK            bool   `json:"databaseOk"`
 	DatabaseCode          string `json:"databaseCode,omitempty"`
 	CDCConfigured         bool   `json:"cdcConfigured"`
@@ -30,14 +34,21 @@ type healthStatus struct {
 }
 
 func NewHealthHandler(endpoint healthEndpoint) http.Handler {
+	concurrency := make(chan struct{}, healthMaxConcurrent)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if endpoint == nil {
-			http.Error(w, "health unavailable", http.StatusServiceUnavailable)
+			writeProblem(w, http.StatusServiceUnavailable, "HEALTH_UNAVAILABLE", "health unavailable", true)
 			return
 		}
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeProblem(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed", false)
+			return
+		}
+		select {
+		case concurrency <- struct{}{}:
+		default:
+			writeProblem(w, http.StatusServiceUnavailable, "HEALTH_BUSY", "health check busy", true)
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
@@ -47,6 +58,7 @@ func NewHealthHandler(endpoint healthEndpoint) http.Handler {
 			err    error
 		}, 1)
 		go func() {
+			defer func() { <-concurrency }()
 			report, err := endpoint.Health(ctx)
 			result <- struct {
 				report core.HealthReport
@@ -81,7 +93,7 @@ func NewHealthHandler(endpoint healthEndpoint) http.Handler {
 		if report.CDCConfigured && !report.CDCConnected {
 			cdcCode = "DISCONNECTED"
 		}
-		_ = json.NewEncoder(w).Encode(healthStatus{Ready: report.Ready, SnapshotOK: report.SnapshotOK, Snapshot: report.SnapshotFingerprint, DatabaseOK: report.DatabaseOK, DatabaseCode: databaseCode, CDCConfigured: report.CDCConfigured, CDCConnected: report.CDCConnected, CDCCode: cdcCode, SubscriptionAvailable: report.SubscriptionAvailable})
+		_ = json.NewEncoder(w).Encode(healthStatus{Ready: report.Ready, SnapshotOK: report.SnapshotOK, Snapshot: report.SnapshotFingerprint, ControlRevision: report.ControlRevision, RouteRevision: report.RouteRevision, SecurityRevision: report.SecurityRevision, DatabaseOK: report.DatabaseOK, DatabaseCode: databaseCode, CDCConfigured: report.CDCConfigured, CDCConnected: report.CDCConnected, CDCCode: cdcCode, SubscriptionAvailable: report.SubscriptionAvailable})
 	})
 }
 
@@ -99,6 +111,11 @@ func (my *RemoteEndpoint) healthFor(ctx context.Context, expected string) (core.
 	}
 	ctx, cancel := context.WithTimeout(ctx, my.timeout)
 	defer cancel()
+	release, err := acquireRemoteSlot(ctx, my.unarySlots, "health")
+	if err != nil {
+		return core.HealthReport{}, err
+	}
+	defer release()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, my.health, nil)
 	if err != nil {
 		return core.HealthReport{}, err
@@ -112,6 +129,9 @@ func (my *RemoteEndpoint) healthFor(ctx context.Context, expected string) (core.
 		return core.HealthReport{}, fmt.Errorf("remote health unavailable: %w", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return core.HealthReport{}, remoteResponseError(response, "health", my.maxResponse)
+	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType != "application/json" {
 		return core.HealthReport{}, fmt.Errorf("remote health content type %q", mediaType)
@@ -120,12 +140,12 @@ func (my *RemoteEndpoint) healthFor(ctx context.Context, expected string) (core.
 	if err := decodeResponse(response.Body, my.maxResponse, &status); err != nil {
 		return core.HealthReport{}, fmt.Errorf("remote health response: %w", err)
 	}
-	report := core.HealthReport{Ready: status.Ready, SnapshotOK: status.SnapshotOK, SnapshotFingerprint: status.Snapshot, DatabaseOK: status.DatabaseOK, DatabaseError: status.DatabaseCode, CDCConfigured: status.CDCConfigured, CDCConnected: status.CDCConnected, CDCError: status.CDCCode, SubscriptionAvailable: status.SubscriptionAvailable}
+	report := core.HealthReport{Ready: status.Ready, SnapshotOK: status.SnapshotOK, SnapshotFingerprint: status.Snapshot, ControlRevision: status.ControlRevision, RouteRevision: status.RouteRevision, SecurityRevision: status.SecurityRevision, DatabaseOK: status.DatabaseOK, DatabaseError: status.DatabaseCode, CDCConfigured: status.CDCConfigured, CDCConnected: status.CDCConnected, CDCError: status.CDCCode, SubscriptionAvailable: status.SubscriptionAvailable}
 	if expected != "" && status.Snapshot != expected {
 		report.Ready, report.SnapshotOK = false, false
 		return report, fmt.Errorf("remote health snapshot mismatch")
 	}
-	if response.StatusCode != http.StatusOK || !status.Ready {
+	if !status.Ready {
 		return report, fmt.Errorf("remote endpoint is not ready")
 	}
 	return report, nil

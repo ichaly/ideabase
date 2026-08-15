@@ -62,6 +62,23 @@ func TestGovernanceUpsertConflictUsesUpdatePolicy(t *testing.T) {
 	require.Equal(t, 1, strings.Count(ctx.String(), ` = ANY(`), "one role must bind its filter and check atomically")
 }
 
+func TestGovernanceUpsertRejectsConflictTargetOutsideScope(t *testing.T) {
+	c := &protocol.Class{Name: "User", Table: "users",
+		Scope:       []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}},
+		Constraints: []*protocol.Constraint{{Name: "global_email", Kind: protocol.ConstraintUnique, Columns: []string{"email"}}},
+		Fields: map[string]*protocol.Field{
+			"tenant": {Name: "tenant", Column: "tenant_id"}, "email": {Name: "email", Column: "email"}, "name": {Name: "name", Column: "name"},
+		}}
+	ctx := compiler.NewContext(testHoster{class: c}, `"`, nil)
+	defer ctx.Release()
+	m := &mutation{field: &ast.Field{Name: "upsertUsers", Arguments: ast.ArgumentList{
+		{Name: protocol.INPUT, Value: &ast.Value{Kind: ast.ListValue, Children: []*ast.ChildValue{{Value: &ast.Value{Kind: ast.ObjectValue, Children: []*ast.ChildValue{{Name: "email", Value: &ast.Value{Kind: ast.StringValue, Raw: "a@x"}}, {Name: "name", Value: &ast.Value{Kind: ast.StringValue, Raw: "A"}}}}}}}},
+		{Name: protocol.ON, Value: &ast.Value{Kind: ast.EnumValue, Raw: "UNIQUE_1"}},
+	}}, class: c, op: protocol.UPSERT, shape: compiler.ShapeBulk}
+	require.ErrorContains(t, (&Dialect{}).buildUpsert(ctx, m), "冲突目标无效")
+	require.Empty(t, ctx.String())
+}
+
 func TestLegacyResultUsesRequestedAliases(t *testing.T) {
 	ctx := compiler.NewContext(nil, `"`, nil)
 	defer ctx.Release()
@@ -92,7 +109,7 @@ func TestGovernanceMutationFormsAndSoftDelete(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		kind compiler.OperationShape
-	}{{"updateUserByPk", compiler.ShapeSingleByPK}, {"updateUsersMany", compiler.ShapeBulkResult}, {"deleteUserByPk", compiler.ShapeSingleByPK}, {"deleteUsersMany", compiler.ShapeBulkResult}, {"restoreUserByPk", compiler.ShapeSingleByPK}, {"restoreUsersMany", compiler.ShapeBulkResult}} {
+	}{{"updateUser", compiler.ShapeSingleByPK}, {"updateUsersMany", compiler.ShapeBulkResult}, {"deleteUserByPk", compiler.ShapeSingleByPK}, {"deleteUsersMany", compiler.ShapeBulkResult}, {"restoreUserByPk", compiler.ShapeSingleByPK}, {"restoreUsersMany", compiler.ShapeBulkResult}} {
 		m, err := parseMutation(ctx, &ast.Field{Name: tc.name})
 		require.NoError(t, err)
 		require.Equal(t, tc.kind, m.shape, tc.name)
@@ -181,6 +198,17 @@ func (my *_DialectSuite) TestGovernanceRelationUpdateInjectsTargetPolicy() {
 	my.Contains(sql, `"sys_post"."owner_id" = $`)
 }
 
+func (my *_DialectSuite) TestAffectedCountOnlyMutationReturnsConstant() {
+	doc, gqlErr := gqlparser.LoadQuery(my.schema, `mutation { updateUsers(input: { name: "x" }, where: { id: { gt: 0 } }) { affectedCount } }`)
+	my.Require().Empty(gqlErr)
+	compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
+	my.Require().NoError(err)
+	sql, _, err := compile.Build(doc.Operations[0], nil)
+	my.Require().NoError(err)
+	my.Contains(sql, `RETURNING 1`)
+	my.NotContains(sql, `RETURNING *`)
+}
+
 func (my *_DialectSuite) TestGovernanceManyToManyDisconnectInjectsTargetPolicy() {
 	meta, schema, dialect := my.newSuite(map[string]interface{}{
 		"metadata.classes": map[string]*internal.ClassConfig{
@@ -201,6 +229,13 @@ func (my *_DialectSuite) TestGovernanceManyToManyDisconnectInjectsTargetPolicy()
 				}},
 				Fields: map[string]*internal.FieldConfig{
 					"id": {Type: "ID", Column: "id", IsPrimary: true}, "ownerId": {Type: "ID", Column: "owner_id"},
+				},
+			},
+			"PostTag": {
+				Table: "sys_post_tag", PrimaryKeys: []string{"postId", "tagId"},
+				Fields: map[string]*internal.FieldConfig{
+					"postId": {Type: "ID", Column: "post_id", IsPrimary: true},
+					"tagId":  {Type: "ID", Column: "tag_id", IsPrimary: true},
 				},
 			},
 		},
@@ -227,7 +262,7 @@ func (h testHoster) GetNode(name string) (*protocol.Class, bool) {
 func (h testHoster) SetVersion(string) {}
 func (h testHoster) LookupOperation(coordinate string) (compiler.OperationSpec, bool) {
 	variants := map[string]compiler.OperationSpec{
-		"Mutation.updateUserByPk":   {Operation: protocol.OP_UPDATE, Shape: compiler.ShapeSingleByPK},
+		"Mutation.updateUser":       {Operation: protocol.OP_UPDATE, Shape: compiler.ShapeSingleByPK},
 		"Mutation.updateUsersMany":  {Operation: protocol.OP_UPDATE, Shape: compiler.ShapeBulkResult},
 		"Mutation.deleteUser":       {Operation: protocol.OP_DELETE},
 		"Mutation.deleteUserByPk":   {Operation: protocol.OP_DELETE, Shape: compiler.ShapeSingleByPK},

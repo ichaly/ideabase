@@ -66,6 +66,7 @@ type (
 		Errors     gqlerror.List          `json:"errors,omitempty"`     // 错误信息列表
 		Extensions map[string]interface{} `json:"extensions,omitempty"` // 执行状态元数据
 		raw        []byte                 // 直通字节：无resolver时DB返回的__root JSON原样输出
+		encoded    []byte                 // 共享订阅事件：一次编码，订阅者仅复制不可变字节
 		nullData   bool                   // 执行期Non-Null失败需显式输出data:null
 	}
 )
@@ -388,6 +389,9 @@ func (my *Engine) loadDocuments(dir string) error {
 
 // loadDocument 解析并注册文档中的命名操作
 func (my *Engine) loadDocument(content string) error {
+	if len(content) > maxDocumentBytes {
+		return fmt.Errorf("GraphQL document size limit exceeded")
+	}
 	doc, errs := loadQuery(my.schema, content, my.metadata.MaxTokens(), my.validation)
 	if len(errs) > 0 {
 		return errs
@@ -420,12 +424,12 @@ func (my *Engine) loadDocument(content string) error {
 		// 依赖变量内容的操作（volatile）缓存AST，执行期免解析重编译
 		operation, introspection := splitIntrospection(operation)
 		if introspection != nil && !my.options().Introspection {
-			return fmt.Errorf("自省查询已关闭（schema.introspection=false）")
+			return &publicFailure{"自省查询已关闭（schema.introspection=false）", "INTROSPECTION_DISABLED"}
 		}
 		if operation == nil { // 自省无需SQL预热，执行期直接投影当前schema
 			continue
 		}
-		key := planKey{operation: operation.Name, query: content}
+		key := planKeyFor(operation.Name, content, "", "")
 		if my.needsRootExecution(operation) {
 			my.cache.Put(key, &planEntry{
 				operation:    operation,
@@ -439,20 +443,11 @@ func (my *Engine) loadDocument(content string) error {
 			log.Warn().Err(err).Str("operation", operation.Name).Msg("持久化文档预热编译失败，执行期将重试编译")
 		} else if _, snapshotErr := my.Snapshot(); snapshotErr == nil && my.baseView != nil {
 			// Startup prewarm and runtime lookup share the effective-view key.
-			my.cache.Put(planKey{operation: operation.Name, query: content,
-				view: my.baseView.artifact.Fingerprint + "\x00" + my.baseView.artifact.PermissionSignature}, entry)
+			my.cache.Put(planKeyFor(operation.Name, content, "",
+				my.baseView.artifact.Fingerprint+"\x00"+my.baseView.artifact.PermissionSignature), entry)
 		}
 	}
 	return nil
-}
-
-// 接口实现方法
-
-// Path 实现Plugin接口的Path方法，返回插件的基础路径
-// 返回: GraphQL API的基础路径 ("/graphql")
-// 此方法使Engine能够作为Fiber的插件集成
-func (my *Engine) Path() string {
-	return "/graphql"
 }
 
 // 主要公开方法
@@ -474,7 +469,7 @@ func (my *Engine) executeBytes(ctx context.Context, query string, variables map[
 	}
 	done := my.startPhase(ctx, PhaseExecute)
 	reply := my.execute(ctx, query, variables, operationName)
-	body, err := reply.MarshalJSON()
+	body, err := marshalReply(ctx, reply)
 	if done != nil {
 		done(observationReplyCode(reply, err))
 	}
@@ -603,11 +598,17 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 	}
 
 	done = my.startPhase(ctx, PhaseDatabase)
+	if mutationState != "" {
+		mutationState = "indeterminate"
+	}
 	data, err := my.fetch(ctx, plan, variables)
 	if done != nil {
 		done(observationErrorCode(err))
 	}
 	if err != nil {
+		if mutationState != "" && mutationDefinitelyRolledBack(err) {
+			mutationState = "rolled_back"
+		}
 		r.Errors = GraphQLErrors(err)
 		return r
 	}
@@ -893,20 +894,20 @@ func (my *Engine) planWithView(view *effectiveView, query, operationName string,
 		if err != nil {
 			return nil, err
 		}
-		key := planKey{operation: operationName, query: query, shape: selectionShape(operation.SelectionSet), view: view.artifact.Fingerprint + "\x00" + view.artifact.PermissionSignature}
+		key := planKeyFor(operationName, query, selectionShape(operation.SelectionSet), view.artifact.Fingerprint+"\x00"+view.artifact.PermissionSignature)
 		if entry, ok := my.cache.Get(key); ok {
 			if err := my.validateMaxCost(operation, variables); err != nil {
 				return nil, err
 			}
 			return my.preparedPlan(view, entry, variables)
 		}
-		entry, plan, err := my.miss(view, key, operation, variables)
+		entry, plan, err := my.miss(view, key, query, operation, variables)
 		if err != nil || plan != nil {
 			return plan, err
 		}
 		return my.preparedPlan(view, entry, variables)
 	}
-	key := planKey{operation: operationName, query: query, view: view.artifact.Fingerprint + "\x00" + view.artifact.PermissionSignature}
+	key := planKeyFor(operationName, query, "", view.artifact.Fingerprint+"\x00"+view.artifact.PermissionSignature)
 	entry, ok := my.cache.Get(key)
 	if !ok {
 		flightKey := key.view + "\x00" + operationName + "\x00" + query
@@ -918,7 +919,7 @@ func (my *Engine) planWithView(view *effectiveView, query, operationName string,
 			if strings.IndexByte(query, '$') >= 0 {
 				attempt = cloneVariables(variables) // 失败领跑者不污染自身重试入参
 			}
-			entry, plan, err := my.miss(view, key, nil, attempt)
+			entry, plan, err := my.miss(view, key, query, nil, attempt)
 			lead = plan
 			leader = err == nil
 			if leader {
@@ -945,7 +946,7 @@ func (my *Engine) planWithView(view *effectiveView, query, operationName string,
 			}
 			retryAttempt := cloneVariables(variables)
 			value, err, _ = my.flight.Do("retry\x00"+flightKey, func() (interface{}, error) {
-				entry, plan, compileErr := my.miss(view, key, operation, retryAttempt)
+				entry, plan, compileErr := my.miss(view, key, query, operation, retryAttempt)
 				lead = plan
 				if compileErr == nil {
 					assignVariables(variables, retryAttempt)
@@ -959,7 +960,7 @@ func (my *Engine) planWithView(view *effectiveView, query, operationName string,
 				// cursor等volatile编译错误仍可能与值相关，最后用
 				// 当前请求独立确认，不返回其他请求的错误。
 				finalAttempt := cloneVariables(variables)
-				entry, lead, err = my.miss(view, key, operation, finalAttempt)
+				entry, lead, err = my.miss(view, key, query, operation, finalAttempt)
 				if err != nil {
 					return nil, err
 				}
@@ -1012,10 +1013,10 @@ func (my *Engine) preparedPlan(view *effectiveView, entry *planEntry, variables 
 
 // miss 缓存未命中的singleflight领跑者：落缓存条目并带回本次
 // 编译计划；重试路径可传入已校验operation，正常路径在flight内解析。
-func (my *Engine) miss(view *effectiveView, key planKey, operation *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
+func (my *Engine) miss(view *effectiveView, key planKey, query string, operation *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
 	if operation == nil {
 		var err error
-		operation, err = my.parseWithView(view, key.query, key.operation, variables)
+		operation, err = my.parseWithView(view, query, key.operation, variables)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1026,7 +1027,7 @@ func (my *Engine) miss(view *effectiveView, key planKey, operation *ast.Operatio
 	operation, introspection := splitIntrospection(operation)
 	if introspection != nil {
 		if !my.options().Introspection {
-			return nil, nil, fmt.Errorf("自省查询已关闭（schema.introspection=false）")
+			return nil, nil, &publicFailure{"自省查询已关闭（schema.introspection=false）", "INTROSPECTION_DISABLED"}
 		}
 		if operation == nil {
 			return nil, nil, &introQuery{operation: introspection}
@@ -1119,7 +1120,7 @@ func (my *Engine) validateMaxCost(operation *ast.OperationDefinition, variables 
 	}
 	cost := operationCost(operation, variables, my.metadata.DefaultLimit(), snapshot.index)
 	if cost > my.metadata.MaxCost() {
-		return fmt.Errorf("查询成本%d超过上限%d（schema.max-cost可调，0=不限制）", cost, my.metadata.MaxCost())
+		return &publicFailure{fmt.Sprintf("查询成本%d超过上限%d", cost, my.metadata.MaxCost()), "QUERY_COST_EXCEEDED"}
 	}
 	return nil
 }

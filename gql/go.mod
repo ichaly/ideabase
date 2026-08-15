@@ -1,10 +1,8 @@
 module github.com/ichaly/ideabase/gql
 
-go 1.26.5
+go 1.26.6
 
 require (
-	github.com/fasthttp/websocket v1.5.12
-	github.com/gofiber/fiber/v3 v3.4.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/huandu/go-clone v1.7.3
 	github.com/iancoleman/strcase v0.3.0
@@ -21,7 +19,6 @@ require (
 	github.com/sony/sonyflake v1.3.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.38.0
-	github.com/valyala/fasthttp v1.72.0
 	github.com/vektah/gqlparser/v2 v2.5.36
 	golang.org/x/perf v0.0.0-20260709024250-82a0b07e230d
 	golang.org/x/sync v0.22.0
@@ -60,6 +57,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/gofiber/fiber/v3 v3.0.0-rc.3 // indirect
 	github.com/gofiber/schema v1.8.0 // indirect
 	github.com/gofiber/utils/v2 v2.1.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
@@ -104,7 +102,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/redis/go-redis/v9 v9.17.2 // indirect
-	github.com/savsgio/gotils v0.0.0-20240704082632-aef3928b8a38 // indirect
 	github.com/shirou/gopsutil/v4 v4.25.5 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/sqids/sqids-go v0.4.1 // indirect
@@ -112,6 +109,7 @@ require (
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	github.com/valyala/fasthttp v1.72.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.49.0 // indirect

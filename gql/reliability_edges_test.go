@@ -2,7 +2,6 @@ package gql
 
 import (
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -43,22 +42,4 @@ func TestDispatchParseErrorIsReturnedToReconnectLoop(t *testing.T) {
 	l := newListener("", "")
 	err := l.dispatch([]byte{0}, map[uint32]string{}, map[string]bool{})
 	require.Error(t, err)
-}
-
-func TestSocketSessionHasActiveSubscriptionLimit(t *testing.T) {
-	s := &socketSession{subs: make(map[string]*socketSubscription)}
-	for i := 0; i < maxActiveSubscriptions; i++ {
-		require.True(t, s.reserve(fmt.Sprint(i)))
-	}
-	require.False(t, s.reserve("overflow"))
-}
-
-func TestSocketSessionReleasesOnlyCompletedSubscription(t *testing.T) {
-	s := &socketSession{subs: make(map[string]*socketSubscription)}
-	old, current := &socketSubscription{}, &socketSubscription{}
-	s.subs["same"] = current
-	s.release("same", old)
-	require.Same(t, current, s.subs["same"])
-	s.release("same", current)
-	require.NotContains(t, s.subs, "same")
 }

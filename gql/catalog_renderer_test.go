@@ -131,7 +131,7 @@ func TestRendererUsesTypedCompositePrimaryKey(t *testing.T) {
 	require.Contains(t, schema, "id: Int!")
 	require.Contains(t, schema, "title: String!")
 	require.Contains(t, schema, "catalogInputs(\n    key: CatalogInputKeyInput")
-	require.Contains(t, schema, "updateCatalogInputByPk(key: CatalogInputKeyInput!, input: CatalogInputUpdateInput!)")
+	require.Contains(t, schema, "updateCatalogInput(key: CatalogInputKeyInput!, input: CatalogInputUpdateInput!)")
 	require.Contains(t, schema, "deleteCatalogInputByPk(key: CatalogInputKeyInput!)")
-	require.NotContains(t, schema, "updateCatalogInputByPk(id:")
+	require.NotContains(t, schema, "updateCatalogInputByPk")
 }

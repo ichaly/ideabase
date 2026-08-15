@@ -68,6 +68,19 @@ func TestConflictTargetsExcludeDeferrableAndUnsafeIndexes(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestUpsertConflictTargetsRequireEveryScopeColumn(t *testing.T) {
+	class := &Class{
+		Scope: []ScopeRule{{Column: "tenant_id"}},
+		Constraints: []*Constraint{
+			{Name: "global_code", Kind: ConstraintUnique, Columns: []string{"code"}},
+			{Name: "tenant_code", Kind: ConstraintUnique, Columns: []string{"tenant_id", "code"}},
+		},
+	}
+	require.Equal(t, []Key{{Name: "UNIQUE_2", Columns: []string{"tenant_id", "code"}}}, class.UpsertConflictTargets())
+	_, ok := class.UpsertConflictTarget("UNIQUE_1")
+	require.False(t, ok)
+}
+
 func TestRoutineValidationRejectsIncompleteCatalogFacts(t *testing.T) {
 	routine := &Routine{Schema: "public", Name: "lookup", Kind: RoutineFunction, Volatility: RoutineVolatilityStable}
 	require.ErrorContains(t, routine.Validate(), "return type")

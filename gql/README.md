@@ -32,7 +32,10 @@ GraphQL 请求
 ## 快速开始
 
 ```go
-import _ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 空白导入自注册PostgreSQL方言
+import (
+    _ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 空白导入自注册PostgreSQL方言
+    "github.com/ichaly/ideabase/gql/transport"
+)
 
 k, _ := std.NewKonfig()         // 配置中为生产实体声明 permissions
 builder := gql.New(k, db)       // db: *gorm.DB，自动加载表结构与外键关系
@@ -40,7 +43,8 @@ builder.LoadDocuments("queries")
 engine, err := builder.Build()  // 构建一次 capability snapshot，随后冻结
 if err != nil { log.Fatal(err) }
 
-engine.Bind(app.Group(engine.Path()))  // fiber v3：POST查询变更 + GET订阅WebSocket升级
+http.Handle("/graphql", transport.NewHandler(engine, transport.Options{}))
+http.Handle("/graphql/stream", transport.NewSubscriptionHandler(engine, transport.Options{}))
 
 // 非HTTP场景使用同一字节快路径；GraphQL字段错误位于响应体errors中
 body, err := engine.Execute(ctx, `query { users { items { id name } } }`, nil)
@@ -61,7 +65,7 @@ singleflight；依赖请求临时状态的 provider 不声明缓存身份，引�
 ### 独立服务与命名空间组合
 
 `Engine` 和 `Gateway` 实现同一个传输无关执行契约。标准库 HTTP、SSE、manifest 与
-健康检查只是薄适配器，因此嵌入 Fiber、Gin、gRPC 或命令行时无需改变执行内核：
+健康检查只是薄适配器，因此接入任意支持 `net/http` 的框架、gRPC 或命令行时无需改变执行内核：
 
 ```go
 mux.Handle("/graphql", transport.NewHandler(engine, transport.Options{}))
@@ -82,7 +86,6 @@ child 的 object/input/enum/interface/union/scalar 会确定性改名；目前�
 GraphQL 标准 directive，自定义 directive 在组合时显式拒绝，不会在运行期被静默忽略。
 返回值会按公共 Schema 重新完成，额外字段、错误路径和 `__typename` 不会泄漏
 child 内部名字。生产控制面用 `Gateway.Apply(GatewayUpdate{Revision, Namespaces})` 发布
-单调、幂等的完整拓扑；旧 revision 与同 revision 冲突均 fail closed。最近 8 个不可变
 snapshot 保留为滚动发布兼容窗口，执行中的请求继续固定启动时的 child fingerprint。
 
 远程组合使用 `transport.NewRemoteEndpoint`，只接受启动时配置的 HTTPS 地址，禁止跳转，
@@ -97,12 +100,18 @@ tenant/role header 不构成可信身份。
 `AllowHTTP` 仅用于显式的 localhost/回环测试地址，不会放行内网或公网明文连接。
 `GQL-Snapshot` 会把 HTTP/SSE 请求绑定到不可变修订，不是仅在执行前比较一次指纹。
 
+自动化客户端只从认证后的 `/gql/effective-schema` 获取当前身份的 Schema 和 capability
+artifact，以 `fingerprint`、`policyRevision`、`routeRevision` 为缓存身份；artifact 变化后重新
+生成/校验操作，执行和订阅始终携带返回的 `GQL-Snapshot`。标准 GraphQL 自省只描述类型，
+不重复承载成本、幂等和重试元数据，避免两套能力发现协议。
+
 ### 多实例部署合同
 
 - 所有副本使用相同的数据库元数据、Policy revision、Gateway revision 和 delegation key epoch。
 - `EndpointID` 必须唯一标识不可变的目标与传输配置；同一 control revision 下复用 ID 指向
   不同地址属于控制面 split-brain，调用方必须拒绝发布。
-- `Builder.Security` / `WithSecurityState` 注入同一个共享撤权事实源；本地
+- `Builder.Security` / `WithSecurityState` 注入同一个共享撤权事实源；多实例直接使用
+  `NewPostgresSecurityStateProvider`（部署迁移执行 `PostgresSecurityStateDDL`）。本地
   `RevocationBarrier` 只用于单实例或由控制面向每个副本可靠同步的部署。
 - 每个副本使用独立的 128-bit 随机临时复制槽；断线自动重连并广播重查，语义是“最新状态
   收敛”而不是持久事件日志。需要逐事件交付时应使用独立 outbox/消息系统。
@@ -114,6 +123,14 @@ tenant/role header 不构成可信身份。
 - CI 的 GA 门禁包含共享 token 并发消费、滚动 snapshot、真实 PostgreSQL 锁超时恢复、真实
   CDC backend 终止后重连，以及稳定的分配预算；`scripts/perf.sh` 生成 10 轮相对性能样本。
 
+### 稳定错误合同
+
+GraphQL 错误始终包含 `extensions.code`；HTTP 控制面和握手错误统一返回版本化
+`application/problem+json`（`code`、`message`、`retryable`）。客户端只按 code 分类，
+不解析 message。认证/授权/校验错误不可重试；`*_UNAVAILABLE`、`HEALTH_BUSY` 和瞬时远端
+故障可退避重试；`CONTROL_REVISION_STALE` 要先读取当前 control state，
+`CONTROL_REVISION_CONFLICT` 必须人工或控制面重新仲裁。
+
 ## 查询能力
 
 - 过滤：`where: { name: { eq/ne/gt/ge/lt/le/in/like/iLike/regex/iRegex/is/hasKey... } }`，
@@ -124,11 +141,11 @@ tenant/role header 不构成可信身份。
   游标分页 `first/after`、`last/before` + `pageInfo{hasNext,hasPrev,start,end}`，
   keyset 语义性能恒定（排序键自动追加主键兜底；排序键应为非空列）；页大小
   支持变量（`first: $n`），同一查询文本一份计划适配任意页大小。无显式 limit 的
-  列表自动注入 `schema.default-limit`（缺省 10，设 0 关闭）防无界全表扫描；
+  列表自动注入 `schema.default-limit`（缺省 10，非正数使用协议安全默认 20）防无界全表扫描；
   变更读回、统计分组与递归全树不受此限制。选择集嵌套深度超过
   `schema.max-depth`（缺省 20，设 0 关闭）在执行前拒绝。可执行文档同时受
-  `schema.max-tokens`（缺省 15000，设 0 不限制）保护；`schema.max-cost`（缺省 0，
-  即只通过 `OperationCost` 观测）可启用请求成本预算。成本消费规范化后的
+  `schema.max-tokens`（缺省 15000，设 0 不限制）保护；`schema.max-cost`（缺省
+  100000；生产环境禁止设 0）限制请求成本预算。成本消费规范化后的
   选择树，按分页上界和批量 `input` 长度乘算；无可证明上界的列表在预算模式下fail closed
 - 统计：`userStats(where, groupBy, having, limit, offset)` 返回 `count` 与各列的
   sum/avg/min/max/countDistinct，选择驱动只算请求的聚合。`having` 对聚合值过滤
@@ -152,8 +169,8 @@ tenant/role header 不构成可信身份。
   递归 CTE 单查询全树遍历，depth 缺省 5（1~32，限深防爆炸）；建议 parent_id 建索引
 - 去重：`distinct: [field]` 使用实体专属枚举并编译为 DISTINCT ON；Json 列支持
   `contains/containedIn`（jsonb @>/<@，可配 GIN 索引）
-- 变更：`createX(input)` / `updateX(input, id|key|where)` / `deleteX(id|key|where)`，
-  变更 CTE + 读回单条 SQL 原子完成；update/delete 强制要求条件
+- 变更：`createX(input)` / `updateX(id|key, input)` / `updateXs(where, input)` / `deleteX(id|key|where)`，
+  变更 CTE + 读回单条 SQL 原子完成；单对象 update 只接受必填主键，条件更新只走批量结果
 - 主键策略：实体 `id-generator` 支持 `database`（缺省，数据库自增/UUID default）、
   `snowflake` 与 `WithIDGenerator` 注册的自定义策略；生成发生在缓存计划执行期，
   批量和嵌套创建逐行生成且不重复
@@ -334,15 +351,18 @@ metadata:
     # 当前登录人:{ column: user_id, context: userId }；可同时声明多条，各注入一条 AND
 ```
 
-认证中间件把值注入请求上下文（`gql.WithScope`）：
+认证中间件把值注入请求上下文（`gql.WithScope`）。HTTP 生产入口统一使用
+`transport.NewHandler`，订阅统一使用 `transport.NewSubscriptionHandler`（SSE）；根包不再提供
+Fiber 适配器或 GraphQL WebSocket 协议实现：
 
 ```go
-func AuthMiddleware(c fiber.Ctx) error {
-    claims := parseJWT(c.Get("Authorization"))      // 服务端解出当前租户/登录人
-    ctx := gql.WithScope(c.Context(),
+func AuthMiddleware(next http.Handler) http.Handler {
+  return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    claims := parseJWT(r.Header.Get("Authorization")) // 服务端解出当前租户/登录人
+    ctx := gql.WithScope(r.Context(),
         map[string]any{"tenant": claims.Tenant, "userId": claims.UserId})
-    c.SetContext(ctx)
-    return c.Next()
+    next.ServeHTTP(w, r.WithContext(ctx))
+  })
 }
 ```
 
@@ -378,7 +398,7 @@ metadata:
   classes:
     Post:
       table: posts
-	  operations: [select, aggregate, insert, update, delete, restore, purge]
+      operations: [select, aggregate, insert, update, delete, restore, purge]
       soft_delete: { column: deleted_at }
       where:
         - { column: enabled, operator: eq, value: true }
@@ -391,8 +411,8 @@ metadata:
           insert: [title]
           update: [title]
           delete: true
-	      restore: true
-	      purge: true
+          restore: true
+          purge: true
           aggregate: true
           filter:
             - { column: tenant_id, operator: eq, context: tenant }
@@ -430,11 +450,11 @@ ctx = gql.WithIdentity(ctx, identity)
   因而任一可命中的行分支都授权同一字段形状，不允许跨角色拼接字段权限与行范围
 - `filter` 在 SQL 中限制可见/可改行；`check` 在发 SQL 前逐行验证新值，批量任一行失败则整次拒绝
 
-明确的 mutation 契约与旧字段并存：
+明确的 mutation 契约：
 
 ```graphql
-updatePostByPk(id: ID!, input: PostUpdateInput!): Post
-updatePosts(where: PostWhereInput!, input: PostUpdateInput!): PostMutationResult!
+updatePost(id: ID!, input: PostUpdateInput!): Post
+updatePosts(where: PostWhereInput!, input: PostUpdateRowInput!): PostMutationResult!
 deletePostByPk(id: ID!): Post
 deletePosts(where: PostWhereInput!): PostMutationResult!
 restorePostByPk(id: ID!): Post
@@ -489,10 +509,9 @@ events, _ := executor.Subscribe(ctx, `subscription { users { items { name } tota
 for reply := range events { ... } // ctx取消后通道关闭
 ```
 
-HTTP 侧 `Bind` 已注册 GET 路由为 WebSocket 升级入口，
-实现 [graphql-transport-ws](https://github.com/enisdenjo/graphql-ws/blob/master/PROTOCOL.md)
-子协议（connection_init/ack、subscribe、next、complete、ping/pong），
-可直接对接 Apollo Client / graphql-ws 客户端。
+HTTP 订阅只走 `transport.NewSubscriptionHandler` 的 SSE 协议，与程序内 `Subscribe`
+共用同一执行链。其他 Web 框架通过其标准 `net/http` adaptor 挂载；引擎不再维护第二套
+WebSocket 状态机。
 
 **部署要求**（官方 PG 镜像即可，无需扩展或自定义镜像）：
 
@@ -533,12 +552,11 @@ fail closed，不会以部分元数据启动。
 
 - `schema.introspection: false` 关闭自省（`__schema/__type` 拒绝，常规查询不受影响）
 - `schema.persisted-only: true` 所有 `ExecuteOperation` 入口只接受已注册操作；原始查询
-  返回标准 GraphQL `errors` 响应，HTTP/Fiber 不再各自实现一套分支语义
+  返回标准 GraphQL `errors` 响应，所有适配器共用一套分支语义
 - `Register`/`LoadDocuments` 仅限启动期：首次执行后注册表冻结，运行期调用明确报错
   （schema 重建与并发请求不互斥，冻结防静默数据竞争）
-- 订阅 WebSocket 实现 graphql-transport-ws 完整状态机：未 `connection_init` 即
-  subscribe 关 4401，init 超时 4408、重复 init 4429、重复订阅 ID 4409——
-  鉴权握手不可绕过
+- SSE 必须由支持连接 deadline 的 `net/http` server 或等价适配器承载；无法施加写
+  deadline 时握手 fail closed，避免慢客户端永久占用 handler 和订阅资源
 - `builder.Observe(observer)` 仅在 Build 前安装。观测事件只有
   `execute/plan/authorize/database/handler`、耗时和稳定错误码，不包含 query、variables、
   token、cursor、tenant 或 user；observer panic 会被隔离，关闭时热路径约 2ns、零分配

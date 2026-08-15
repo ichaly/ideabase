@@ -1,4 +1,4 @@
 {
-  "sha256": "8d2a8b3d5a9cf08802658ef8915c4a17be32d50995f18b5bc411fa421a433d23",
-  "classification": "security-breaking: upsert has a dedicated input intersecting insert and update writable fields"
+  "sha256": "0e4c685ce419ca38b2ff17a850be119bb36246f71f49214be7fc0d20d0aac8bc",
+  "classification": "breaking: single update is primary-key-only and condition updates use updateMany"
 }

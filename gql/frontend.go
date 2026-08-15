@@ -14,6 +14,8 @@ import (
 	validatorrules "github.com/vektah/gqlparser/v2/validator/rules"
 )
 
+const maxDocumentBytes = 1 << 20
+
 // preparedOperation is the immutable request frontend result shared by every
 // execution entry point. The selection tree is normalized and variables are
 // coerced before a caller may cache, cost, authorize, or execute it.

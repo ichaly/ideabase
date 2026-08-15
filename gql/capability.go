@@ -33,29 +33,29 @@ const (
 
 // Capability is the immutable execution contract of one schema coordinate.
 type Capability struct {
-	Coordinate     string
-	Parent         string
-	Name           string
-	Type           string
-	Arguments      []Argument
-	Handler        HandlerKind
-	Planner        string
-	Actions        []string
-	Resource       string
-	Cost           uint32
-	PolicyAware    bool
-	Requires       []string
-	Timeout        time.Duration
-	RetrySafe      bool
-	IdempotencyKey string
-	MaxBatch       int
+	Coordinate     string        `json:"coordinate"`
+	Parent         string        `json:"parent"`
+	Name           string        `json:"name"`
+	Type           string        `json:"type"`
+	Arguments      []Argument    `json:"arguments"`
+	Handler        HandlerKind   `json:"handler"`
+	Planner        string        `json:"planner"`
+	Actions        []string      `json:"actions"`
+	Resource       string        `json:"resource"`
+	Cost           uint32        `json:"cost"`
+	PolicyAware    bool          `json:"policyAware"`
+	Requires       []string      `json:"requires"`
+	Timeout        time.Duration `json:"timeout"`
+	RetrySafe      bool          `json:"retrySafe"`
+	IdempotencyKey string        `json:"idempotencyKey"`
+	MaxBatch       int           `json:"maxBatch"`
 }
 
 // Argument is the introspectable invocation contract of one field argument.
 type Argument struct {
-	Name    string
-	Type    string
-	Default string
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Default string `json:"default"`
 }
 
 type operationCapability struct {
@@ -95,10 +95,7 @@ func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
 		create := catalogAllows(class, protocol.OP_INSERT) && len(insertFields) > 0
 		update := catalogAllows(class, protocol.OP_UPDATE) && len(updateFields) > 0
 		plural := inflection.Plural(name)
-		batch := plural
-		if batch == name {
-			batch += protocol.SUFFIX_MANY
-		}
+		batch := mutationBatchName(name)
 		if create {
 			add("Mutation", protocol.CREATE+name, class, compiler.ShapeSingle, protocol.CREATE, protocol.OP_INSERT)
 			if plural != name {
@@ -107,14 +104,13 @@ func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
 			upsertFields := slices.DeleteFunc(append([]string(nil), insertFields...), func(name string) bool {
 				return !slices.Contains(updateFields, name)
 			})
-			if update && len(upsertFields) > 0 && len(class.ConflictTargets()) > 0 {
+			if update && len(upsertFields) > 0 && len(class.UpsertConflictTargets()) > 0 {
 				add("Mutation", protocol.UPSERT+plural, class, compiler.ShapeBulk, protocol.UPSERT, protocol.OP_INSERT, protocol.OP_UPDATE)
 			}
 		}
 		if update {
-			add("Mutation", protocol.UPDATE+name, class, compiler.ShapeSingle, protocol.OP_UPDATE, protocol.OP_UPDATE)
 			if len(class.PrimaryKeyFields()) > 0 {
-				add("Mutation", protocol.UPDATE+name+protocol.SUFFIX_BY_PK, class, compiler.ShapeSingleByPK, protocol.OP_UPDATE, protocol.OP_UPDATE)
+				add("Mutation", protocol.UPDATE+name, class, compiler.ShapeSingleByPK, protocol.OP_UPDATE, protocol.OP_UPDATE)
 			}
 			add("Mutation", protocol.UPDATE+batch, class, compiler.ShapeBulkResult, protocol.OP_UPDATE, protocol.OP_UPDATE)
 		}

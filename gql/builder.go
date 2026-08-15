@@ -1,9 +1,11 @@
 package gql
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"gorm.io/gorm"
 )
@@ -145,6 +147,12 @@ func (my *Builder) Build() (*Engine, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("Engine policy provider or metadata permissions is required")
 	}
+	if my.security == nil && my.database != nil && my.database.Name() == "postgres" && metadata.cfg != nil && !metadata.cfg.IsDebug() {
+		return nil, fmt.Errorf("production Engine requires an explicit SecurityStateProvider")
+	}
+	if err := validateProductionMigrations(metadata, my.database); err != nil {
+		return nil, err
+	}
 	if err := configureSearchMode(metadata, my.database); err != nil {
 		return nil, fmt.Errorf("detect search capability: %w", err)
 	}
@@ -207,4 +215,26 @@ func (my *Builder) Build() (*Engine, error) {
 	}
 	ready = true
 	return executor, nil
+}
+
+func validateProductionMigrations(metadata *Metadata, database *gorm.DB) error {
+	if metadata == nil || metadata.cfg == nil || metadata.cfg.IsDebug() || database == nil || database.Name() != "postgres" {
+		return nil
+	}
+	requiresAudit := false
+	for _, spec := range metadata.operations {
+		if spec.operation == protocol.OP_PURGE {
+			requiresAudit = true
+			break
+		}
+	}
+	if !requiresAudit {
+		return nil
+	}
+	return postgresPreflight(context.Background(), database, "gql_audit_outbox", func(tx *gorm.DB) error {
+		return tx.Exec(`INSERT INTO gql_audit_outbox
+  (event_key, tenant, actor, action, resource, request_id, snapshot, policy_revision, affected_count)
+VALUES ('gql-preflight-' || pg_backend_pid()::text || '-' || clock_timestamp()::text,
+  'preflight', 'preflight', 'purge', 'preflight', 'preflight', 'preflight', 0, 0)`).Error
+	})
 }

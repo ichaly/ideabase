@@ -31,7 +31,7 @@ func (my scope) column(fieldName string) string {
 
 // buildWhere 构建WHERE子句；conjuncts为前置合取条件（关联/搜索/keyset），与用户条件AND组合
 func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.ArgumentList, conjuncts ...func() error) error {
-	conditions, err := my.collectConditions(ctx, args)
+	conditions, err := my.collectConditions(ctx, sc, args)
 	if err != nil {
 		return err
 	}
@@ -141,14 +141,18 @@ func writeKeyEquals(ctx *compiler.Context, sc scope, fields []*protocol.Field, v
 }
 
 // collectConditions 收集可渲染的WHERE条件（id参数转换为主键等值条件；空对象剪枝）
-func (my *Dialect) collectConditions(ctx *compiler.Context, args ast.ArgumentList) ([]*ast.Value, error) {
+func (my *Dialect) collectConditions(ctx *compiler.Context, sc scope, args ast.ArgumentList) ([]*ast.Value, error) {
 	var conditions []*ast.Value
 
 	if idArg := args.ForName(protocol.ID); idArg != nil && idArg.Value != nil {
+		keys := sc.class.PrimaryKeyFields()
+		if len(keys) != 1 {
+			return nil, fmt.Errorf("id参数要求单一主键")
+		}
 		conditions = append(conditions, &ast.Value{
 			Kind: ast.ObjectValue,
 			Children: []*ast.ChildValue{{
-				Name: protocol.ID,
+				Name: keys[0],
 				Value: &ast.Value{
 					Kind:     ast.ObjectValue,
 					Children: []*ast.ChildValue{{Name: protocol.EQ, Value: idArg.Value}},

@@ -28,7 +28,7 @@ const (
 	gatewayMaxDepth         = 8
 	gatewayMaxRootFields    = 64
 	gatewayMaxFanout        = 32
-	gatewayMaxDocumentBytes = 1 << 20
+	gatewayMaxConcurrent    = 4
 	gatewayMaxVariableBytes = 1 << 20
 	gatewayMaxVariables     = 256
 	gatewayMaxChildResponse = 8 << 20
@@ -37,8 +37,15 @@ const (
 
 // Endpoint 是命名空间组合所需的最小传输无关契约。
 type Endpoint interface {
+	ExecuteOperation(context.Context, string, map[string]any, string) ([]byte, error)
+}
+
+// ComposableEndpoint is the immutable endpoint contract required by a
+// namespace. Snapshot is intentionally separate from execution so transports
+// can accept operation-only endpoints without exposing a legacy Execute path.
+type ComposableEndpoint interface {
+	Endpoint
 	Snapshot() (*Snapshot, error)
-	Execute(context.Context, string, map[string]any) ([]byte, error)
 }
 
 // SubscriptionEndpoint is implemented only by endpoints with an executable
@@ -58,6 +65,10 @@ type EffectiveSchemaEndpoint interface {
 	EffectiveSchema(context.Context) (SchemaArtifact, error)
 }
 
+type EffectiveSchemaCacheIdentityEndpoint interface {
+	EffectiveSchemaCacheIdentity(context.Context) (string, bool)
+}
+
 type EffectiveSchemaCapability interface{ EffectiveSchemaAvailable() bool }
 
 type effectiveSchemaAware interface{ effectiveSchemaAware() bool }
@@ -66,7 +77,7 @@ type effectiveSchemaAware interface{ effectiveSchemaAware() bool }
 type Namespace struct {
 	Name       string
 	EndpointID string
-	Endpoint   Endpoint
+	Endpoint   ComposableEndpoint
 }
 
 // Gateway 组合不可变端点快照，不共享数据库、策略、事务或传输层。
@@ -86,9 +97,14 @@ type GatewayUpdate struct {
 }
 
 var (
-	ErrControlStale    = errors.New("stale control revision")
-	ErrControlConflict = errors.New("conflicting control revision")
+	ErrControlStale    error = controlFailure{"stale control revision", "CONTROL_REVISION_STALE"}
+	ErrControlConflict error = controlFailure{"conflicting control revision", "CONTROL_REVISION_CONFLICT"}
 )
+
+type controlFailure struct{ message, code string }
+
+func (failure controlFailure) Error() string     { return failure.message }
+func (failure controlFailure) ErrorCode() string { return failure.code }
 
 // ControlState is the machine-readable publication state of a gateway.
 type ControlState struct {
@@ -97,19 +113,20 @@ type ControlState struct {
 }
 
 type gatewayState struct {
-	id              string
-	schema          *ast.Schema
-	intro           *intro.Handler
-	validation      *validatorrules.Rules
-	cache           *planCache
-	effectiveCache  *lruCache[string, *gatewayState]
-	effectiveFlight singleflight.Group
-	snapshot        *Snapshot
-	contracts       map[string]*namespaceContract
-	mutations       map[string]*namespaceContract
-	topologyIDs     map[string]struct{}
-	depth           int
-	identityAware   bool
+	id                string
+	schema            *ast.Schema
+	intro             *intro.Handler
+	validation        *validatorrules.Rules
+	cache             *planCache
+	effectiveCache    *lruCache[string, *gatewayState]
+	effectiveFlight   singleflight.Group
+	snapshot          *Snapshot
+	contracts         map[string]*namespaceContract
+	mutations         map[string]*namespaceContract
+	topologyIDs       map[string]struct{}
+	depth             int
+	identityAware     bool
+	effectiveArtifact SchemaArtifact
 }
 
 type endpointTopology interface {
@@ -119,7 +136,7 @@ type endpointTopology interface {
 // SnapshotEndpoint can bind execution to the exact manifest revision imported
 // by a parent Gateway.
 type SnapshotEndpoint interface {
-	ForSnapshot(string) (Endpoint, error)
+	ForSnapshot(string) (ComposableEndpoint, error)
 }
 
 type gatewayRevision struct {
@@ -127,9 +144,16 @@ type gatewayRevision struct {
 	state *gatewayState
 }
 
+type effectiveNamespace struct {
+	contract *namespaceContract
+	artifact *SchemaArtifact
+	revision string
+}
+
 type effectiveArtifactEndpoint struct {
-	base     Endpoint
-	snapshot *Snapshot
+	base         ComposableEndpoint
+	snapshot     *Snapshot
+	executionPin string
 }
 
 type effectiveSubscriptionEndpoint struct{ *effectiveArtifactEndpoint }
@@ -141,20 +165,59 @@ func (my *effectiveArtifactEndpoint) EndpointID() string {
 	return "effective-child"
 }
 func (my *effectiveArtifactEndpoint) Snapshot() (*Snapshot, error) { return my.snapshot, nil }
-func (my *effectiveArtifactEndpoint) Execute(ctx context.Context, query string, variables map[string]any) ([]byte, error) {
-	return my.base.Execute(ctx, query, variables)
+func (my *effectiveArtifactEndpoint) ExecuteOperation(ctx context.Context, query string, variables map[string]any, operationName string) ([]byte, error) {
+	ctx = WithExecutionPin(ctx, my.executionPin)
+	return my.base.ExecuteOperation(ctx, query, variables, operationName)
 }
 func (my *effectiveSubscriptionEndpoint) Subscribe(ctx context.Context, query string, variables map[string]any, operationName string) (<-chan []byte, error) {
+	ctx = WithExecutionPin(ctx, my.executionPin)
 	return my.base.(SubscriptionEndpoint).Subscribe(ctx, query, variables, operationName)
 }
 
-func (my *gatewayState) effective(ctx context.Context) (*gatewayState, error) {
+func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err error) {
+	defer func() {
+		if err == nil && state != nil {
+			err = enforceExecutionPin(ctx, state.effectiveArtifact)
+		}
+	}()
 	revisions := []string{my.snapshot.Fingerprint()}
 	names := sortedMapKeys(my.contracts)
-	type effectiveNamespace struct {
-		contract *namespaceContract
-		artifact *SchemaArtifact
-		revision string
+	cacheParts := make([]string, 0, len(names))
+	prefetched := make(map[string]string, len(names))
+	cacheable := true
+	for _, name := range names {
+		contract := my.contracts[name]
+		aware, ok := contract.endpoint.(EffectiveSchemaCacheIdentityEndpoint)
+		if !ok {
+			cacheable = false
+			continue
+		}
+		key, stable := aware.EffectiveSchemaCacheIdentity(ctx)
+		if !stable || strings.TrimSpace(key) == "" {
+			cacheable = false
+			continue
+		}
+		cacheParts = append(cacheParts, name+"="+key)
+		prefetched[name] = key
+	}
+	cacheKey := ""
+	if cacheable {
+		identity, _ := IdentityFromContext(ctx)
+		route, _ := PinnedRoute(ctx)
+		contract, _ := stdjson.Marshal(struct {
+			Snapshot                        string
+			Tenant, Subject, Actor          string
+			Roles                           []string
+			Claims                          map[string]any
+			PolicyRevision, CredentialEpoch uint64
+			Route                           TenantRoute
+			Scope                           map[string]any
+			Children                        []string
+		}{my.snapshot.Fingerprint(), identity.Tenant(), identity.Subject(), identity.Actor(), identity.Roles(), identity.Claims(), identity.PolicyRevision(), identity.CredentialEpoch(), route, scopeValues(ctx), cacheParts})
+		cacheKey = "identity:" + digest(string(contract))
+		if cached, ok := my.effectiveCache.Get(cacheKey); ok {
+			return cached, nil
+		}
 	}
 	sources := make([]effectiveNamespace, len(names))
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -176,7 +239,7 @@ func (my *gatewayState) effective(ctx context.Context) (*gatewayState, error) {
 			}
 			revision, err := effectiveArtifactRevision(artifact)
 			if err != nil {
-				return fmt.Errorf("namespace %s effective artifact: %w", contract.name, err)
+				return &publicFailure{"effective schema artifact is invalid", "BAD_GATEWAY_RESPONSE"}
 			}
 			sources[index].artifact, sources[index].revision = &artifact, revision
 			return nil
@@ -188,9 +251,17 @@ func (my *gatewayState) effective(ctx context.Context) (*gatewayState, error) {
 	for _, source := range sources {
 		if source.artifact != nil {
 			revisions = append(revisions, source.contract.name+"="+source.revision)
+			if cacheKey != "" {
+				if artifactKey := strings.TrimSpace(source.artifact.CacheIdentity); artifactKey == "" || artifactKey != prefetched[source.contract.name] {
+					cacheKey = ""
+				}
+			}
 		}
 	}
 	key := strings.Join(revisions, "\x00")
+	if cacheKey != "" {
+		key = cacheKey
+	}
 	if cached, ok := my.effectiveCache.Get(key); ok {
 		return cached, nil
 	}
@@ -200,7 +271,11 @@ func (my *gatewayState) effective(ctx context.Context) (*gatewayState, error) {
 		}
 		namespaces := make([]Namespace, 0, len(sources))
 		for _, source := range sources {
-			contract, endpoint := source.contract, source.contract.endpoint
+			contract := source.contract
+			endpoint, composable := source.contract.endpoint.(ComposableEndpoint)
+			if !composable {
+				return nil, fmt.Errorf("namespace %s endpoint is not composable", contract.name)
+			}
 			if source.artifact != nil {
 				structural := source.artifact.StructuralFingerprint
 				if structural == "" {
@@ -211,7 +286,7 @@ func (my *gatewayState) effective(ctx context.Context) (*gatewayState, error) {
 					structural = baseSnapshot.Fingerprint()
 				}
 				if pinner, ok := endpoint.(SnapshotEndpoint); ok {
-					pinned, err := safelyCall(func() (Endpoint, error) {
+					pinned, err := safelyCall(func() (ComposableEndpoint, error) {
 						return pinner.ForSnapshot(structural)
 					})
 					if err != nil {
@@ -221,9 +296,9 @@ func (my *gatewayState) effective(ctx context.Context) (*gatewayState, error) {
 				}
 				snapshot, err := snapshotFromEffectiveArtifact(*source.artifact)
 				if err != nil {
-					return nil, fmt.Errorf("namespace %s effective artifact: %w", contract.name, err)
+					return nil, &publicFailure{"effective schema artifact is invalid", "BAD_GATEWAY_RESPONSE"}
 				}
-				artifactEndpoint := &effectiveArtifactEndpoint{base: endpoint, snapshot: snapshot}
+				artifactEndpoint := &effectiveArtifactEndpoint{base: endpoint, snapshot: snapshot, executionPin: source.artifact.ExecutionPin}
 				if _, ok := endpoint.(SubscriptionEndpoint); ok {
 					endpoint = &effectiveSubscriptionEndpoint{artifactEndpoint}
 				} else {
@@ -235,6 +310,7 @@ func (my *gatewayState) effective(ctx context.Context) (*gatewayState, error) {
 		state, buildErr := buildGatewayState(my.id, namespaces)
 		if buildErr == nil {
 			state.cache = my.cache
+			state.effectiveArtifact = aggregateGatewayArtifact(my.snapshot.Fingerprint(), state.snapshot.Schema(), sources, state.snapshot.Capabilities())
 			my.effectiveCache.Put(key, state)
 		}
 		return state, buildErr
@@ -245,10 +321,16 @@ func effectiveArtifactRevision(artifact SchemaArtifact) (string, error) {
 	if artifact.Schema == "" || artifact.Fingerprint != digest(artifact.Schema) {
 		return "", fmt.Errorf("effective artifact fingerprint mismatch")
 	}
+	if artifact.Version != SchemaArtifactVersion || artifact.ExecutionPin == "" || artifact.ExecutionPin != schemaArtifactExecutionPin(artifact) {
+		return "", fmt.Errorf("effective artifact version or execution pin mismatch")
+	}
 	contract, err := stdjson.Marshal(struct {
-		Fingerprint  string
-		Capabilities []Capability
-	}{artifact.Fingerprint, artifact.Capabilities})
+		Version, Fingerprint, StructuralFingerprint, PermissionSignature, ExecutionPin string
+		CacheIdentity                                                                  string
+		PolicyRevision, RouteRevision                                                  uint64
+		Capabilities                                                                   []Capability
+	}{artifact.Version, artifact.Fingerprint, artifact.StructuralFingerprint, artifact.PermissionSignature, artifact.ExecutionPin,
+		artifact.CacheIdentity, artifact.PolicyRevision, artifact.RouteRevision, artifact.Capabilities})
 	if err != nil {
 		return "", err
 	}
@@ -258,6 +340,9 @@ func effectiveArtifactRevision(artifact SchemaArtifact) (string, error) {
 func snapshotFromEffectiveArtifact(artifact SchemaArtifact) (*Snapshot, error) {
 	if artifact.Schema == "" || artifact.Fingerprint != digest(artifact.Schema) {
 		return nil, fmt.Errorf("effective artifact fingerprint mismatch")
+	}
+	if artifact.Version != SchemaArtifactVersion || artifact.ExecutionPin == "" || artifact.ExecutionPin != schemaArtifactExecutionPin(artifact) {
+		return nil, fmt.Errorf("effective artifact version or execution pin mismatch")
 	}
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "effective.graphql", Input: artifact.Schema})
 	if err != nil {
@@ -285,6 +370,12 @@ func (my *gatewayRevision) ExecuteOperation(ctx context.Context, query string, v
 }
 func (my *gatewayRevision) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) {
 	return gatewaySchemaArtifact(ctx, my.state)
+}
+func (my *gatewayRevision) EffectiveSchemaCacheIdentity(ctx context.Context) (string, bool) {
+	return gatewayCacheIdentity(ctx, my.state)
+}
+func (my *gatewayRevision) EffectiveSchemaAvailable() bool {
+	return my != nil && my.state != nil && my.state.identityAware
 }
 func (my *gatewayRevision) effectiveSchemaAware() bool { return my.state.identityAware }
 func (my *gatewayRevision) Subscribe(ctx context.Context, query string, variables map[string]any, operationName string) (<-chan []byte, error) {
@@ -318,7 +409,7 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 			if err != nil {
 				return nil, fmt.Errorf("namespace %s snapshot: %w", namespaces[index].Name, err)
 			}
-			pinned, err := safelyCall(func() (Endpoint, error) { return pinner.ForSnapshot(snapshot.Fingerprint()) })
+			pinned, err := safelyCall(func() (ComposableEndpoint, error) { return pinner.ForSnapshot(snapshot.Fingerprint()) })
 			if err != nil {
 				return nil, fmt.Errorf("namespace %s snapshot changed during build: %w", namespaces[index].Name, err)
 			}
@@ -373,6 +464,24 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 		effective = effective || effectiveChild
 		for field := range contract.mutations {
 			mutations[field] = contract
+		}
+	}
+	if effective {
+		for _, contract := range contracts {
+			_, hasEffectiveEndpoint := contract.endpoint.(EffectiveSchemaEndpoint)
+			available := hasEffectiveEndpoint
+			if capability, declared := contract.endpoint.(EffectiveSchemaCapability); declared {
+				if capability.EffectiveSchemaAvailable() && !hasEffectiveEndpoint {
+					return nil, fmt.Errorf("namespace %s declares EffectiveSchemaCapability but lacks EffectiveSchemaEndpoint", contract.name)
+				}
+				available = hasEffectiveEndpoint && capability.EffectiveSchemaAvailable()
+			}
+			if !available {
+				if _, explicitlyStatic := contract.endpoint.(EffectiveSchemaCapability); explicitlyStatic {
+					continue
+				}
+				return nil, fmt.Errorf("namespace %s lacks identity-aware effective schema; static endpoints must explicitly declare mode", contract.name)
+			}
 		}
 	}
 	identity := []string{id, source}
@@ -452,8 +561,9 @@ func (my *Gateway) effectiveSchemaAware() bool {
 	state := my.current()
 	return state != nil && state.identityAware
 }
+func (my *Gateway) EffectiveSchemaAvailable() bool { return my != nil && my.effectiveSchemaAware() }
 
-func (my *Gateway) ForSnapshot(fingerprint string) (Endpoint, error) {
+func (my *Gateway) ForSnapshot(fingerprint string) (ComposableEndpoint, error) {
 	state := my.current()
 	if state != nil && state.snapshot.Fingerprint() == fingerprint {
 		return &gatewayRevision{id: my.id, state: state}, nil
@@ -488,6 +598,30 @@ func (my *Gateway) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) 
 	return gatewaySchemaArtifact(ctx, my.current())
 }
 
+func (my *Gateway) EffectiveSchemaCacheIdentity(ctx context.Context) (string, bool) {
+	return gatewayCacheIdentity(ctx, my.current())
+}
+
+func gatewayCacheIdentity(ctx context.Context, state *gatewayState) (string, bool) {
+	if state == nil || !state.identityAware {
+		return "", false
+	}
+	parts := make([]string, 0, len(state.contracts))
+	for _, name := range sortedMapKeys(state.contracts) {
+		contract := state.contracts[name]
+		aware, ok := contract.endpoint.(EffectiveSchemaCacheIdentityEndpoint)
+		if !ok {
+			return "", false
+		}
+		key, stable := aware.EffectiveSchemaCacheIdentity(ctx)
+		if !stable || strings.TrimSpace(key) == "" {
+			return "", false
+		}
+		parts = append(parts, name+"="+key)
+	}
+	return digest(strings.Join(parts, "\x00")), true
+}
+
 func gatewaySchemaArtifact(ctx context.Context, state *gatewayState) (SchemaArtifact, error) {
 	if state == nil {
 		return SchemaArtifact{}, fmt.Errorf("gateway不可用")
@@ -500,10 +634,45 @@ func gatewaySchemaArtifact(ctx context.Context, state *gatewayState) (SchemaArti
 		}
 	}
 	schema := state.snapshot.Schema()
-	return SchemaArtifact{
-		Schema: schema, Fingerprint: digest(schema), StructuralFingerprint: structural,
-		PermissionSignature: state.snapshot.Fingerprint(), Capabilities: state.snapshot.Capabilities(),
-	}, nil
+	artifact := state.effectiveArtifact
+	if artifact.Schema == "" {
+		artifact = SchemaArtifact{Schema: schema, Fingerprint: digest(schema), StructuralFingerprint: structural,
+			PermissionSignature: state.snapshot.Fingerprint(), Capabilities: state.snapshot.Capabilities()}
+	}
+	artifact.Schema, artifact.Fingerprint = schema, digest(schema)
+	return FinalizeSchemaArtifact(artifact), nil
+}
+
+func aggregateGatewayArtifact(structural, schema string, sources []effectiveNamespace, capabilities []Capability) SchemaArtifact {
+	permissions := make([]string, 0, len(sources))
+	cacheIdentities := make([]string, 0, len(sources))
+	cacheable := true
+	var policyRevision, routeRevision uint64
+	for _, source := range sources {
+		if source.artifact == nil {
+			continue
+		}
+		permissions = append(permissions, source.artifact.PermissionSignature)
+		if strings.TrimSpace(source.artifact.CacheIdentity) == "" {
+			cacheable = false
+		} else {
+			cacheIdentities = append(cacheIdentities, source.contract.name+"="+source.artifact.CacheIdentity)
+		}
+		if source.artifact.PolicyRevision > policyRevision {
+			policyRevision = source.artifact.PolicyRevision
+		}
+		if source.artifact.RouteRevision > routeRevision {
+			routeRevision = source.artifact.RouteRevision
+		}
+	}
+	artifact := SchemaArtifact{Schema: schema, Fingerprint: digest(schema),
+		StructuralFingerprint: structural, PermissionSignature: digest(strings.Join(permissions, "\x00")),
+		PolicyRevision: policyRevision, RouteRevision: routeRevision, Capabilities: cloneCapabilities(capabilities)}
+	if cacheable && len(cacheIdentities) > 0 {
+		sort.Strings(cacheIdentities)
+		artifact.CacheIdentity = digest(strings.Join(cacheIdentities, "\x00"))
+	}
+	return FinalizeSchemaArtifact(artifact)
 }
 
 func (my *Gateway) Schema() (string, error) {
@@ -608,11 +777,11 @@ func healthAvailable(state *gatewayState) bool {
 }
 
 func (my *Gateway) Health(ctx context.Context) (HealthReport, error) {
-	state := my.current()
+	state, revision := my.manifestState()
 	if state == nil || !healthAvailable(state) {
 		return HealthReport{}, fmt.Errorf("gateway health unavailable")
 	}
-	report := HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, CDCConnected: true, SnapshotFingerprint: state.snapshot.Fingerprint(), SubscriptionAvailable: state.schema.Subscription != nil}
+	report := HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, CDCConnected: true, SnapshotFingerprint: state.snapshot.Fingerprint(), ControlRevision: revision, SubscriptionAvailable: state.schema.Subscription != nil}
 	names := sortedMapKeys(state.contracts)
 	results := collectHealth(names, func(name string) (HealthReport, error) {
 		contract := state.contracts[name]
@@ -652,6 +821,15 @@ func (my *Gateway) Health(ctx context.Context) (HealthReport, error) {
 		report.CDCConnected = false
 	}
 	return report, errors.Join(failures...)
+}
+
+func (my *Gateway) manifestState() (*gatewayState, uint64) {
+	if my == nil {
+		return nil, 0
+	}
+	my.refresh.Lock()
+	defer my.refresh.Unlock()
+	return my.state.Load(), my.revision
 }
 
 // Subscribe validates the public single-root subscription, then forwards one
@@ -724,7 +902,7 @@ func (my *gatewayState) forwardSubscription(ctx context.Context, events chan<- [
 			}
 			child, err := decodeEndpointReply(body)
 			if err != nil {
-				frame, _ := (gqlReply{Data: map[string]any{responseKey(field): nil}, Errors: endpointProtocolError(responseKey(field), field)}).MarshalJSON()
+				frame, _ := marshalReply(ctx, gqlReply{Data: map[string]any{responseKey(field): nil}, Errors: endpointProtocolError(responseKey(field), field)})
 				select {
 				case events <- frame:
 				case <-ctx.Done():
@@ -733,10 +911,17 @@ func (my *gatewayState) forwardSubscription(ctx context.Context, events chan<- [
 			}
 			definition := my.schema.Subscription.Fields.ForName(field.Name)
 			value, completionErrors, _ := completeEndpointValue(my.schema, child.Data, definition.Type, field.SelectionSet, nil, child.Errors, contract)
-			child.Errors = append(child.Errors, completionErrors...)
 			prefixErrors(child.Errors, responseKey(field), field)
-			frame, err := (gqlReply{Data: map[string]any{responseKey(field): value}, Errors: child.Errors}).MarshalJSON()
+			prefixLocalErrors(completionErrors, responseKey(field), field)
+			child.Errors = append(child.Errors, completionErrors...)
+			frame, err := marshalReply(ctx, gqlReply{Data: map[string]any{responseKey(field): value}, Errors: child.Errors})
 			if err != nil {
+				if frame, fallbackErr := marshalReply(ctx, gqlReply{Errors: GraphQLErrors(err)}); fallbackErr == nil {
+					select {
+					case events <- frame:
+					case <-ctx.Done():
+					}
+				}
 				return
 			}
 			select {
@@ -769,16 +954,16 @@ func (my *gatewayState) execute(ctx context.Context, query string, variables map
 	if my.identityAware {
 		effective, err := my.effective(ctx)
 		if err != nil {
-			return (gqlReply{Errors: GraphQLErrors(err)}).MarshalJSON()
+			return marshalReply(ctx, gqlReply{Errors: GraphQLErrors(err)})
 		}
 		return effective.execute(ctx, query, variables, operationName)
 	}
 	if errs := validateGatewayRequest(query, variables); len(errs) > 0 {
-		return (gqlReply{Errors: errs}).MarshalJSON()
+		return marshalReply(ctx, gqlReply{Errors: errs})
 	}
 	operation, coerced, err := my.prepareOperation(query, variables, operationName)
 	if err != nil {
-		return (gqlReply{Errors: GraphQLErrors(err)}).MarshalJSON()
+		return marshalReply(ctx, gqlReply{Errors: GraphQLErrors(err)})
 	}
 	dataOperation, introspection := splitIntrospection(operation)
 	data := make(map[string]any)
@@ -793,7 +978,7 @@ func (my *gatewayState) execute(ctx context.Context, query string, variables map
 			executed.Errors = gqlerror.List{gqlerror.Errorf("gateway暂不支持%s操作", dataOperation.Operation)}
 		}
 		if executed.Data == nil && len(executed.Errors) > 0 {
-			return executed.MarshalJSON()
+			return marshalReply(ctx, executed)
 		}
 		if !executed.nullData {
 			for key, value := range executed.Data {
@@ -812,11 +997,11 @@ func (my *gatewayState) execute(ctx context.Context, query string, variables map
 		}
 	}
 	executed.Data = data
-	return executed.MarshalJSON()
+	return marshalReply(ctx, executed)
 }
 
 func (my *gatewayState) prepareOperation(query string, variables map[string]any, operationName string) (*ast.OperationDefinition, map[string]any, error) {
-	key := planKey{operation: operationName, query: query, view: my.snapshot.Fingerprint()}
+	key := planKeyFor(operationName, query, "", my.snapshot.Fingerprint())
 	conditional := hasConditionalDirective(query)
 	if !conditional {
 		if entry, ok := my.cache.Get(key); ok {
@@ -841,7 +1026,7 @@ func (my *gatewayState) executeQuery(ctx context.Context, operation *ast.Operati
 	reply := gqlReply{Data: make(map[string]any)}
 	results := make([]queryResult, len(operation.SelectionSet))
 	groups := make(map[*namespaceContract][]queryEntry)
-	var wait sync.WaitGroup
+	var group errgroup.Group
 	for index, selection := range operation.SelectionSet {
 		field, ok := selection.(*ast.Field)
 		if !ok {
@@ -865,12 +1050,14 @@ func (my *gatewayState) executeQuery(ctx context.Context, operation *ast.Operati
 			my.executeQueryGroup(ctx, operation, variables, contract, entries, results)
 		}
 	} else {
+		group.SetLimit(gatewayMaxConcurrent)
 		for contract, entries := range groups {
-			wait.Go(func() {
+			group.Go(func() error {
 				my.executeQueryGroup(ctx, operation, variables, contract, entries, results)
+				return nil
 			})
 		}
-		wait.Wait()
+		_ = group.Wait()
 	}
 	for _, result := range results {
 		if result.key == "" {
@@ -899,6 +1086,13 @@ type queryAlias struct {
 }
 
 func (my *gatewayState) executeQueryGroup(ctx context.Context, operation *ast.OperationDefinition, variables map[string]any, contract *namespaceContract, entries []queryEntry, results []queryResult) {
+	if err := ctx.Err(); err != nil {
+		for _, entry := range entries {
+			key := responseKey(entry.field)
+			results[entry.index] = queryResult{key: key, errors: endpointError(key, entry.field, err)}
+		}
+		return
+	}
 	set, aliases := groupedSelection(entries)
 	query, childVariables := childOperation(ast.Query, set, operation.VariableDefinitions, variables, contract.publicToChild)
 	body, err := executeChild(ctx, contract.endpoint, query, childVariables)
@@ -906,6 +1100,13 @@ func (my *gatewayState) executeQueryGroup(ctx context.Context, operation *ast.Op
 		for _, entry := range entries {
 			key := responseKey(entry.field)
 			results[entry.index] = queryResult{key: key, errors: endpointError(key, entry.field, err)}
+		}
+		return
+	}
+	if !consumeResponseBudget(ctx, len(body)) {
+		for _, entry := range entries {
+			key := responseKey(entry.field)
+			results[entry.index] = queryResult{key: key, errors: gatewayLimitError("response")}
 		}
 		return
 	}
@@ -944,8 +1145,9 @@ func (my *gatewayState) executeQueryGroup(ctx context.Context, operation *ast.Op
 		key := responseKey(entry.field)
 		definition := my.schema.Query.Fields.ForName(entry.field.Name)
 		value, completionErrors, _ := completeEndpointValue(my.schema, data[index], definition.Type, entry.field.SelectionSet, nil, errors[index], contract)
-		errors[index] = append(errors[index], completionErrors...)
 		prefixErrors(errors[index], key, entry.field)
+		prefixLocalErrors(completionErrors, key, entry.field)
+		errors[index] = append(errors[index], completionErrors...)
 		results[entry.index] = queryResult{key: key, value: value, errors: errors[index]}
 	}
 }
@@ -1011,6 +1213,7 @@ func (my *gatewayState) executeMutation(ctx context.Context, operation *ast.Oper
 		if contract == nil {
 			continue
 		}
+		definition := my.schema.Mutation.Fields.ForName(field.Name)
 		key := responseKey(field)
 		childField := *field
 		childField.Name = contract.mutations[field.Name]
@@ -1019,31 +1222,44 @@ func (my *gatewayState) executeMutation(ctx context.Context, operation *ast.Oper
 		body, err := executeChild(WithMutationCommitMetadata(ctx), contract.endpoint, query, childVariables)
 		var child endpointReply
 		uncertain := err != nil
+		responseLimited := false
+		if err == nil && !consumeResponseBudget(ctx, len(body)) {
+			err = errResponseLimit
+			responseLimited = true
+		}
 		if err == nil {
 			child, err = decodeEndpointReply(body)
 			uncertain = err != nil
 		}
 		if err != nil {
-			child.Errors = indeterminateCommitError(key, field)
+			if errors.Is(err, errResponseLimit) {
+				responseLimited = true
+				uncertain = false
+				child.Errors = gatewayLimitError("response")
+			} else {
+				child.Errors = indeterminateCommitError(key, field)
+			}
 		} else {
 			if child.Data == nil {
 				child.Data = make(map[string]any)
 			}
-			definition := my.schema.Mutation.Fields.ForName(field.Name)
 			completed, completionErrors, _ := completeEndpointValue(my.schema, child.Data[key], definition.Type, field.SelectionSet, ast.Path{ast.PathName(key)}, child.Errors, contract)
 			child.Data[key] = completed
-			child.Errors = append(child.Errors, completionErrors...)
 			prefixErrors(child.Errors, "", field)
+			prefixLocalErrors(completionErrors, "", field)
+			child.Errors = append(child.Errors, completionErrors...)
 		}
 		value := child.Data[key]
 		reply.Data[key] = value
 		reply.Errors = append(reply.Errors, child.Errors...)
 		commitState, _ := child.Extensions["mutationCommit"].(string)
-		if commitState == "indeterminate" || (commitState == "" && len(child.Errors) > 0) {
+		if responseLimited || commitState == "indeterminate" || (commitState == "" && len(child.Errors) > 0) {
 			uncertain = true
 		}
 		if uncertain {
-			markIndeterminateCommit(child.Errors)
+			if !responseLimited {
+				markIndeterminateCommit(child.Errors)
+			}
 			if !indeterminateSet[contract.name] {
 				indeterminateSet[contract.name] = true
 				indeterminate = append(indeterminate, contract.name)
@@ -1052,7 +1268,6 @@ func (my *gatewayState) executeMutation(ctx context.Context, operation *ast.Oper
 			committedSet[contract.name] = true
 			committed = append(committed, contract.name)
 		}
-		definition := my.schema.Mutation.Fields.ForName(field.Name)
 		if len(child.Errors) > 0 && definition != nil && definition.Type.NonNull && value == nil {
 			reply.nullData = true
 			break
@@ -1107,7 +1322,7 @@ func gatewayLimitError(resource string) gqlerror.List {
 }
 
 func validateGatewayRequest(query string, variables map[string]any) gqlerror.List {
-	if len(query) > gatewayMaxDocumentBytes {
+	if len(query) > maxDocumentBytes {
 		return gatewayLimitError("document size")
 	}
 	if len(variables) > gatewayMaxVariables {
@@ -1258,7 +1473,9 @@ func responseKey(field *ast.Field) string {
 }
 
 func executeChild(ctx context.Context, endpoint Endpoint, query string, variables map[string]any) (body []byte, err error) {
-	return safelyCall(func() ([]byte, error) { return endpoint.Execute(WithDelegatedExecution(ctx), query, variables) })
+	return safelyCall(func() ([]byte, error) {
+		return endpoint.ExecuteOperation(WithDelegatedExecution(ctx), query, variables, "")
+	})
 }
 
 func subscribeChild(ctx context.Context, endpoint SubscriptionEndpoint, query string, variables map[string]any) (events <-chan []byte, err error) {
@@ -1303,6 +1520,14 @@ func markIndeterminateCommit(errors gqlerror.List) {
 }
 
 func prefixErrors(errors gqlerror.List, prefix string, field *ast.Field) {
+	prefixEndpointErrors(errors, prefix, field, true)
+}
+
+func prefixLocalErrors(errors gqlerror.List, prefix string, field *ast.Field) {
+	prefixEndpointErrors(errors, prefix, field, false)
+}
+
+func prefixEndpointErrors(errors gqlerror.List, prefix string, field *ast.Field, sanitize bool) {
 	for _, err := range errors {
 		set := ast.SelectionSet{field}
 		if prefix != "" {
@@ -1314,11 +1539,29 @@ func prefixErrors(errors gqlerror.List, prefix string, field *ast.Field) {
 			err.Path = nil
 			err.Extensions = map[string]any{"code": "BAD_GATEWAY_RESPONSE"}
 			position = field
+		} else if sanitize {
+			code, _ := err.Extensions["code"].(string)
+			if !publicRemoteErrorCode(code) {
+				code = "REMOTE_ERROR"
+			}
+			err.Message = "endpoint execution failed"
+			err.Extensions = map[string]any{"code": code}
 		}
 		if prefix != "" {
 			err.Path = append(ast.Path{ast.PathName(prefix)}, err.Path...)
 		}
 		setPublicLocation(err, position)
+	}
+}
+
+func publicRemoteErrorCode(code string) bool {
+	switch code {
+	case "BAD_USER_INPUT", "BAD_GATEWAY_RESPONSE", "FORBIDDEN", "UNAUTHENTICATED", "NOT_FOUND", "CONFLICT",
+		"LIMIT_EXCEEDED", "TIMEOUT", "CANCELLED", "POLICY_DENIED", "POLICY_REVISION_MISMATCH",
+		"SNAPSHOT_CHANGED", "SNAPSHOT_CONFLICT", "GRAPHQL_ERROR", "INDETERMINATE_COMMIT":
+		return true
+	default:
+		return false
 	}
 }
 

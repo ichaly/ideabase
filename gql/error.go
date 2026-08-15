@@ -18,34 +18,90 @@ func GraphQLErrors(err error) gqlerror.List {
 		return nil
 	}
 	if list, ok := err.(gqlerror.List); ok {
-		return list
+		return codedGraphQLErrors(list, "GRAPHQL_ERROR")
 	}
 	if item, ok := err.(*gqlerror.Error); ok {
-		return gqlerror.List{item}
+		return codedGraphQLErrors(gqlerror.List{item}, "GRAPHQL_ERROR")
 	}
 	var list gqlerror.List
 	if errors.As(err, &list) {
-		return list
+		return codedGraphQLErrors(list, "GRAPHQL_ERROR")
 	}
 	var item *gqlerror.Error
 	if errors.As(err, &item) {
-		return gqlerror.List{item}
+		return codedGraphQLErrors(gqlerror.List{item}, "GRAPHQL_ERROR")
 	}
 	if safe := safeFailure(err); safe != nil {
 		err = safe
+	}
+	var public errorCoder
+	if !errors.As(err, &public) {
+		err = &publicFailure{"internal execution error", "EXECUTION_ERROR"}
 	}
 	item = gqlerror.Wrap(err)
 	var coded errorCoder
 	if errors.As(err, &coded) {
 		item.Extensions = map[string]any{"code": coded.ErrorCode()}
+	} else {
+		item.Extensions = map[string]any{"code": "EXECUTION_ERROR"}
 	}
 	return gqlerror.List{item}
+}
+
+func resolverFailure(err error) error {
+	var completion *nonNullResolverError
+	if errors.As(err, &completion) {
+		return completion.errors
+	}
+	var public errorCoder
+	if safeFailure(err) != nil || errors.As(err, &public) || codedResolverError(err) {
+		return err
+	}
+	return &publicFailure{"resolver execution failed", "RESOLVER_ERROR"}
+}
+
+func codedResolverError(err error) bool {
+	var list gqlerror.List
+	if errors.As(err, &list) {
+		for _, item := range list {
+			if item == nil || item.Extensions["code"] == nil {
+				return false
+			}
+		}
+		return len(list) > 0
+	}
+	var item *gqlerror.Error
+	return errors.As(err, &item) && item.Extensions["code"] != nil
+}
+
+func codedGraphQLErrors(list gqlerror.List, fallback string) gqlerror.List {
+	result := make(gqlerror.List, len(list))
+	for i, item := range list {
+		if item == nil {
+			continue
+		}
+		clone := *item
+		clone.Extensions = make(map[string]any, len(item.Extensions)+1)
+		for key, value := range item.Extensions {
+			clone.Extensions[key] = value
+		}
+		if clone.Extensions["code"] == nil {
+			clone.Extensions["code"] = fallback
+		}
+		result[i] = &clone
+	}
+	return result
 }
 
 type publicFailure struct{ message, code string }
 
 func (my *publicFailure) Error() string     { return my.message }
 func (my *publicFailure) ErrorCode() string { return my.code }
+
+func mutationDefinitelyRolledBack(err error) bool {
+	var postgres *pgconn.PgError
+	return errors.As(err, &postgres) || errors.Is(err, gorm.ErrDuplicatedKey) || errors.Is(err, gorm.ErrForeignKeyViolated)
+}
 
 func safeFailure(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {

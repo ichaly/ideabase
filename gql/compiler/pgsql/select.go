@@ -140,7 +140,7 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 			if err != nil {
 				return err
 			}
-			u.ordered = len(u.groups) > 0 && (u.args.ForName(protocol.LIMIT) != nil || u.args.ForName(protocol.OFFSET) != nil)
+			u.ordered = len(u.groups) > 0 && (u.args.ForName(protocol.LIMIT) != nil || u.args.ForName(protocol.OFFSET) != nil || ctx.DefaultLimit() > 0)
 			core = func() error { return my.buildStatsCore(ctx, u) }
 		} else {
 			u.ordered = u.orderedList()
@@ -852,7 +852,7 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 
 	// 缺省LIMIT兜底：无显式limit的列表注入配置的default-limit，防无界全表扫描；
 	// 变更读回须返回全部受影响行、统计分组保持完整语义、递归全树已有depth限深，均不注入
-	if !limited && !u.readback && u.shape != shapeStats && (u.rel == nil || !u.rel.Deep) {
+	if !limited && !u.readback && (u.shape != shapeStats || len(u.groups) > 0) && (u.rel == nil || !u.rel.Deep) {
 		if n := ctx.DefaultLimit(); n > 0 {
 			ctx.Space(`LIMIT`).Write(n)
 		}

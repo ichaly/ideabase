@@ -2,7 +2,9 @@
 
 应用主路径统一为 `New` → `Builder` → `Policy`/metadata permissions → `Build` → `Engine`；
 低级构造器不再是运行时装配入口。
-自定义业务统一注册 `Resolver`，Fiber 使用 `Bind`。单数据源使用 `Engine`；多租户数据源
+自定义业务统一注册 `Resolver`。HTTP 统一使用 `transport.NewHandler`；Fiber 等框架通过官方
+`net/http` adaptor 挂载该 handler。旧 `Bind` 和 GraphQL WebSocket 入口已经移除，订阅统一
+迁移到 `transport.NewSubscriptionHandler` 的 SSE。单数据源使用 `Engine`；多租户数据源
 路由使用 `TenantGateway`，跨引擎命名空间组合使用 `Gateway`，三者都经由同一执行契约暴露。
 
 ## 1. 先升级引擎，再迁调用方
@@ -56,3 +58,13 @@ Schema/拓扑刷新失败可继续服务已验证的旧 snapshot。
 `transport.NewHandler` 与 `transport.NewSubscriptionHandler` 统一要求显式传入一个
 `transport.Options`。无自定义配置时传 `transport.Options{}`；不要再传多个 options，避免
 安全配置被静默覆盖。
+
+## 7. 先执行生产迁移
+
+集群实例启动前必须由应用迁移系统执行三份显式 DDL：
+
+- `gql.PostgresReplayDDL`：跨副本 delegation token 单次消费；
+- `gql.PostgresSecurityStateDDL`：跨副本撤权、credential、policy 与 route revision；
+- `pgsql.AuditOutboxDDL`：物理删除审计事实。
+
+共享 store 构造器和生产 purge Engine 会在启动期校验这些迁移，缺失时 fail closed，不再等到首个请求暴露。

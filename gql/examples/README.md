@@ -54,7 +54,7 @@ GQL '{"query":"mutation { echo(message: \"hello\") }"}'
 | Remote Join | `User.reputation` | `main.go`, `ResolverAndRemote` |
 | 行级作用域 | `Post.tenant_id ↔ tenant` | `main.go`, `TenantScopedPosts` |
 | 持久化查询与缓存预热 | 所有命名 operation | `queries/*.graphql` |
-| CDC WebSocket 订阅 | `subscription { users { total } }` | `docker-compose.yml` |
+| CDC SSE 订阅 | `subscription { users { total } }` | `docker-compose.yml` |
 | 标准自省 | `StandardIntrospection` | `operations/extensions.graphql` |
 | 安全开关 | introspection/persisted-only/max-depth | `config.production.yml` |
 | 字节响应快路径 | `Engine.Execute` | `demo_test.go` |
@@ -132,11 +132,13 @@ curl -s http://localhost:8080/graphql -H 'Content-Type: application/json' \
 
 ## 订阅
 
-Docker 已设置 `wal_level=logical`。使用 `graphql-transport-ws`：
+Docker 已设置 `wal_level=logical`。向 `/graphql/stream` POST 标准 GraphQL JSON，
+并以 `Accept: text/event-stream` 接收 SSE：
 
-```json
-{"type":"connection_init"}
-{"id":"1","type":"subscribe","payload":{"query":"subscription { users { total } }"}}
+```bash
+curl -N http://localhost:8080/graphql/stream -H 'Accept: text/event-stream' \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"subscription { users { total } }"}'
 ```
 
 首次推送当前值；相关表发生变化后 CDC 唤醒并仅在结果变化时推送。共享同构订阅只执行

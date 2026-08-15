@@ -14,6 +14,45 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
+type effectiveCapabilityEndpoint struct{ *gatewayEndpoint }
+
+func (effectiveCapabilityEndpoint) EffectiveSchemaAvailable() bool { return true }
+
+func TestCheckProfileCompatibilityReportsNullableDefaultChanges(t *testing.T) {
+	previous := SchemaProfile{Name: "previous", SchemaArtifact: SchemaArtifact{Schema: `directive @d(arg: String = "old") on FIELD_DEFINITION
+type Query { user(arg: String = "old"): String }
+input Input { value: String = "old" }`}}
+	next := SchemaProfile{Name: "next", SchemaArtifact: SchemaArtifact{Schema: `directive @d(arg: String = "new") on FIELD_DEFINITION
+type Query { user(arg: String = "new"): String }
+input Input { value: String = "new" }`}}
+	err := CheckProfileCompatibility(previous, next)
+	compat, ok := err.(SchemaCompatibilityError)
+	require.True(t, ok)
+	require.Equal(t, []string{"@d(arg)", "Input.value", "Query.user(arg)"}, []string{compat.Violations[0].Coordinate, compat.Violations[1].Coordinate, compat.Violations[2].Coordinate})
+}
+
+func TestCheckProfileCompatibilityReportsPossibleTypeRemoval(t *testing.T) {
+	previous := SchemaProfile{Name: "previous", SchemaArtifact: SchemaArtifact{Schema: `interface Node { id: ID! }
+type User implements Node { id: ID! }
+type Team implements Node { id: ID! }
+union Search = User | Team
+type Query { node: Node, search: Search }`}}
+	next := SchemaProfile{Name: "next", SchemaArtifact: SchemaArtifact{Schema: `interface Node { id: ID! }
+type User implements Node { id: ID! }
+union Search = User
+type Query { node: Node, search: Search }`}}
+	err := CheckProfileCompatibility(previous, next)
+	compat, ok := err.(SchemaCompatibilityError)
+	require.True(t, ok)
+	require.Contains(t, compat.Violations, SchemaCompatibilityViolation{Category: "union_member_removed", Coordinate: "Search.Team", Message: "removed union member Search.Team"})
+	// Removing an object from an interface's possible types is also breaking.
+	next.Schema = strings.Replace(next.Schema, "type User implements Node", "type User", 1)
+	err = CheckProfileCompatibility(previous, next)
+	compat, ok = err.(SchemaCompatibilityError)
+	require.True(t, ok)
+	require.Contains(t, compat.Violations, SchemaCompatibilityViolation{Category: "interface_implementation_removed", Coordinate: "User implements Node", Message: "removed interface implementation User implements Node"})
+}
+
 type blockingCachedPolicy struct {
 	started chan struct{}
 	release chan struct{}
@@ -270,4 +309,75 @@ func TestSchemaProfileCompatibilityDetectsRequiredDefaultsAndKindChanges(t *test
 			require.ErrorContains(t, err, "incompatible schema profile")
 		})
 	}
+}
+
+func TestSchemaProfileCompatibilityDetectsAbstractRootsAndDirectiveBreaks(t *testing.T) {
+	previous := SchemaProfile{Name: "v1", SchemaArtifact: SchemaArtifact{Schema: `
+		directive @tag(label: String!) repeatable on FIELD_DEFINITION | OBJECT
+		schema { query: Root mutation: Write }
+		type Root { search: Result @tag(label: "x") }
+		type Write { save: String }
+		interface Node { id: ID! }
+		type User implements Node { id: ID! }
+		union Result = User
+	`}}
+	next := SchemaProfile{Name: "v2", SchemaArtifact: SchemaArtifact{Schema: `
+		directive @tag(label: String) on FIELD_DEFINITION
+		schema { query: Root }
+		type Root { search: Result @tag(label: "x") }
+		type Write { save: String }
+		interface Node { id: ID! }
+		type User { id: ID! }
+		union Result = Root
+	`}}
+	err := CheckProfileCompatibility(previous, next)
+	require.Error(t, err)
+	for _, want := range []string{"category=", "coordinate=", "union", "interface", "schema", "directive"} {
+		require.Contains(t, err.Error(), want)
+	}
+}
+
+func TestSchemaProfileCompatibilityReportsDirectiveParameterAndLocationCoordinates(t *testing.T) {
+	previous := SchemaProfile{Name: "v1", SchemaArtifact: SchemaArtifact{Schema: `
+		directive @auth(role: String! = "reader") on FIELD_DEFINITION | OBJECT
+		type Query { value: String @auth }
+	`}}
+	next := SchemaProfile{Name: "v2", SchemaArtifact: SchemaArtifact{Schema: `
+		directive @auth(role: Int) on FIELD_DEFINITION
+		type Query { value: String @auth }
+	`}}
+	err := CheckProfileCompatibility(previous, next)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "coordinate=@auth(role)")
+}
+
+func TestSchemaProfileCompatibilityAllowsAdditiveRootsAndDirectiveCapabilities(t *testing.T) {
+	previous := SchemaProfile{SchemaArtifact: SchemaArtifact{Schema: `
+		directive @tag on FIELD_DEFINITION
+		type Query { value: String }
+	`}}
+	next := SchemaProfile{SchemaArtifact: SchemaArtifact{Schema: `
+		directive @tag repeatable on FIELD_DEFINITION | OBJECT
+		type Query { value: String }
+		type Mutation { save: String }
+	`}}
+	require.NoError(t, CheckProfileCompatibility(previous, next))
+}
+
+func TestSchemaArtifactExecutionPinBindsCapabilities(t *testing.T) {
+	artifact := FinalizeSchemaArtifact(SchemaArtifact{
+		Schema: "type Query { value: String }", Fingerprint: digest("type Query { value: String }"),
+		Capabilities: []Capability{{Coordinate: "Query.value", Parent: "Query", Name: "value", Type: "String", Handler: HandlerSQL, RetrySafe: true}},
+	})
+	require.NoError(t, ValidateSchemaArtifact(artifact))
+	artifact.Capabilities[0].RetrySafe = false
+	require.ErrorContains(t, ValidateSchemaArtifact(artifact), "execution pin mismatch")
+}
+
+func TestExecutionPinIsEnforcedAtEffectiveViewSelection(t *testing.T) {
+	artifact := SchemaArtifact{Schema: "type Query { value: String }", Fingerprint: digest("type Query { value: String }")}
+	pin := FinalizeSchemaArtifact(artifact).ExecutionPin
+	require.NoError(t, enforceExecutionPin(WithExecutionPin(context.Background(), pin), artifact))
+	err := enforceExecutionPin(WithExecutionPin(context.Background(), "stale"), artifact)
+	require.Equal(t, "SNAPSHOT_CONFLICT", err.(errorCoder).ErrorCode())
 }

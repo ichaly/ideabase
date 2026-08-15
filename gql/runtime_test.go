@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,6 +74,21 @@ func TestExecutorRuntimeSubscribeRejectsWithoutCDC(t *testing.T) {
 	_, err := executor.Subscribe(context.Background(), `subscription { users { total } }`, nil, "")
 	require.Error(t, err)
 	require.False(t, executor.SubscriptionAvailable())
+}
+
+func TestSubscriptionEncodedEventIsCopiedAndStillHonorsPerSubscriberLimit(t *testing.T) {
+	reply := gqlReply{encoded: []byte(`{"data":{"value":"shared"}}`)}
+	first, err := marshalSubscriptionReply(context.Background(), reply)
+	require.NoError(t, err)
+	first[0] = 'x'
+	second, err := marshalSubscriptionReply(context.Background(), reply)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":{"value":"shared"}}`, string(second))
+
+	large := gqlReply{encoded: []byte(`{"data":{"value":"` + strings.Repeat("x", 256) + `"}}`)}
+	limited, err := marshalSubscriptionReply(WithResponseLimit(context.Background(), 128), large)
+	require.NoError(t, err)
+	require.Contains(t, string(limited), `"code":"LIMIT_EXCEEDED"`)
 }
 
 func TestExecutorRuntimeSchemaAndCapabilitiesAreCopies(t *testing.T) {

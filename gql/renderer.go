@@ -217,7 +217,7 @@ func (my *Renderer) renderEnums() error {
 		if catalogAllows(class, protocol.OP_AGGREGATE) {
 			writeColumns(protocol.SUFFIX_GROUP_FIELD)
 		}
-		keys := class.ConflictTargets()
+		keys := class.UpsertConflictTargets()
 		if len(keys) == 0 {
 			return
 		}
@@ -457,15 +457,17 @@ func (my *Renderer) renderInput() error {
 		createFields := writableFields(my.meta, class, protocol.OP_INSERT)
 		updateFields := writableFields(my.meta, class, protocol.OP_UPDATE)
 		plural := inflection.Plural(className)
+		batch := mutationBatchName(className)
 		createOperation := my.operationExists("Mutation", protocol.CREATE+className) ||
 			my.operationExists("Mutation", protocol.CREATE+plural)
-		updateOperation := my.operationExists("Mutation", protocol.UPDATE+className)
+		singleUpdate := my.operationExists("Mutation", protocol.UPDATE+className)
+		batchUpdate := my.operationExists("Mutation", protocol.UPDATE+batch)
 		if createOperation && len(createFields) > 0 {
 			my.writeLine("# ", className, "创建输入")
 			my.writeMutationInput(className, protocol.SUFFIX_CREATE_INPUT, class, createFields, protocol.OP_INSERT, true)
 			my.writeMutationInput(className, protocol.SUFFIX_CREATE_ROW_INPUT, class, createFields, protocol.OP_INSERT, false)
 		}
-		if my.operationExists("Mutation", protocol.UPSERT+plural) && len(createFields) > 0 && len(class.ConflictTargets()) > 0 {
+		if my.operationExists("Mutation", protocol.UPSERT+plural) && len(createFields) > 0 && len(class.UpsertConflictTargets()) > 0 {
 			upsertFields := slices.DeleteFunc(append([]string(nil), createFields...), func(name string) bool {
 				return !slices.Contains(updateFields, name)
 			})
@@ -474,9 +476,11 @@ func (my *Renderer) renderInput() error {
 			}
 		}
 
-		if updateOperation && len(updateFields) > 0 {
+		if singleUpdate && len(updateFields) > 0 {
 			my.writeLine("# ", className, "更新输入")
 			my.writeMutationInput(className, protocol.SUFFIX_UPDATE_INPUT, class, updateFields, protocol.OP_UPDATE, true)
+		}
+		if batchUpdate && len(updateFields) > 0 {
 			my.writeMutationInput(className, protocol.SUFFIX_UPDATE_ROW_INPUT, class, updateFields, protocol.OP_UPDATE, false)
 		}
 	})
@@ -801,10 +805,7 @@ func (my *Renderer) renderMutation() error {
 		return nil
 	}
 	my.eachTableClass(func(className string, class *protocol.Class) {
-		batch := inflection.Plural(className)
-		if batch == className {
-			batch += protocol.SUFFIX_MANY
-		}
+		batch := mutationBatchName(className)
 		if !operationExists(protocol.UPDATE+className) && !operationExists(protocol.DELETE+className) && !operationExists("restore"+className+protocol.SUFFIX_BY_PK) && !operationExists(protocol.PURGE+className+protocol.SUFFIX_BY_PK) &&
 			!operationExists(protocol.UPDATE+batch) && !operationExists(protocol.DELETE+batch) &&
 			!operationExists("restore"+batch) && !operationExists(protocol.PURGE+batch) {
@@ -841,7 +842,7 @@ func (my *Renderer) renderMutation() error {
 			my.writeLine("  # ", class.Name, "插入或更新（按on列冲突，缺省主键）")
 			onType := className + "ConflictTarget"
 			defaultTarget := "PRIMARY"
-			if _, ok := class.PrimaryConflictTarget(); !ok {
+			if _, ok := class.PrimaryUpsertConflictTarget(); !ok {
 				onType += "!"
 				defaultTarget = ""
 			}
@@ -850,31 +851,18 @@ func (my *Renderer) renderMutation() error {
 				{Name: protocol.ON, Type: onType, Default: defaultTarget},
 			}...))
 		}
+		batchPlural := mutationBatchName(className)
 		if operationExists(protocol.UPDATE + className) {
-			batchPlural := inflection.Plural(className)
-			if batchPlural == className {
-				batchPlural += protocol.SUFFIX_MANY
-			}
-			args := []renderer.Argument{{Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_INPUT + "!"}}
-			args = append(args, my.keyArguments(className, class, false)...)
-			args = append(args, renderer.Argument{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT})
-			my.writeField(protocol.UPDATE+className, className, renderer.NonNull(), renderer.WithArgs(args...))
 			if key := my.keyArguments(className, class, true); len(key) > 0 {
 				key = append(key, renderer.Argument{Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_INPUT + "!"})
-				if operationExists(protocol.UPDATE + className + protocol.SUFFIX_BY_PK) {
-					my.writeField(protocol.UPDATE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
-				}
+				my.writeField(protocol.UPDATE+className, className, renderer.WithArgs(key...))
 			}
-			if operationExists(protocol.UPDATE + batchPlural) {
-				my.writeField(protocol.UPDATE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}, {Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_ROW_INPUT + "!"}}...))
-			}
+		}
+		if operationExists(protocol.UPDATE + batchPlural) {
+			my.writeField(protocol.UPDATE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}, {Name: protocol.INPUT, Type: className + protocol.SUFFIX_UPDATE_ROW_INPUT + "!"}}...))
 		}
 
 		if operationExists(protocol.DELETE + className) {
-			batchPlural := inflection.Plural(className)
-			if batchPlural == className {
-				batchPlural += protocol.SUFFIX_MANY
-			}
 			my.writeLine("  # ", class.Name, "删除")
 			args := append(my.keyArguments(className, class, false), renderer.Argument{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT})
 			my.writeField(protocol.DELETE+className, protocol.SCALAR_INT, renderer.NonNull(), renderer.WithArgs(args...))
@@ -885,11 +873,7 @@ func (my *Renderer) renderMutation() error {
 				my.writeField(protocol.DELETE+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
 			}
 		}
-		if operationExists("restore"+inflection.Plural(className)) || operationExists("restore"+className+protocol.SUFFIX_BY_PK) {
-			batchPlural := inflection.Plural(className)
-			if batchPlural == className {
-				batchPlural += protocol.SUFFIX_MANY
-			}
+		if operationExists("restore"+batchPlural) || operationExists("restore"+className+protocol.SUFFIX_BY_PK) {
 			if key := my.keyArguments(className, class, true); len(key) > 0 && operationExists("restore"+className+protocol.SUFFIX_BY_PK) {
 				my.writeField("restore"+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
 			}
@@ -897,11 +881,7 @@ func (my *Renderer) renderMutation() error {
 				my.writeField("restore"+batchPlural, className+protocol.SUFFIX_MUTATION_RESULT, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{{Name: protocol.WHERE, Type: className + protocol.SUFFIX_WHERE_INPUT + "!"}}...))
 			}
 		}
-		if operationExists(protocol.PURGE+inflection.Plural(className)) || operationExists(protocol.PURGE+className+protocol.SUFFIX_BY_PK) {
-			batchPlural := inflection.Plural(className)
-			if batchPlural == className {
-				batchPlural += protocol.SUFFIX_MANY
-			}
+		if operationExists(protocol.PURGE+batchPlural) || operationExists(protocol.PURGE+className+protocol.SUFFIX_BY_PK) {
 			if key := my.keyArguments(className, class, true); len(key) > 0 && operationExists(protocol.PURGE+className+protocol.SUFFIX_BY_PK) {
 				my.writeField(protocol.PURGE+className+protocol.SUFFIX_BY_PK, className, renderer.WithArgs(key...))
 			}
@@ -913,6 +893,13 @@ func (my *Renderer) renderMutation() error {
 
 	my.writeLine("}")
 	return nil
+}
+
+func mutationBatchName(className string) string {
+	if plural := inflection.Plural(className); plural != className {
+		return plural
+	}
+	return className + protocol.SUFFIX_MANY
 }
 
 func (*Renderer) keyArguments(className string, class *protocol.Class, required bool) []renderer.Argument {

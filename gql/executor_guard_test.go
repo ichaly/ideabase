@@ -2,15 +2,24 @@ package gql
 
 import (
 	"context"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResponseLimitStopsResolverReplyAtExecutionBoundary(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Query", "largeReply", "", func(context.Context, Root, struct{}) (string, error) {
+		return strings.Repeat("x", 1024), nil
+	})))
+	body, err := executor.Execute(WithResponseLimit(context.Background(), 128), `{ largeReply }`, nil)
+	require.Nil(t, body)
+	require.ErrorContains(t, err, "response size limit")
+}
 
 // schema.introspection=false 时自省查询必须拒绝(生产对外暴露的安全开关)
 func TestIntrospectionDisabled(t *testing.T) {
@@ -32,16 +41,15 @@ func TestPersistedOnlyHTTP(t *testing.T) {
 	defer cleanup()
 	require.NoError(t, executor.loadDocument(`query UserTotal { users { total } }`))
 
-	app := fiber.New()
-	executor.Bind(app.Group(executor.Path()))
 	post := func(body string) string {
-		req := httptest.NewRequest("POST", executor.Path(), strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := app.Test(req)
+		var req struct {
+			Query         string `json:"query"`
+			OperationName string `json:"operationName"`
+		}
+		require.NoError(t, jsonNumeric.Unmarshal([]byte(body), &req))
+		out, err := executor.ExecuteOperation(context.Background(), req.Query, nil, req.OperationName)
 		require.NoError(t, err)
-		buf := make([]byte, 4096)
-		n, _ := resp.Body.Read(buf)
-		return string(buf[:n])
+		return string(out)
 	}
 
 	// 原始查询文本拒绝

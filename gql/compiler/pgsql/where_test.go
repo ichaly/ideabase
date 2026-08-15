@@ -161,7 +161,7 @@ func (my *_DialectSuite) TestWhereGuards() {
 			want:      `WHERE ("sys_user"."name" = $1 OR "sys_user"."age" > $2)`,
 		},
 		"变更整体变量where": {
-			query:     `mutation ($w: UserWhereInput) { updateUser(input: { name: "x" }, where: $w) { id } }`,
+			query:     `mutation ($w: UserWhereInput!) { updateUsers(input: { name: "x" }, where: $w) { affectedCount } }`,
 			variables: map[string]interface{}{"w": map[string]interface{}{"name": map[string]interface{}{"eq": "a"}}},
 			want:      `WHERE "sys_user"."name" = $2`,
 		},

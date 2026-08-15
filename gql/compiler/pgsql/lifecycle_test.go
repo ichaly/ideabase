@@ -203,16 +203,25 @@ func TestMultiplePurgeOccurrencesRetainSeparateAuditCTEs(t *testing.T) {
 	require.Equal(t, 2, strings.Count(ctx.String(), `INSERT INTO "gql_audit_outbox"`))
 }
 
+func TestPurgeAuditDoesNotSilentlyIgnoreEventKeyConflicts(t *testing.T) {
+	ctx := compiler.NewContext(testHoster{class: auditClass()}, `"`, nil)
+	defer ctx.Release()
+	(&Dialect{}).buildPurgeAudit(ctx, &mutation{class: auditClass(), occurrence: 0})
+	if strings.Contains(ctx.String(), `ON CONFLICT ("event_key") DO NOTHING`) {
+		t.Fatalf("purge audit must not silently drop a reused request event: %s", ctx.String())
+	}
+}
+
 func TestOnlyPurgeMayRepeatOneTable(t *testing.T) {
 	class := auditClass()
 	for name, set := range map[string]ast.SelectionSet{
 		"update_then_purge": {
-			&ast.Field{Name: "updateUserByPk", Arguments: ast.ArgumentList{{Name: protocol.ID, Value: &ast.Value{Kind: ast.IntValue, Raw: "1"}}, {Name: protocol.INPUT, Value: &ast.Value{Kind: ast.ObjectValue}}}},
+			&ast.Field{Name: "updateUser", Arguments: ast.ArgumentList{{Name: protocol.ID, Value: &ast.Value{Kind: ast.IntValue, Raw: "1"}}, {Name: protocol.INPUT, Value: &ast.Value{Kind: ast.ObjectValue}}}},
 			&ast.Field{Name: "purgeUserByPk", Arguments: ast.ArgumentList{{Name: protocol.ID, Value: &ast.Value{Kind: ast.IntValue, Raw: "1"}}}},
 		},
 		"purge_then_update": {
 			&ast.Field{Name: "purgeUserByPk", Arguments: ast.ArgumentList{{Name: protocol.ID, Value: &ast.Value{Kind: ast.IntValue, Raw: "1"}}}},
-			&ast.Field{Name: "updateUserByPk", Arguments: ast.ArgumentList{{Name: protocol.ID, Value: &ast.Value{Kind: ast.IntValue, Raw: "1"}}, {Name: protocol.INPUT, Value: &ast.Value{Kind: ast.ObjectValue}}}},
+			&ast.Field{Name: "updateUser", Arguments: ast.ArgumentList{{Name: protocol.ID, Value: &ast.Value{Kind: ast.IntValue, Raw: "1"}}, {Name: protocol.INPUT, Value: &ast.Value{Kind: ast.ObjectValue}}}},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

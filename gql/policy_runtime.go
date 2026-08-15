@@ -14,6 +14,7 @@ import (
 )
 
 type policyDecisionsKey struct{}
+type policyTargetsKey struct{}
 
 // PolicyDecisionFromContext exposes the normalized decision to a governed
 // Resolver without making the Resolver call the provider a second time.
@@ -44,6 +45,7 @@ func (my *Engine) authorizeProvider(ctx context.Context, operation *ast.Operatio
 		return ctx, err
 	}
 	decisions := make(map[string]PolicyDecision, len(targets))
+	targetIndex := make(map[string]policyTarget, len(targets))
 	for _, target := range targets {
 		capability, coordinate := target.capability, target.capability.Coordinate
 		request := PolicyRequest{
@@ -84,7 +86,9 @@ func (my *Engine) authorizeProvider(ctx context.Context, operation *ast.Operatio
 			}
 		}
 		decisions[coordinate] = decision
+		targetIndex[coordinate] = target
 	}
+	ctx = context.WithValue(ctx, policyTargetsKey{}, targetIndex)
 	return context.WithValue(ctx, policyDecisionsKey{}, decisions), nil
 }
 
@@ -123,11 +127,6 @@ func (my *Engine) validatePolicyBudget(target policyTarget, decision PolicyDecis
 	}
 	for _, node := range target.nodes {
 		limit := my.metadata.DefaultLimit()
-		if limit <= 0 {
-			// Connection lists receive the compiler's bounded fallback even when
-			// schema.default-limit is unset; authorize that effective value too.
-			limit = protocol.DEFAULT_PAGE_SIZE
-		}
 		for _, name := range []string{protocol.LIMIT, protocol.FIRST, protocol.LAST} {
 			if argument := node.Arguments.ForName(name); argument != nil {
 				value, err := argument.Value.Value(variables)
@@ -375,6 +374,34 @@ func (my *Engine) collectRelationPolicyTargets(targetFor func(Capability, *proto
 			targetClass, ok := my.metadata.GetNode(field.Relation.TargetClass)
 			if !ok {
 				return fmt.Errorf("relation target class is missing: %s", field.Relation.TargetClass)
+			}
+			through := field.Relation.Through
+			if through != nil {
+				throughClass, exists := my.metadata.GetNode(through.TableName)
+				if !exists || throughClass == nil || !throughClass.IsThrough {
+					return fmt.Errorf("governed relation through class is missing: %s", through.TableName)
+				}
+				addThrough := func(name, action string, raw any) {
+					if raw == nil {
+						return
+					}
+					capability := Capability{Coordinate: "Mutation." + root.Name + "." + field.Name + "." + name,
+						Parent: "Mutation", Name: root.Name, Handler: HandlerSQL, Planner: "pgsql", Actions: []string{action}, Resource: throughClass.Name, PolicyAware: true}
+					target := targetFor(capability, throughClass)
+					use := FieldUseWrite
+					if name == protocol.DISCONNECT {
+						use = FieldUseFilter
+					}
+					for _, column := range []string{through.SourceKey, through.TargetKey} {
+						if field := throughClass.Fields[column]; field != nil {
+							column = field.Name
+						}
+						target.add(use, column)
+					}
+				}
+				addThrough(protocol.CONNECT, protocol.OP_INSERT, operations[protocol.CONNECT])
+				addThrough(protocol.DISCONNECT, protocol.OP_DELETE, operations[protocol.DISCONNECT])
+				addThrough(protocol.CREATE, protocol.OP_INSERT, operations[protocol.CREATE])
 			}
 			if operations[protocol.CONNECT] != nil || operations[protocol.DISCONNECT] != nil {
 				capability, ok := my.snapshot.Capability("Mutation." + protocol.UPDATE + targetClass.Name)
@@ -643,6 +670,7 @@ func policyFieldAllowed(class *protocol.Class, allowed []string, requested strin
 
 func (my *Engine) policyPlan(ctx context.Context, base *Plan, variables map[string]interface{}) (*Plan, error) {
 	decisions, _ := ctx.Value(policyDecisionsKey{}).(map[string]PolicyDecision)
+	targets, _ := ctx.Value(policyTargetsKey{}).(map[string]policyTarget)
 	if len(decisions) == 0 || base == nil || base.operation == nil {
 		return base, nil
 	}
@@ -650,7 +678,7 @@ func (my *Engine) policyPlan(ctx context.Context, base *Plan, variables map[stri
 	if route, ok := PinnedRoute(ctx); ok && route.Mode != TenantModeSharedTable {
 		routeKey = route.CacheKey
 	}
-	key := planKey{query: fmt.Sprintf("%p", base.operation), shape: routeKey + "\x00" + policyPlanSignature(decisions)}
+	key := planKeyFor("", fmt.Sprintf("%p", base.operation), routeKey+"\x00"+policyPlanSignature(decisions), "")
 	if entry, ok := my.policyCache.Get(key); ok && entry.plan != nil {
 		plan := *entry.plan
 		plan.policyScope = my.policyDecisionScope(decisions)
@@ -663,9 +691,14 @@ func (my *Engine) policyPlan(ctx context.Context, base *Plan, variables map[stri
 	scope := my.policyDecisionScope(decisions)
 	for coordinateIndex, coordinate := range coordinates {
 		decision := decisions[coordinate]
-		capability, _ := my.snapshot.Capability(coordinate)
-		baseClass, ok := my.metadata.GetNode(capability.Resource)
-		if !ok {
+		target, targeted := targets[coordinate]
+		capability := target.capability
+		baseClass := target.class
+		if !targeted {
+			capability, _ = my.snapshot.Capability(coordinate)
+			baseClass, _ = my.metadata.GetNode(capability.Resource)
+		}
+		if baseClass == nil {
 			continue // custom Resolver/Remote policies have no SQL catalog overlay
 		}
 		class := overlay.class(baseClass)
@@ -740,7 +773,11 @@ func applyDecisionFields(permission *protocol.Permission, actions []string, fiel
 		case protocol.OP_INSERT:
 			permission.Insert = append(permission.Insert, write...)
 		case protocol.OP_UPDATE:
-			permission.Update = append(permission.Update, write...)
+			if len(write) == 0 {
+				permission.Update = append(permission.Update, "*") // relation-only action grant
+			} else {
+				permission.Update = append(permission.Update, write...)
+			}
 		case protocol.OP_DELETE:
 			permission.Delete = true
 		case protocol.OP_RESTORE:

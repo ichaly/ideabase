@@ -14,10 +14,10 @@ type SecurityStateProvider interface {
 }
 
 type TenantSecurityState struct {
-	Disabled               bool
-	MinimumPolicyRevision  uint64
-	MinimumRouteRevision   uint64
-	MinimumCredentialEpoch uint64
+	Disabled               bool   `json:"disabled"`
+	MinimumPolicyRevision  uint64 `json:"minimumPolicyRevision"`
+	MinimumRouteRevision   uint64 `json:"minimumRouteRevision"`
+	MinimumCredentialEpoch uint64 `json:"minimumCredentialEpoch"`
 }
 
 type revocationSnapshot struct {
@@ -62,25 +62,20 @@ func (barrier *RevocationBarrier) Replace(revision uint64, tenants map[string]Te
 
 func (barrier *RevocationBarrier) Check(_ context.Context, identity Identity, route TenantRoute) error {
 	if barrier == nil || barrier.state.Load() == nil {
-		return fmt.Errorf("revocation state unavailable")
+		return &publicFailure{"revocation state unavailable", "SECURITY_STATE_UNAVAILABLE"}
 	}
 	state, ok := barrier.state.Load().tenants[identity.Tenant()]
 	if !ok || route.Tenant != "" && route.Tenant != identity.Tenant() {
-		return fmt.Errorf("tenant security state unavailable")
+		return &publicFailure{"tenant security state unavailable", "SECURITY_STATE_UNAVAILABLE"}
 	}
-	if state.Disabled {
-		return fmt.Errorf("tenant is disabled")
+	return checkTenantSecurityState(identity, route, state)
+}
+
+func (barrier *RevocationBarrier) Revision(context.Context) (uint64, error) {
+	if barrier == nil || barrier.state.Load() == nil {
+		return 0, fmt.Errorf("revocation state unavailable")
 	}
-	if identity.PolicyRevision() < state.MinimumPolicyRevision {
-		return fmt.Errorf("identity policy revision is revoked")
-	}
-	if identity.CredentialEpoch() < state.MinimumCredentialEpoch {
-		return fmt.Errorf("identity credential epoch is revoked")
-	}
-	if route.Revision < state.MinimumRouteRevision {
-		return fmt.Errorf("tenant route revision is revoked")
-	}
-	return nil
+	return barrier.state.Load().revision, nil
 }
 
 func (my *Engine) checkSecurity(ctx context.Context) error {
@@ -89,7 +84,7 @@ func (my *Engine) checkSecurity(ctx context.Context) error {
 	}
 	identity, ok := IdentityFromContext(ctx)
 	if !ok {
-		return fmt.Errorf("verified identity is required")
+		return &publicFailure{"verified identity is required", "IDENTITY_REQUIRED"}
 	}
 	route, _ := PinnedRoute(ctx)
 	return my.revocation.Check(ctx, identity, route)

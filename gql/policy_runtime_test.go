@@ -402,6 +402,77 @@ func TestPolicyProviderChecksNestedRelationCreate(t *testing.T) {
 	require.Contains(t, reply.Errors.Error(), "check failed")
 }
 
+func TestPolicyProviderAuthorizesManyToManyThroughWrite(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	seen := false
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "PostTag" && operationInList(request.Actions, protocol.OP_INSERT) {
+			seen = true
+			return PolicyDecision{Allow: false}, nil
+		}
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `mutation {
+		updatePost(input: { tags: { connect: [1] } }, id: 1) { id }
+	}`, nil, "")
+	require.True(t, seen, "many-to-many link insert must authorize the through resource")
+	require.NotEmpty(t, reply.Errors)
+	require.Contains(t, reply.Errors.Error(), "policy denied")
+}
+
+func TestManyToManyDisconnectUsesThroughFilterFields(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	seen := false
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "PostTag" && operationInList(request.Actions, protocol.OP_DELETE) && len(request.Fields[FieldUseFilter]) > 0 {
+			seen = true
+			require.Empty(t, request.Fields[FieldUseWrite])
+			require.ElementsMatch(t, []string{"postId", "tagId"}, request.Fields[FieldUseFilter])
+		}
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `mutation {
+		updatePost(input: { tags: { disconnect: [1] } }, id: 1) { id }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.True(t, seen)
+}
+
+func TestManyToManyConnectChecksCompleteThroughRowInSQL(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, name, email) VALUES (1, 'u', 'u@x')`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO posts (id, title, user_id) VALUES (1, 'p', 1)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO tags (id, name) VALUES (1, 'one'), (2, 'two')`).Error)
+	allowedSource := 1
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		decision := PolicyDecision{Allow: true, Fields: request.Fields}
+		if request.Resource == "PostTag" && operationInList(request.Actions, protocol.OP_INSERT) {
+			decision.Check = []TypedPredicate{{Column: "postId", Operator: "eq", Value: allowedSource}}
+		}
+		return decision, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	reply := executor.run(ctx, `mutation { updatePost(input: { tags: { connect: [1] } }, id: 1) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	allowedSource = 2
+	reply = executor.run(ctx, `mutation { updatePost(input: { tags: { connect: [2] } }, id: 1) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	var allowed, denied int64
+	require.NoError(t, db.Table("post_tags").Where("post_id=1 AND tag_id=1").Count(&allowed).Error)
+	require.NoError(t, db.Table("post_tags").Where("post_id=1 AND tag_id=2").Count(&denied).Error)
+	require.EqualValues(t, 1, allowed)
+	require.Zero(t, denied)
+}
+
 func TestPolicyPlanCacheIsPartitionedByTenantRoute(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()

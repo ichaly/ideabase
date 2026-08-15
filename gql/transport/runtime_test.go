@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -62,14 +63,28 @@ func testManifestHandler(id string, endpoint manifestEndpoint) http.Handler {
 
 func (e *runtimeEndpoint) EffectiveSchema(context.Context) (core.SchemaArtifact, error) {
 	if e.effective.Schema != "" {
-		return e.effective, nil
+		return core.FinalizeSchemaArtifact(e.effective), nil
 	}
-	return core.SchemaArtifact{Schema: e.snapshot.Schema(), Fingerprint: schemaDigest(e.snapshot.Schema()), StructuralFingerprint: e.snapshot.Fingerprint(), Capabilities: e.snapshot.Capabilities()}, nil
+	return core.FinalizeSchemaArtifact(core.SchemaArtifact{Schema: e.snapshot.Schema(), Fingerprint: schemaDigest(e.snapshot.Schema()), StructuralFingerprint: e.snapshot.Fingerprint(), Capabilities: e.snapshot.Capabilities()}), nil
+}
+
+func (e *runtimeEndpoint) ForSnapshot(fingerprint string) (core.ComposableEndpoint, error) {
+	if e.snapshot == nil || e.snapshot.Fingerprint() != fingerprint {
+		return nil, fmt.Errorf("snapshot unavailable")
+	}
+	return e, nil
 }
 
 type subscriptionRuntime struct {
 	*runtimeEndpoint
 	events <-chan []byte
+}
+
+func (my *subscriptionRuntime) ForSnapshot(fingerprint string) (core.ComposableEndpoint, error) {
+	if my.snapshot == nil || my.snapshot.Fingerprint() != fingerprint {
+		return nil, fmt.Errorf("snapshot unavailable")
+	}
+	return my, nil
 }
 
 type healthyRuntime struct{ *runtimeEndpoint }
@@ -90,6 +105,27 @@ type versionedRuntime struct {
 
 func (my *versionedRuntime) ManifestState() (*core.Snapshot, uint64, error) {
 	return my.snapshot, my.revision, nil
+}
+
+type rollingRuntime struct {
+	current  *runtimeEndpoint
+	history  map[string]*runtimeEndpoint
+	revision uint64
+}
+
+func (my *rollingRuntime) Snapshot() (*core.Snapshot, error) { return my.current.Snapshot() }
+func (my *rollingRuntime) ManifestState() (*core.Snapshot, uint64, error) {
+	return my.current.snapshot, my.revision, nil
+}
+func (my *rollingRuntime) EffectiveSchema(ctx context.Context) (core.SchemaArtifact, error) {
+	return my.current.EffectiveSchema(ctx)
+}
+func (my *rollingRuntime) ForSnapshot(fingerprint string) (core.ComposableEndpoint, error) {
+	endpoint := my.history[fingerprint]
+	if endpoint == nil {
+		return nil, fmt.Errorf("snapshot unavailable")
+	}
+	return endpoint, nil
 }
 
 func (my *healthyRuntime) Health(context.Context) (core.HealthReport, error) {
@@ -131,6 +167,58 @@ func TestHealthHandlerReturnsWhenEndpointIgnoresContext(t *testing.T) {
 	}
 }
 
+func TestHealthHandlerBoundsConcurrentContextIgnoringChecks(t *testing.T) {
+	const maxConcurrent = 8
+	started := make(chan struct{}, maxConcurrent+4)
+	release := make(chan struct{})
+	defer close(release)
+	endpoint := healthProbeFunc(func(context.Context) (core.HealthReport, error) {
+		started <- struct{}{}
+		<-release
+		return core.HealthReport{}, nil
+	})
+	handler := NewHealthHandler(endpoint)
+	var done sync.WaitGroup
+	for i := 0; i < maxConcurrent+4; i++ {
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			req := httptest.NewRequest(http.MethodGet, "/health", nil)
+			ctx, cancel := context.WithTimeout(req.Context(), 10*time.Millisecond)
+			defer cancel()
+			handler.ServeHTTP(httptest.NewRecorder(), req.WithContext(ctx))
+		}()
+	}
+	done.Wait()
+	if got := len(started); got > maxConcurrent {
+		t.Fatalf("started %d ignored-context checks, want at most %d", got, maxConcurrent)
+	}
+}
+
+func TestHealthHandlerRetainsCapacityForStuckChecks(t *testing.T) {
+	started := make(chan struct{}, healthMaxConcurrent+4)
+	release := make(chan struct{})
+	defer close(release)
+	handler := NewHealthHandler(healthProbeFunc(func(context.Context) (core.HealthReport, error) {
+		started <- struct{}{}
+		<-release
+		return core.HealthReport{}, nil
+	}))
+	for i := 0; i < cap(started); i++ {
+		request := httptest.NewRequest(http.MethodGet, "/health", nil)
+		ctx, cancel := context.WithTimeout(request.Context(), time.Millisecond)
+		handler.ServeHTTP(httptest.NewRecorder(), request.WithContext(ctx))
+		cancel()
+	}
+	if got := len(started); got != healthMaxConcurrent {
+		t.Fatalf("started %d ignored-context checks, want %d", got, healthMaxConcurrent)
+	}
+}
+
+type healthProbeFunc func(context.Context) (core.HealthReport, error)
+
+func (f healthProbeFunc) Health(ctx context.Context) (core.HealthReport, error) { return f(ctx) }
+
 func (my *subscriptionRuntime) SubscriptionAvailable() bool { return true }
 func (my *subscriptionRuntime) Subscribe(ctx context.Context, _ string, _ map[string]any, _ string) (<-chan []byte, error) {
 	my.identity, _ = core.IdentityFromContext(ctx)
@@ -168,6 +256,26 @@ func TestRemoteEndpointAcceptsPartialGraphQLResponseStatus(t *testing.T) {
 	body, err := remote.Execute(context.Background(), `{ hello }`, nil)
 	if err != nil || string(body) != string(endpoint.body) {
 		t.Fatalf("partial response = %s, %v", body, err)
+	}
+}
+
+func TestRemoteEndpointHonorsCallerResponseLimit(t *testing.T) {
+	snapshot := newArtifact(t, "type Query { hello: String }")
+	endpoint := &runtimeEndpoint{snapshot: snapshot, body: []byte(`{"data":{"hello":"` + strings.Repeat("x", 256) + `"}}`)}
+	mux := http.NewServeMux()
+	mux.Handle("/manifest", testManifestHandler("child", endpoint))
+	mux.Handle("/graphql", NewHandler(endpoint, Options{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
+		EndpointID: "child", ManifestURL: server.URL + "/manifest", ExecuteURL: server.URL + "/graphql", AllowHTTP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = remote.Execute(core.WithResponseLimit(context.Background(), 64), `{ hello }`, nil)
+	if err == nil || !strings.Contains(err.Error(), "response exceeds 64 bytes") {
+		t.Fatalf("response limit error = %v", err)
 	}
 }
 
@@ -210,6 +318,46 @@ func TestRemoteEndpointEffectiveSchemaUsesDelegatedIdentity(t *testing.T) {
 	}
 	if strings.Contains(composed.Schema, "secret") {
 		t.Fatalf("parent gateway leaked static child schema: %s", composed.Schema)
+	}
+}
+
+func TestRemoteEffectiveSchemaPinsHistoricalStructuralSnapshot(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	serverCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
+	clientCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
+	oldSnapshot := newArtifact(t, "type Query { old: String }")
+	newSnapshot := newArtifact(t, "type Query { current: String }")
+	oldArtifact := core.FinalizeSchemaArtifact(core.SchemaArtifact{Schema: oldSnapshot.Schema(), Fingerprint: schemaDigest(oldSnapshot.Schema()), StructuralFingerprint: oldSnapshot.Fingerprint(), Capabilities: oldSnapshot.Capabilities()})
+	currentArtifact := core.FinalizeSchemaArtifact(core.SchemaArtifact{Schema: newSnapshot.Schema(), Fingerprint: schemaDigest(newSnapshot.Schema()), StructuralFingerprint: newSnapshot.Fingerprint(), Capabilities: newSnapshot.Capabilities()})
+	old := &runtimeEndpoint{snapshot: oldSnapshot, effective: oldArtifact}
+	newer := &runtimeEndpoint{snapshot: newSnapshot, effective: currentArtifact}
+	rolling := &rollingRuntime{current: old, history: map[string]*runtimeEndpoint{oldSnapshot.Fingerprint(): old, newSnapshot.Fingerprint(): newer}, revision: 1}
+	mux := http.NewServeMux()
+	mux.Handle("/manifest", NewManifestHandler("child", rolling, func(*http.Request) bool { return true }))
+	mux.Handle("/effective", NewEffectiveSchemaHandler(rolling, serverCodec))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{EndpointID: "child", ManifestURL: server.URL + "/manifest", EffectiveSchemaURL: server.URL + "/effective", ExecuteURL: server.URL, Delegation: clientCodec, AllowHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rolling.current, rolling.revision = newer, 2
+	if err := remote.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := remote.ForSnapshot(oldSnapshot.Fingerprint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, _ := core.NewIdentity(core.IdentityInput{Tenant: "t", Subject: "u"})
+	artifact, err := pinned.(interface {
+		EffectiveSchema(context.Context) (core.SchemaArtifact, error)
+	}).EffectiveSchema(core.WithIdentity(context.Background(), identity))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.StructuralFingerprint != oldSnapshot.Fingerprint() || artifact.ExecutionPin != oldArtifact.ExecutionPin {
+		t.Fatalf("historical artifact = %#v", artifact)
 	}
 }
 
@@ -270,7 +418,7 @@ func TestRemoteEndpointRejectsStaleManifestRevision(t *testing.T) {
 	}
 }
 
-func TestRemoteEndpointAcceptsChangedLegacyZeroRevisionManifest(t *testing.T) {
+func TestRemoteEndpointRejectsChangedZeroRevisionManifest(t *testing.T) {
 	first := newArtifact(t, "type Query { first: String }")
 	second := newArtifact(t, "type Query { second: String }")
 	endpoint := &runtimeEndpoint{snapshot: first}
@@ -284,8 +432,8 @@ func TestRemoteEndpointAcceptsChangedLegacyZeroRevisionManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint.snapshot = second
-	if err := remote.Refresh(context.Background()); err != nil {
-		t.Fatalf("legacy zero revision refresh error = %v", err)
+	if err := remote.Refresh(context.Background()); !errors.Is(err, core.ErrControlConflict) {
+		t.Fatalf("zero revision conflict error = %v", err)
 	}
 }
 
@@ -302,6 +450,43 @@ func TestRemoteEndpointRejectsMixedVersionExecutionResponse(t *testing.T) {
 	if err == nil || body != nil {
 		t.Fatalf("mixed-version response accepted: body=%s err=%v", body, err)
 	}
+}
+
+func TestRemoteEndpointRejectsNonOKGraphQLExecutionResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", responseType)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"data":{"hello":"must not be accepted"}}`))
+	}))
+	defer server.Close()
+	remote := &RemoteEndpoint{client: server.Client(), execute: server.URL, timeout: time.Second, maxResponse: 1024}
+	body, err := remote.executeOperation(context.Background(), `{ hello }`, nil, "", "")
+	if err == nil || body != nil {
+		t.Fatalf("non-200 GraphQL response accepted: body=%s err=%v", body, err)
+	}
+}
+
+func TestRemoteAdmissionSlotsRejectAndRecover(t *testing.T) {
+	ctx := context.Background()
+	slots := make(chan struct{}, 1)
+	release, err := acquireRemoteSlot(ctx, slots, "execute")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = acquireRemoteSlot(ctx, slots, "execute"); err == nil {
+		t.Fatal("full remote capacity was accepted")
+	} else {
+		var problem *RemoteProblemError
+		if !errors.As(err, &problem) || problem.Code != "REMOTE_OVERLOADED" || !problem.Retryable {
+			t.Fatalf("overload error = %#v", err)
+		}
+	}
+	release()
+	release, err = acquireRemoteSlot(ctx, slots, "execute")
+	if err != nil {
+		t.Fatal("released capacity was not reusable:", err)
+	}
+	release()
 }
 
 func TestRemoteEndpointLoadsManifestAndDelegatesIdentity(t *testing.T) {
@@ -422,7 +607,7 @@ func TestRemoteEndpointRefreshKeepsLastKnownGoodManifest(t *testing.T) {
 
 func TestRemoteEndpointRetainsRollingSnapshotWindow(t *testing.T) {
 	first := newArtifact(t, "type Query { hello: String }")
-	endpoint := &runtimeEndpoint{snapshot: first}
+	endpoint := &versionedRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: first}, revision: 1}
 	server := httptest.NewServer(testManifestHandler("child", endpoint))
 	defer server.Close()
 	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
@@ -432,6 +617,7 @@ func TestRemoteEndpointRetainsRollingSnapshotWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint.snapshot = newArtifact(t, "type Query { goodbye: String }")
+	endpoint.revision = 2
 	if err = remote.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -450,11 +636,13 @@ func TestRemoteEndpointRetainsRollingSnapshotWindow(t *testing.T) {
 		t.Fatalf("pinned static effective schema = %#v, %v", artifact, err)
 	}
 	endpoint.snapshot = first
+	endpoint.revision++
 	if err = remote.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	for _, field := range []string{"c", "d", "e", "f", "g", "h", "i", "j"} {
 		endpoint.snapshot = newArtifact(t, "type Query { "+field+": String }")
+		endpoint.revision++
 		if err = remote.Refresh(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -655,6 +843,74 @@ func TestRemoteEndpointResetsRetryBudgetAfterProgress(t *testing.T) {
 	}
 }
 
+func TestRemoteEndpointDoesNotRetryForeverAfterSuccessfulEmptySSEHandshake(t *testing.T) {
+	snapshot := newArtifact(t, "type Subscription { changed: String }")
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("GQL-Snapshot", snapshot.Fingerprint())
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	remote := &RemoteEndpoint{client: server.Client(), subscribe: server.URL, timeout: time.Second, maxResponse: 1024}
+	events, err := remote.subscribeOperation(ctx, "subscription { changed }", nil, "", snapshot.Fingerprint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for frame := range events {
+		if strings.Contains(string(frame), `"changed"`) {
+			t.Fatal("empty SSE stream produced a data event")
+		}
+	}
+	if got := attempts.Load(); got > 40 {
+		t.Fatalf("empty successful handshakes retried %d times", got)
+	}
+}
+
+func TestRemoteProblemPreservesCodeAtGraphQLBoundary(t *testing.T) {
+	problem := &RemoteProblemError{Operation: "execute", Code: "SNAPSHOT_CHANGED", Message: "refresh", Retryable: true}
+	errs := core.GraphQLErrors(problem)
+	if len(errs) != 1 || errs[0].Extensions["code"] != "SNAPSHOT_CHANGED" {
+		t.Fatalf("GraphQL errors lost remote problem code: %#v", errs)
+	}
+}
+
+func TestRemoteEndpointRecoversAfterExtendedTransientOutageWithinWindow(t *testing.T) {
+	snapshot := newArtifact(t, "type Subscription { changed: String }")
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempt := attempts.Add(1)
+		if attempt == 1 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("GQL-Snapshot", snapshot.Fingerprint())
+			return
+		}
+		if attempt <= 6 {
+			http.Error(w, "temporary", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("GQL-Snapshot", snapshot.Fingerprint())
+		_, _ = w.Write([]byte("event: next\ndata: {\"data\":{\"changed\":\"recovered\"}}\n\nevent: complete\n\n"))
+	}))
+	defer server.Close()
+	remote := &RemoteEndpoint{client: server.Client(), subscribe: server.URL, timeout: time.Second, maxResponse: 1024, sseRecoveryWindow: time.Second, retryDelay: func(int) time.Duration { return 0 }}
+	events, err := remote.subscribeOperation(context.Background(), "subscription { changed }", nil, "", snapshot.Fingerprint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for frame := range events {
+		got = append(got, string(frame))
+	}
+	if len(got) != 1 || !strings.Contains(got[0], "recovered") || attempts.Load() != 7 {
+		t.Fatalf("frames/attempts = %#v/%d", got, attempts.Load())
+	}
+}
+
 func TestRemoteSubscriptionIdleWatchdogUnblocksRead(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer writer.Close()
@@ -716,7 +972,7 @@ func TestSubscriptionHandlerLimitsEventFrames(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { changed }"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
-	response := httptest.NewRecorder()
+	response := &deadlineRecorder{httptest.NewRecorder()}
 	NewSubscriptionHandler(endpoint, Options{MaxResponseBytes: 32}).ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "LIMIT_EXCEEDED") || strings.Contains(response.Body.String(), strings.Repeat("x", 64)) {
 		t.Fatalf("oversized subscription frame = %d %s", response.Code, response.Body.String())

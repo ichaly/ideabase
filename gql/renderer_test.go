@@ -48,7 +48,7 @@ func TestRenderer_GovernanceOperationGatingAndInputs(t *testing.T) {
 	schema := governanceSchema(t, c)
 	assert.Contains(t, schema, "gateds(")
 	assert.Contains(t, schema, "gatedStats(")
-	assert.Contains(t, schema, "updateGatedByPk")
+	assert.Contains(t, schema, "updateGated(id: ID!, input: GatedUpdateInput!): Gated")
 	assert.NotContains(t, schema, "createGated")
 	assert.NotContains(t, schema, "upsertGated")
 	assert.NotContains(t, schema, "deleteGated")
@@ -58,6 +58,19 @@ func TestRenderer_GovernanceOperationGatingAndInputs(t *testing.T) {
 	update := schema[updateStart:updateEnd]
 	assert.NotContains(t, update, "readOnly:")
 	assert.NotContains(t, update, "updatePreset:")
+}
+
+func TestRendererRendersBatchUpdateWithoutPrimaryKey(t *testing.T) {
+	class := governanceClass("Keyless", protocol.OP_UPDATE)
+	class.PrimaryKeys = nil
+	class.Fields["id"].IsPrimary = false
+
+	schema := governanceSchema(t, class)
+
+	require.Contains(t, schema, "input KeylessUpdateRowInput {")
+	require.NotContains(t, schema, "input KeylessUpdateInput {")
+	require.Contains(t, schema, "updateKeylesses(where: KeylessWhereInput!, input: KeylessUpdateRowInput!): KeylessMutationResult!")
+	require.NotContains(t, schema, "updateKeyless(")
 }
 
 func TestRenderer_GovernanceUpsertRequiresGlobalInsertAndUpdate(t *testing.T) {
@@ -110,7 +123,7 @@ func TestRenderer_GovernanceExplicitMutationAndRestoreSDL(t *testing.T) {
 	assert.Contains(t, schema, "deletion: DeletionMode = ACTIVE")
 	assert.Contains(t, schema, "distinct: [ArticleDistinctField!]")
 	assert.Contains(t, schema, "groupBy: [ArticleGroupField!]")
-	assert.Contains(t, schema, "updateArticleByPk(id: ID!, input: ArticleUpdateInput!): Article")
+	assert.Contains(t, schema, "updateArticle(id: ID!, input: ArticleUpdateInput!): Article")
 	assert.Contains(t, schema, "updateArticles(where: ArticleWhereInput!, input: ArticleUpdateRowInput!): ArticleMutationResult!")
 	assert.Contains(t, schema, "deleteArticleByPk(id: ID!): Article")
 	assert.Contains(t, schema, "deleteArticles(where: ArticleWhereInput!): ArticleMutationResult!")
@@ -135,7 +148,7 @@ func TestRenderer_GovernanceLegacyEmptyOperationsAndUncountablePlural(t *testing
 	assert.Contains(t, schema, "deleteLegacy")
 	assert.NotContains(t, schema, "updateNewses")
 	assert.NotContains(t, schema, "deleteNewses")
-	assert.Contains(t, schema, "updateNewsByPk")
+	assert.Contains(t, schema, "updateNews(id: ID!, input: NewsUpdateInput!): News")
 	assert.Contains(t, schema, "restoreNewsMany(where: NewsWhereInput!): NewsMutationResult!")
 	assert.NotContains(t, schema, "purgeNews")
 }
@@ -629,7 +642,8 @@ func TestRenderer_RenderMutation(t *testing.T) {
 	assert.Contains(t, generatedSchema, "createPost(")
 
 	// 验证更新操作
-	assert.Contains(t, generatedSchema, "updateUser(")
+	assert.Contains(t, generatedSchema, "updateUser(id: ID!, input: UserUpdateInput!): User")
+	assert.NotContains(t, generatedSchema, "updateUserByPk")
 	assert.Contains(t, generatedSchema, "updatePost(")
 
 	// 验证删除操作

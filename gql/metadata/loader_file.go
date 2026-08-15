@@ -114,11 +114,17 @@ func (my *FileLoader) Load(h protocol.Hoster) error {
 
 	// 4. 遍历所有主节点，处理字段名/列名索引和多key索引
 	for index, class := range meta.Nodes {
+		if class == nil {
+			return fmt.Errorf("元数据坐标 metadata.nodes.%s 为空", index)
+		}
 		// 只处理主类名（key与类名一致）
 		if index == class.Name {
 			// 初始化字段映射，支持字段名和列名双重索引
 			fields := make(map[string]*protocol.Field)
 			for fieldName, field := range class.Fields {
+				if field == nil {
+					return fmt.Errorf("元数据坐标 metadata.nodes.%s.fields.%s 为空", index, fieldName)
+				}
 				fields[fieldName] = field
 				// 如果列名与字段名不同，添加列名索引，便于通过列名查找字段
 				if field.Column != "" && field.Column != fieldName {

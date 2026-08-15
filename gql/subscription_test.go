@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
 	"strings"
 	"testing"
@@ -12,7 +13,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSubscriptionUnpackFailureDoesNotCommitFingerprint(t *testing.T) {
+func TestSubscriptionAdmissionLimitsFeedsAndSubscribers(t *testing.T) {
+	engine := &Engine{feeds: make(map[string]*feed)}
+	for i := range maxTenantSubscriptionFeeds {
+		key := fmt.Sprint(i)
+		engine.feeds[key] = &feed{key: key, tenant: "tenant", subs: make(map[chan gqlReply]bool)}
+	}
+	err := engine.checkSubscriptionLimit("tenant", nil)
+	require.Equal(t, "LIMIT_EXCEEDED", GraphQLErrors(err)[0].Extensions["code"])
+	require.NoError(t, engine.checkSubscriptionLimit("other", nil))
+
+	shared := &feed{subs: make(map[chan gqlReply]bool)}
+	for range maxSubscribersPerFeed {
+		shared.subs[make(chan gqlReply)] = true
+	}
+	err = engine.checkSubscriptionLimit("tenant", shared)
+	require.Equal(t, "LIMIT_EXCEEDED", GraphQLErrors(err)[0].Extensions["code"])
+}
+
+func TestSubscriptionReplyLimitReturnsBoundedTerminalError(t *testing.T) {
+	ctx := WithResponseLimit(context.Background(), 256)
+	body, err := marshalSubscriptionReply(ctx, gqlReply{Data: map[string]any{"value": strings.Repeat("x", 1024)}})
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(body), 256)
+	require.Contains(t, string(body), "LIMIT_EXCEEDED")
+	require.NotContains(t, string(body), strings.Repeat("x", 64))
+
+	_, err = marshalSubscriptionReply(WithResponseLimit(context.Background(), 8), gqlReply{Data: map[string]any{"value": strings.Repeat("x", 1024)}})
+	require.ErrorIs(t, err, errResponseLimit)
+}
+
+func TestSubscriptionIdenticalFailurePublishesOnceAndKeepsRetrying(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	plan := &Plan{SQL: `SELECT '{'::text`}
@@ -20,10 +51,18 @@ func TestSubscriptionUnpackFailureDoesNotCommitFingerprint(t *testing.T) {
 	var last uint64
 	for attempt := 0; attempt < 2; attempt++ {
 		reply, changed := executor.tick(context.Background(), plan, nil, digest, &last)
-		require.True(t, changed)
+		require.Equal(t, attempt == 0, changed)
 		require.NotEmpty(t, reply.Errors)
-		require.Zero(t, last, "failed post-processing must remain retryable for identical database bytes")
+		require.NotZero(t, last, "failed result must be retained for duplicate suppression")
 	}
+}
+
+func TestSubscriptionFingerprintSeparatesDataAndErrors(t *testing.T) {
+	digest := fnv.New64a()
+	var last uint64
+	require.True(t, publishFingerprint(digest, &last, 'd', []byte("same")))
+	require.True(t, publishFingerprint(digest, &last, 'e', []byte("same")))
+	require.False(t, publishFingerprint(digest, &last, 'e', []byte("same")))
 }
 
 func TestSubscriptionRetriesUntilDatabaseRecovers(t *testing.T) {

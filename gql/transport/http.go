@@ -21,13 +21,11 @@ import (
 	"github.com/vektah/gqlparser/v2/parser"
 )
 
-// Endpoint is the transport-neutral execution contract implemented by gql.Engine and gql.Gateway.
-type Endpoint interface {
-	ExecuteOperation(context.Context, string, map[string]any, string) ([]byte, error)
-}
+// Endpoint reuses the core transport-neutral execution contract.
+type Endpoint = core.Endpoint
 
 type snapshotPinner interface {
-	ForSnapshot(string) (core.Endpoint, error)
+	ForSnapshot(string) (core.ComposableEndpoint, error)
 }
 
 // Options controls the HTTP resource limits. Zero values use safe defaults.
@@ -48,6 +46,7 @@ const (
 	defaultTimeout      = 30 * time.Second
 	responseType        = "application/graphql-response+json"
 	delegationScheme    = "GQL-Delegation "
+	executionPinHeader  = "GQL-Execution-Pin"
 )
 
 func delegationToken(r *http.Request) (string, bool) {
@@ -85,35 +84,40 @@ type request struct {
 	Extensions    map[string]any `json:"extensions,omitempty"`
 }
 
+type codedError struct{ message, code string }
+
+func (e codedError) Error() string     { return e.message }
+func (e codedError) ErrorCode() string { return e.code }
+
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.endpoint == nil {
-		http.Error(w, "endpoint unavailable", http.StatusInternalServerError)
+		writeProblem(w, http.StatusInternalServerError, "ENDPOINT_UNAVAILABLE", "endpoint unavailable", true)
 		return
 	}
 	responseMedia := negotiateGraphQL(r.Header.Get("Accept"))
 	if responseMedia == "" {
-		http.Error(w, "unsupported Accept", http.StatusNotAcceptable)
+		writeProblem(w, http.StatusNotAcceptable, "NOT_ACCEPTABLE", "unsupported Accept", false)
 		return
 	}
 	var req request
 	switch r.Method {
 	case http.MethodPost:
 		if !isJSONContentType(r.Header.Get("Content-Type")) {
-			http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+			writeProblem(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json", false)
 			return
 		}
 		if err := decodeLimited(r, h.options.MaxBodyBytes, &req); err != nil {
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {
-				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				writeProblem(w, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "request body too large", false)
 				return
 			}
 			var typeErr *json.UnmarshalTypeError
 			if errors.As(err, &typeErr) {
-				http.Error(w, "invalid GraphQL request parameters", http.StatusUnprocessableEntity)
+				writeProblem(w, http.StatusUnprocessableEntity, "INVALID_REQUEST", "invalid GraphQL request parameters", false)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeProblem(w, http.StatusBadRequest, "INVALID_JSON", err.Error(), false)
 			return
 		}
 	case http.MethodGet:
@@ -131,24 +135,25 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			var typeErr *json.UnmarshalTypeError
 			if errors.As(err, &typeErr) {
-				http.Error(w, "invalid GraphQL request parameters", http.StatusUnprocessableEntity)
+				writeProblem(w, http.StatusUnprocessableEntity, "INVALID_REQUEST", "invalid GraphQL request parameters", false)
 			} else {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				writeProblem(w, http.StatusBadRequest, "INVALID_JSON", err.Error(), false)
 			}
 			return
 		}
 	default:
 		w.Header().Set("Allow", "GET, POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeProblem(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed", false)
 		return
 	}
 	// A blank query is a valid persisted-operation request when the endpoint
 	// supports it; policy enforcement remains in the endpoint.
 	if req.Query == "" && req.OperationName == "" {
-		http.Error(w, "query is required", http.StatusUnprocessableEntity)
+		writeProblem(w, http.StatusUnprocessableEntity, "INVALID_REQUEST", "query is required", false)
 		return
 	}
 	ctx := r.Context()
+	ctx = core.WithResponseLimit(ctx, h.options.MaxResponseBytes)
 	if h.options.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, h.options.Timeout)
@@ -160,13 +165,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.options.Delegation != nil {
 		token, ok := delegationToken(r)
 		if !ok {
-			http.Error(w, "delegation required", http.StatusUnauthorized)
+			writeProblem(w, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", "delegation required", false)
 			return
 		}
 		var authErr error
-		ctx, authErr = h.options.Delegation.Verify(ctx, token, operationDigest(req, r.Header.Get("GQL-Snapshot")))
+		ctx, authErr = h.options.Delegation.Verify(ctx, token, operationDigest(req, r.Header.Get("GQL-Snapshot"), r.Header.Get(executionPinHeader)))
 		if authErr != nil {
-			http.Error(w, "invalid delegation", http.StatusUnauthorized)
+			writeProblem(w, http.StatusUnauthorized, "INVALID_DELEGATION", "invalid delegation", false)
 			return
 		}
 		ctx = core.WithDelegatedExecution(ctx)
@@ -177,12 +182,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.options.Delegation == nil {
 			source, ok := h.endpoint.(manifestEndpoint)
 			if !ok {
-				http.Error(w, "snapshot pinning unavailable", http.StatusConflict)
+				writeProblem(w, http.StatusConflict, "SNAPSHOT_UNAVAILABLE", "snapshot pinning unavailable", true)
 				return
 			}
 			current, snapshotErr := source.Snapshot()
 			if snapshotErr != nil || current == nil || current.Fingerprint() != revision {
-				http.Error(w, "snapshot revision changed", http.StatusConflict)
+				writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
 				return
 			}
 		}
@@ -191,18 +196,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var executable bool
 			execution, executable = pinned.(Endpoint)
 			if pinErr != nil || !executable {
-				http.Error(w, "snapshot revision changed", http.StatusConflict)
+				writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
 				return
 			}
 		} else {
 			source, ok := h.endpoint.(manifestEndpoint)
 			if !ok {
-				http.Error(w, "snapshot pinning unavailable", http.StatusConflict)
+				writeProblem(w, http.StatusConflict, "SNAPSHOT_UNAVAILABLE", "snapshot pinning unavailable", true)
 				return
 			}
 			snapshot, snapshotErr := source.Snapshot()
 			if snapshotErr != nil || snapshot == nil || snapshot.Fingerprint() != revision {
-				http.Error(w, "snapshot revision changed", http.StatusConflict)
+				writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
 				return
 			}
 		}
@@ -212,22 +217,35 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if pinner, pinnable := h.endpoint.(snapshotPinner); pinnable {
 				snapshot, snapshotErr := source.Snapshot()
 				if snapshotErr != nil || snapshot == nil {
-					http.Error(w, "snapshot unavailable", http.StatusServiceUnavailable)
+					writeProblem(w, http.StatusServiceUnavailable, "SNAPSHOT_UNAVAILABLE", "snapshot unavailable", true)
 					return
 				}
 				pinned, pinErr := pinner.ForSnapshot(snapshot.Fingerprint())
 				var executable bool
 				execution, executable = pinned.(Endpoint)
 				if pinErr != nil || !executable {
-					http.Error(w, "snapshot revision changed", http.StatusConflict)
+					writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
 					return
 				}
 			}
 		}
 	}
+	if pin := r.Header.Get(executionPinHeader); pin != "" {
+		source, ok := execution.(effectiveSchemaEndpoint)
+		if !ok {
+			writeProblem(w, http.StatusConflict, "SNAPSHOT_CONFLICT", "effective schema execution pin unavailable", true)
+			return
+		}
+		artifact, err := source.EffectiveSchema(ctx)
+		if err != nil || artifact.ExecutionPin == "" || artifact.ExecutionPin != pin {
+			writeProblem(w, http.StatusConflict, "SNAPSHOT_CONFLICT", "effective schema execution pin changed", true)
+			return
+		}
+		ctx = core.WithExecutionPin(ctx, pin)
+	}
 	if r.Method == http.MethodGet && req.Query == "" {
 		w.Header().Set("Allow", "POST")
-		http.Error(w, "GET requires an explicit query operation", http.StatusMethodNotAllowed)
+		writeProblem(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "GET requires an explicit query operation", false)
 		return
 	}
 	kind := ast.Query
@@ -242,7 +260,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet && kind != ast.Query {
 		w.Header().Set("Allow", "POST")
-		http.Error(w, "GET only allows query operations", http.StatusMethodNotAllowed)
+		writeProblem(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "GET only allows query operations", false)
 		return
 	}
 	var body []byte
@@ -255,26 +273,27 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err = execution.ExecuteOperation(ctx, req.Query, req.Variables, req.OperationName)
 	if len(body) != 0 {
 		if int64(len(body)) > h.options.MaxResponseBytes {
-			writeGraphQLError(w, http.StatusInternalServerError, fmt.Errorf("GraphQL response exceeds configured limit"))
+			writeGraphQLError(w, http.StatusInternalServerError, codedError{"GraphQL response exceeds configured limit", "LIMIT_EXCEEDED"}, responseMedia)
 			return
 		}
 		if writeGraphQL(w, body, responseMedia) {
 			return
 		}
-		err = fmt.Errorf("endpoint returned an invalid GraphQL response")
+		err = codedError{"endpoint returned an invalid GraphQL response", "BAD_GATEWAY_RESPONSE"}
 	}
 	if err != nil {
-		writeGraphQLError(w, http.StatusInternalServerError, err)
+		writeGraphQLError(w, http.StatusInternalServerError, err, responseMedia)
 		return
 	}
-	writeGraphQLError(w, http.StatusInternalServerError, fmt.Errorf("empty execution response"))
+	writeGraphQLError(w, http.StatusInternalServerError, codedError{"empty execution response", "BAD_GATEWAY_RESPONSE"}, responseMedia)
 }
 
-func operationDigest(req request, revision string) string {
+func operationDigest(req request, revision, executionPin string) string {
 	body, _ := json.Marshal(struct {
-		Request  request `json:"request"`
-		Revision string  `json:"revision,omitempty"`
-	}{Request: req, Revision: revision})
+		Request      request `json:"request"`
+		Revision     string  `json:"revision,omitempty"`
+		ExecutionPin string  `json:"executionPin,omitempty"`
+	}{req, revision, executionPin})
 	return fmt.Sprintf("%x", sha256.Sum256(body))
 }
 
@@ -411,7 +430,11 @@ func graphQLResponseShape(body []byte) (data, errors, valid bool) {
 }
 
 func writeGraphQLRequestError(w http.ResponseWriter, status int, err error, mediaType string) {
-	body, _ := json.Marshal(map[string]any{"errors": []map[string]string{{"message": err.Error()}}})
+	code := "GRAPHQL_REQUEST_INVALID"
+	if status == http.StatusBadRequest {
+		code = "GRAPHQL_PARSE_FAILED"
+	}
+	body, _ := json.Marshal(map[string]any{"errors": []map[string]any{{"message": err.Error(), "extensions": map[string]string{"code": code}}}})
 	if mediaType == "application/json" {
 		status = http.StatusOK
 	}
@@ -420,11 +443,19 @@ func writeGraphQLRequestError(w http.ResponseWriter, status int, err error, medi
 	_, _ = w.Write(body)
 }
 
-func writeGraphQLError(w http.ResponseWriter, status int, err error) {
+func writeProblem(w http.ResponseWriter, status int, code, message string, retryable bool) {
+	body, _ := json.Marshal(map[string]any{
+		"version": 1,
+		"error":   map[string]any{"code": code, "message": message, "retryable": retryable},
+	})
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+func writeGraphQLError(w http.ResponseWriter, status int, err error, mediaType string) {
 	body, _ := json.Marshal(map[string]any{"errors": core.GraphQLErrors(err)})
-	// Failures that prevent a GraphQL response use ordinary JSON as required by
-	// GraphQL-over-HTTP; execution errors already arrive as endpoint bodies.
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", mediaType)
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 }

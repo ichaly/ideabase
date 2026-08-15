@@ -1,7 +1,0 @@
-# Exact inline operation from fish-ai-api/internal/modules/gql/api/graphql_test.go:132-140.
-query {
-  botProfiles {
-    items { id sysUser { nickname } botPersonas { personality } botQuota { postMax } }
-    total
-  }
-}

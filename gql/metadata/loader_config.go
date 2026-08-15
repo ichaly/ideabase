@@ -38,6 +38,9 @@ func (my *ConfigLoader) Load(h protocol.Hoster) error {
 	// 1. 分组排序
 	var tableClasses, canonClasses, overrideClasses, aliasClasses, virtualClasses []string
 	for className, classConfig := range my.cfg.Metadata.Classes {
+		if classConfig == nil {
+			return fmt.Errorf("配置坐标 metadata.classes.%s 为空", className)
+		}
 		switch {
 		case classConfig.Table == "":
 			virtualClasses = append(virtualClasses, className)
@@ -55,6 +58,9 @@ func (my *ConfigLoader) Load(h protocol.Hoster) error {
 
 	for _, className := range orderedClasses {
 		classConfig := my.cfg.Metadata.Classes[className]
+		if classConfig == nil {
+			return fmt.Errorf("配置坐标 metadata.classes.%s 为空", className)
+		}
 		canonName := ConvertClassName(classConfig.Table, my.cfg.Metadata)
 
 		// 虚拟类

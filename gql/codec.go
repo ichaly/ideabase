@@ -44,7 +44,7 @@ func WithCodecs(codecs ...Codec) MetadataOption {
 }
 
 // idCodec 内置ID编解码器：出参编码为sqids shortId，入参还原为数字，
-// 与REST通道（fiberJSON）共用std.Id同一套配置
+// 与其他 std.Id JSON 通道共用同一套配置。
 type idCodec struct{}
 
 // NewIdCodec 内置ID codec：需要ID加解密时经WithCodecs注册，不注册则ID保持数字；

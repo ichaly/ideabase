@@ -203,11 +203,14 @@ func TestTenantGatewaySharedTableRequiresTenantScopeOrExplicitGlobal(t *testing.
 	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{scoped: true})}, testTenantSecurity(router))
 	require.NoError(t, err)
 	engine := build(sharedTenantLoader{scoped: true})
-	_, err = NewTenantGateway(router, map[string]*Engine{"db": engine}, testTenantSecurity(router), WithRLS(map[string]RLSConfig{"db": {
+	rls := map[string]RLSConfig{"db": {
 		Tables: []RLSTable{{Name: "accounts", Protected: true, HasPolicy: true}},
-	}}))
+	}}
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": engine}, testTenantSecurity(router), WithRLS(rls))
 	require.NoError(t, err)
 	require.False(t, engine.rls, "gateway assembly must not mutate a built child engine")
+	delete(rls, "db")
+	require.Contains(t, gateway.rls, "db", "gateway must freeze caller-owned RLS configuration")
 	_, err = NewTenantGateway(router, map[string]*Engine{"db": build(sharedTenantLoader{scoped: true})}, testTenantSecurity(router), WithRLS(map[string]RLSConfig{"db": {
 		Role: RLSRole{BypassRLS: true}, Tables: []RLSTable{{Name: "accounts", Protected: true, HasPolicy: true}},
 	}}))

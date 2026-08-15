@@ -81,6 +81,13 @@ func TestPurgeAndAuditOutboxSharePostgresStatement(t *testing.T) {
 	require.NoError(t, db.Raw(`SELECT COUNT(*) FROM gql_audit_outbox`).Scan(&rows).Error)
 	require.EqualValues(t, 1, rows, "同一request重试不得产生重复审计事件")
 
+	var otherID int64
+	require.NoError(t, db.Raw(`INSERT INTO articles (tenant_id,title,deleted_at) VALUES ('tenant-a','other',CURRENT_TIMESTAMP) RETURNING id`).Scan(&otherID).Error)
+	reply = executor.run(ctx, `mutation($id: ID) { purgeArticles(where: { id: { eq: $id } }) { affectedCount } }`, map[string]any{"id": otherID}, "")
+	require.NotEmpty(t, reply.Errors, "同一request不得把另一个删除目标折叠为已审计")
+	require.NoError(t, db.Raw(`SELECT COUNT(*) FROM articles WHERE id=?`, otherID).Scan(&rows).Error)
+	require.EqualValues(t, 1, rows, "审计键冲突必须回滚物理删除")
+
 	k2, err := std.NewKonfig()
 	require.NoError(t, err)
 	k2.Set("mode", "dev")
@@ -91,4 +98,56 @@ func TestPurgeAndAuditOutboxSharePostgresStatement(t *testing.T) {
 	schema, err := NewRenderer(meta2).Render()
 	require.NoError(t, err)
 	require.NotContains(t, schema, "gqlAuditOutbox", "内部审计表不得进入公共Schema")
+}
+
+func TestProductionBuildRequiresPurgeAuditMigration(t *testing.T) {
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+	require.NoError(t, db.Exec(`CREATE TABLE articles (id bigserial PRIMARY KEY, deleted_at timestamptz)`).Error)
+	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	security, err := NewPostgresSecurityStateProvider(db)
+	require.NoError(t, err)
+	k, err := std.NewKonfig()
+	require.NoError(t, err)
+	k.Set("mode", "prod")
+	k.Set("app.root", t.TempDir())
+	k.Set("schema.schema", "public")
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+		"Article": {Table: "articles", Operations: []string{"select", "purge"}, SoftDelete: &internal.SoftDeleteConfig{Column: "deleted_at"}, Fields: map[string]*internal.FieldConfig{"deletedAt": {Column: "deleted_at", Type: "DateTime"}}},
+	})
+	builder := New(k, db).testAllowAllPolicy()
+	require.NoError(t, builder.Security(security))
+	_, err = builder.Build()
+	require.ErrorContains(t, err, "gql_audit_outbox migration")
+}
+
+func TestProductionMetadataRejectsDisabledCostGuard(t *testing.T) {
+	k, err := std.NewKonfig()
+	require.NoError(t, err)
+	k.Set("mode", "prod")
+	k.Set("schema.max-cost", 0)
+	_, err = NewMetadata(k, nil)
+	require.ErrorContains(t, err, "schema.max-cost")
+}
+
+func TestProductionBuildRejectsMalformedPurgeAuditMigration(t *testing.T) {
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+	require.NoError(t, db.Exec(`CREATE TABLE articles (id bigserial PRIMARY KEY, deleted_at timestamptz)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE gql_audit_outbox (event_key text PRIMARY KEY)`).Error)
+	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	security, err := NewPostgresSecurityStateProvider(db)
+	require.NoError(t, err)
+	k, err := std.NewKonfig()
+	require.NoError(t, err)
+	k.Set("mode", "prod")
+	k.Set("app.root", t.TempDir())
+	k.Set("schema.schema", "public")
+	k.Set("metadata.classes", map[string]*internal.ClassConfig{
+		"Article": {Table: "articles", Operations: []string{"select", "purge"}, SoftDelete: &internal.SoftDeleteConfig{Column: "deleted_at"}, Fields: map[string]*internal.FieldConfig{"deletedAt": {Column: "deleted_at", Type: "DateTime"}}},
+	})
+	builder := New(k, db).testAllowAllPolicy()
+	require.NoError(t, builder.Security(security))
+	_, err = builder.Build()
+	require.ErrorContains(t, err, "gql_audit_outbox migration")
 }

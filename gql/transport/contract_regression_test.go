@@ -16,6 +16,28 @@ type contractEndpoint struct {
 	body        []byte
 }
 
+// A transport/composition endpoint need only implement the named-operation
+// contract. It deliberately has no legacy Execute method.
+type operationOnlyComposable struct{ snapshot *core.Snapshot }
+
+func (e *operationOnlyComposable) Snapshot() (*core.Snapshot, error) { return e.snapshot, nil }
+func (e *operationOnlyComposable) ExecuteOperation(context.Context, string, map[string]any, string) ([]byte, error) {
+	return []byte(`{"data":{}}`), nil
+}
+
+var _ core.Endpoint = (*operationOnlyComposable)(nil)
+
+func TestContractOperationOnlyComposableEndpointIsAccepted(t *testing.T) {
+	endpoint := &operationOnlyComposable{snapshot: newArtifact(t, "type Query { hello: String }")}
+	gateway, err := core.NewGateway("root", core.Namespace{Name: "child", EndpointID: "child", Endpoint: endpoint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gateway.ExecuteOperation(context.Background(), "{ child { hello } }", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type contractRevision struct {
 	*contractEndpoint
 	snapshot *core.Snapshot
@@ -29,7 +51,7 @@ func (e *pinningContract) Snapshot() (*core.Snapshot, error) { return e.current.
 func (e *pinningContract) ExecuteOperation(ctx context.Context, query string, vars map[string]any, name string) ([]byte, error) {
 	return e.current.ExecuteOperation(ctx, query, vars, name)
 }
-func (e *pinningContract) ForSnapshot(string) (core.Endpoint, error) { return e.pinned, nil }
+func (e *pinningContract) ForSnapshot(string) (core.ComposableEndpoint, error) { return e.pinned, nil }
 
 func (e *contractEndpoint) ExecuteOperation(_ context.Context, query string, _ map[string]any, name string) ([]byte, error) {
 	e.query, e.name = query, name
@@ -44,7 +66,7 @@ func TestContractBlankQueryForwardsOperationName(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"operationName":"Persisted"}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", responseType)
-	w := httptest.NewRecorder()
+	w := &deadlineRecorder{httptest.NewRecorder()}
 	NewHandler(e, Options{}).ServeHTTP(w, r)
 	if w.Code != http.StatusOK || e.query != "" || e.name != "Persisted" {
 		t.Fatalf("status/query/name = %d/%q/%q", w.Code, e.query, e.name)
@@ -87,7 +109,7 @@ func TestContractDelegationBindsSnapshotRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := request{Query: "{ revision }"}
-	token, err := signer.Sign(core.WithIdentity(context.Background(), identity), operationDigest(payload, "old"))
+	token, err := signer.Sign(core.WithIdentity(context.Background(), identity), operationDigest(payload, "old", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,11 +126,33 @@ func TestContractDelegationBindsSnapshotRevision(t *testing.T) {
 	}
 }
 
+func TestContractDelegationBindsExecutionPin(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	signer, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, Replay: core.NewMemoryReplayStore(8)})
+	verifier, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, Replay: core.NewMemoryReplayStore(8)})
+	identity, _ := core.NewIdentity(core.IdentityInput{Tenant: "tenant", Subject: "user"})
+	payload := request{Query: "{ revision }"}
+	token, err := signer.Sign(core.WithIdentity(context.Background(), identity), operationDigest(payload, "", "expected"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ revision }"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Accept", responseType)
+	r.Header.Set("Authorization", delegationScheme+token)
+	r.Header.Set(executionPinHeader, "substituted")
+	w := httptest.NewRecorder()
+	NewHandler(&contractEndpoint{}, Options{Delegation: verifier}).ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status/body = %d/%s", w.Code, w.Body.String())
+	}
+}
+
 func TestContractHealthRoundTripsAllFields(t *testing.T) {
-	report := core.HealthReport{Ready: true, SnapshotOK: true, SnapshotFingerprint: "rev", DatabaseOK: false, DatabaseError: "db down", CDCConfigured: true, SubscriptionAvailable: true}
+	report := core.HealthReport{Ready: true, SnapshotOK: true, SnapshotFingerprint: "rev", ControlRevision: 7, RouteRevision: 8, SecurityRevision: 9, DatabaseOK: false, DatabaseError: "db down", CDCConfigured: true, SubscriptionAvailable: true}
 	w := httptest.NewRecorder()
 	NewHealthHandler(healthStub{report: report}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
-	for _, want := range []string{`"databaseOk":false`, `"databaseCode":"UNAVAILABLE"`, `"cdcConfigured":true`, `"subscriptionAvailable":true`} {
+	for _, want := range []string{`"controlRevision":7`, `"routeRevision":8`, `"securityRevision":9`, `"databaseOk":false`, `"databaseCode":"UNAVAILABLE"`, `"cdcConfigured":true`, `"subscriptionAvailable":true`} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Fatalf("health body missing %s: %s", want, w.Body)
 		}
@@ -130,7 +174,7 @@ func TestContractSSELimitsCumulativeDataLines(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { x }"}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "text/event-stream")
-	w := httptest.NewRecorder()
+	w := &deadlineRecorder{httptest.NewRecorder()}
 	NewSubscriptionHandler(subscriptionStub{events: events}, Options{MaxResponseBytes: 30}).ServeHTTP(w, r)
 	if !strings.Contains(w.Body.String(), "LIMIT_EXCEEDED") {
 		t.Fatalf("event was not limited: %s", w.Body)

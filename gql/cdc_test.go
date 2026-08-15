@@ -3,10 +3,44 @@ package gql
 import (
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestListenerCloseWaitsForRunAndIsIdempotent(t *testing.T) {
+	l := newListener("", "")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	l.runWG.Add(1)
+	go func() {
+		defer l.runWG.Done()
+		close(started)
+		<-release
+	}()
+	<-started
+
+	done := make(chan struct{})
+	go func() {
+		l.close()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("close returned before run exited")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("close did not wait for run")
+	}
+	l.close()
+	_, err := l.watch([]string{"public.users"})
+	require.ErrorContains(t, err, "已关闭")
+}
 
 func TestReplicationSlotNamesAreClusterSafePostgresIdentifiers(t *testing.T) {
 	valid := regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)

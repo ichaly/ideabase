@@ -1,6 +1,7 @@
 package gql
 
 import (
+	"context"
 	"crypto/sha256"
 	stdjson "encoding/json"
 	"fmt"
@@ -118,12 +119,37 @@ func TestCompatGeneratedSDLContract(t *testing.T) {
 
 func TestCompatRealCorpusParsesAndValidatesOperation(t *testing.T) {
 	root := filepath.Join("testdata", "compat")
-	sdl, err := os.ReadFile(filepath.Join(root, "fish_ai_schema.graphql"))
+	sdl, err := NewRenderer(createMockMetadata(t)).Render()
 	require.NoError(t, err)
-	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "fish-ai-api.schema.graphql", Input: string(sdl)})
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "generated-current.graphql", Input: sdl})
 	require.NoError(t, err)
-	op, err := os.ReadFile(filepath.Join(root, "fish_ai_operation.graphql"))
+	op, err := os.ReadFile(filepath.Join(root, "operation.graphql"))
 	require.NoError(t, err)
 	_, errs := gqlparser.LoadQuery(schema, string(op))
 	require.Empty(t, errs)
+}
+
+func TestCompatCorpusKeepsDataAndErrorGoldens(t *testing.T) {
+	golden, err := os.ReadFile(filepath.Join("testdata", "compat", "operation_golden.json"))
+	require.NoError(t, err)
+	var fixture struct {
+		Valid   map[string]any `json:"valid"`
+		Invalid map[string]any `json:"invalid"`
+	}
+	require.NoError(t, stdjson.Unmarshal(golden, &fixture))
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	require.NoError(t, db.Exec(`INSERT INTO users(name,email) VALUES ('Alice','alice@example.com')`).Error)
+	operation, err := os.ReadFile(filepath.Join("testdata", "compat", "operation.graphql"))
+	require.NoError(t, err)
+	valid, err := stdjson.Marshal(executor.run(context.Background(), string(operation), nil, ""))
+	require.NoError(t, err)
+	want, err := stdjson.Marshal(fixture.Valid)
+	require.NoError(t, err)
+	require.JSONEq(t, string(want), string(valid))
+	invalid, err := stdjson.Marshal(executor.run(context.Background(), `query { users { items { doesNotExist } } }`, nil, ""))
+	require.NoError(t, err)
+	want, err = stdjson.Marshal(fixture.Invalid)
+	require.NoError(t, err)
+	require.JSONEq(t, string(want), string(invalid))
 }
