@@ -1951,3 +1951,50 @@
 - feat(std): 新增统一响应处理和异常处理机制
 ## std v0.0.10 (2025-08-16)
 - feat(std): 新增统一响应处理和异常处理机制
+## cmd v0.0.1 (2026-08-17)
+- chore(deps): 更新项目依赖版本并调整模块结构
+- chore(deps): 更新多个模块依赖版本
+- feat(std): 新增认证上下文处理功能
+- refactor(std): 重构缓存模块以支持自定义存储后端
+- chore(deps): 更新内部模块依赖版本&添加 NormalizePath 函数用于统一规范化路由路径
+- chore(deps): 更新多个模块依赖版本
+- feat(cache): 支持字节切片缓存类型
+- refactor(ioc):重构容器启动逻辑并优化依赖注入配置
+- refactor(ioc):重构IoC容器实现以简化依赖注入配置
+- chore(deps): 更新多个模块依赖版本
+- feat(cli): 添加获取运行命令的函数
+- chore(deps): 更新依赖库版本
+- fix(start):修复命令执行错误输出处理
+- build(deps): 更新 github.com/gofiber/fiber 从 v2 到 v3
+- Merge remote-tracking branch 'origin/main'
+- feat(utl):优化项目根目录获取逻辑
+- feat(validator): 支持字段标签自定义校验错误信息
+- chore(deps): 更新多个模块依赖版本
+- chore(deps): 更新依赖版本
+- feat(std): 新增 GoCache作为缓存存储选项
+- build:升级 Go 版本至 1.25
+- feat(std): 添加健康检查功能并优化 CSRF 配置
+- build: 更新多个模块的依赖版本，调整安装脚本中的依赖安装顺序，以提升模块依赖的安装稳定性和可维护性
+- build: 更新多个模块的依赖版本，新增间接依赖以增强功能和测试支持，提升项目的可维护性
+- build: 移除多个模块的冗余依赖，更新 go.mod 文件以提升项目的整洁性和可维护性
+- build: 更新 golang.org/x/mod 版本至 v0.27.0，并新增多个间接依赖以增强功能和测试支持
+- build: 更新 Go 版本至 1.24.0，并调整多个模块的依赖版本以确保兼容性
+- build: 更新 Go 语言版本并升级相关依赖
+- chore(release): 发布新版本
+- feat(std): 新增统一响应处理和异常处理机制
+- chore(release): 发布新版本
+- chore(deps): 将 ideabase/utl 依赖标记为间接依赖，并移除直接依赖项以优化模块管理
+- chore(refactor): 优化配置文件路径获取逻辑，简化代码结构
+- chore(deps): 更新 ideabase 相关依赖版本至 v0.0.6，并添加新的 sqlite3 和 mssql 驱动
+- chore(release): 发布新版本
+- chore(release): 移除不再使用的依赖刷新逻辑，简化发布流程
+- chore(modify): 更新模块路径，从 cli 更改为 cmd，以反映新的项目结构
+- chore(refactor): 移除不再使用的 app 和 cli 模块，更新 go.work 文件以反映新的模块结构
+- chore(release): 发布新版本
+- chore(deps): 更新多个依赖版本以提升稳定性和性能
+- chore(release): 发布新版本
+- build:移除 ideabase 项目中的版本信息文件
+- chore(cmd): release 0.0.2
+- chore(cmd): release 0.0.1
+- refactor(std): 重构 cache.go 替换 util包为 utl 包
+- refactor(project): 重构项目模块和依赖
