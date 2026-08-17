@@ -81,6 +81,9 @@ func completeValue(schema *ast.Schema, value any, typ *ast.Type, set ast.Selecti
 	runtimeType := ""
 	if hasInlineFragment(set) {
 		alias := gatewayTypeAlias(set)
+		if options.mode == completionLocal {
+			alias = "__typename"
+		}
 		var valid bool
 		runtimeType, valid = object[alias].(string)
 		if options.typename != nil {

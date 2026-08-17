@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +17,61 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
+
+type blockingSubscriptionEndpoint struct {
+	calls   atomic.Int32
+	entered chan struct{}
+	events  chan []byte
+}
+
+func (endpoint *blockingSubscriptionEndpoint) Subscribe(context.Context, string, map[string]any, string) (<-chan []byte, error) {
+	endpoint.calls.Add(1)
+	endpoint.entered <- struct{}{}
+	return endpoint.events, nil
+}
+
+func TestSubscriptionAdmissionBoundsQueuedAndActiveStreams(t *testing.T) {
+	endpoint := &blockingSubscriptionEndpoint{entered: make(chan struct{}, 2), events: make(chan []byte)}
+	handler := NewSubscriptionHandler(endpoint, Options{MaxConcurrent: 1, MaxQueued: 1, Timeout: time.Second})
+	request := func(ctx context.Context, body io.Reader) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/subscribe", body).WithContext(ctx)
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Accept", "text/event-stream")
+		return r
+	}
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	done1 := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), request(ctx1, strings.NewReader(`{"query":"subscription { value }"}`)))
+		close(done1)
+	}()
+	<-endpoint.entered
+
+	read := make(chan struct{}, 1)
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done2 := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), request(ctx2, &signalingReader{reader: strings.NewReader(`{"query":"subscription { value }"}`), read: read}))
+		close(done2)
+	}()
+	<-read
+
+	overloaded := request(context.Background(), panicReader{})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, overloaded)
+	if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") != "1" {
+		t.Fatalf("overload response = %d retry-after=%q", response.Code, response.Header().Get("Retry-After"))
+	}
+	requireTransportError(t, response, "REQUEST_OVERLOADED")
+	cancel1()
+	<-done1
+	<-endpoint.entered
+	cancel2()
+	<-done2
+	if endpoint.calls.Load() != 2 {
+		t.Fatalf("subscription calls = %d, want 2", endpoint.calls.Load())
+	}
+}
 
 type flushErrorWriter struct {
 	header http.Header

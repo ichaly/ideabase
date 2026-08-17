@@ -41,7 +41,7 @@ func (my *_DialectSuite) TestSelect() {
 			query: `query { users(limit: 10, offset: 20) { items { id } total } }`,
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
-					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__rn' - '__total' ORDER BY "__sr_0"."__rn"), '[]'), 'total', COALESCE(MIN("__sr_0"."__total"), 0)) AS "json"
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__rn' - '__total' ORDER BY "__sr_0"."__rn"), '[]'), 'total', COALESCE(MIN("__sr_0"."__total"), (SELECT COALESCE(MIN("__total"), 0) FROM (SELECT "sys_user_0"."__total" FROM (SELECT COUNT(*) OVER() AS "__total" FROM "public"."sys_user") AS "sys_user_0") AS "__sc_0"))) AS "json"
 					FROM (
 						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."__total", ROW_NUMBER() OVER () AS "__rn"
 						FROM (SELECT "sys_user"."id", COUNT(*) OVER() AS "__total" FROM "public"."sys_user" ORDER BY "sys_user"."id" ASC LIMIT 10 OFFSET 20) AS "sys_user_0"
@@ -100,6 +100,29 @@ func (my *_DialectSuite) TestSelect() {
 		},
 	}
 	my.runCases(cases)
+}
+
+func (my *_DialectSuite) TestFilteredTotalDoesNotMutatePaginationArguments() {
+	compile := func(query string) (string, []any) {
+		doc, gqlErr := gqlparser.LoadQuery(my.schema, query)
+		my.Require().Empty(gqlErr)
+		builder, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
+		my.Require().NoError(err)
+		sql, args, err := builder.Build(doc.Operations[0], nil)
+		my.Require().NoError(err)
+		return normalizeSQL(sql), args
+	}
+
+	first, firstArgs := compile(`query { users(limit: 0, where: {name: {eq: "a"}}) { items { id } total } }`)
+	second, secondArgs := compile(`query { users(where: {name: {eq: "a"}}, limit: 0) { items { id } total } }`)
+	my.Equal(second, first)
+	my.Equal(secondArgs, firstArgs)
+	my.Contains(first, "LIMIT 0")
+
+	first, firstArgs = compile(`query { userConnection(first: 2, where: {name: {eq: "a"}}) { edges { node { id } } totalCount } }`)
+	second, secondArgs = compile(`query { userConnection(where: {name: {eq: "a"}}, first: 2) { edges { node { id } } totalCount } }`)
+	my.Equal(second, first)
+	my.Equal(secondArgs, firstArgs)
 }
 
 func (my *_DialectSuite) TestRelation() {

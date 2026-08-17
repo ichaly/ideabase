@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -56,7 +57,12 @@ type delegationClaims struct {
 	CredentialEpoch uint64         `json:"credential_epoch"`
 	KeyEpoch        uint64         `json:"key_epoch"`
 	Depth           int            `json:"depth"`
+	ScopeVersion    uint8          `json:"scope_version,omitempty"`
+	Scope           map[string]any `json:"scope,omitempty"`
 }
+
+const delegationScopeVersion uint8 = 1
+const delegationScopeMaxBytes = 16 << 10
 
 func NewDelegationCodec(config DelegationConfig) (*DelegationCodec, error) {
 	if config.Issuer == "" || config.Audience == "" {
@@ -98,6 +104,10 @@ func (my *DelegationCodec) Sign(ctx context.Context, operation string) (string, 
 	if operation == "" {
 		return "", fmt.Errorf("delegation operation digest is required")
 	}
+	scope, err := delegationScope(ctx)
+	if err != nil {
+		return "", err
+	}
 	now := my.config.Clock()
 	id, err := randomTokenID()
 	if err != nil {
@@ -111,6 +121,7 @@ func (my *DelegationCodec) Sign(ctx context.Context, operation string) (string, 
 		Tenant: identity.Tenant(), Actor: identity.Actor(), RequestID: identity.RequestID(),
 		Roles: identity.Roles(), Claims: identity.Claims(), PolicyRevision: identity.PolicyRevision(),
 		CredentialEpoch: identity.CredentialEpoch(), KeyEpoch: my.config.KeyEpoch, Depth: depth, Operation: operation,
+		ScopeVersion: scopeVersion(scope), Scope: scope,
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(my.config.Key)
 }
@@ -147,7 +158,71 @@ func (my *DelegationCodec) Verify(ctx context.Context, token, operation string) 
 	if err != nil {
 		return nil, fmt.Errorf("delegation identity: %w", err)
 	}
-	return context.WithValue(WithIdentity(ctx, identity), delegationDepthKey{}, claims.Depth), nil
+	scope, err := verifiedDelegationScope(claims)
+	if err != nil {
+		return nil, err
+	}
+	verified := WithIdentity(ctx, identity)
+	if scope != nil {
+		verified = WithScope(verified, scope)
+	}
+	return context.WithValue(verified, delegationDepthKey{}, claims.Depth), nil
+}
+
+func scopeVersion(scope map[string]any) uint8 {
+	if len(scope) == 0 {
+		return 0
+	}
+	return delegationScopeVersion
+}
+
+func delegationScope(ctx context.Context) (map[string]any, error) {
+	scope, _ := ctx.Value(scopeKey{}).(map[string]any)
+	return cloneDelegationScope(scope)
+}
+
+func verifiedDelegationScope(claims *delegationClaims) (map[string]any, error) {
+	if claims.ScopeVersion == 0 && len(claims.Scope) == 0 {
+		return nil, nil
+	}
+	if claims.ScopeVersion != delegationScopeVersion {
+		return nil, fmt.Errorf("unsupported delegation scope version")
+	}
+	return cloneDelegationScope(claims.Scope)
+}
+
+func cloneDelegationScope(scope map[string]any) (map[string]any, error) {
+	if len(scope) == 0 {
+		return nil, nil
+	}
+	cloned := make(map[string]any, len(scope))
+	for key, value := range scope {
+		if !delegationScopeKeyAllowed(key) {
+			return nil, fmt.Errorf("delegation scope key is not allowlisted: %q", key)
+		}
+		cloned[key] = cloneVariableValue(value)
+	}
+	encoded, err := stdjson.Marshal(cloned)
+	if err != nil {
+		return nil, fmt.Errorf("delegation scope is not JSON-safe: %w", err)
+	}
+	if len(encoded) > delegationScopeMaxBytes {
+		return nil, fmt.Errorf("delegation scope exceeds %d bytes", delegationScopeMaxBytes)
+	}
+	return cloned, nil
+}
+
+func delegationScopeKeyAllowed(key string) bool {
+	if key == "" {
+		return false
+	}
+	for index, char := range []byte(key) {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || char == '_' || index > 0 && char >= '0' && char <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func randomTokenID() (string, error) {

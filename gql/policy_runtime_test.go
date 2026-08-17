@@ -225,7 +225,7 @@ func TestPolicyProviderRowPredicateIsCompiledWithRequestValue(t *testing.T) {
 		require.Len(t, users, 1)
 		require.Equal(t, name, users[0].(map[string]any)["name"])
 	}
-	require.Equal(t, 1, executor.policyCache.order.Len(), "同一策略形状应复用SQL计划，值只走参数槽")
+	require.Equal(t, 1, executor.policyCache.Len(), "同一策略形状应复用SQL计划，值只走参数槽")
 }
 
 func TestPolicyProviderCreateCheckRejectsBeforeWrite(t *testing.T) {
@@ -369,6 +369,8 @@ func TestPolicyProviderAuthorizesNestedRelationTarget(t *testing.T) {
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_UPDATE) && len(request.Fields) > 0 {
 			seenTarget = true
+			require.ElementsMatch(t, []string{"id"}, request.Fields[FieldUseFilter], "nested relation target keys must be authorized as filters")
+			require.ElementsMatch(t, []string{"userId"}, request.Fields[FieldUseWrite], "nested relation foreign key must be authorized as a write")
 			return PolicyDecision{Allow: false}, nil
 		}
 		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
@@ -383,12 +385,19 @@ func TestPolicyProviderAuthorizesNestedRelationTarget(t *testing.T) {
 	require.Contains(t, reply.Errors.Error(), "policy denied")
 }
 
+func TestRelationTargetCompositeKeysAreFilterUses(t *testing.T) {
+	target := &policyTarget{fields: make(map[FieldUse][]string)}
+	addRelationTargetFilterFields(target, &protocol.Class{PrimaryKeys: []string{"tenantId", "code"}})
+	require.ElementsMatch(t, []string{"tenantId", "code"}, target.fields[FieldUseFilter])
+	require.Empty(t, target.fields[FieldUseWrite])
+}
+
 func TestPolicyProviderChecksNestedRelationCreate(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		decision := PolicyDecision{Allow: true, Fields: request.Fields}
-		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_INSERT) {
+		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_INSERT) && len(request.Fields) > 0 {
 			decision.Check = []TypedPredicate{{Column: "title", Operator: "eq", Value: "Allowed"}}
 		}
 		return decision, nil
@@ -400,6 +409,27 @@ func TestPolicyProviderChecksNestedRelationCreate(t *testing.T) {
 	}`, nil, "")
 	require.NotEmpty(t, reply.Errors)
 	require.Contains(t, reply.Errors.Error(), "check failed")
+}
+
+func TestPolicyProviderAuthorizesNestedCreateForeignKeyWrite(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_INSERT) && len(request.Fields) > 0 {
+			require.ElementsMatch(t, []string{"title", "userId"}, request.Fields[FieldUseWrite])
+			return PolicyDecision{Allow: true, Fields: map[FieldUse][]string{FieldUseWrite: {"title"}}}, nil
+		}
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `mutation {
+		createUser(input: { name: "Nested policy", email: "nested-fk-policy@x.com", posts: { create: [{ title: "Denied FK" }] } }) { id }
+	}`, nil, "")
+	require.NotEmpty(t, reply.Errors)
+	var count int64
+	require.NoError(t, db.Table("posts").Where("title = ?", "Denied FK").Count(&count).Error)
+	require.Zero(t, count)
 }
 
 func TestPolicyProviderAuthorizesManyToManyThroughWrite(t *testing.T) {
@@ -496,7 +526,7 @@ func TestPolicyPlanCacheIsPartitionedByTenantRoute(t *testing.T) {
 	}
 	require.NotEmpty(t, seen["a"])
 	require.NotEqual(t, seen["a"], seen["b"])
-	require.Equal(t, 2, executor.policyCache.order.Len())
+	require.Equal(t, 2, executor.policyCache.Len())
 }
 
 func TestPolicyProviderFiltersIntrospectionAndSchemaArtifact(t *testing.T) {

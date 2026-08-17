@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,6 +50,40 @@ type testEndpoint struct {
 	err   error
 	name  string
 }
+
+type blockingEndpoint struct {
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (e *blockingEndpoint) ExecuteOperation(ctx context.Context, _ string, _ map[string]any, _ string) ([]byte, error) {
+	e.calls.Add(1)
+	e.entered <- struct{}{}
+	select {
+	case <-e.release:
+		return []byte(`{"data":{"ok":true}}`), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+type signalingReader struct {
+	reader io.Reader
+	read   chan struct{}
+}
+
+func (r *signalingReader) Read(p []byte) (int, error) {
+	select {
+	case r.read <- struct{}{}:
+	default:
+	}
+	return r.reader.Read(p)
+}
+
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) { panic("overloaded request body was read") }
 
 type effectivePinEndpoint struct {
 	testEndpoint
@@ -373,6 +408,52 @@ func TestRequestBodyLimitAndDeadline(t *testing.T) {
 	}
 	if _, ok := ep.ctx.Deadline(); !ok {
 		t.Fatal("request deadline missing")
+	}
+}
+
+func TestHTTPAdmissionBoundsDecodedAndExecutingRequests(t *testing.T) {
+	ep := &blockingEndpoint{entered: make(chan struct{}, 2), release: make(chan struct{}, 2)}
+	h := NewHandler(ep, Options{MaxConcurrent: 1, MaxQueued: 1, Timeout: time.Second})
+
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req(http.MethodPost, "application/json", responseType, `{"query":"{x}"}`))
+		firstDone <- w
+	}()
+	<-ep.entered
+
+	secondRead := make(chan struct{}, 1)
+	secondDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		r := req(http.MethodPost, "application/json", responseType, "")
+		r.Body = io.NopCloser(&signalingReader{reader: strings.NewReader(`{"query":"{x}"}`), read: secondRead})
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		secondDone <- w
+	}()
+	<-secondRead
+
+	overloaded := req(http.MethodPost, "application/json", responseType, "")
+	overloaded.Body = io.NopCloser(panicReader{})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, overloaded)
+	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") != "1" {
+		t.Fatalf("overload response = %d retry-after=%q body=%s", w.Code, w.Header().Get("Retry-After"), w.Body.Bytes())
+	}
+	requireTransportError(t, w, "REQUEST_OVERLOADED")
+	if got := ep.calls.Load(); got != 1 {
+		t.Fatalf("endpoint calls before release = %d, want 1", got)
+	}
+
+	ep.release <- struct{}{}
+	if w := <-firstDone; w.Code != http.StatusOK {
+		t.Fatalf("first status = %d", w.Code)
+	}
+	<-ep.entered
+	ep.release <- struct{}{}
+	if w := <-secondDone; w.Code != http.StatusOK {
+		t.Fatalf("second status = %d", w.Code)
 	}
 }
 

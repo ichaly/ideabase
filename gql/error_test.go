@@ -16,7 +16,7 @@ import (
 func TestPublicWireContractsUseLowerCamelJSON(t *testing.T) {
 	body, err := stdjson.Marshal(SchemaArtifact{Schema: "type Query{x:Int}", Fingerprint: "f", Capabilities: []Capability{{Coordinate: "Query.x", RetrySafe: true}}})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"version":"","schema":"type Query{x:Int}","fingerprint":"f","structuralFingerprint":"","permissionSignature":"","policyRevision":0,"routeRevision":0,"executionPin":"","capabilities":[{"coordinate":"Query.x","parent":"","name":"","type":"","arguments":null,"handler":"","planner":"","actions":null,"resource":"","cost":0,"policyAware":false,"requires":null,"timeout":0,"retrySafe":true,"idempotencyKey":"","maxBatch":0}]}`, string(body))
+	require.JSONEq(t, `{"version":"","schema":"type Query{x:Int}","fingerprint":"f","structuralFingerprint":"","permissionSignature":"","policyRevision":0,"routeRevision":0,"executionPin":"","capabilities":[{"coordinate":"Query.x","parent":"","name":"","type":"","arguments":null,"handler":"","planner":"","actions":null,"resource":"","cost":0,"policyAware":false,"requires":null,"timeout":0,"retrySafe":true,"idempotencyKey":"","maxBatch":0}],"executionMode":""}`, string(body))
 }
 
 func TestGQLErrorsSanitizeDatabaseAndContextFailures(t *testing.T) {

@@ -27,8 +27,24 @@ import (
 type notifier interface {
 	watch(tables []string) (*watcher, error)
 	unwatch(w *watcher)
+	invalidate(tables ...string)
+	cdcState() (string, string)
 	close() // 停止监听并释放连接（Engine.Close调用，须幂等）
 }
+
+func (my *listener) invalidate(tables ...string) { my.notify(tables...) }
+
+const (
+	CDCStateIdleValidated = "IdleValidated"
+	CDCStateConnected     = "Connected"
+	CDCStateDisconnected  = "Disconnected"
+)
+
+const (
+	cdcStateDisconnected uint32 = iota
+	cdcStateIdleValidated
+	cdcStateConnected
+)
 
 // notifiers 唤醒源工厂注册表（key=gorm驱动名），在各实现文件的init中登记
 var notifiers = map[string]func(db *gorm.DB, cfg internal.SubscriptionConfig) (notifier, error){}
@@ -59,7 +75,7 @@ func newPostgresNotifier(db *gorm.DB, cfg internal.SubscriptionConfig) (notifier
 		listener.close()
 		return nil, err
 	}
-	listener.setStatus(true, nil) // validated and idle until the first watcher starts replication
+	listener.setIdleValidated()
 	return listener, nil
 }
 
@@ -84,6 +100,7 @@ type listener struct {
 	dsn            string
 	publication    string
 	connected      atomic.Bool
+	state          atomic.Uint32
 	disconnectedAt atomic.Int64
 	lastError      atomic.Pointer[string]
 }
@@ -94,19 +111,21 @@ func newListener(dsn, publication string) *listener {
 		publication = "ideabase_cdc"
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &listener{
+	listener := &listener{
 		ctx:         ctx,
 		cancel:      cancel,
 		dsn:         dsn,
 		publication: publication,
 		watchers:    make(map[string]map[*watcher]bool),
 	}
+	listener.state.Store(cdcStateDisconnected)
+	return listener
 }
 
 // close 停止监听：取消生命周期ctx，接收循环随ctx中断、重连循环退出
 func (my *listener) close() {
 	my.mu.Lock()
-	my.connected.Store(false)
+	my.setStatus(false, nil)
 	my.cancel()
 	my.mu.Unlock()
 	my.runWG.Wait()
@@ -205,6 +224,9 @@ func (my *listener) notify(tables ...string) {
 
 // connect 建立复制连接：确保发布存在、创建临时槽、启动逻辑复制
 func (my *listener) connect() (*pgconn.PgConn, error) {
+	if !validPublicationName(my.publication) {
+		return nil, fmt.Errorf("CDC publication名称不安全: %q", my.publication)
+	}
 	ctx, cancel := context.WithTimeout(my.ctx, 15*time.Second)
 	defer cancel()
 
@@ -243,9 +265,24 @@ func (my *listener) connect() (*pgconn.PgConn, error) {
 	return conn, nil
 }
 
+func validPublicationName(name string) bool {
+	if len(name) == 0 || len(name) > 63 || !identifierStart(name[0]) {
+		return false
+	}
+	for i := 1; i < len(name); i++ {
+		if c := name[i]; !identifierStart(c) && (c < '0' || c > '9') && c != '$' {
+			return false
+		}
+	}
+	return true
+}
+
+func identifierStart(c byte) bool {
+	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
 func (my *listener) ensurePublication(ctx context.Context, conn *pgconn.PgConn) error {
-	if _, err := conn.Exec(ctx, fmt.Sprintf(
-		`CREATE PUBLICATION %q FOR ALL TABLES`, my.publication)).ReadAll(); err != nil &&
+	if _, err := conn.Exec(ctx, `CREATE PUBLICATION "`+my.publication+`" FOR ALL TABLES`).ReadAll(); err != nil &&
 		!strings.Contains(err.Error(), "42710") { // duplicate_object
 		return fmt.Errorf("创建发布失败: %w", err)
 	}
@@ -336,13 +373,26 @@ func cdcReconnectDelay(backoff time.Duration) time.Duration {
 func (my *listener) setStatus(connected bool, err error) {
 	my.connected.Store(connected)
 	if err == nil {
+		if connected {
+			my.state.Store(cdcStateConnected)
+		} else {
+			my.state.Store(cdcStateDisconnected)
+		}
 		my.disconnectedAt.Store(0)
 		my.lastError.Store(nil)
 		return
 	}
+	my.state.Store(cdcStateDisconnected)
 	my.disconnectedAt.CompareAndSwap(0, time.Now().UnixNano())
 	message := err.Error()
 	my.lastError.Store(&message)
+}
+
+func (my *listener) setIdleValidated() {
+	my.connected.Store(true)
+	my.state.Store(cdcStateIdleValidated)
+	my.disconnectedAt.Store(0)
+	my.lastError.Store(nil)
 }
 
 func (my *listener) outage() time.Duration {
@@ -358,6 +408,20 @@ func (my *listener) status() (bool, string) {
 		return my.connected.Load(), *message
 	}
 	return my.connected.Load(), ""
+}
+
+func (my *listener) cdcState() (string, string) {
+	state := CDCStateDisconnected
+	switch my.state.Load() {
+	case cdcStateIdleValidated:
+		state = CDCStateIdleValidated
+	case cdcStateConnected:
+		state = CDCStateConnected
+	}
+	if message := my.lastError.Load(); message != nil {
+		return state, *message
+	}
+	return state, ""
 }
 
 // receive 单连接接收循环，出错返回交由run重连

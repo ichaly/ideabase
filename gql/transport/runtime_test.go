@@ -15,6 +15,7 @@ import (
 	"time"
 
 	core "github.com/ichaly/ideabase/gql"
+	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -61,11 +62,17 @@ func testManifestHandler(id string, endpoint manifestEndpoint) http.Handler {
 	return NewManifestHandler(id, endpoint, func(*http.Request) bool { return true })
 }
 
-func (e *runtimeEndpoint) EffectiveSchema(context.Context) (core.SchemaArtifact, error) {
+func (e *runtimeEndpoint) EffectiveSchema(ctx context.Context) (core.SchemaArtifact, error) {
+	var artifact core.SchemaArtifact
 	if e.effective.Schema != "" {
-		return core.FinalizeSchemaArtifact(e.effective), nil
+		artifact = e.effective
+	} else {
+		artifact = core.SchemaArtifact{Schema: e.snapshot.Schema(), Fingerprint: schemaDigest(e.snapshot.Schema()), StructuralFingerprint: e.snapshot.Fingerprint(), Capabilities: e.snapshot.Capabilities()}
 	}
-	return core.FinalizeSchemaArtifact(core.SchemaArtifact{Schema: e.snapshot.Schema(), Fingerprint: schemaDigest(e.snapshot.Schema()), StructuralFingerprint: e.snapshot.Fingerprint(), Capabilities: e.snapshot.Capabilities()}), nil
+	if identity, ok := core.IdentityFromContext(ctx); ok {
+		artifact.Identity = core.IdentityDescriptorFromIdentity(identity)
+	}
+	return core.FinalizeSchemaArtifact(artifact), nil
 }
 
 func (e *runtimeEndpoint) ForSnapshot(fingerprint string) (core.ComposableEndpoint, error) {
@@ -287,16 +294,23 @@ func TestRemoteEndpointEffectiveSchemaUsesDelegatedIdentity(t *testing.T) {
 	serverCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
 	clientCodec, _ := core.NewDelegationCodec(core.DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, TTL: time.Minute, Replay: core.NewMemoryReplayStore(64)})
 	effective := newArtifact(t, "type Query { public: String }")
-	endpoint := &runtimeEndpoint{snapshot: snapshot, effective: core.SchemaArtifact{Schema: effective.Schema(), Fingerprint: schemaDigest(effective.Schema()), StructuralFingerprint: snapshot.Fingerprint(), Capabilities: effective.Capabilities()}}
+	endpoint := &runtimeEndpoint{snapshot: snapshot, effective: core.SchemaArtifact{Schema: effective.Schema(), Fingerprint: schemaDigest(effective.Schema()), StructuralFingerprint: snapshot.Fingerprint(), Capabilities: effective.Capabilities(), CacheIdentity: "policy-v1"}}
 	mux := http.NewServeMux()
 	mux.Handle("/manifest", testManifestHandler("child", endpoint))
-	mux.Handle("/effective", NewEffectiveSchemaHandler(endpoint, serverCodec))
+	var effectiveCalls atomic.Int32
+	effectiveHandler := NewEffectiveSchemaHandler(endpoint, serverCodec)
+	mux.Handle("/effective", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		effectiveCalls.Add(1)
+		effectiveHandler.ServeHTTP(w, r)
+	}))
 	server := httptest.NewServer(mux)
 	defer server.Close()
-	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{EndpointID: "child", ManifestURL: server.URL + "/manifest", EffectiveSchemaURL: server.URL + "/effective", ExecuteURL: server.URL + "/graphql", Delegation: clientCodec, AllowHTTP: true})
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{EndpointID: "child", ManifestURL: server.URL + "/manifest", EffectiveSchemaURL: server.URL + "/effective", ExecuteURL: server.URL + "/graphql", Delegation: clientCodec, EffectiveCacheTTL: 100 * time.Millisecond, AllowHTTP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
+	now := time.Now()
+	remote.clock = func() time.Time { return now }
 	identity, err := core.NewIdentity(core.IdentityInput{Tenant: "t", Subject: "u"})
 	if err != nil {
 		t.Fatal(err)
@@ -304,6 +318,55 @@ func TestRemoteEndpointEffectiveSchemaUsesDelegatedIdentity(t *testing.T) {
 	artifact, err := remote.EffectiveSchema(core.WithIdentity(context.Background(), identity))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := remote.EffectiveSchema(core.WithIdentity(context.Background(), identity)); err != nil {
+		t.Fatal(err)
+	}
+	for _, requestID := range []string{"request-1", "request-2"} {
+		requestIdentity, err := core.NewIdentity(core.IdentityInput{Tenant: "t", Subject: "u", RequestID: requestID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := remote.EffectiveSchema(core.WithIdentity(context.Background(), requestIdentity)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if effectiveCalls.Load() != 1 {
+		t.Fatalf("warm effective schema calls = %d, want 1", effectiveCalls.Load())
+	}
+	other, err := core.NewIdentity(core.IdentityInput{Tenant: "t", Subject: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.EffectiveSchema(core.WithIdentity(context.Background(), other)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.EffectiveSchema(core.WithScope(core.WithIdentity(context.Background(), identity), map[string]any{"region": "cn"})); err != nil {
+		t.Fatal(err)
+	}
+	if effectiveCalls.Load() != 3 {
+		t.Fatalf("identity/scope invalidation calls = %d, want 3", effectiveCalls.Load())
+	}
+	changed := newArtifact(t, "type Query { changed: String }")
+	endpoint.effective = core.SchemaArtifact{Schema: changed.Schema(), Fingerprint: schemaDigest(changed.Schema()), StructuralFingerprint: snapshot.Fingerprint(), Capabilities: changed.Capabilities(), CacheIdentity: "policy-v2"}
+	now = now.Add(101 * time.Millisecond)
+	refreshed, err := remote.EffectiveSchema(core.WithIdentity(context.Background(), identity))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(refreshed.Schema, "changed") || effectiveCalls.Load() != 4 {
+		t.Fatalf("expired effective cache did not refresh: calls=%d schema=%s", effectiveCalls.Load(), refreshed.Schema)
+	}
+	uncacheable := newArtifact(t, "type Query { dynamic: String }")
+	endpoint.effective = core.SchemaArtifact{Schema: uncacheable.Schema(), Fingerprint: schemaDigest(uncacheable.Schema()), StructuralFingerprint: snapshot.Fingerprint(), Capabilities: uncacheable.Capabilities()}
+	now = now.Add(101 * time.Millisecond)
+	for range 2 {
+		if _, err := remote.EffectiveSchema(core.WithIdentity(context.Background(), identity)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if effectiveCalls.Load() != 6 {
+		t.Fatalf("uncacheable effective artifact calls = %d, want 6", effectiveCalls.Load())
 	}
 	if artifact.Fingerprint == snapshot.Fingerprint() {
 		t.Fatal("effective schema fell back to static manifest")
@@ -356,7 +419,10 @@ func TestRemoteEffectiveSchemaPinsHistoricalStructuralSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if artifact.StructuralFingerprint != oldSnapshot.Fingerprint() || artifact.ExecutionPin != oldArtifact.ExecutionPin {
+	expected := oldArtifact
+	expected.Identity = core.IdentityDescriptorFromIdentity(identity)
+	expected = core.FinalizeSchemaArtifact(expected)
+	if artifact.StructuralFingerprint != oldSnapshot.Fingerprint() || artifact.ExecutionPin != expected.ExecutionPin {
 		t.Fatalf("historical artifact = %#v", artifact)
 	}
 }
@@ -404,7 +470,7 @@ func TestRemoteEndpointRejectsStaleManifestRevision(t *testing.T) {
 	endpoint := &runtimeEndpoint{snapshot: first}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(Manifest{Version: endpointProtocolVersion, Revision: revision, EndpointID: "child", Schema: endpoint.snapshot.Schema(), Fingerprint: endpoint.snapshot.Fingerprint(), Capabilities: endpoint.snapshot.Capabilities()})
+		_ = json.NewEncoder(w).Encode(Manifest{Version: EndpointProtocolVersion, Revision: revision, EndpointID: "child", Schema: endpoint.snapshot.Schema(), Fingerprint: endpoint.snapshot.Fingerprint(), Capabilities: endpoint.snapshot.Capabilities()})
 	}))
 	defer server.Close()
 	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{EndpointID: "child", ManifestURL: server.URL, ExecuteURL: server.URL, AllowHTTP: true})
@@ -424,7 +490,7 @@ func TestRemoteEndpointRejectsChangedZeroRevisionManifest(t *testing.T) {
 	endpoint := &runtimeEndpoint{snapshot: first}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(Manifest{Version: endpointProtocolVersion, EndpointID: "child", Schema: endpoint.snapshot.Schema(), Fingerprint: endpoint.snapshot.Fingerprint(), Capabilities: endpoint.snapshot.Capabilities()})
+		_ = json.NewEncoder(w).Encode(Manifest{Version: EndpointProtocolVersion, EndpointID: "child", Schema: endpoint.snapshot.Schema(), Fingerprint: endpoint.snapshot.Fingerprint(), Capabilities: endpoint.snapshot.Capabilities()})
 	}))
 	defer server.Close()
 	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{EndpointID: "child", ManifestURL: server.URL, ExecuteURL: server.URL, AllowHTTP: true})
@@ -562,6 +628,67 @@ func TestRemoteEndpointHealthMatchesManifestSnapshot(t *testing.T) {
 	if report, err := remote.Health(context.Background()); err != nil || !report.Ready || report.SnapshotFingerprint != snapshot.Fingerprint() {
 		t.Fatalf("remote health = %#v, %v", report, err)
 	}
+}
+
+func TestRemoteEndpointDecodesNotReadyHealthReport(t *testing.T) {
+	snapshot := newArtifact(t, "type Query { hello: String }")
+	manifestEndpoint := &healthyRuntime{runtimeEndpoint: &runtimeEndpoint{snapshot: snapshot}}
+	report := core.HealthReport{
+		Ready: false, SnapshotOK: true, SnapshotFingerprint: snapshot.Fingerprint(),
+		ControlRevision: 7, RouteRevision: 8, SecurityRevision: 9,
+		DatabaseOK: false, CDCConfigured: true, CDCConnected: false,
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/manifest", testManifestHandler("child", manifestEndpoint))
+	mux.Handle("/graphql", NewHandler(manifestEndpoint, Options{}))
+	mux.Handle("/health", NewHealthHandler(healthProbeFunc(func(context.Context) (core.HealthReport, error) { return report, nil })))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
+		EndpointID: "child", ManifestURL: server.URL + "/manifest", ExecuteURL: server.URL + "/graphql",
+		HealthURL: server.URL + "/health", AllowHTTP: true,
+	})
+	require.NoError(t, err)
+
+	got, err := remote.Health(context.Background())
+	require.Equal(t, report.ControlRevision, got.ControlRevision)
+	require.Equal(t, report.RouteRevision, got.RouteRevision)
+	require.Equal(t, report.SecurityRevision, got.SecurityRevision)
+	require.False(t, got.DatabaseOK)
+	var problem *RemoteProblemError
+	require.ErrorAs(t, err, &problem)
+	require.Equal(t, "REMOTE_NOT_READY", problem.Code)
+	require.True(t, problem.Retryable)
+}
+
+func TestRemoteEndpointRejectsUnknownHealthVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":2,"ready":true,"snapshotOk":true,"databaseOk":true}`))
+	}))
+	defer server.Close()
+	remote := &RemoteEndpoint{
+		health: server.URL, client: server.Client(), timeout: time.Second,
+		maxResponse: 1 << 20, unarySlots: make(chan struct{}, 1),
+	}
+	_, err := remote.healthFor(context.Background(), "")
+	var problem *RemoteProblemError
+	require.ErrorAs(t, err, &problem)
+	require.Equal(t, "UNSUPPORTED_HEALTH_VERSION", problem.Code)
+	require.False(t, problem.Retryable)
+}
+
+func TestRemoteEndpointAcceptsLegacyHealthWithoutVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ready":true,"snapshotOk":true,"databaseOk":true,"cdcConfigured":true,"cdcState":"IdleValidated","cdcConnected":true}`))
+	}))
+	defer server.Close()
+	remote := &RemoteEndpoint{health: server.URL, client: server.Client(), timeout: time.Second, maxResponse: 1 << 20, unarySlots: make(chan struct{}, 1)}
+	report, err := remote.healthFor(context.Background(), "")
+	require.NoError(t, err)
+	require.Equal(t, "IdleValidated", report.CDCState)
+	require.True(t, report.CDCConnected)
 }
 
 func TestRemoteEndpointRejectsHealthManifestWithoutHealthURL(t *testing.T) {

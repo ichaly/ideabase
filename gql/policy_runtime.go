@@ -409,10 +409,14 @@ func (my *Engine) collectRelationPolicyTargets(targetFor func(Capability, *proto
 					return fmt.Errorf("policy capability is missing for nested relation update: %s", targetClass.Name)
 				}
 				target := targetFor(capability, targetClass)
-				if field.Relation.Through != nil {
-					target.add(FieldUseWrite, targetClass.PrimaryKeys[0])
-				} else {
-					target.add(FieldUseWrite, field.Relation.TargetField)
+				// connect/disconnect locate the target row by its primary key. The
+				// key is therefore a filter use, never a writable field. Declare
+				// every key so composite keys cannot bypass field authorization.
+				addRelationTargetFilterFields(target, targetClass)
+				if through == nil {
+					if foreignKey := targetClass.Fields[field.Relation.TargetField]; foreignKey != nil {
+						target.add(FieldUseWrite, foreignKey.Name)
+					}
 				}
 			}
 			if rawCreate := operations[protocol.CREATE]; rawCreate != nil {
@@ -426,6 +430,11 @@ func (my *Engine) collectRelationPolicyTargets(targetFor func(Capability, *proto
 				}
 				target := targetFor(capability, targetClass)
 				target.rows = append(target.rows, created...)
+				if through == nil {
+					if foreignKey := targetClass.Fields[field.Relation.TargetField]; foreignKey != nil {
+						target.add(FieldUseWrite, foreignKey.Name)
+					}
+				}
 				for _, createdRow := range created {
 					for fieldName := range createdRow {
 						if targetClass.Fields[fieldName] != nil {
@@ -437,6 +446,15 @@ func (my *Engine) collectRelationPolicyTargets(targetFor func(Capability, *proto
 		}
 	}
 	return nil
+}
+
+func addRelationTargetFilterFields(target *policyTarget, class *protocol.Class) {
+	if target == nil || class == nil {
+		return
+	}
+	for _, primary := range class.PrimaryKeys {
+		target.add(FieldUseFilter, primary)
+	}
 }
 
 func evaluatePolicyChecks(target policyTarget, decision PolicyDecision, variables map[string]interface{}, scope map[string]any) error {

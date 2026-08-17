@@ -101,9 +101,10 @@ func TestGAPerformanceRealPostgresConcurrentWarmGate(t *testing.T) {
 	p := func(q int) time.Duration { return durations[(len(durations)-1)*q/100] }
 	throughput := float64(len(durations)) / elapsed.Seconds()
 	fmt.Printf("GA postgres warm: concurrency=%d requests=%d elapsed=%s throughput=%.1f/s p50=%s p95=%s p99=%s sql=%d errors=%d\n", concurrency, len(durations), elapsed, throughput, p(50), p(95), p(99), counter.count.Load(), failures.Load())
-	// These are deliberately broad, machine-stable regression budgets; latency
-	// is diagnostic, while SQL count, allocation, and error budgets are gates.
-	require.LessOrEqual(t, p(99), 5*time.Second, "p99 runaway budget")
+	// Keep enough room for shared CI, while rejecting an order-of-magnitude
+	// regression against the warm real-Postgres baseline (~2.3k req/s, ~15ms).
+	require.GreaterOrEqual(t, throughput, 500.0, "warm throughput regression budget")
+	require.LessOrEqual(t, p(99), 100*time.Millisecond, "warm p99 latency regression budget")
 	allocs := testing.AllocsPerRun(3, func() {
 		result := executor.run(context.Background(), query, nil, "")
 		if len(result.Errors) != 0 {
@@ -111,7 +112,7 @@ func TestGAPerformanceRealPostgresConcurrentWarmGate(t *testing.T) {
 		}
 	})
 	fmt.Printf("GA postgres warm: allocations/request=%.0f\n", allocs)
-	require.LessOrEqual(t, allocs, float64(10000), "allocation budget")
+	require.LessOrEqual(t, allocs, float64(100), "allocation budget")
 	before := counter.count.Load()
 	rejected := executor.run(context.Background(), `mutation { createUser(input: {name: "bad"}) { doesNotExist } }`, nil, "")
 	require.NotEmpty(t, rejected.Errors)

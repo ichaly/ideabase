@@ -12,6 +12,12 @@ var compatErrSink error
 
 // These contract assertions accompany the warm compile corpus. They avoid
 // ns/op: SQL shape and argument slots are reproducible; timings are not.
+func TestCompatCompileSQLContract(t *testing.T) {
+	compile, schema := benchCompiler(t)
+	assertBaseline(t, compile, benchOperation(t, schema, `{ posts(limit: 10) { items { id title } total } }`), false)
+	assertBaseline(t, compile, benchOperation(t, schema, `{ posts(limit: 10) { items { id title user { name } tags { name } } total } }`), true)
+}
+
 func BenchmarkCompatCompileBaselineSimple(b *testing.B) {
 	compile, schema := benchCompiler(b)
 	op := benchOperation(b, schema, `{ posts(limit: 10) { items { id title } total } }`)
@@ -36,21 +42,21 @@ func BenchmarkCompatCompileBaselineNested(b *testing.B) {
 	assertBenchmarkResult(b, true)
 }
 
-func assertBaseline(b *testing.B, compile interface {
+func assertBaseline(t testing.TB, compile interface {
 	Build(*ast.OperationDefinition, map[string]interface{}) (string, []any, error)
 }, op *ast.OperationDefinition, nested bool) {
 	sql, args, err := compile.Build(op, nil)
 	if err != nil {
-		b.Fatal(err)
+		t.Fatal(err)
 	}
 	if sql == "" {
-		b.Fatal("compile baseline produced empty SQL")
+		t.Fatal("compile baseline produced empty SQL")
 	}
 	if len(args) != 0 {
-		b.Fatalf("baseline args = %d, want 0: %#v", len(args), args)
+		t.Fatalf("baseline args = %d, want 0: %#v", len(args), args)
 	}
 	if nested {
-		assertNestedSQL(b, sql)
+		assertNestedSQL(t, sql)
 	}
 }
 
@@ -63,14 +69,14 @@ func assertBenchmarkResult(b *testing.B, nested bool) {
 	}
 }
 
-func assertNestedSQL(b *testing.B, sql string) {
+func assertNestedSQL(t testing.TB, sql string) {
 	for _, fragment := range []string{`LATERAL`, `sys_user`, `sys_tag`} {
 		for i := 0; i < len(sql); i++ { // avoid importing/doing checks in the timed loop
 			if i+len(fragment) <= len(sql) && sql[i:i+len(fragment)] == fragment {
 				goto found
 			}
 		}
-		b.Fatalf("nested baseline SQL missing %q", fragment)
+		t.Fatalf("nested baseline SQL missing %q", fragment)
 	found:
 	}
 }

@@ -177,7 +177,7 @@ func (my *HookedLoader) Load(h protocol.Hoster) error {
 
 // NewMetadata 策略模式重构，支持Loader注册与优先级排序
 func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, error) {
-	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: protocol.DataTypes}}
+	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: protocol.DefaultDataTypes()}}
 	fileConfigured := k.IsSet("metadata.file")
 
 	// 设置默认配置

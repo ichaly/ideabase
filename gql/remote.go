@@ -61,7 +61,7 @@ func (my *remoteJob) fetch(ctx context.Context, remotes map[string]Remote) {
 		my.err = safely(func() (err error) { // panic与错误同走容错语义,不打崩进程
 			callCtx := ctx
 			if my.executor != nil {
-				callCtx = my.executor.executionContext(ctx, my.binding.node.SelectionSet)
+				callCtx = my.executor.executionContextFor(ctx, my.binding.node.SelectionSet, my.binding.Name)
 			}
 			hctx, cancel := context.WithCancel(callCtx)
 			if handler, ok := remote.(Handler); ok {

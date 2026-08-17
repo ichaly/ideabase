@@ -92,7 +92,7 @@ func TestMutationFailureRollsBackEarlierRootFields(t *testing.T) {
 
 	fail := NewResolver("Mutation", "failMutation", "测试事务回滚",
 		func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
-			if err := Tx(ctx).Exec(
+			if err := transactionFromContext(ctx).Exec(
 				"INSERT INTO users(name, email) VALUES(?, ?)", "Resolver", "resolver-rollback@x.com",
 			).Error; err != nil {
 				return false, err
@@ -118,7 +118,7 @@ func TestRootTransactionTreatsRollbackConnectionLossAsIndeterminate(t *testing.T
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 	sentinel := errors.New("mutation failed")
-	err, rolledBack := runRootTransaction(context.Background(), db, func(tx *gorm.DB) error {
+	err, rolledBack := runRootTransaction(context.Background(), db, nil, func(tx *gorm.DB) error {
 		var pid int
 		require.NoError(t, tx.Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error)
 		require.NoError(t, db.Exec(`SELECT pg_terminate_backend(?)`, pid).Error)
@@ -134,7 +134,7 @@ func TestMutationResolverSharesTransactionWithDefaultFields(t *testing.T) {
 
 	seed := NewResolver("Mutation", "seedUser", "测试Resolver事务连接",
 		func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
-			tx := Tx(ctx)
+			tx := transactionFromContext(ctx)
 			if tx == nil {
 				return false, errors.New("mutation transaction missing")
 			}

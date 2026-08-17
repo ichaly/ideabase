@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"hash"
 	"hash/fnv"
@@ -26,6 +27,8 @@ type feed struct {
 }
 
 const cdcReconnectGrace = 30 * time.Second
+const subscriptionRefreshTimeout = 5 * time.Second
+const subscriptionCacheResponseLimit int64 = 1 << 20
 
 const (
 	maxSubscriptionFeeds       = 1024
@@ -83,12 +86,7 @@ func subscriptionRetryDelay(attempt int) time.Duration {
 	return d/2 + time.Duration(rand.Int63n(int64(d/2)+1))
 }
 
-func (my *Engine) acquireRefresh(ctx context.Context) func() {
-	select {
-	case my.refreshSem <- struct{}{}:
-	case <-ctx.Done():
-		return func() {}
-	}
+func (my *Engine) acquireRefresh(ctx context.Context) (func(), bool) {
 	tenant := ""
 	if identity, ok := IdentityFromContext(ctx); ok {
 		tenant = identity.Tenant()
@@ -101,10 +99,15 @@ func (my *Engine) acquireRefresh(ctx context.Context) func() {
 	select {
 	case sem <- struct{}{}:
 	case <-ctx.Done():
-		<-my.refreshSem
-		return func() {}
+		return func() {}, false
 	}
-	return func() { <-sem; <-my.refreshSem }
+	select {
+	case my.refreshSem <- struct{}{}:
+		return func() { <-my.refreshSem; <-sem }, true
+	case <-ctx.Done():
+		<-sem
+		return func() {}, false
+	}
 }
 
 func tenantRefreshSlot(tenant string) uint64 {
@@ -239,7 +242,6 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 		leaseTick = ticker.C
 		defer ticker.Stop()
 	}
-	digest := fnv.New64a() // stream单goroutine持有，tick内Reset复用免每次分配
 	attempt := 0
 	var retry *time.Timer
 	var retryC <-chan time.Time
@@ -275,12 +277,6 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 		retryC = retry.C
 	}
 	publish := func() bool {
-		if hasLease {
-			if err := lease.Check(ctx); err != nil {
-				my.expireFeed(f, err)
-				return false
-			}
-		}
 		if w.status != nil {
 			if connected, _ := w.status(); !connected {
 				if w.outage == nil || w.outage() < cdcReconnectGrace {
@@ -291,10 +287,22 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 				return false
 			}
 		}
-		release := my.acquireRefresh(ctx)
-		defer release()
-		reply, changed := my.tick(ctx, plan, variables, digest, &last)
-		if reply.Errors != nil {
+		refreshCtx, cancel := context.WithTimeout(ctx, subscriptionRefreshTimeout)
+		release, acquired := my.acquireRefresh(refreshCtx)
+		defer cancel()
+		if !acquired {
+			scheduleRetry()
+			return true
+		}
+		reply, changed := my.tickWithinDeadline(refreshCtx, plan, variables, &last, release, func() error {
+			if hasLease {
+				return lease.Check(refreshCtx)
+			}
+			return nil
+		})
+		failed := reply.Errors != nil
+		reply = boundSubscriptionReply(ctx, reply)
+		if failed {
 			scheduleRetry()
 		} else {
 			stopRetry()
@@ -316,21 +324,9 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 	for {
 		select {
 		case <-leaseTick:
-			if err := lease.Check(ctx); err != nil {
+			if err := my.checkLeaseWithinDeadline(ctx, lease); err != nil {
 				my.expireFeed(f, err)
 				return
-			}
-			if lease.PolicyProvider != nil && lease.Operation != nil {
-				reauthed, err := my.authorizeProvider(ctx, lease.Operation, lease.Variables)
-				if err != nil {
-					my.expireFeed(f, err)
-					return
-				}
-				decisions, _ := reauthed.Value(policyDecisionsKey{}).(map[string]PolicyDecision)
-				if policyRuntimeSignature(decisions) != lease.PolicySignature {
-					my.expireFeed(f, fmt.Errorf("subscription policy changed"))
-					return
-				}
 			}
 		case <-w.wake:
 			if !publish() {
@@ -343,6 +339,82 @@ func (my *Engine) stream(ctx context.Context, plan *Plan, variables map[string]i
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+func boundSubscriptionReply(ctx context.Context, reply gqlReply) gqlReply {
+	limit := ResponseLimit(ctx)
+	if limit <= 0 || limit > subscriptionCacheResponseLimit {
+		limit = subscriptionCacheResponseLimit
+	}
+	body, err := marshalReply(WithResponseLimit(context.Background(), limit), reply)
+	if err != nil {
+		limited := gqlReply{Errors: GraphQLErrors(errResponseLimit)}
+		limited.encoded, _ = marshalReply(context.Background(), limited)
+		return limited
+	}
+	return gqlReply{encoded: body}
+}
+
+func (my *Engine) tickWithinDeadline(ctx context.Context, plan *Plan, variables map[string]interface{}, last *uint64, release func(), check func() error) (gqlReply, bool) {
+	type result struct {
+		reply   gqlReply
+		changed bool
+		last    uint64
+	}
+	resultCh := make(chan result, 1)
+	localLast := *last
+	go func() {
+		defer release()
+		if err := check(); err != nil {
+			resultCh <- result{reply: gqlReply{Errors: GraphQLErrors(err)}, changed: true, last: localLast}
+			return
+		}
+		digest := fnv.New64a()
+		reply, changed := my.tick(ctx, plan, variables, digest, &localLast)
+		resultCh <- result{reply: reply, changed: changed, last: localLast}
+	}()
+	select {
+	case result := <-resultCh:
+		*last = result.last
+		return result.reply, result.changed
+	case <-ctx.Done():
+		return gqlReply{Errors: GraphQLErrors(ctx.Err())}, true
+	}
+}
+
+func (my *Engine) checkLeaseWithinDeadline(ctx context.Context, lease subscriptionLease) error {
+	deadline, cancel := context.WithTimeout(ctx, subscriptionRefreshTimeout)
+	defer cancel()
+	release, acquired := my.acquireRefresh(deadline)
+	if !acquired {
+		return deadline.Err()
+	}
+	result := make(chan error, 1)
+	go func() {
+		defer release()
+		if err := lease.Check(deadline); err != nil {
+			result <- err
+			return
+		}
+		if lease.PolicyProvider == nil || lease.Operation == nil {
+			result <- nil
+			return
+		}
+		reauthed, err := my.authorizeProvider(deadline, lease.Operation, lease.Variables)
+		if err == nil {
+			decisions, _ := reauthed.Value(policyDecisionsKey{}).(map[string]PolicyDecision)
+			if policyRuntimeSignature(decisions) != lease.PolicySignature {
+				err = fmt.Errorf("subscription policy changed")
+			}
+		}
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-deadline.Done():
+		return deadline.Err()
 	}
 }
 
@@ -397,10 +469,16 @@ func (my *Engine) expireFeed(f *feed, err error) {
 func subscriptionFeedKey(query, operation string, variables, scope map[string]any, identity Identity, route TenantRoute, policy string) string {
 	roles := identity.Roles()
 	sort.Strings(roles)
-	v, _ := json.Marshal(variables)
-	s, _ := json.Marshal(scope)
-	r, _ := json.Marshal(roles)
-	return query + "\x00" + operation + "\x00" + string(v) + "\x00" + string(s) + "\x00" + identity.Tenant() + "\x00" + identity.Subject() + "\x00" + string(r) + "\x00" + fmt.Sprint(identity.PolicyRevision()) + "\x00" + fmt.Sprint(identity.CredentialEpoch()) + "\x00" + route.CacheKey + "\x00" + policy
+	canonical, _ := json.Marshal(struct {
+		Query, Operation       string
+		Variables, Scope       map[string]any
+		Tenant, Subject, Actor string
+		Roles                  []string
+		Policy, Credential     uint64
+		Route, PolicySignature string
+	}{query, operation, variables, scope, identity.Tenant(), identity.Subject(), identity.Actor(), roles, identity.PolicyRevision(), identity.CredentialEpoch(), route.CacheKey, policy})
+	digest := sha256.Sum256(canonical)
+	return fmt.Sprintf("subscription:v1:%x", digest[:])
 }
 
 // tick 表变更唤醒后重查一次：结果指纹无变化时返回false（不推送）

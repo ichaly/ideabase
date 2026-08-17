@@ -1,7 +1,9 @@
 package gql
 
 import (
+	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +44,19 @@ func TestListenerCloseWaitsForRunAndIsIdempotent(t *testing.T) {
 	require.ErrorContains(t, err, "已关闭")
 }
 
+func TestListenerValidatedIdleIsNotConnected(t *testing.T) {
+	l := newListener("", "")
+	l.setIdleValidated()
+	state, message := l.cdcState()
+	require.Equal(t, CDCStateIdleValidated, state)
+	require.Empty(t, message)
+	connected, _ := l.status()
+	require.True(t, connected, "legacy CDCConnected remains ready-compatible while idle")
+	l.setStatus(false, fmt.Errorf("connection lost"))
+	state, _ = l.cdcState()
+	require.Equal(t, CDCStateDisconnected, state)
+}
+
 func TestReplicationSlotNamesAreClusterSafePostgresIdentifiers(t *testing.T) {
 	valid := regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 	seen := make(map[string]struct{}, 1000)
@@ -53,6 +68,23 @@ func TestReplicationSlotNamesAreClusterSafePostgresIdentifiers(t *testing.T) {
 		_, duplicate := seen[name]
 		require.False(t, duplicate, name)
 		seen[name] = struct{}{}
+	}
+}
+
+func TestCDCRejectsUnsafePublicationNamesBeforeConnecting(t *testing.T) {
+	for _, name := range []string{
+		`public.ideabase_cdc`,
+		`ideabase-cdc`,
+		`ideabase_cdc' WITH (publish = 'truncate') --`,
+		`ideabase_cdc\" FOR TABLE secrets --`,
+		strings.Repeat("a", 64),
+	} {
+		t.Run(name, func(t *testing.T) {
+			listener := newListener("host=127.0.0.1 port=1 connect_timeout=1", name)
+			err := listener.validate()
+			require.ErrorContains(t, err, "CDC publication名称不安全")
+			listener.close()
+		})
 	}
 }
 

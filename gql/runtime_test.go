@@ -20,16 +20,25 @@ func (runtimeTestNotifier) watch(tables []string) (*watcher, error) {
 	return &watcher{tables: set, wake: make(chan struct{}, 1)}, nil
 }
 
-func (runtimeTestNotifier) unwatch(*watcher) {}
-func (runtimeTestNotifier) close()           {}
+func (runtimeTestNotifier) unwatch(*watcher)           {}
+func (runtimeTestNotifier) invalidate(...string)       {}
+func (runtimeTestNotifier) cdcState() (string, string) { return CDCStateConnected, "" }
+func (runtimeTestNotifier) close()                     {}
 
 type runtimeStatusNotifier struct{ connected atomic.Bool }
 
 func (n *runtimeStatusNotifier) watch(tables []string) (*watcher, error) {
 	return &watcher{tables: map[string]bool{}, wake: make(chan struct{}, 1), status: n.status}, nil
 }
-func (*runtimeStatusNotifier) unwatch(*watcher) {}
-func (*runtimeStatusNotifier) close()           {}
+func (*runtimeStatusNotifier) unwatch(*watcher)     {}
+func (*runtimeStatusNotifier) invalidate(...string) {}
+func (*runtimeStatusNotifier) close()               {}
+func (n *runtimeStatusNotifier) cdcState() (string, string) {
+	if n.connected.Load() {
+		return CDCStateConnected, ""
+	}
+	return CDCStateDisconnected, "CDC unavailable"
+}
 func (n *runtimeStatusNotifier) status() (bool, string) {
 	if n.connected.Load() {
 		return true, ""
@@ -161,6 +170,24 @@ func TestExecutorHealthReadinessTracksCDCConnection(t *testing.T) {
 	notifier.connected.Store(true)
 	report, err = executor.Health(context.Background())
 	require.NoError(t, err)
+	require.True(t, report.CDCConnected)
+	require.True(t, report.Ready)
+}
+
+func TestExecutorHealthReportsValidatedIdleCDCState(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	if source := executor.cdc; source != nil {
+		source.close()
+	}
+	idle := newListener("", "")
+	idle.setIdleValidated()
+	defer idle.close()
+	executor.cdc = idle
+
+	report, err := executor.Health(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, CDCStateIdleValidated, report.CDCState)
 	require.True(t, report.CDCConnected)
 	require.True(t, report.Ready)
 }

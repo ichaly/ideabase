@@ -409,6 +409,12 @@ func (my *Dialect) writeInsertValues(ctx *compiler.Context, class *protocol.Clas
 	if err != nil {
 		return nil, err
 	}
+	if len(columns) == 0 {
+		ctx.Write(`INSERT INTO `)
+		tableRef(ctx, class.Table)
+		ctx.Write(` DEFAULT VALUES`)
+		return columns, nil
+	}
 	ctx.Write(`INSERT INTO `)
 	tableRef(ctx, class.Table)
 	ctx.Write(` (`)
@@ -443,9 +449,6 @@ func (my *Dialect) insertColumns(class *protocol.Class, rows []inputRow) ([]stri
 				columns = append(columns, column)
 			}
 		}
-	}
-	if len(columns) == 0 {
-		return nil, fmt.Errorf("input不能为空")
 	}
 	return columns, nil
 }
@@ -732,7 +735,13 @@ func sortedClassFields(class *protocol.Class) []*protocol.Field {
 // inputRows 解析input参数为行列表：单对象/对象列表/整体变量（map或列表）
 func (my *Dialect) inputRows(ctx *compiler.Context, class *protocol.Class, field *ast.Field, operation string) ([]inputRow, error) {
 	arg := field.Arguments.ForName(protocol.INPUT)
-	if arg == nil || arg.Value == nil {
+	if arg == nil {
+		if operation == protocol.OP_INSERT && class.CanInsertWithoutInput() {
+			return []inputRow{{values: make(map[string]paramWriter)}}, nil
+		}
+		return nil, fmt.Errorf("%s缺少input参数", field.Name)
+	}
+	if arg.Value == nil {
 		return nil, fmt.Errorf("%s缺少input参数", field.Name)
 	}
 	return my.rowsOfValue(ctx, class, arg.Value, operation)

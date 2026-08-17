@@ -1,6 +1,11 @@
 package protocol
 
-import "github.com/samber/lo"
+import (
+	"maps"
+	"slices"
+
+	"github.com/samber/lo"
+)
 
 // Operator 表示过滤操作符
 type Operator struct {
@@ -173,7 +178,7 @@ const (
 )
 
 // DataTypes 内置的数据库到GraphQL的类型映射
-var DataTypes = map[string]string{
+var dataTypes = map[string]string{
 	// PostgreSQL 类型
 	"timestamp with time zone":    SCALAR_DATE_TIME,
 	"timestamp without time zone": SCALAR_DATE_TIME,
@@ -233,7 +238,7 @@ var DataTypes = map[string]string{
 
 // Operators 全部操作符；Value为最终SQL文本（编译期零转换）
 // jsonb系（contains/containedIn/hasKey）由方言渲染为函数形式，Value仅作标注
-var Operators = []*Operator{
+var operators = []*Operator{
 	{Name: IS, Value: "IS", Description: descIs},
 	{Name: EQ, Value: "=", Description: descEqual},
 	{Name: IN, Value: "IN", Description: descIn},
@@ -261,7 +266,7 @@ func pick(names ...string) []*Operator {
 }
 
 // Grouping 内置标量可用的操作符集合
-var Grouping = map[string][]*Operator{
+var grouping = map[string][]*Operator{
 	SCALAR_ID:        pick(EQ, IN, GT, GE, LT, LE),
 	SCALAR_INT:       pick(IS, EQ, IN, GT, GE, LT, LE, NE),
 	SCALAR_FLOAT:     pick(IS, EQ, IN, GT, GE, LT, LE, NE),
@@ -272,12 +277,34 @@ var Grouping = map[string][]*Operator{
 }
 
 // 运算符按照名字索引字典
-var dictionary = lo.KeyBy(Operators, func(op *Operator) string {
+var dictionary = lo.KeyBy(operators, func(op *Operator) string {
 	return op.Name
 })
 
 // GetOperator 根据名称获取操作符信息
 func GetOperator(name string) (*Operator, bool) {
 	op, exists := dictionary[name]
-	return op, exists
+	if !exists {
+		return nil, false
+	}
+	copy := *op
+	return &copy, true
+}
+
+// DefaultDataTypes returns one mutable engine-local copy of the built-in
+// database-to-GraphQL mapping.
+func DefaultDataTypes() map[string]string { return maps.Clone(dataTypes) }
+
+func IsBuiltinScalar(name string) bool { _, ok := grouping[name]; return ok }
+
+func ScalarTypes() []string { return slices.Sorted(maps.Keys(grouping)) }
+
+func OperatorsForScalar(name string) []*Operator {
+	defaults := grouping[name]
+	result := make([]*Operator, len(defaults))
+	for index, op := range defaults {
+		copy := *op
+		result[index] = &copy
+	}
+	return result
 }

@@ -4,6 +4,7 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	stdjson "encoding/json"
 	"fmt"
 	"io/fs"
@@ -151,6 +152,7 @@ type Engine struct {
 	rls               bool
 	effectiveCache    *effectiveCache
 	effectiveFlight   singleflight.Group
+	buildLimiter      *buildLimiter
 	subscriptionLease time.Duration
 	observer          Observer
 	closed            atomic.Bool
@@ -268,7 +270,7 @@ func (my *Engine) Snapshot() (*Snapshot, error) {
 		if my.snapshotErr == nil {
 			fingerprint := my.snapshot.Fingerprint()
 			my.baseView = &effectiveView{
-				artifact: SchemaArtifact{Schema: my.snapshot.Schema(), Fingerprint: digest(my.snapshot.Schema()), StructuralFingerprint: fingerprint, Capabilities: my.snapshot.Capabilities()},
+				artifact: SchemaArtifact{Schema: my.snapshot.Schema(), Fingerprint: digest(my.snapshot.Schema()), StructuralFingerprint: fingerprint, Capabilities: my.snapshot.Capabilities(), ExecutionMode: my.executionMode(), PersistedOperations: my.persistedOperationCatalog(my.schema)},
 				schema:   my.schema, intro: my.intro,
 			}
 		}
@@ -286,6 +288,7 @@ func newEngine(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Engine, erro
 		cache:          newPlanCache(planCacheSize),
 		policyCache:    newPlanCache(planCacheSize),
 		effectiveCache: newEffectiveCache(128),
+		buildLimiter:   newBuildLimiter(16, 4),
 		feeds:          make(map[string]*feed),
 		resolvers:      make(map[string]Resolver),
 		documents:      make(map[string]persistedDocument),
@@ -468,7 +471,18 @@ func (my *Engine) executeBytes(ctx context.Context, query string, variables map[
 		return nil, fmt.Errorf("gql engine is closed")
 	}
 	done := my.startPhase(ctx, PhaseExecute)
-	reply := my.execute(ctx, query, variables, operationName)
+	var reply gqlReply
+	if readSnapshotRequested(ctx) && transactionFromContext(ctx) == nil && my.database != nil {
+		err := my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			reply = my.execute(context.WithValue(ctx, transactionKey{}, tx), query, variables, operationName)
+			return nil
+		}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		if err != nil {
+			reply = gqlReply{Errors: GraphQLErrors(err)}
+		}
+	} else {
+		reply = my.execute(ctx, query, variables, operationName)
+	}
 	body, err := marshalReply(ctx, reply)
 	if done != nil {
 		done(observationReplyCode(reply, err))
@@ -561,6 +575,10 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 			return r
 		}
 		if rootErr, ok := err.(*rootResolverQuery); ok {
+			if readSnapshotRequested(ctx) && rootErr.entry.operation.Operation != ast.Query {
+				r.Errors = GraphQLErrors(&publicFailure{"read snapshot only accepts query operations", "READ_SNAPSHOT_MUTATION"})
+				return r
+			}
 			done = my.startPhase(ctx, PhaseAuthorize)
 			ctx, err = my.authorizeProvider(ctx, rootErr.entry.operation, variables)
 			if err != nil {
@@ -586,6 +604,10 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 			return r
 		}
 		r.Errors = GraphQLErrors(err)
+		return r
+	}
+	if readSnapshotRequested(ctx) && plan.operation.Operation != ast.Query {
+		r.Errors = GraphQLErrors(&publicFailure{"read snapshot only accepts query operations", "READ_SNAPSHOT_MUTATION"})
 		return r
 	}
 	if plan.operation.Operation == ast.Mutation {
@@ -700,7 +722,7 @@ func (my *Engine) fetch(ctx context.Context, plan *Plan, variables map[string]in
 		return nil, err
 	}
 	database := my.database
-	if tx := Tx(ctx); tx != nil {
+	if tx := transactionFromContext(ctx); tx != nil {
 		database = tx
 	}
 	var data []byte
@@ -712,7 +734,7 @@ func (my *Engine) fetch(ctx context.Context, plan *Plan, variables map[string]in
 		}
 		return tx.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
 	}
-	if (my.rls || tenantRLSRequested(ctx)) && Tx(ctx) == nil {
+	if (my.rls || tenantRLSRequested(ctx)) && transactionFromContext(ctx) == nil {
 		err = database.WithContext(ctx).Transaction(run)
 	} else {
 		err = run(database)
@@ -742,7 +764,7 @@ func (my *Engine) unpack(ctx context.Context, plan *Plan, data []byte, variables
 		warnings, err = my.resolve(callCtx, plan.resolvers, result, variables)
 		return err
 	}
-	if (my.rls || tenantRLSRequested(ctx)) && my.database != nil && Tx(ctx) == nil {
+	if (my.rls || tenantRLSRequested(ctx)) && my.database != nil && transactionFromContext(ctx) == nil {
 		err = my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			if err := my.prepareRLS(ctx, tx); err != nil {
 				return err

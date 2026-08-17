@@ -119,7 +119,7 @@ func TestHandlerExecutionContextContainsTrustedRequestView(t *testing.T) {
 	var executionDB, executionTx any
 	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Mutation", "inspectExecution", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) {
 		view, found = ExecutionContextFromContext(ctx)
-		executionDB, executionTx = DB(ctx), Tx(ctx)
+		executionDB, executionTx = view.DB(), transactionFromContext(ctx)
 		if !found || view.Identity().Subject() != "user-a" || view.SnapshotFingerprint() == "" || executionDB == nil || executionDB != executionTx {
 			return "invalid", nil
 		}

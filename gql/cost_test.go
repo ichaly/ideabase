@@ -7,8 +7,57 @@ import (
 
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
+
+func TestOperationCostCountsNestedMutationWorkload(t *testing.T) {
+	schema, err := gqlparser.LoadSchema(&ast.Source{Input: `
+		type Query { users(where: UserWhere): [User!]! }
+		type Mutation { createUser(input: UserInput!): User! }
+		schema { query: Query, mutation: Mutation }
+		type User { name: String! }
+		input UserWhere { name: String }
+		input UserInput { name: String, posts: PostRelation }
+		input PostRelation { connect: [ID!], disconnect: [ID!], create: [PostInput!] }
+		input PostInput { title: String! }
+	`})
+	require.NoError(t, err)
+	parse := func(query string, vars map[string]any) *ast.OperationDefinition {
+		doc, parseErr := gqlparser.LoadQuery(schema, query)
+		if parseErr != nil && len(parseErr) > 0 {
+			require.Failf(t, "query parse failed", "%#v", parseErr)
+		}
+		op := doc.Operations[0]
+		for _, field := range op.SelectionSet {
+			if f, ok := field.(*ast.Field); ok {
+				if op.Operation == ast.Mutation {
+					f.ObjectDefinition = schema.Mutation
+				} else {
+					f.ObjectDefinition = schema.Query
+				}
+			}
+		}
+		_ = vars
+		return op
+	}
+	caps := map[string]Capability{"Mutation.createUser": {Cost: 5}, "User.name": {Cost: 1}}
+	literal := parse(`mutation { createUser(input: {name: "u", posts: {connect: [1, 2], create: [{title: "p"}]}}) { name } }`, nil)
+	require.Equal(t, uint64(48), operationCost(literal, nil, 3, caps), "root row + all scalar parameters + nested operations/rows")
+	variable := parse(`mutation Create($input: UserInput!) { createUser(input: $input) { name } }`, nil)
+	require.Equal(t, uint64(48), operationCost(variable, map[string]any{"input": map[string]any{
+		"name": "u", "posts": map[string]any{"connect": []any{1, 2}, "create": []any{map[string]any{"title": "p"}}}}}, 3, caps))
+	query := parse(`query { users(where: {name: "u"}) { name } }`, nil)
+	require.Equal(t, uint64(6), operationCost(query, nil, 3, map[string]Capability{"Query.users": {Cost: 3}, "User.name": {Cost: 1}}), "query filters do not incur mutation input workload")
+}
+
+func TestMutationInputWorkloadSaturatesAtUint64(t *testing.T) {
+	connect := &ast.Value{Kind: ast.ListValue, Children: ast.ChildValueList{{Value: &ast.Value{Raw: "1"}}}}
+	posts := &ast.Value{Kind: ast.ObjectValue, Children: ast.ChildValueList{{Name: "connect", Value: connect}}}
+	input := &ast.Value{Kind: ast.ObjectValue, Children: ast.ChildValueList{{Name: "posts", Value: posts}}}
+	field := &ast.Field{Arguments: ast.ArgumentList{{Name: "input", Value: input}}}
+	require.Equal(t, maxUint64, mutationInputWorkload(field, nil, maxUint64))
+}
 
 type costArgs struct {
 	Limit int `json:"limit"`
@@ -72,11 +121,11 @@ func TestOperationCostUsesCoercedBoundsAndBulkInput(t *testing.T) {
 		"input": []map[string]any{{"id": 1}, {"id": 2}, {"id": 3}},
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(21), variableCost)
+	require.Equal(t, uint64(42), variableCost)
 
 	literalCost, err := executor.OperationCost(`mutation { bulkCost(input: [{id: 1}, {id: 2}]) }`, "", nil)
 	require.NoError(t, err)
-	require.Equal(t, uint64(14), literalCost)
+	require.Equal(t, uint64(28), literalCost)
 }
 
 func TestMaxCostRejectsBeforeResolverAndHonorsConditionalShape(t *testing.T) {

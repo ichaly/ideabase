@@ -119,6 +119,9 @@ func (my *Engine) Capabilities() ([]Capability, error) {
 // HealthReport is a read-only runtime readiness view.
 type HealthReport struct {
 	Ready                 bool
+	Degraded              bool
+	DegradedSources       []string
+	RouteScoped           bool
 	SnapshotOK            bool
 	SnapshotFingerprint   string
 	ControlRevision       uint64
@@ -127,6 +130,7 @@ type HealthReport struct {
 	DatabaseOK            bool
 	DatabaseError         string
 	CDCConfigured         bool
+	CDCState              string
 	CDCConnected          bool
 	CDCError              string
 	SubscriptionAvailable bool
@@ -182,13 +186,9 @@ func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 		}
 	}
 	report.SubscriptionAvailable = report.CDCConfigured
-	if my != nil {
-		if status, ok := my.cdc.(interface{ status() (bool, string) }); ok {
-			report.CDCConnected, report.CDCError = status.status()
-		} else if report.CDCConfigured {
-			// Notifiers predating the optional status hook are assumed healthy.
-			report.CDCConnected = true
-		}
+	if report.CDCConfigured {
+		report.CDCState, report.CDCError = my.cdc.cdcState()
+		report.CDCConnected = report.CDCState != CDCStateDisconnected
 	}
 	if my == nil || (my.schema == nil && my.snapshot == nil) {
 		return report, errors.New("gql schema is unavailable")
@@ -201,7 +201,7 @@ func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 	report.SnapshotFingerprint = snapshot.Fingerprint()
 	if my.database == nil {
 		report.DatabaseOK = true
-		report.Ready = !report.CDCConfigured || report.CDCConnected
+		report.Ready = !report.CDCConfigured || report.CDCState != CDCStateDisconnected
 		return report, nil
 	}
 	sqlDB, err := my.database.DB()
@@ -213,6 +213,19 @@ func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 		return report, err
 	}
 	report.DatabaseOK = true
-	report.Ready = !report.CDCConfigured || report.CDCConnected
+	report.Ready = !report.CDCConfigured || report.CDCState != CDCStateDisconnected
 	return report, nil
+}
+
+func mergeHealthCDC(report *HealthReport, child HealthReport) {
+	if !child.CDCConfigured {
+		return
+	}
+	report.CDCConfigured = true
+	report.CDCConnected = report.CDCConnected && child.CDCConnected
+	if child.CDCState == CDCStateDisconnected || (!child.CDCConnected && child.CDCState == "") {
+		report.CDCState = CDCStateDisconnected
+	} else if report.CDCState != CDCStateDisconnected && child.CDCState == CDCStateIdleValidated {
+		report.CDCState = CDCStateIdleValidated
+	}
 }

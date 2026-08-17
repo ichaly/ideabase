@@ -90,6 +90,25 @@ func (my *Class) AddField(field *Field) {
 	}
 }
 
+// CanInsertWithoutInput reports whether one row can be created entirely from
+// engine presets and database default or generation rules.
+func (my *Class) CanInsertWithoutInput() bool {
+	if my == nil {
+		return false
+	}
+	seen := false
+	for _, field := range my.Fields {
+		if field == nil || field.Virtual || field.Column == "" {
+			continue
+		}
+		seen = true
+		if field.InsertPreset == nil && (field.Catalog == nil || (field.Catalog.Default == nil && field.Catalog.Generation == nil)) {
+			return false
+		}
+	}
+	return seen
+}
+
 // MarshalJSON 实现自定义的JSON序列化
 func (my *Class) MarshalJSON() ([]byte, error) {
 	// 只序列化主字段（字段名==key），且跳过虚拟关系字段——

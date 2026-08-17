@@ -59,6 +59,26 @@ func TestRendererCatalogDefaultAndGenerationControlCreateInput(t *testing.T) {
 	require.NotContains(t, input, "generatedValue")
 }
 
+func TestRendererAdvertisesDefaultOnlyCreateWithoutEmptyInput(t *testing.T) {
+	class := governanceClass("DefaultOnly", protocol.OP_INSERT)
+	class.Fields["insertPreset"].ReadOnly = true
+	class.Fields["updatePreset"].ReadOnly = true
+	class.Fields["readOnly"].Catalog = &protocol.Column{Default: &protocol.ColumnDefault{Expression: "'read only'::text"}}
+	class.Fields["updatePreset"].Catalog = &protocol.Column{Default: &protocol.ColumnDefault{Expression: "'update'::text"}}
+	class.Fields["id"].Catalog = &protocol.Column{
+		Type:       protocol.TypeRef{Name: "integer", Kind: protocol.TypeBase},
+		Generation: &protocol.ColumnGeneration{Kind: protocol.GeneratedIdentityByDefault},
+	}
+	class.Fields["title"].Catalog = &protocol.Column{
+		Type:    protocol.TypeRef{Name: "text", Kind: protocol.TypeBase},
+		Default: &protocol.ColumnDefault{Expression: "'ready'::text"},
+	}
+	class.Fields["title"].ReadOnly = true
+	schema := governanceSchema(t, class)
+	require.Contains(t, schema, "createDefaultOnly: DefaultOnly!")
+	require.NotContains(t, schema, "input DefaultOnlyCreateInput")
+}
+
 func TestRendererCatalogEnumAndArrayAreHonest(t *testing.T) {
 	class := governanceClass("CatalogType", protocol.OP_SELECT, protocol.OP_INSERT)
 	class.AddField(&protocol.Field{Name: "state", Column: "state", Type: "account_state", Catalog: &protocol.Column{Type: protocol.TypeRef{

@@ -78,6 +78,10 @@ type gatewayRawEffectiveEndpoint struct {
 	artifact SchemaArtifact
 }
 
+type healthDeclaredWithoutEndpoint struct{ *gatewayEndpoint }
+
+func (healthDeclaredWithoutEndpoint) HealthAvailable() bool { return true }
+
 type gatewayCacheIdentityEndpoint struct {
 	*gatewayEffectiveEndpoint
 	cacheKey       string
@@ -183,8 +187,14 @@ func TestGatewayHealthRequiresEveryExecutableChild(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestGatewayRejectsHealthAvailableWithoutHealthEndpoint(t *testing.T) {
+	child := &healthDeclaredWithoutEndpoint{gatewayEndpoint: newGatewayEndpoint("declared", gatewayChildSchema, nil)}
+	_, err := NewGateway("root", Namespace{Name: "declared", Endpoint: child})
+	require.ErrorContains(t, err, "HealthAvailable")
+}
+
 func TestGatewayHealthAggregatesChildCapabilitiesAndDatabaseFailure(t *testing.T) {
-	good := &gatewayHealthyEndpoint{gatewayEndpoint: newGatewayEndpoint("good", gatewayChildSchema, nil), report: &HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, CDCConfigured: true, SubscriptionAvailable: true}}
+	good := &gatewayHealthyEndpoint{gatewayEndpoint: newGatewayEndpoint("good", gatewayChildSchema, nil), report: &HealthReport{Ready: true, Degraded: true, DegradedSources: []string{"archive"}, SnapshotOK: true, DatabaseOK: true, CDCConfigured: true, SubscriptionAvailable: true}}
 	bad := &gatewayHealthyEndpoint{gatewayEndpoint: newGatewayEndpoint("bad", gatewayChildSchema, nil), report: &HealthReport{SnapshotOK: true, DatabaseError: "db down"}}
 	gateway, err := NewGateway("root", Namespace{Name: "good", Endpoint: good}, Namespace{Name: "bad", Endpoint: bad})
 	require.NoError(t, err)
@@ -194,6 +204,8 @@ func TestGatewayHealthAggregatesChildCapabilitiesAndDatabaseFailure(t *testing.T
 	require.False(t, report.DatabaseOK)
 	require.Equal(t, "bad: db down", report.DatabaseError)
 	require.True(t, report.CDCConfigured)
+	require.True(t, report.Degraded)
+	require.Equal(t, []string{"good:archive"}, report.DegradedSources)
 }
 
 func TestGatewayPrefixesChildErrorsAndKeepsNullableNamespace(t *testing.T) {
@@ -936,6 +948,20 @@ func TestGatewayRejectsEffectiveArtifactWithoutVersionOrExecutionPin(t *testing.
 	require.NoError(t, err)
 	require.Contains(t, string(body), `"code":"BAD_GATEWAY_RESPONSE"`)
 	require.NotContains(t, string(body), "execution pin mismatch")
+	require.Zero(t, child.calls.Load())
+}
+
+func TestGatewayRejectsEffectiveArtifactForDifferentIdentity(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
+	artifact := FinalizeSchemaArtifact(SchemaArtifact{Schema: gatewayChildSchema, Fingerprint: digest(gatewayChildSchema)})
+	endpoint := &gatewayRawEffectiveEndpoint{gatewayEndpoint: child, artifact: artifact}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint})
+	require.NoError(t, err)
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-a"})
+	require.NoError(t, err)
+	body, err := gateway.Execute(WithIdentity(context.Background(), identity), `{ crm { user { id } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"code":"BAD_GATEWAY_RESPONSE"`)
 	require.Zero(t, child.calls.Load())
 }
 

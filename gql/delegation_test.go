@@ -2,8 +2,11 @@ package gql
 
 import (
 	"context"
+	"encoding/base64"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,6 +14,43 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestDelegationCodecPropagatesTrustedScopeAndRejectsTampering(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	codec, err := NewDelegationCodec(DelegationConfig{Issuer: "gateway", Audience: "child", Key: key, Replay: NewMemoryReplayStore(8)})
+	require.NoError(t, err)
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user"})
+	require.NoError(t, err)
+	scope := map[string]any{"tenant_id": "tenant-a", "region": "cn"}
+	token, err := codec.Sign(WithScope(WithIdentity(context.Background(), identity), scope), "operation")
+	require.NoError(t, err)
+	scope["region"] = "forged-after-sign"
+	verified, err := codec.Verify(context.Background(), token, "operation")
+	require.NoError(t, err)
+	require.Equal(t, "cn", scopeValues(verified)["region"], "delegated scope must be immutable at signing time")
+
+	parts := strings.Split(token, ".")
+	require.Len(t, parts, 3)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	require.NoError(t, err)
+	var claims map[string]any
+	require.NoError(t, stdjson.Unmarshal(payload, &claims))
+	claims["scope"] = map[string]any{"region": "forged"}
+	payload, err = stdjson.Marshal(claims)
+	require.NoError(t, err)
+	parts[1] = base64.RawURLEncoding.EncodeToString(payload)
+	_, err = codec.Verify(context.Background(), strings.Join(parts, "."), "operation")
+	require.Error(t, err, "scope tampering must invalidate the signed envelope")
+}
+
+func TestDelegationCodecRejectsUnallowlistedScopeKeys(t *testing.T) {
+	codec, err := NewDelegationCodec(DelegationConfig{Issuer: "gateway", Audience: "child", Key: []byte("0123456789abcdef0123456789abcdef"), Replay: NewMemoryReplayStore(8)})
+	require.NoError(t, err)
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user"})
+	require.NoError(t, err)
+	_, err = codec.Sign(WithScope(WithIdentity(context.Background(), identity), map[string]any{"bad-key": "value"}), "operation")
+	require.ErrorContains(t, err, "allowlisted")
+}
 
 type failingReplayStore struct{ err error }
 

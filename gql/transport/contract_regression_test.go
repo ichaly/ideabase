@@ -149,10 +149,10 @@ func TestContractDelegationBindsExecutionPin(t *testing.T) {
 }
 
 func TestContractHealthRoundTripsAllFields(t *testing.T) {
-	report := core.HealthReport{Ready: true, SnapshotOK: true, SnapshotFingerprint: "rev", ControlRevision: 7, RouteRevision: 8, SecurityRevision: 9, DatabaseOK: false, DatabaseError: "db down", CDCConfigured: true, SubscriptionAvailable: true}
+	report := core.HealthReport{Ready: true, SnapshotOK: true, SnapshotFingerprint: "rev", ControlRevision: 7, RouteRevision: 8, SecurityRevision: 9, DatabaseOK: false, DatabaseError: "db down", CDCConfigured: true, CDCState: core.CDCStateIdleValidated, SubscriptionAvailable: true}
 	w := httptest.NewRecorder()
 	NewHealthHandler(healthStub{report: report}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
-	for _, want := range []string{`"controlRevision":7`, `"routeRevision":8`, `"securityRevision":9`, `"databaseOk":false`, `"databaseCode":"UNAVAILABLE"`, `"cdcConfigured":true`, `"subscriptionAvailable":true`} {
+	for _, want := range []string{`"version":1`, `"controlRevision":7`, `"routeRevision":8`, `"securityRevision":9`, `"databaseOk":false`, `"databaseCode":"UNAVAILABLE"`, `"cdcConfigured":true`, `"cdcState":"IdleValidated"`, `"subscriptionAvailable":true`} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Fatalf("health body missing %s: %s", want, w.Body)
 		}

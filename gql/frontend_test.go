@@ -130,7 +130,7 @@ func TestNormalizeSelectionTemplateDeepCopiesArgumentValues(t *testing.T) {
 	copySet, err := normalizeSelectionTemplate(template, nil, nil, schema)
 	require.NoError(t, err)
 	meta := &Metadata{}
-	meta.setCodecs([]Codec{idCodec{}})
+	meta.setCodecs([]Codec{&idCodec{}})
 	decodeLiterals(schema, copySet, meta)
 	require.Equal(t, ast.IntValue, copySet[0].(*ast.Field).Arguments[0].Value.Kind)
 	require.Equal(t, "1", copySet[0].(*ast.Field).Arguments[0].Value.Raw)

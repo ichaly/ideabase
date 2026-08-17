@@ -264,6 +264,48 @@ func TestEffectiveSchemaRemovesUnauthorizedRelationOperations(t *testing.T) {
 	require.NotNil(t, relation.Fields.ForName("create"))
 }
 
+func TestEffectiveSchemaRemovesRelationWritesWithoutTargetKeyFilter(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_UPDATE) {
+			return PolicyDecision{Allow: true, Fields: map[FieldUse][]string{
+				FieldUseSelect: {"*"}, FieldUseReturn: {"*"}, FieldUseWrite: {"title"},
+			}}, nil
+		}
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	artifact, err := executor.EffectiveSchema(WithIdentity(context.Background(), identity))
+	require.NoError(t, err)
+	schema, gqlErr := gqlparser.LoadSchema(&ast.Source{Name: "effective.graphql", Input: artifact.Schema})
+	require.Empty(t, gqlErr)
+	relation := schema.Types["PostUpdateRelationInput"]
+	if relation != nil {
+		require.Nil(t, relation.Fields.ForName("connect"))
+		require.Nil(t, relation.Fields.ForName("disconnect"))
+	}
+	update := schema.Mutation.Fields.ForName("updatePost")
+	if update != nil {
+		require.Nil(t, update.Arguments.ForName(protocol.ID), "an update without an authorized target key must not expose id")
+	}
+}
+
+func TestPrimaryKeyFilteringDoesNotRemoveUnrelatedRootFields(t *testing.T) {
+	class := &protocol.Class{Name: "User", PrimaryKeys: []string{"id"}, Fields: map[string]*protocol.Field{
+		"id": {Name: "id", Column: "id"},
+	}}
+	schema, errs := gqlparser.LoadSchema(&ast.Source{Name: "schema.graphql", Input: `
+		type Query { users(id: ID): User superUser(id: ID!): User }
+		type User { id: ID! }
+	`})
+	require.Empty(t, errs)
+	removeUnauthorizedPrimaryKeyArguments(schema, class, nil)
+	require.Nil(t, schema.Query.Fields.ForName("users").Arguments.ForName(protocol.ID))
+	require.NotNil(t, schema.Query.Fields.ForName("superUser"), "another capability must not be removed by a class-name substring")
+}
+
 func TestSchemaProfileCompatibilityDetectsClientBreakingChanges(t *testing.T) {
 	previous := SchemaProfile{Name: "v1", SchemaArtifact: SchemaArtifact{Schema: `
 		type Query { users(limit: Int): [User!]! }
@@ -374,10 +416,38 @@ func TestSchemaArtifactExecutionPinBindsCapabilities(t *testing.T) {
 	require.ErrorContains(t, ValidateSchemaArtifact(artifact), "execution pin mismatch")
 }
 
+func TestSchemaArtifactExecutionPinBindsPersistedCatalog(t *testing.T) {
+	artifact := FinalizeSchemaArtifact(SchemaArtifact{
+		Schema: "type Query { value: String }", Fingerprint: digest("type Query { value: String }"),
+		ExecutionMode:       ExecutionModePersistedOnly,
+		PersistedOperations: []PersistedOperation{{Name: "Value", Type: "query", Hash: "hash"}},
+	})
+	require.NoError(t, ValidateSchemaArtifact(artifact))
+	artifact.PersistedOperations[0].Hash = "forged"
+	require.ErrorContains(t, ValidateSchemaArtifact(artifact), "execution pin mismatch")
+}
+
 func TestExecutionPinIsEnforcedAtEffectiveViewSelection(t *testing.T) {
 	artifact := SchemaArtifact{Schema: "type Query { value: String }", Fingerprint: digest("type Query { value: String }")}
 	pin := FinalizeSchemaArtifact(artifact).ExecutionPin
 	require.NoError(t, enforceExecutionPin(WithExecutionPin(context.Background(), pin), artifact))
 	err := enforceExecutionPin(WithExecutionPin(context.Background(), "stale"), artifact)
 	require.Equal(t, "SNAPSHOT_CONFLICT", err.(errorCoder).ErrorCode())
+}
+
+func TestSchemaArtifactUsesOneVersionedContract(t *testing.T) {
+	artifact := FinalizeSchemaArtifact(SchemaArtifact{Schema: "type Query { value: String }", Fingerprint: digest("type Query { value: String }")})
+	require.Equal(t, SchemaArtifactVersion, artifact.Version)
+	require.NoError(t, ValidateSchemaArtifact(artifact))
+	artifact.Version = "schema-artifact-v1"
+	artifact.ExecutionPin = schemaArtifactExecutionPin(artifact)
+	require.ErrorContains(t, ValidateSchemaArtifact(artifact), "unsupported")
+}
+
+func TestValidateSchemaArtifactRejectsInvalidPersistedOperationContract(t *testing.T) {
+	artifact := FinalizeSchemaArtifact(SchemaArtifact{Schema: "type Query { value: String }", Fingerprint: digest("type Query { value: String }"), ExecutionMode: ExecutionModePersistedOnly, PersistedOperations: []PersistedOperation{{Name: "Value", Type: "query", Hash: "hash"}}})
+	require.NoError(t, ValidateSchemaArtifact(artifact))
+	artifact.PersistedOperations[0].Type = "fragment"
+	artifact.ExecutionPin = schemaArtifactExecutionPin(artifact)
+	require.ErrorContains(t, ValidateSchemaArtifact(artifact), "persisted operation")
 }

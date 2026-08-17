@@ -73,6 +73,10 @@ mux.Handle("/graphql/stream", transport.NewSubscriptionHandler(engine, transport
 mux.Handle("/gql/manifest", transport.NewManifestHandler("accounts", engine, authenticateManifest))
 mux.Handle("/gql/effective-schema", transport.NewEffectiveSchemaHandler(engine, delegationVerifier))
 mux.Handle("/health/gql", transport.NewHealthHandler(engine))
+mux.Handle("/.well-known/gql", transport.NewTransportDescriptorHandler(transport.TransportDescriptor{
+    EndpointID: "accounts", ManifestURL: "/gql/manifest", EffectiveSchemaURL: "/gql/effective-schema",
+    ExecuteURL: "/graphql", SubscribeURL: "/graphql/stream", HealthURL: "/health/gql",
+}))
 
 gateway, err := gql.NewGateway("public-api",
     gql.Namespace{Name: "accounts", EndpointID: "accounts", Endpoint: accounts},
@@ -99,6 +103,8 @@ tenant/role header 不构成可信身份。
 父 Gateway 的自省和 capability 目录因此与 child 实际可执行权限保持一致。
 `AllowHTTP` 仅用于显式的 localhost/回环测试地址，不会放行内网或公网明文连接。
 `GQL-Snapshot` 会把 HTTP/SSE 请求绑定到不可变修订，不是仅在执行前比较一次指纹。
+通用客户端也可通过 `transport.DiscoverRemoteEndpoint` 读取版本化 descriptor；显式配置与
+自动发现最终都进入同一个 `RemoteEndpoint` 构造和校验路径，不存在宽松的第二套协议。
 
 自动化客户端只从认证后的 `/gql/effective-schema` 获取当前身份的 Schema 和 capability
 artifact，以 `fingerprint`、`policyRevision`、`routeRevision` 为缓存身份；artifact 变化后重新
@@ -118,6 +124,10 @@ artifact，以 `fingerprint`、`policyRevision`、`routeRevision` 为缓存身�
 - 租户路由在一个请求内固定；数据库/Schema 迁移通过单调 route revision 与安全状态一起发布。
 - 撤权在请求开始和订阅 lease 边界生效，不承诺与已在数据库执行中的请求瞬时线性化；需要
   强制即时撤权的写操作必须同时使用数据库 RLS/事务内 policy predicate。
+- `PostgresSecurityStateProvider` 在 `DefaultPostgresSecurityMaxStaleness` 窗口内读取本地不可变
+  快照，过期刷新失败即 fail closed；可用 `WithPostgresSecurityMaxStaleness` 收紧窗口。
+- `TenantGateway.Health` 无身份时报告 aggregate readiness 与 `DegradedSources`，单个闲置路由
+  故障不会摘掉仍可服务的进程；携带可信 Identity 时只检查实际路由并设置 `RouteScoped`。
 - 新副本启动时必须按序回放当前 revision 及之前的滚动窗口，再接入负载均衡；仅加载最新
   revision 的新副本无法接受旧父节点的 snapshot pin。
 - CI 的 GA 门禁包含共享 token 并发消费、滚动 snapshot、真实 PostgreSQL 锁超时恢复、真实
@@ -192,6 +202,8 @@ array、PK/unique/FK/check/exclusion、partial/expression/include index、table/
 view/partitioned/foreign table，以及重载 function/procedure 的结构化参数和返回事实。
 
 - `NOT NULL DEFAULT` 在 `CreateInput` 中可省略；identity/generated 不进入写输入
+- 实体全部写列由 preset/default/identity/generated 提供时，生成无 `input` 参数的单条
+  `createX`；不会生成无意义的 bulk create 或 upsert
 - 数据库 enum 只有在类型名和值都能无损表示为 GraphQL Name 时才生成 enum，否则构建失败，
   可用显式 type mapping 裁决，绝不静默改值
 - PostgreSQL array 以真实 GraphQL list 暴露并可参数化写入；尚未实现的数组过滤不会出现在自省
@@ -250,16 +262,21 @@ builder.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
     }, gql.Result("BotProfile"), gql.Cost(8)))
 ```
 
-`Cost`、`Requires`、`Timeout`、`MaxBatch` 与显式 `RetrySafe(idempotencyKey)` 都会进入
+`Cost`、`Requires`、`Timeout`、`MaxBatch`、`Semantic` 与显式 `RetrySafe(idempotencyKey)` 都会进入
 不可变 Snapshot。命名的嵌套输入/输出 struct 自动生成结构化 SDL，`Extra` 仅保留为兼容逃生口；
 `engine.OperationCost(query, operationName, variables)` 使用与真实执行相同的验证、
 coercion、directive 和选择集合并路径，但不受当前预算上限影响。
 
-Mutation 根 Resolver 会在引擎事务中执行；业务代码统一从 `gql.DB(ctx)` 或
-`gql.RequireDB(ctx)` 取得 request-scoped 连接，它会优先返回当前事务。需要 identity、
-selection、deadline 和 snapshot fingerprint 时使用 `gql.ExecutionContextFromContext(ctx)`；
-Query、无数据库执行器或事务外调用返回 `nil`。直接捕获全局 `*gorm.DB` 的旧写法无法
+Mutation 根 Resolver 会在引擎事务中执行；Resolver 统一先调用
+`execution, ok := gql.ExecutionContextFromContext(ctx)`，再通过 `execution.RequireDB()` 取得
+request-scoped 连接，它会优先返回当前事务。同一只读视图还提供 identity、selection、
+deadline、snapshot fingerprint、scope、route、policy decision、capability 和 coordinate。
+无数据库执行器时 `RequireDB` 返回明确错误。直接捕获全局 `*gorm.DB` 的旧写法无法
 自动加入引擎事务，需要把事务连接继续传给 service/repository。
+自定义 Mutation 修改了 CDC 无法观察的外部状态时，调用
+`execution.Invalidate("table")` 登记刷新；引擎只在自有事务成功提交后去重发布，回滚和外部
+事务不会误唤醒。需要 SQL 与后处理 Resolver 共享一致读快照时，执行入口传
+`gql.WithReadSnapshot(ctx)`；它只接受 Query，并使用 read-only repeatable-read 事务。
 
 `Register` 新增字段；构造时传 `gql.Existing()` 后用 `Replace` 显式覆盖 schema 已有字段；
 `Wrap` 用强类型中间件增强已注册 Resolver。自定义根字段可与默认数据库字段混排；

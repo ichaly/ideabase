@@ -68,6 +68,7 @@ func TestSubscriptionLeaseExpiresWithoutDatabaseWake(t *testing.T) {
 	require.NoError(t, err)
 	select {
 	case first := <-events:
+		first = decodeSubscriptionReply(t, first)
 		require.Empty(t, first.Errors)
 	case <-time.After(3 * time.Second):
 		t.Fatal("missing initial subscription result")
@@ -76,6 +77,7 @@ func TestSubscriptionLeaseExpiresWithoutDatabaseWake(t *testing.T) {
 	select {
 	case expired, ok := <-events:
 		require.True(t, ok)
+		expired = decodeSubscriptionReply(t, expired)
 		require.NotEmpty(t, expired.Errors)
 		require.Contains(t, expired.Errors.Error(), "disabled")
 		_, ok = <-events
@@ -106,6 +108,7 @@ func TestSubscriptionWakeChecksLeaseBeforeFetch(t *testing.T) {
 	go executor.stream(streamCtx, plan, nil, watch, feed)
 	select {
 	case first := <-events:
+		first = decodeSubscriptionReply(t, first)
 		require.Empty(t, first.Errors)
 	case <-time.After(3 * time.Second):
 		t.Fatal("missing initial subscription result")
@@ -118,6 +121,7 @@ func TestSubscriptionWakeChecksLeaseBeforeFetch(t *testing.T) {
 	select {
 	case expired, ok := <-events:
 		require.True(t, ok)
+		expired = decodeSubscriptionReply(t, expired)
 		require.Contains(t, expired.Errors.Error(), "disabled")
 	case <-time.After(time.Second):
 		t.Fatal("revoked subscription did not publish an error")
@@ -146,6 +150,7 @@ func TestSubscriptionWaitsForBoundedCDCReconnect(t *testing.T) {
 	go executor.stream(ctx, plan, nil, watch, feed)
 	select {
 	case first := <-events:
+		first = decodeSubscriptionReply(t, first)
 		require.Empty(t, first.Errors)
 	case <-time.After(3 * time.Second):
 		t.Fatal("missing initial subscription result")
@@ -154,6 +159,7 @@ func TestSubscriptionWaitsForBoundedCDCReconnect(t *testing.T) {
 	watch.wake <- struct{}{}
 	select {
 	case event := <-events:
+		event = decodeSubscriptionReply(t, event)
 		t.Fatalf("transient disconnect unexpectedly ended feed: %v", event.Errors)
 	case <-time.After(50 * time.Millisecond):
 	}
@@ -161,5 +167,6 @@ func TestSubscriptionWaitsForBoundedCDCReconnect(t *testing.T) {
 	watch.wake <- struct{}{}
 	failed, ok := <-events
 	require.True(t, ok)
+	failed = decodeSubscriptionReply(t, failed)
 	require.Contains(t, fmt.Sprint(failed.Errors), "CDC replication connection lost")
 }

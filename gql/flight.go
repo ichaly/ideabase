@@ -5,43 +5,57 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ichaly/ideabase/gql/internal/sharedflight"
 	"golang.org/x/sync/singleflight"
 )
 
 const sharedBuildTimeout = 30 * time.Second
 
-var sharedBuildSlots = make(chan struct{}, 64)
-
-// sharedBuild lets each waiter honor its own cancellation while a bounded,
-// detached build continues for healthy waiters sharing the same immutable key.
-func sharedBuild[T any](ctx context.Context, group *singleflight.Group, key string, build func(context.Context) (T, error)) (T, error) {
-	return sharedBuildWithin(ctx, group, key, sharedBuildTimeout, build)
+type buildLimiter struct {
+	global  chan struct{}
+	tenants [64]chan struct{}
 }
 
-func sharedBuildWithin[T any](ctx context.Context, group *singleflight.Group, key string, timeout time.Duration, build func(context.Context) (T, error)) (T, error) {
-	if ctx == nil {
-		ctx = context.Background()
+func newBuildLimiter(global, tenant int) *buildLimiter {
+	limiter := &buildLimiter{global: make(chan struct{}, global)}
+	for index := range limiter.tenants {
+		limiter.tenants[index] = make(chan struct{}, tenant)
 	}
-	result := group.DoChan(key, func() (any, error) {
-		select {
-		case sharedBuildSlots <- struct{}{}:
-			defer func() { <-sharedBuildSlots }()
-		default:
-			return nil, fmt.Errorf("effective schema build capacity exceeded")
+	return limiter
+}
+
+func (limiter *buildLimiter) acquire(ctx context.Context) (func(), error) {
+	tenant := ""
+	if identity, ok := IdentityFromContext(ctx); ok {
+		tenant = identity.Tenant()
+	}
+	local := limiter.tenants[tenantRefreshSlot(tenant)]
+	select {
+	case local <- struct{}{}:
+	default:
+		return nil, fmt.Errorf("effective schema tenant capacity exceeded")
+	}
+	select {
+	case limiter.global <- struct{}{}:
+		return func() { <-limiter.global; <-local }, nil
+	default:
+		<-local
+		return nil, fmt.Errorf("effective schema build capacity exceeded")
+	}
+}
+
+func sharedBuild[T any](ctx context.Context, group *singleflight.Group, limiter *buildLimiter, key string, build func(context.Context) (T, error)) (T, error) {
+	return sharedBuildWithin(ctx, group, limiter, key, sharedBuildTimeout, build)
+}
+
+func sharedBuildWithin[T any](ctx context.Context, group *singleflight.Group, limiter *buildLimiter, key string, timeout time.Duration, build func(context.Context) (T, error)) (T, error) {
+	return sharedflight.Do(ctx, group, key, timeout, func(shared context.Context) (T, error) {
+		release, err := limiter.acquire(shared)
+		if err != nil {
+			var zero T
+			return zero, err
 		}
-		shared, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
-		defer cancel()
+		defer release()
 		return build(shared)
 	})
-	select {
-	case <-ctx.Done():
-		var zero T
-		return zero, ctx.Err()
-	case result := <-result:
-		if result.Err != nil {
-			var zero T
-			return zero, result.Err
-		}
-		return result.Val.(T), nil
-	}
 }

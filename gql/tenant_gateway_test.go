@@ -186,6 +186,68 @@ func TestTenantGatewayHealthChecksRoutedDatasource(t *testing.T) {
 	require.False(t, report.Ready)
 }
 
+func TestTenantGatewayHealthPreservesWorstCDCState(t *testing.T) {
+	idle := tenantTestEngine(t, "idle", new(atomic.Int32))
+	connected := tenantTestEngine(t, "connected", new(atomic.Int32))
+	idle.cdc = &runtimeStatusNotifier{}
+	connectedCDC := &runtimeStatusNotifier{}
+	connectedCDC.connected.Store(true)
+	connected.cdc = connectedCDC
+	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Revision: 1, Routes: map[string]TenantRoute{
+		"idle": {DataSource: "idle"}, "connected": {DataSource: "connected"},
+	}})
+	require.NoError(t, err)
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"idle": idle, "connected": connected}, testTenantSecurity(router))
+	require.NoError(t, err)
+
+	report, err := gateway.Health(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, CDCStateDisconnected, report.CDCState)
+	require.False(t, report.CDCConnected)
+}
+
+func TestTenantGatewayHealthDistinguishesAggregateDegradationFromRouteReadiness(t *testing.T) {
+	healthy, healthyDB, healthyCleanup := newTestExecutor(t, nil)
+	defer healthyCleanup()
+	unhealthy, unhealthyDB, unhealthyCleanup := newTestExecutor(t, nil)
+	defer unhealthyCleanup()
+	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Revision: 9, Routes: map[string]TenantRoute{
+		"healthy": {DataSource: "healthy", Revision: 9},
+		"broken":  {DataSource: "broken", Revision: 9},
+	}})
+	require.NoError(t, err)
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"healthy": healthy, "broken": unhealthy}, testTenantSecurity(router))
+	require.NoError(t, err)
+	sqlDB, err := unhealthyDB.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	report, err := gateway.Health(context.Background())
+	require.NoError(t, err)
+	require.True(t, report.Ready, "an idle failed route must not fail process readiness")
+	require.True(t, report.Degraded)
+	require.Equal(t, []string{"broken"}, report.DegradedSources)
+	require.False(t, report.RouteScoped)
+
+	identity, err := NewIdentity(IdentityInput{Tenant: "healthy", Subject: "u"})
+	require.NoError(t, err)
+	report, err = gateway.Health(WithIdentity(context.Background(), identity))
+	require.NoError(t, err)
+	require.True(t, report.Ready)
+	require.True(t, report.RouteScoped)
+	require.Equal(t, uint64(9), report.RouteRevision)
+
+	identity, err = NewIdentity(IdentityInput{Tenant: "broken", Subject: "u"})
+	require.NoError(t, err)
+	report, err = gateway.Health(WithIdentity(context.Background(), identity))
+	require.Error(t, err)
+	require.False(t, report.Ready)
+	require.True(t, report.RouteScoped)
+
+	_, err = healthyDB.DB()
+	require.NoError(t, err)
+}
+
 func TestTenantGatewaySharedTableRequiresTenantScopeOrExplicitGlobal(t *testing.T) {
 	build := func(loader sharedTenantLoader) *Engine {
 		builder := New(snapshotKonfig(t), nil, snapshotOptions(loader)...)

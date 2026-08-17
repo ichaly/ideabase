@@ -75,6 +75,26 @@ func TestExecuteReturnsGraphQLBytes(t *testing.T) {
 	require.JSONEq(t, `{"data":{"users":{"total":0}}}`, string(out))
 }
 
+func TestOffsetPageBeyondEndKeepsFilteredTotal(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	reply := executor.run(context.Background(), `mutation {
+		createUser(input: { name: "offset-total", email: "offset-total@example.com" }) { id }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+
+	reply = executor.run(context.Background(), `{
+		users(where: { name: { eq: "offset-total" } }, limit: 1, offset: 10) {
+			items { id }
+			total
+		}
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	users := reply.Data["users"].(map[string]any)
+	require.Empty(t, users["items"])
+	require.EqualValues(t, 1, users["total"])
+}
+
 func TestNestedCreatePreservesDefaultsAcrossRowShapes(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
@@ -212,7 +232,7 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Equal(t, "Bob", reply.Data["updateUser"].(map[string]interface{})["name"])
 
 	// 5. 计划缓存：同一查询第二次命中缓存且结果一致
-	cached := executor.cache.order.Len()
+	cached := executor.cache.Len()
 	reply = executor.run(ctx, `query {
 		users(where: { name: { eq: "Bob" } }) { items { id name } }
 	}`, nil, "")
@@ -221,7 +241,7 @@ func TestExecutorRoundTrip(t *testing.T) {
 		users(where: { name: { eq: "Bob" } }) { items { id name } }
 	}`, nil, "")
 	require.Empty(t, reply.Errors)
-	require.Equal(t, cached+1, executor.cache.order.Len(), "重复查询应命中缓存而非新增计划")
+	require.Equal(t, cached+1, executor.cache.Len(), "重复查询应命中缓存而非新增计划")
 	require.Equal(t, "Bob", reply.Data["users"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["name"])
 
 	// 6. 删除（先删文章再删用户，验证计数返回）

@@ -20,11 +20,14 @@ import (
 	"time"
 
 	core "github.com/ichaly/ideabase/gql"
+	"github.com/ichaly/ideabase/gql/internal/lru"
+	"github.com/ichaly/ideabase/gql/internal/sharedflight"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
+	"golang.org/x/sync/singleflight"
 )
 
-const endpointProtocolVersion = 1
+const EndpointProtocolVersion = 1
 
 // RemoteProblemError is the bounded, machine-readable control-plane failure
 // contract. It is shared by HTTP and SSE so retry policy never depends on a
@@ -198,7 +201,7 @@ func NewManifestHandler(id string, endpoint manifestEndpoint, authenticate Manif
 			return
 		}
 		manifest := Manifest{
-			Version: endpointProtocolVersion, EndpointID: id, Schema: snapshot.Schema(), Fingerprint: snapshot.Fingerprint(),
+			Version: EndpointProtocolVersion, EndpointID: id, Schema: snapshot.Schema(), Fingerprint: snapshot.Fingerprint(),
 			Capabilities: snapshot.Capabilities(),
 		}
 		manifest.Revision = revision
@@ -238,11 +241,12 @@ type RemoteOptions struct {
 	Delegation                                                                       interface {
 		Sign(context.Context, string) (string, error)
 	}
-	Timeout          time.Duration
-	MaxResponseBytes int64
-	MaxConcurrent    int
-	MaxSubscriptions int
-	AllowHTTP        bool
+	Timeout           time.Duration
+	EffectiveCacheTTL time.Duration
+	MaxResponseBytes  int64
+	MaxConcurrent     int
+	MaxSubscriptions  int
+	AllowHTTP         bool
 }
 
 // RemoteEndpoint implements gql.Endpoint over GraphQL-over-HTTP.
@@ -269,14 +273,28 @@ type RemoteEndpoint struct {
 	order             []string
 	unarySlots        chan struct{}
 	subscriptionSlots chan struct{}
+	effectiveCache    *remoteEffectiveCache
+	effectiveCacheTTL time.Duration
+	clock             func() time.Time
+}
+
+type remoteEffectiveCache struct {
+	entries *lru.Cache[string, remoteEffectiveEntry]
+	flight  singleflight.Group
+}
+
+type remoteEffectiveEntry struct {
+	artifact core.SchemaArtifact
+	expires  time.Time
 }
 
 const (
-	remoteSSERecoveryWindow = 30 * time.Second
-	remoteSSEBackoff        = 100 * time.Millisecond
-	remoteSSEMaxBackoff     = 5 * time.Second
-	remoteMaxConcurrent     = 128
-	remoteMaxSubscriptions  = 1024
+	remoteSSERecoveryWindow  = 30 * time.Second
+	remoteSSEBackoff         = 100 * time.Millisecond
+	remoteSSEMaxBackoff      = 5 * time.Second
+	remoteMaxConcurrent      = 128
+	remoteMaxSubscriptions   = 1024
+	defaultEffectiveCacheTTL = 5 * time.Second
 )
 
 var errRemoteSSEStream = errors.New("remote subscription stream failed")
@@ -333,6 +351,9 @@ func (my *remoteRevision) EffectiveSchema(ctx context.Context) (core.SchemaArtif
 func (my *remoteRevision) EffectiveSchemaAvailable() bool {
 	return my.endpoint.EffectiveSchemaAvailable()
 }
+func (my *remoteRevision) EffectiveSchemaCacheIdentity(ctx context.Context) (string, bool) {
+	return my.endpoint.cachedEffectiveSchemaIdentity(ctx, my.snapshot.Fingerprint())
+}
 
 func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpoint, error) {
 	if options.EndpointID == "" || options.ManifestURL == "" || options.ExecuteURL == "" {
@@ -365,6 +386,9 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 	if options.MaxSubscriptions <= 0 {
 		options.MaxSubscriptions = remoteMaxSubscriptions
 	}
+	if options.EffectiveCacheTTL <= 0 {
+		options.EffectiveCacheTTL = defaultEffectiveCacheTTL
+	}
 	client := options.Client
 	if client == nil {
 		client = &http.Client{}
@@ -380,6 +404,7 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 		idleTimeout: 30 * time.Second,
 		history:     make(map[string]*remoteState, 8),
 		unarySlots:  make(chan struct{}, options.MaxConcurrent), subscriptionSlots: make(chan struct{}, options.MaxSubscriptions),
+		effectiveCache: newRemoteEffectiveCache(64), effectiveCacheTTL: options.EffectiveCacheTTL, clock: time.Now,
 	}
 	if err := remote.Refresh(ctx); err != nil {
 		return nil, err
@@ -414,7 +439,110 @@ func (my *RemoteEndpoint) EffectiveSchema(ctx context.Context) (core.SchemaArtif
 
 func (my *RemoteEndpoint) EffectiveSchemaAvailable() bool { return my != nil && my.effective != "" }
 
+func (my *RemoteEndpoint) EffectiveSchemaCacheIdentity(ctx context.Context) (string, bool) {
+	state := my.state.Load()
+	if state == nil || state.snapshot == nil || my.effective == "" {
+		return "", false
+	}
+	return my.cachedEffectiveSchemaIdentity(ctx, state.snapshot.Fingerprint())
+}
+
+func newRemoteEffectiveCache(limit int) *remoteEffectiveCache {
+	if limit <= 0 {
+		limit = 64
+	}
+	return &remoteEffectiveCache{entries: lru.New[string, remoteEffectiveEntry](limit)}
+}
+
+func (cache *remoteEffectiveCache) get(key string, now time.Time) (core.SchemaArtifact, bool) {
+	entry, ok := cache.entries.GetIf(key, func(entry remoteEffectiveEntry) bool { return entry.expires.After(now) })
+	return entry.artifact, ok
+}
+
+func (cache *remoteEffectiveCache) put(key string, artifact core.SchemaArtifact, expires time.Time) {
+	cache.entries.Put(key, remoteEffectiveEntry{artifact: artifact, expires: expires})
+}
+
+func (my *RemoteEndpoint) effectiveSchemaRequestKey(ctx context.Context, structural string) (string, bool) {
+	identity, ok := core.IdentityFromContext(ctx)
+	if !ok {
+		return "", false
+	}
+	state := my.state.Load()
+	if state == nil {
+		return "", false
+	}
+	key, err := json.Marshal(struct {
+		Structural string
+		Revision   uint64
+		Tenant     string
+		Subject    string
+		Actor      string
+		Roles      []string
+		Claims     map[string]any
+		Policy     uint64
+		Credential uint64
+		Scope      map[string]any
+	}{structural, state.revision, identity.Tenant(), identity.Subject(), identity.Actor(), identity.Roles(), identity.Claims(), identity.PolicyRevision(), identity.CredentialEpoch(), core.Scope(ctx)})
+	if err != nil {
+		return "", false
+	}
+	return schemaDigest(string(key)), true
+}
+
+func (my *RemoteEndpoint) cachedEffectiveSchemaIdentity(ctx context.Context, structural string) (string, bool) {
+	key, ok := my.effectiveSchemaRequestKey(ctx, structural)
+	if !ok || my.effectiveCache == nil {
+		return "", false
+	}
+	artifact, ok := my.effectiveCache.get(key, my.effectiveNow())
+	if !ok || strings.TrimSpace(artifact.CacheIdentity) == "" {
+		return "", false
+	}
+	return artifact.CacheIdentity, true
+}
+
 func (my *RemoteEndpoint) effectiveSchema(ctx context.Context, structural string) (core.SchemaArtifact, error) {
+	if my.effectiveCache == nil {
+		my.effectiveCache = newRemoteEffectiveCache(64)
+	}
+	key, cacheable := my.effectiveSchemaRequestKey(ctx, structural)
+	if cacheable {
+		if artifact, ok := my.effectiveCache.get(key, my.effectiveNow()); ok {
+			return artifact, nil
+		}
+		return sharedflight.Do(ctx, &my.effectiveCache.flight, key, my.timeout, func(shared context.Context) (core.SchemaArtifact, error) {
+			if artifact, ok := my.effectiveCache.get(key, my.effectiveNow()); ok {
+				return artifact, nil
+			}
+			artifact, err := my.effectiveSchemaFetch(shared, structural)
+			if err != nil {
+				return core.SchemaArtifact{}, err
+			}
+			if strings.TrimSpace(artifact.CacheIdentity) != "" {
+				my.effectiveCache.put(key, artifact, my.effectiveNow().Add(my.effectiveTTL()))
+			}
+			return artifact, nil
+		})
+	}
+	return my.effectiveSchemaFetch(ctx, structural)
+}
+
+func (my *RemoteEndpoint) effectiveNow() time.Time {
+	if my.clock != nil {
+		return my.clock()
+	}
+	return time.Now()
+}
+
+func (my *RemoteEndpoint) effectiveTTL() time.Duration {
+	if my.effectiveCacheTTL > 0 {
+		return my.effectiveCacheTTL
+	}
+	return defaultEffectiveCacheTTL
+}
+
+func (my *RemoteEndpoint) effectiveSchemaFetch(ctx context.Context, structural string) (core.SchemaArtifact, error) {
 	if my == nil {
 		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema unavailable")
 	}
@@ -473,6 +601,9 @@ func (my *RemoteEndpoint) effectiveSchema(ctx context.Context, structural string
 		return core.SchemaArtifact{}, fmt.Errorf("remote effective schema fingerprint mismatch")
 	}
 	if err := core.ValidateSchemaArtifact(artifact); err != nil {
+		return core.SchemaArtifact{}, err
+	}
+	if err := core.ValidateArtifactIdentity(ctx, artifact); err != nil {
 		return core.SchemaArtifact{}, err
 	}
 	return artifact, nil
@@ -596,7 +727,7 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 	if err := decodeResponse(response.Body, my.maxResponse, &manifest); err != nil {
 		return fmt.Errorf("remote manifest: %w", err)
 	}
-	if manifest.Version != endpointProtocolVersion || manifest.EndpointID != my.id {
+	if manifest.Version != EndpointProtocolVersion || manifest.EndpointID != my.id {
 		return fmt.Errorf("remote manifest identity or protocol mismatch")
 	}
 	current := my.state.Load()

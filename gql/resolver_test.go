@@ -3,6 +3,7 @@ package gql
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/compiler"
@@ -368,6 +369,48 @@ func TestRootResolverRoundTrip(t *testing.T) {
 	require.NotNil(t, reply.Data["users"])
 }
 
+func TestMixedQueryRootsBatchDefaultSQLOnce(t *testing.T) {
+	executor, _, cleanup := setupRootResolverExecutor(t)
+	defer cleanup()
+	var queries atomic.Int32
+	queryName := "test:mixed-root-query-count"
+	rawName := "test:mixed-root-raw-count"
+	rowName := "test:mixed-root-row-count"
+	require.NoError(t, executor.database.Callback().Raw().Before("gorm:raw").Register(rawName, func(*gorm.DB) {
+		queries.Add(1)
+	}))
+	defer executor.database.Callback().Raw().Remove(rawName)
+	require.NoError(t, executor.database.Callback().Row().Before("gorm:row").Register(rowName, func(*gorm.DB) {
+		queries.Add(1)
+	}))
+	defer executor.database.Callback().Row().Remove(rowName)
+	require.NoError(t, executor.database.Callback().Query().Before("gorm:query").Register(queryName, func(*gorm.DB) {
+		queries.Add(1)
+	}))
+	defer executor.database.Callback().Query().Remove(queryName)
+	require.NoError(t, executor.register(pingResolver()))
+	reply := executor.run(context.Background(), `query { ping(msg: "x") users { total } posts { total } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, "pong:x", reply.Data["ping"])
+	require.NotNil(t, reply.Data["users"])
+	require.NotNil(t, reply.Data["posts"])
+	require.EqualValues(t, 1, queries.Load(), "all default query roots should share one SQL fetch")
+}
+
+func TestMixedQueryRootsPreserveAliasesAndResolverErrors(t *testing.T) {
+	executor, _, cleanup := setupRootResolverExecutor(t)
+	defer cleanup()
+	require.NoError(t, executor.register(pingResolver(), NewResolver[Root, struct{}, string]("Query", "broken", "", func(context.Context, Root, struct{}) (string, error) {
+		return "", fmt.Errorf("resolver exploded")
+	})))
+	reply := executor.run(context.Background(), `query { p: ping(msg: "ok") broken users { total } }`, nil, "")
+	require.Equal(t, "pong:ok", reply.Data["p"])
+	require.Nil(t, reply.Data["broken"])
+	require.NotNil(t, reply.Data["users"])
+	require.NotEmpty(t, reply.Errors)
+	require.Equal(t, "broken", fmt.Sprint(reply.Errors[0].Path))
+}
+
 // TestRootResolverTypename __typename与Resolver共存（Apollo客户端默认注入）。
 func TestRootResolverTypename(t *testing.T) {
 	executor, db, cleanup := setupRootResolverExecutor(t)
@@ -387,6 +430,35 @@ func TestRootResolverTypename(t *testing.T) {
 	}`, map[string]interface{}{"n": "Ty", "e": "ty@x.com"}, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	require.Equal(t, "Mutation", reply.Data["t"])
+}
+
+func TestRootResolverCompletesInlineFragments(t *testing.T) {
+	executor, _, cleanup := setupRootResolverExecutor(t)
+	defer cleanup()
+	require.NoError(t, executor.register(NewResolver[Root, struct{}, map[string]any](
+		"Query", "node", "", func(context.Context, Root, struct{}) (map[string]any, error) {
+			return map[string]any{"__typename": "TestActor", "id": "7", "name": "Ada"}, nil
+		}, Result("Node"), Extra(`
+			interface Node { id: ID! }
+			type TestActor implements Node { id: ID! name: String! }
+		`),
+	), NewResolver[Root, struct{}, map[string]any](
+		"Query", "actor", "", func(context.Context, Root, struct{}) (map[string]any, error) {
+			return map[string]any{"id": "8", "name": "Grace"}, nil
+		}, Result("TestActor"),
+	)))
+
+	reply := executor.run(context.Background(), `{
+		node { __typename id ... on TestActor { name } }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, map[string]any{"__typename": "TestActor", "id": "7", "name": "Ada"}, reply.Data["node"])
+
+	reply = executor.run(context.Background(), `{
+		actor { id ... on TestActor { name } }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, map[string]any{"id": "8", "name": "Grace"}, reply.Data["actor"])
 }
 
 // TestRootResolverVariablePassthrough 回查合成查询透传原变量声明：

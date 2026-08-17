@@ -381,7 +381,7 @@ func (my *Engine) resolve(ctx context.Context, bindings []binding, data map[stri
 		var values []interface{}
 		var err error
 		var itemErrors []error
-		callCtx := my.executionContext(ctx, b.node.SelectionSet)
+		callCtx := my.executionContextFor(ctx, b.node.SelectionSet, b.Name)
 		if many, ok := resolver.(BatchResolver); ok {
 			key := batchRequestKey(b, args)
 			if cached, exists := batchMemo[key]; exists {
@@ -538,6 +538,7 @@ type Define struct {
 	RetrySafe      bool
 	IdempotencyKey string
 	MaxBatch       int
+	SemanticKind   SemanticKind // custom handler business meaning; empty derives from mount location
 	inputType      reflect.Type // 仅供启动期生成强类型嵌套input，不进入运行期热路径
 	outputType     reflect.Type // 仅供启动期生成强类型output，不进入运行期热路径
 }
@@ -649,9 +650,7 @@ func (my *Engine) rebuild() error {
 
 type transactionKey struct{}
 
-// Tx 返回当前mutation共享的事务连接；Query或无数据库执行器返回nil。
-// 根Resolver中的数据库写入必须使用此连接，才能与默认CRUD共同提交或回滚。
-func Tx(ctx context.Context) *gorm.DB {
+func transactionFromContext(ctx context.Context) *gorm.DB {
 	if ctx == nil {
 		return nil
 	}
@@ -691,6 +690,7 @@ func (my *Engine) needsRootExecution(operation *ast.OperationDefinition) bool {
 }
 
 func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, variables map[string]interface{}) gqlReply {
+	ctx = withInvalidationState(ctx)
 	operation, plans := entry.operation, &entry.rootPlans
 	typename := "Query"
 	if operation.Operation == ast.Mutation {
@@ -702,6 +702,13 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 	stop := false
 	rollbackConfirmed := false
 	execute := func(ctx context.Context) error {
+		var defaults map[string]interface{}
+		var defaultWarnings gqlerror.List
+		var defaultErr error
+		if operation.Operation == ast.Query {
+			defaults, defaultWarnings, defaultErr = my.executeDefaultRootFields(ctx, operation, variables)
+			warnings = append(warnings, defaultWarnings...)
+		}
 		for _, s := range operation.SelectionSet {
 			if stop {
 				break
@@ -712,6 +719,18 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 			}
 			if f.Name == "__typename" {
 				data[f.Alias] = typename
+				continue
+			}
+			if operation.Operation == ast.Query && my.resolvers[typename+"."+f.Name] == nil {
+				if defaultErr != nil {
+					executionErrors = append(executionErrors, rootFieldExecutionErrors(f, defaultErr, "EXECUTION_ERROR", false)...)
+					data[f.Alias] = nil
+					if f.Definition != nil && f.Definition.Type != nil && f.Definition.Type.NonNull {
+						stop = true
+					}
+					continue
+				}
+				data[f.Alias] = defaults[responseKey(f)]
 				continue
 			}
 			value, warns, err := my.resolveRootField(ctx, operation, f, variables, typename, plans)
@@ -733,22 +752,25 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 		return nil
 	}
 	var err error
-	if operation.Operation == ast.Mutation && Tx(ctx) != nil {
-		err, rollbackConfirmed = runMutationSavepoint(ctx, Tx(ctx), func() error {
+	if operation.Operation == ast.Mutation && transactionFromContext(ctx) != nil {
+		err, rollbackConfirmed = runMutationSavepoint(ctx, transactionFromContext(ctx), func() error {
 			if err := execute(ctx); len(executionErrors) > 0 {
 				return errRootTransactionRollback
 			} else {
 				return err
 			}
 		})
-	} else if my.database != nil && Tx(ctx) == nil && (operation.Operation == ast.Mutation || my.rls || tenantRLSRequested(ctx)) {
-		err, rollbackConfirmed = runRootTransaction(ctx, my.database, func(tx *gorm.DB) error {
+	} else if my.database != nil && transactionFromContext(ctx) == nil && (operation.Operation == ast.Mutation || my.rls || tenantRLSRequested(ctx)) {
+		err, rollbackConfirmed = runRootTransaction(ctx, my.database, my.cdc, func(tx *gorm.DB) error {
 			if my.rls || tenantRLSRequested(ctx) {
 				if err := my.prepareRLS(ctx, tx); err != nil {
 					return err
 				}
 			}
 			executionCtx := context.WithValue(ctx, transactionKey{}, tx)
+			if operation.Operation == ast.Mutation {
+				executionCtx = context.WithValue(executionCtx, engineMutationTransactionKey{}, true)
+			}
 			if my.rls || tenantRLSRequested(ctx) {
 				executionCtx = markRLSPrepared(executionCtx, tx)
 			}
@@ -791,7 +813,54 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 	return reply
 }
 
-func runRootTransaction(ctx context.Context, database *gorm.DB, execute func(*gorm.DB) error) (error, bool) {
+func (my *Engine) executeDefaultRootFields(ctx context.Context, operation *ast.OperationDefinition, variables map[string]interface{}) (map[string]interface{}, gqlerror.List, error) {
+	selection := make(ast.SelectionSet, 0, len(operation.SelectionSet))
+	for _, node := range operation.SelectionSet {
+		field, ok := node.(*ast.Field)
+		if ok && field.Name != "__typename" && my.resolvers["Query."+field.Name] == nil {
+			selection = append(selection, field)
+		}
+	}
+	if len(selection) == 0 {
+		return nil, nil, nil
+	}
+	if my.compiler == nil {
+		return nil, nil, fmt.Errorf("gql compiler is unavailable")
+	}
+	sub := *operation
+	sub.SelectionSet = selection
+	plan, err := my.compiler.Compile(&sub, variables)
+	if err != nil {
+		return nil, nil, err
+	}
+	if my.policy != nil {
+		plan, err = my.policyPlan(ctx, plan, variables)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	raw, err := my.fetch(ctx, plan, variables)
+	if err != nil {
+		return nil, nil, err
+	}
+	var root map[string]interface{}
+	var warnings gqlerror.List
+	if len(plan.resolvers) == 0 {
+		value, decodeErr := decodeValue(raw)
+		if decodeErr != nil {
+			return nil, nil, decodeErr
+		}
+		root, _ = value.(map[string]interface{})
+	} else {
+		root, warnings, err = my.unpack(ctx, plan, raw, variables)
+		if err != nil {
+			return nil, warnings, err
+		}
+	}
+	return root, warnings, nil
+}
+
+func runRootTransaction(ctx context.Context, database *gorm.DB, publisher interface{ invalidate(...string) }, execute func(*gorm.DB) error) (error, bool) {
 	tx := database.WithContext(ctx).Begin()
 	if tx.Error != nil {
 		return tx.Error, false
@@ -802,7 +871,13 @@ func runRootTransaction(ctx context.Context, database *gorm.DB, execute func(*go
 		}
 		return err, true
 	}
-	return tx.Commit().Error, false
+	if err := tx.Commit().Error; err != nil {
+		return err, false
+	}
+	if publisher != nil {
+		publisher.invalidate(invalidationTables(ctx)...)
+	}
+	return nil, false
 }
 
 // runMutationSavepoint makes a nested mutation atomic without taking ownership
@@ -874,7 +949,7 @@ func (my *Engine) resolveRootField(ctx context.Context, operation *ast.Operation
 	}
 	var result interface{}
 	err := safely(func() (err error) {
-		hctx, cancel := handlerContext(my.executionContext(ctx, field.SelectionSet), resolver)
+		hctx, cancel := handlerContext(my.executionContextFor(ctx, field.SelectionSet, parent+"."+field.Name), resolver)
 		defer cancel()
 		result, err = resolver.Resolve(hctx, Root{}, field.ArgumentMap(variables))
 		return handlerResult(hctx, err)
@@ -940,32 +1015,36 @@ func projectRootValue(value any, set ast.SelectionSet, objectType string) any {
 		return out
 	case map[string]any:
 		out := make(map[string]any, len(set))
+		if hasInlineFragment(set) {
+			out["__typename"] = current["__typename"]
+		}
 		for _, selection := range set {
-			field, ok := selection.(*ast.Field)
-			if !ok {
-				continue
-			}
-			key := field.Alias
-			if key == "" {
-				key = field.Name
-			}
-			if field.Name == "__typename" {
-				out[key] = objectType
-				if actual, ok := current["__typename"].(string); ok {
-					out[key] = actual
+			switch node := selection.(type) {
+			case *ast.InlineFragment:
+				fragment, _ := projectRootValue(current, node.SelectionSet, objectType).(map[string]any)
+				for key, value := range fragment {
+					out[key] = value
 				}
-				continue
+			case *ast.Field:
+				key := responseKey(node)
+				if node.Name == "__typename" {
+					out[key] = objectType
+					if actual, ok := current["__typename"].(string); ok {
+						out[key] = actual
+					}
+					continue
+				}
+				child, exists := current[node.Name]
+				if !exists {
+					out[key] = nil
+					continue
+				}
+				childType := objectType
+				if node.Definition != nil && node.Definition.Type != nil {
+					childType = node.Definition.Type.Name()
+				}
+				out[key] = projectRootValue(child, node.SelectionSet, childType)
 			}
-			child, exists := current[field.Name]
-			if !exists {
-				out[key] = nil
-				continue
-			}
-			childType := objectType
-			if field.Definition != nil && field.Definition.Type != nil {
-				childType = field.Definition.Type.Name()
-			}
-			out[key] = projectRootValue(child, field.SelectionSet, childType)
 		}
 		return out
 	default:

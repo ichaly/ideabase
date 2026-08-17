@@ -20,9 +20,19 @@ type subscriptionEndpoint interface {
 // NewSubscriptionHandler exposes one GraphQL SSE single-operation stream.
 func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Handler {
 	opts = defaultOptions(opts)
+	admission := make(chan struct{}, opts.MaxConcurrent+opts.MaxQueued)
+	executionSlots := make(chan struct{}, opts.MaxConcurrent)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if endpoint == nil {
 			writeProblem(w, http.StatusServiceUnavailable, "SUBSCRIPTION_UNAVAILABLE", "subscription unavailable", true)
+			return
+		}
+		select {
+		case admission <- struct{}{}:
+			defer func() { <-admission }()
+		default:
+			w.Header().Set("Retry-After", "1")
+			writeProblem(w, http.StatusTooManyRequests, "REQUEST_OVERLOADED", "subscription capacity exhausted", true)
 			return
 		}
 		if r.Method != http.MethodPost {
@@ -44,87 +54,23 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 			return
 		}
 		ctx := core.WithResponseLimit(r.Context(), opts.MaxResponseBytes)
-		if opts.Delegation != nil {
-			token, ok := delegationToken(r)
-			if !ok {
-				writeProblem(w, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", "delegation required", false)
-				return
-			}
-			var err error
-			ctx, err = opts.Delegation.Verify(ctx, token, operationDigest(params, r.Header.Get("GQL-Snapshot"), r.Header.Get(executionPinHeader)))
-			if err != nil {
-				writeProblem(w, http.StatusUnauthorized, "INVALID_DELEGATION", "invalid delegation", false)
-				return
-			}
-			ctx = core.WithDelegatedExecution(ctx)
-		}
 		execution := endpoint
-		revision := r.Header.Get("GQL-Snapshot")
-		if revision != "" {
-			if opts.Delegation == nil {
-				source, ok := endpoint.(manifestEndpoint)
-				if !ok {
-					writeProblem(w, http.StatusConflict, "SNAPSHOT_UNAVAILABLE", "snapshot pinning unavailable", true)
-					return
-				}
-				current, snapshotErr := source.Snapshot()
-				if snapshotErr != nil || current == nil || current.Fingerprint() != revision {
-					writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
-					return
-				}
-			}
-			if pinner, ok := endpoint.(snapshotPinner); ok {
-				pinned, pinErr := pinner.ForSnapshot(revision)
-				var subscribable bool
-				execution, subscribable = pinned.(subscriptionEndpoint)
-				if pinErr != nil || !subscribable {
-					writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
-					return
-				}
-			} else {
-				source, ok := endpoint.(manifestEndpoint)
-				if !ok {
-					writeProblem(w, http.StatusConflict, "SNAPSHOT_UNAVAILABLE", "snapshot pinning unavailable", true)
-					return
-				}
-				snapshot, err := source.Snapshot()
-				if err != nil || snapshot == nil || snapshot.Fingerprint() != revision {
-					writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
-					return
-				}
-			}
+		ctx, execution, revision, failure := prepareRequest(ctx, r, endpoint, execution, opts.Delegation,
+			operationDigest(params, r.Header.Get("GQL-Snapshot"), r.Header.Get(executionPinHeader)),
+			func(value any) (subscriptionEndpoint, bool) {
+				endpoint, ok := value.(subscriptionEndpoint)
+				return endpoint, ok
+			})
+		if failure != nil {
+			writeRequestFailure(w, failure)
+			return
 		}
-		if revision == "" {
-			if source, ok := endpoint.(manifestEndpoint); ok {
-				if pinner, pinnable := endpoint.(snapshotPinner); pinnable {
-					snapshot, snapshotErr := source.Snapshot()
-					if snapshotErr != nil || snapshot == nil {
-						writeProblem(w, http.StatusServiceUnavailable, "SNAPSHOT_UNAVAILABLE", "snapshot unavailable", true)
-						return
-					}
-					revision = snapshot.Fingerprint()
-					pinned, pinErr := pinner.ForSnapshot(revision)
-					var subscribable bool
-					execution, subscribable = pinned.(subscriptionEndpoint)
-					if pinErr != nil || !subscribable {
-						writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
-						return
-					}
-				}
-			}
-		}
-		if pin := r.Header.Get(executionPinHeader); pin != "" {
-			source, ok := execution.(effectiveSchemaEndpoint)
-			if !ok {
-				writeProblem(w, http.StatusConflict, "SNAPSHOT_CONFLICT", "effective schema execution pin unavailable", true)
-				return
-			}
-			artifact, err := source.EffectiveSchema(ctx)
-			if err != nil || artifact.ExecutionPin == "" || artifact.ExecutionPin != pin {
-				writeProblem(w, http.StatusConflict, "SNAPSHOT_CONFLICT", "effective schema execution pin changed", true)
-				return
-			}
-			ctx = core.WithExecutionPin(ctx, pin)
+		select {
+		case executionSlots <- struct{}{}:
+			defer func() { <-executionSlots }()
+		case <-ctx.Done():
+			writeProblem(w, http.StatusServiceUnavailable, "REQUEST_TIMEOUT", "request expired while awaiting subscription capacity", true)
+			return
 		}
 		events, err := execution.Subscribe(ctx, params.Query, params.Variables, params.OperationName)
 		if err != nil || events == nil {

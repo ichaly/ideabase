@@ -7,6 +7,7 @@ package pgsql
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -272,19 +273,21 @@ func (my *Dialect) buildConnectionWrap(ctx *compiler.Context, u *unit) error {
 }
 
 func (my *Dialect) buildConnectionTotal(ctx *compiler.Context, u *unit) error {
+	return my.buildFilteredTotal(ctx, u, protocol.FIRST, protocol.AFTER, protocol.LAST, protocol.BEFORE, protocol.SORT)
+}
+
+func (my *Dialect) buildFilteredTotal(ctx *compiler.Context, u *unit, ignored ...string) error {
 	count := *u
-	count.shape, count.page, count.sorts = shapeStats, nil, nil
-	count.args = count.args[:0]
+	count.shape, count.page, count.sorts, count.ordered = shapeStats, nil, nil, false
+	count.args = make(ast.ArgumentList, 0, len(u.args))
 	for _, argument := range u.args {
-		switch argument.Name {
-		case protocol.FIRST, protocol.AFTER, protocol.LAST, protocol.BEFORE, protocol.SORT:
+		if slices.Contains(ignored, argument.Name) {
 			continue
 		}
 		count.args = append(count.args, argument)
 	}
-	key := u.class.PrimaryKeys[0]
 	ctx.Write(`(SELECT COALESCE(MIN("__total"), 0) FROM (`)
-	if err := my.buildCore(ctx, &count, []*ast.Field{{Name: key, Alias: "__count_key"}}, true); err != nil {
+	if err := my.buildCore(ctx, &count, nil, true); err != nil {
 		return err
 	}
 	ctx.Write(`) AS `).Quote("__sc_", u.index).Write(`)`)
@@ -385,7 +388,15 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 		} else {
 			ctx.Write(`'`, totalAlias, `', COALESCE(MIN(`)
 		}
-		sr().Write(`."__total"), 0)`)
+		sr().Write(`."__total"), `)
+		if totalNeedsFallback(u.args) {
+			if err := my.buildFilteredTotal(ctx, u, protocol.LIMIT, protocol.OFFSET, protocol.SORT); err != nil {
+				return err
+			}
+		} else {
+			ctx.Write(0)
+		}
+		ctx.Write(`)`)
 	}
 	if pageInfo != nil {
 		next()
@@ -405,6 +416,14 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	ctx.Write(`) AS `)
 	sr()
 	return nil
+}
+
+func totalNeedsFallback(args ast.ArgumentList) bool {
+	if args.ForName(protocol.OFFSET) != nil {
+		return true
+	}
+	limit := args.ForName(protocol.LIMIT)
+	return limit != nil && limit.Value != nil && (limit.Value.Kind == ast.Variable || limit.Value.Raw == "0")
 }
 
 // buildPageInfo 游标分页信息：N+1探测行决定hasNext/hasPrev，边界行游标为start/end

@@ -13,6 +13,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func decodeSubscriptionReply(t *testing.T, reply gqlReply) gqlReply {
+	t.Helper()
+	if reply.encoded == nil {
+		return reply
+	}
+	var decoded gqlReply
+	require.NoError(t, jsonNumeric.Unmarshal(reply.encoded, &decoded))
+	normalizeNumbers(decoded.Data)
+	return decoded
+}
+
 func TestSubscriptionAdmissionLimitsFeedsAndSubscribers(t *testing.T) {
 	engine := &Engine{feeds: make(map[string]*feed)}
 	for i := range maxTenantSubscriptionFeeds {
@@ -31,6 +42,26 @@ func TestSubscriptionAdmissionLimitsFeedsAndSubscribers(t *testing.T) {
 	require.Equal(t, "LIMIT_EXCEEDED", GraphQLErrors(err)[0].Extensions["code"])
 }
 
+func TestAcquireRefreshDoesNotHoldTenantWhileGlobalIsBusy(t *testing.T) {
+	engine := &Engine{refreshSem: make(chan struct{}, 1)}
+	for i := range engine.tenantRefresh {
+		engine.tenantRefresh[i] = make(chan struct{}, 1)
+	}
+	engine.refreshSem <- struct{}{}
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-b", Subject: "user"})
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(WithIdentity(context.Background(), identity), 10*time.Millisecond)
+	defer cancel()
+	release, acquired := engine.acquireRefresh(ctx)
+	require.False(t, acquired)
+	release()
+	select {
+	case engine.tenantRefresh[tenantRefreshSlot("tenant-b")] <- struct{}{}:
+	default:
+		t.Fatal("tenant slot remained held after global wait timed out")
+	}
+}
+
 func TestSubscriptionReplyLimitReturnsBoundedTerminalError(t *testing.T) {
 	ctx := WithResponseLimit(context.Background(), 256)
 	body, err := marshalSubscriptionReply(ctx, gqlReply{Data: map[string]any{"value": strings.Repeat("x", 1024)}})
@@ -41,6 +72,24 @@ func TestSubscriptionReplyLimitReturnsBoundedTerminalError(t *testing.T) {
 
 	_, err = marshalSubscriptionReply(WithResponseLimit(context.Background(), 8), gqlReply{Data: map[string]any{"value": strings.Repeat("x", 1024)}})
 	require.ErrorIs(t, err, errResponseLimit)
+}
+
+func TestSubscriptionFeedReplyIsBoundedBeforeCaching(t *testing.T) {
+	reply := boundSubscriptionReply(WithResponseLimit(context.Background(), 128), gqlReply{Data: map[string]any{"value": strings.Repeat("x", 4096)}})
+	require.Nil(t, reply.Data)
+	require.LessOrEqual(t, len(reply.encoded), 128)
+	require.Contains(t, string(reply.encoded), "LIMIT_EXCEEDED")
+}
+
+func TestSubscriptionFeedKeyHasFixedLengthAndIsolatesIdentity(t *testing.T) {
+	first, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-a", Roles: []string{"reader"}})
+	require.NoError(t, err)
+	second, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-b", Roles: []string{"reader"}})
+	require.NoError(t, err)
+	small := subscriptionFeedKey("query", "Op", map[string]any{"n": 1}, nil, first, TenantRoute{}, "policy")
+	large := subscriptionFeedKey(strings.Repeat("query", 10000), "Op", map[string]any{"n": strings.Repeat("x", 10000)}, map[string]any{"tenant": strings.Repeat("t", 10000)}, first, TenantRoute{}, "policy")
+	require.Equal(t, len(small), len(large))
+	require.NotEqual(t, small, subscriptionFeedKey("query", "Op", map[string]any{"n": 1}, nil, second, TenantRoute{}, "policy"))
 }
 
 func TestSubscriptionIdenticalFailurePublishesOnceAndKeepsRetrying(t *testing.T) {
@@ -86,6 +135,7 @@ func TestSubscriptionRetriesUntilDatabaseRecovers(t *testing.T) {
 
 	select {
 	case reply := <-events:
+		reply = decodeSubscriptionReply(t, reply)
 		require.NotEmpty(t, reply.Errors)
 	case <-time.After(3 * time.Second):
 		t.Fatal("missing initial database error")
@@ -93,6 +143,7 @@ func TestSubscriptionRetriesUntilDatabaseRecovers(t *testing.T) {
 	require.NoError(t, db.Exec(`CREATE VIEW retry_users AS SELECT * FROM users`).Error)
 	select {
 	case reply := <-events:
+		reply = decodeSubscriptionReply(t, reply)
 		require.Empty(t, reply.Errors)
 		require.EqualValues(t, 0, reply.Data["users"].(map[string]any)["total"])
 	case <-time.After(3 * time.Second):
@@ -117,6 +168,7 @@ func TestSubscribe(t *testing.T) {
 		select {
 		case reply, ok := <-events:
 			require.True(t, ok, "事件通道意外关闭: %s", hint)
+			reply = decodeSubscriptionReply(t, reply)
 			require.Empty(t, reply.Errors, "%s: %v", hint, reply.Errors)
 			return reply
 		case <-time.After(5 * time.Second):
@@ -176,6 +228,7 @@ func TestSubscribeShared(t *testing.T) {
 		select {
 		case reply, ok := <-events:
 			require.True(t, ok, "通道意外关闭: %s", hint)
+			reply = decodeSubscriptionReply(t, reply)
 			require.Empty(t, reply.Errors, "%s: %v", hint, reply.Errors)
 		case <-time.After(5 * time.Second):
 			t.Fatalf("等待首次推送超时: %s", hint)
@@ -244,6 +297,7 @@ func TestSubscribeScope(t *testing.T) {
 		select {
 		case reply, ok := <-events:
 			require.True(t, ok, "通道意外关闭: %s", hint)
+			reply = decodeSubscriptionReply(t, reply)
 			require.Empty(t, reply.Errors, "%s: %v", hint, reply.Errors)
 			return reply
 		case <-time.After(5 * time.Second):

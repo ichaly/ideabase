@@ -397,11 +397,74 @@ func operationCost(operation *ast.OperationDefinition, variables map[string]inte
 				}
 			}
 			unit := saturatingAdd(cost, saturatingMul(child, resultMultiplier))
-			total = saturatingAdd(total, saturatingMul(unit, bulkInputLength(field, variables)))
+			inputWork := bulkInputLength(field, variables)
+			if operation.Operation == ast.Mutation {
+				inputWork = mutationInputWorkload(field, variables, inputWork)
+			}
+			total = saturatingAdd(total, saturatingMul(unit, inputWork))
 		}
 		return total
 	}
 	return walk(operation.SelectionSet)
+}
+
+func mutationInputWorkload(field *ast.Field, variables map[string]interface{}, base uint64) uint64 {
+	arg := field.Arguments.ForName("input")
+	if arg == nil || arg.Value == nil {
+		return base
+	}
+	value, err := arg.Value.Value(variables)
+	if err != nil {
+		return base
+	}
+	return saturatingAdd(base, nestedMutationInputWork(value))
+}
+
+func nestedMutationInputWork(value any) uint64 {
+	switch value := value.(type) {
+	case []any:
+		var total uint64
+		for _, item := range value {
+			total = saturatingAdd(total, nestedMutationInputWork(item))
+		}
+		return total
+	case map[string]any:
+		var total uint64
+		for name, nested := range value {
+			switch name {
+			case "connect", "disconnect":
+				for range mutationInputItems(nested) {
+					total = saturatingAdd(total, 2) // relation operation + key parameter
+				}
+			case "create":
+				for _, item := range mutationInputItems(nested) {
+					total = saturatingAdd(total, 1) // nested row
+					total = saturatingAdd(total, nestedMutationInputWork(item))
+				}
+			default:
+				switch nested.(type) {
+				case map[string]any, []any:
+					// Descend through relation wrappers and nested input rows.
+					total = saturatingAdd(total, nestedMutationInputWork(nested))
+				default:
+					total = saturatingAdd(total, 1) // SQL parameter
+				}
+			}
+		}
+		return total
+	default:
+		return 0
+	}
+}
+
+func mutationInputItems(value any) []any {
+	if value == nil {
+		return nil
+	}
+	if list, ok := value.([]any); ok {
+		return list
+	}
+	return []any{value}
 }
 
 func bulkInputLength(field *ast.Field, variables map[string]interface{}) uint64 {

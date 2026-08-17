@@ -13,24 +13,30 @@ import (
 
 const healthTimeout = 5 * time.Second
 const healthMaxConcurrent = 8
+const HealthProtocolVersion = 1
 
 type healthEndpoint interface {
 	Health(context.Context) (core.HealthReport, error)
 }
 
 type healthStatus struct {
-	Ready                 bool   `json:"ready"`
-	SnapshotOK            bool   `json:"snapshotOk"`
-	Snapshot              string `json:"snapshot,omitempty"`
-	ControlRevision       uint64 `json:"controlRevision"`
-	RouteRevision         uint64 `json:"routeRevision"`
-	SecurityRevision      uint64 `json:"securityRevision"`
-	DatabaseOK            bool   `json:"databaseOk"`
-	DatabaseCode          string `json:"databaseCode,omitempty"`
-	CDCConfigured         bool   `json:"cdcConfigured"`
-	CDCConnected          bool   `json:"cdcConnected"`
-	CDCCode               string `json:"cdcCode,omitempty"`
-	SubscriptionAvailable bool   `json:"subscriptionAvailable"`
+	Version               int      `json:"version"`
+	Ready                 bool     `json:"ready"`
+	Degraded              bool     `json:"degraded"`
+	DegradedSources       []string `json:"degradedSources,omitempty"`
+	RouteScoped           bool     `json:"routeScoped"`
+	SnapshotOK            bool     `json:"snapshotOk"`
+	Snapshot              string   `json:"snapshot,omitempty"`
+	ControlRevision       uint64   `json:"controlRevision"`
+	RouteRevision         uint64   `json:"routeRevision"`
+	SecurityRevision      uint64   `json:"securityRevision"`
+	DatabaseOK            bool     `json:"databaseOk"`
+	DatabaseCode          string   `json:"databaseCode,omitempty"`
+	CDCConfigured         bool     `json:"cdcConfigured"`
+	CDCState              string   `json:"cdcState"`
+	CDCConnected          bool     `json:"cdcConnected"`
+	CDCCode               string   `json:"cdcCode,omitempty"`
+	SubscriptionAvailable bool     `json:"subscriptionAvailable"`
 }
 
 func NewHealthHandler(endpoint healthEndpoint) http.Handler {
@@ -93,7 +99,7 @@ func NewHealthHandler(endpoint healthEndpoint) http.Handler {
 		if report.CDCConfigured && !report.CDCConnected {
 			cdcCode = "DISCONNECTED"
 		}
-		_ = json.NewEncoder(w).Encode(healthStatus{Ready: report.Ready, SnapshotOK: report.SnapshotOK, Snapshot: report.SnapshotFingerprint, ControlRevision: report.ControlRevision, RouteRevision: report.RouteRevision, SecurityRevision: report.SecurityRevision, DatabaseOK: report.DatabaseOK, DatabaseCode: databaseCode, CDCConfigured: report.CDCConfigured, CDCConnected: report.CDCConnected, CDCCode: cdcCode, SubscriptionAvailable: report.SubscriptionAvailable})
+		_ = json.NewEncoder(w).Encode(healthStatus{Version: HealthProtocolVersion, Ready: report.Ready, Degraded: report.Degraded, DegradedSources: report.DegradedSources, RouteScoped: report.RouteScoped, SnapshotOK: report.SnapshotOK, Snapshot: report.SnapshotFingerprint, ControlRevision: report.ControlRevision, RouteRevision: report.RouteRevision, SecurityRevision: report.SecurityRevision, DatabaseOK: report.DatabaseOK, DatabaseCode: databaseCode, CDCConfigured: report.CDCConfigured, CDCState: report.CDCState, CDCConnected: report.CDCConnected, CDCCode: cdcCode, SubscriptionAvailable: report.SubscriptionAvailable})
 	})
 }
 
@@ -129,7 +135,7 @@ func (my *RemoteEndpoint) healthFor(ctx context.Context, expected string) (core.
 		return core.HealthReport{}, fmt.Errorf("remote health unavailable: %w", err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusServiceUnavailable {
 		return core.HealthReport{}, remoteResponseError(response, "health", my.maxResponse)
 	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
@@ -140,13 +146,22 @@ func (my *RemoteEndpoint) healthFor(ctx context.Context, expected string) (core.
 	if err := decodeResponse(response.Body, my.maxResponse, &status); err != nil {
 		return core.HealthReport{}, fmt.Errorf("remote health response: %w", err)
 	}
-	report := core.HealthReport{Ready: status.Ready, SnapshotOK: status.SnapshotOK, SnapshotFingerprint: status.Snapshot, ControlRevision: status.ControlRevision, RouteRevision: status.RouteRevision, SecurityRevision: status.SecurityRevision, DatabaseOK: status.DatabaseOK, DatabaseError: status.DatabaseCode, CDCConfigured: status.CDCConfigured, CDCConnected: status.CDCConnected, CDCError: status.CDCCode, SubscriptionAvailable: status.SubscriptionAvailable}
+	if status.Version != 0 && status.Version != HealthProtocolVersion {
+		return core.HealthReport{}, &RemoteProblemError{
+			Operation: "health", Version: status.Version, Code: "UNSUPPORTED_HEALTH_VERSION",
+			Category: "protocol", Message: "unsupported remote health version",
+		}
+	}
+	report := core.HealthReport{Ready: status.Ready, Degraded: status.Degraded, DegradedSources: status.DegradedSources, RouteScoped: status.RouteScoped, SnapshotOK: status.SnapshotOK, SnapshotFingerprint: status.Snapshot, ControlRevision: status.ControlRevision, RouteRevision: status.RouteRevision, SecurityRevision: status.SecurityRevision, DatabaseOK: status.DatabaseOK, DatabaseError: status.DatabaseCode, CDCConfigured: status.CDCConfigured, CDCState: status.CDCState, CDCConnected: status.CDCConnected, CDCError: status.CDCCode, SubscriptionAvailable: status.SubscriptionAvailable}
 	if expected != "" && status.Snapshot != expected {
 		report.Ready, report.SnapshotOK = false, false
 		return report, fmt.Errorf("remote health snapshot mismatch")
 	}
-	if !status.Ready {
-		return report, fmt.Errorf("remote endpoint is not ready")
+	if response.StatusCode == http.StatusServiceUnavailable || !status.Ready {
+		return report, &RemoteProblemError{
+			Operation: "health", Version: HealthProtocolVersion, Code: "REMOTE_NOT_READY",
+			Category: "availability", Retryable: true, Message: "remote endpoint is not ready",
+		}
 	}
 	return report, nil
 }

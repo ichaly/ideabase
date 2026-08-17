@@ -61,6 +61,44 @@ func TestPersistedOnlyHTTP(t *testing.T) {
 	assert.Contains(t, persisted, `"total"`, "持久化操作应放行: %s", persisted)
 }
 
+func TestPersistedOnlyEffectiveArtifactPublishesExecutableOperations(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	require.NoError(t, executor.loadDocument(`query UserByName($name: String!, $limit: Int = 10) {
+		users(where: { name: { eq: $name } }, limit: $limit) { items { id } total }
+	}`))
+
+	artifact, err := executor.EffectiveSchema(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, ExecutionModePersistedOnly, artifact.ExecutionMode)
+	require.Len(t, artifact.PersistedOperations, 1)
+	operation := artifact.PersistedOperations[0]
+	require.Equal(t, "UserByName", operation.Name)
+	require.Equal(t, "query", operation.Type)
+	require.NotEmpty(t, operation.Hash)
+	require.Equal(t, []PersistedVariable{
+		{Name: "name", Type: "String!"},
+		{Name: "limit", Type: "Int", Default: "10"},
+	}, operation.Variables)
+}
+
+func TestPersistedCatalogExcludesOperationsHiddenByEffectivePolicy(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	require.NoError(t, executor.loadDocument(`query UserTotal { users { total } }`))
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "User" {
+			return PolicyDecision{Allow: false}, nil
+		}
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant", Subject: "subject"})
+	require.NoError(t, err)
+	artifact, err := executor.EffectiveSchema(WithIdentity(context.Background(), identity))
+	require.NoError(t, err)
+	require.Empty(t, artifact.PersistedOperations)
+}
+
 func TestExecuteOperationIsThePersistedOperationBoundary(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
 	defer cleanup()
@@ -91,6 +129,11 @@ func TestPersistedOnlyRejectsDirectSubscriptionDocument(t *testing.T) {
 func TestPersistedOnlyAcceptsGatewayAdmittedDocument(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
 	defer cleanup()
+	require.NoError(t, executor.loadDocument(`query GatewayAdmitted { users { total } }`))
+	artifact, err := executor.EffectiveSchema(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, schemaArtifactExecutionPin(artifact), artifact.ExecutionPin, "%#v", artifact)
+	require.NoError(t, ValidateSchemaArtifact(artifact))
 	gateway, err := NewGateway("root", Namespace{Name: "db", EndpointID: "db", Endpoint: executor})
 	require.NoError(t, err)
 	body, err := gateway.Execute(context.Background(), `{ db { users { total } } }`, nil)

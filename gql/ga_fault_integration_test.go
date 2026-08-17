@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	stdjson "encoding/json"
 	"testing"
 	"time"
 
@@ -48,10 +49,12 @@ func TestGACDCReconnectConvergesAfterBackendTermination(t *testing.T) {
 	defer cleanup()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	events, err := engine.subscribe(ctx, `subscription { users { total } }`, nil, "")
+	events, err := engine.Subscribe(ctx, `subscription { users { total } }`, nil, "")
 	require.NoError(t, err)
 	select {
-	case first := <-events:
+	case body := <-events:
+		var first gqlReply
+		require.NoError(t, stdjson.Unmarshal(body, &first))
 		require.Empty(t, first.Errors)
 	case <-time.After(5 * time.Second):
 		t.Fatal("missing initial subscription state")
@@ -67,7 +70,9 @@ func TestGACDCReconnectConvergesAfterBackendTermination(t *testing.T) {
 	require.NoError(t, db.Exec(`INSERT INTO users(name,email) VALUES ('Ada','ada@example.test')`).Error)
 
 	select {
-	case update := <-events:
+	case body := <-events:
+		var update gqlReply
+		require.NoError(t, stdjson.Unmarshal(body, &update))
 		require.Empty(t, update.Errors)
 		require.EqualValues(t, 1, update.Data["users"].(map[string]any)["total"])
 	case <-time.After(10 * time.Second):

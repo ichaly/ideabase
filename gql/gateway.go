@@ -71,8 +71,6 @@ type EffectiveSchemaCacheIdentityEndpoint interface {
 
 type EffectiveSchemaCapability interface{ EffectiveSchemaAvailable() bool }
 
-type effectiveSchemaAware interface{ effectiveSchemaAware() bool }
-
 // Namespace 将一个端点挂载到稳定的公共GraphQL名称下。
 type Namespace struct {
 	Name       string
@@ -120,6 +118,7 @@ type gatewayState struct {
 	cache             *planCache
 	effectiveCache    *lruCache[string, *gatewayState]
 	effectiveFlight   singleflight.Group
+	buildLimiter      *buildLimiter
 	snapshot          *Snapshot
 	contracts         map[string]*namespaceContract
 	mutations         map[string]*namespaceContract
@@ -182,6 +181,9 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 	}()
 	revisions := []string{my.snapshot.Fingerprint()}
 	names := sortedMapKeys(my.contracts)
+	if len(names) > gatewayMaxFanout {
+		return nil, gatewayLimitError("namespace effective-schema fan-out")
+	}
 	cacheParts := make([]string, 0, len(names))
 	prefetched := make(map[string]string, len(names))
 	cacheable := true
@@ -213,7 +215,7 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 			Route                           TenantRoute
 			Scope                           map[string]any
 			Children                        []string
-		}{my.snapshot.Fingerprint(), identity.Tenant(), identity.Subject(), identity.Actor(), identity.Roles(), identity.Claims(), identity.PolicyRevision(), identity.CredentialEpoch(), route, scopeValues(ctx), cacheParts})
+		}{my.snapshot.Fingerprint(), identity.Tenant(), identity.Subject(), identity.Actor(), identity.Roles(), identity.Claims(), identity.PolicyRevision(), identity.CredentialEpoch(), route, Scope(ctx), cacheParts})
 		cacheKey = "identity:" + digest(string(contract))
 		if cached, ok := my.effectiveCache.Get(cacheKey); ok {
 			return cached, nil
@@ -221,6 +223,7 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 	}
 	sources := make([]effectiveNamespace, len(names))
 	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(gatewayMaxConcurrent)
 	for index, name := range names {
 		contract := my.contracts[name]
 		sources[index].contract = contract
@@ -233,9 +236,21 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 		}
 		index, contract := index, contract
 		group.Go(func() error {
-			artifact, err := safelyCall(func() (SchemaArtifact, error) { return endpointSource.EffectiveSchema(groupCtx) })
+			fetch := func(fetchCtx context.Context) (SchemaArtifact, error) {
+				return safelyCall(func() (SchemaArtifact, error) { return endpointSource.EffectiveSchema(fetchCtx) })
+			}
+			var artifact SchemaArtifact
+			var err error
+			if childKey := prefetched[contract.name]; childKey != "" {
+				artifact, err = sharedBuild(groupCtx, &my.effectiveFlight, my.buildLimiter, "child-effective:"+contract.name+"="+childKey, fetch)
+			} else {
+				artifact, err = fetch(groupCtx)
+			}
 			if err != nil {
 				return fmt.Errorf("namespace %s effective schema: %w", contract.name, err)
+			}
+			if err := ValidateArtifactIdentity(groupCtx, artifact); err != nil {
+				return &publicFailure{"effective schema artifact identity is invalid", "BAD_GATEWAY_RESPONSE"}
 			}
 			revision, err := effectiveArtifactRevision(artifact)
 			if err != nil {
@@ -265,7 +280,7 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 	if cached, ok := my.effectiveCache.Get(key); ok {
 		return cached, nil
 	}
-	return sharedBuild(ctx, &my.effectiveFlight, key, func(context.Context) (*gatewayState, error) {
+	return sharedBuild(ctx, &my.effectiveFlight, my.buildLimiter, key, func(context.Context) (*gatewayState, error) {
 		if cached, ok := my.effectiveCache.Get(key); ok {
 			return cached, nil
 		}
@@ -318,11 +333,8 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 }
 
 func effectiveArtifactRevision(artifact SchemaArtifact) (string, error) {
-	if artifact.Schema == "" || artifact.Fingerprint != digest(artifact.Schema) {
-		return "", fmt.Errorf("effective artifact fingerprint mismatch")
-	}
-	if artifact.Version != SchemaArtifactVersion || artifact.ExecutionPin == "" || artifact.ExecutionPin != schemaArtifactExecutionPin(artifact) {
-		return "", fmt.Errorf("effective artifact version or execution pin mismatch")
+	if err := ValidateSchemaArtifact(artifact); err != nil {
+		return "", err
 	}
 	contract, err := stdjson.Marshal(struct {
 		Version, Fingerprint, StructuralFingerprint, PermissionSignature, ExecutionPin string
@@ -338,11 +350,8 @@ func effectiveArtifactRevision(artifact SchemaArtifact) (string, error) {
 }
 
 func snapshotFromEffectiveArtifact(artifact SchemaArtifact) (*Snapshot, error) {
-	if artifact.Schema == "" || artifact.Fingerprint != digest(artifact.Schema) {
-		return nil, fmt.Errorf("effective artifact fingerprint mismatch")
-	}
-	if artifact.Version != SchemaArtifactVersion || artifact.ExecutionPin == "" || artifact.ExecutionPin != schemaArtifactExecutionPin(artifact) {
-		return nil, fmt.Errorf("effective artifact version or execution pin mismatch")
+	if err := ValidateSchemaArtifact(artifact); err != nil {
+		return nil, err
 	}
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "effective.graphql", Input: artifact.Schema})
 	if err != nil {
@@ -377,7 +386,6 @@ func (my *gatewayRevision) EffectiveSchemaCacheIdentity(ctx context.Context) (st
 func (my *gatewayRevision) EffectiveSchemaAvailable() bool {
 	return my != nil && my.state != nil && my.state.identityAware
 }
-func (my *gatewayRevision) effectiveSchemaAware() bool { return my.state.identityAware }
 func (my *gatewayRevision) Subscribe(ctx context.Context, query string, variables map[string]any, operationName string) (<-chan []byte, error) {
 	return my.state.subscribe(ctx, query, variables, operationName)
 }
@@ -450,6 +458,13 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 	if err != nil {
 		return nil, err
 	}
+	for _, contract := range contracts {
+		if declared, ok := contract.endpoint.(interface{ HealthAvailable() bool }); ok && declared.HealthAvailable() {
+			if _, implements := contract.endpoint.(HealthEndpoint); !implements {
+				return nil, fmt.Errorf("namespace %s declares HealthAvailable but lacks HealthEndpoint", contract.name)
+			}
+		}
+	}
 	capabilities = completeCapabilities(schema, capabilities, HandlerRemote, "namespace")
 	mutations := make(map[string]*namespaceContract)
 	effective := false
@@ -457,9 +472,6 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 		_, effectiveChild := contract.endpoint.(EffectiveSchemaEndpoint)
 		if capability, ok := contract.endpoint.(EffectiveSchemaCapability); ok {
 			effectiveChild = capability.EffectiveSchemaAvailable()
-		}
-		if aware, ok := contract.endpoint.(effectiveSchemaAware); ok {
-			effectiveChild = aware.effectiveSchemaAware()
 		}
 		effective = effective || effectiveChild
 		for field := range contract.mutations {
@@ -503,6 +515,7 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 	state := &gatewayState{
 		id: id, schema: schema, intro: intro.New(schema), validation: validatorrules.NewDefaultRules(), snapshot: snapshot,
 		cache: newPlanCache(planCacheSize), contracts: contracts, mutations: mutations, topologyIDs: identitySet(seen), depth: depth, identityAware: effective,
+		buildLimiter: newBuildLimiter(16, 4),
 	}
 	if effective {
 		state.effectiveCache = newLRU[string, *gatewayState](128)
@@ -557,11 +570,10 @@ func (my *Gateway) ManifestState() (*Snapshot, uint64, error) {
 	}
 	return state.snapshot, my.revision, nil
 }
-func (my *Gateway) effectiveSchemaAware() bool {
+func (my *Gateway) EffectiveSchemaAvailable() bool {
 	state := my.current()
 	return state != nil && state.identityAware
 }
-func (my *Gateway) EffectiveSchemaAvailable() bool { return my != nil && my.effectiveSchemaAware() }
 
 func (my *Gateway) ForSnapshot(fingerprint string) (ComposableEndpoint, error) {
 	state := my.current()
@@ -640,6 +652,9 @@ func gatewaySchemaArtifact(ctx context.Context, state *gatewayState) (SchemaArti
 			PermissionSignature: state.snapshot.Fingerprint(), Capabilities: state.snapshot.Capabilities()}
 	}
 	artifact.Schema, artifact.Fingerprint = schema, digest(schema)
+	if identity, ok := IdentityFromContext(ctx); ok {
+		artifact.Identity = IdentityDescriptorFromIdentity(identity)
+	}
 	return FinalizeSchemaArtifact(artifact), nil
 }
 
@@ -767,7 +782,6 @@ func healthAvailable(state *gatewayState) bool {
 			if !source.HealthAvailable() {
 				return false
 			}
-			continue
 		}
 		if _, ok := contract.endpoint.(HealthEndpoint); !ok {
 			return false
@@ -781,7 +795,7 @@ func (my *Gateway) Health(ctx context.Context) (HealthReport, error) {
 	if state == nil || !healthAvailable(state) {
 		return HealthReport{}, fmt.Errorf("gateway health unavailable")
 	}
-	report := HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, CDCConnected: true, SnapshotFingerprint: state.snapshot.Fingerprint(), ControlRevision: revision, SubscriptionAvailable: state.schema.Subscription != nil}
+	report := HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, CDCConnected: true, CDCState: CDCStateConnected, SnapshotFingerprint: state.snapshot.Fingerprint(), ControlRevision: revision, SubscriptionAvailable: state.schema.Subscription != nil}
 	names := sortedMapKeys(state.contracts)
 	results := collectHealth(names, func(name string) (HealthReport, error) {
 		contract := state.contracts[name]
@@ -791,12 +805,15 @@ func (my *Gateway) Health(ctx context.Context) (HealthReport, error) {
 	for index, name := range names {
 		contract := state.contracts[name]
 		child, err := results[index].report, results[index].err
+		if child.Degraded {
+			report.Degraded = true
+			for _, source := range child.DegradedSources {
+				report.DegradedSources = append(report.DegradedSources, contract.name+":"+source)
+			}
+		}
 		report.SnapshotOK = report.SnapshotOK && child.SnapshotOK
 		report.DatabaseOK = report.DatabaseOK && child.DatabaseOK
-		report.CDCConfigured = report.CDCConfigured || child.CDCConfigured
-		if child.CDCConfigured {
-			report.CDCConnected = report.CDCConnected && child.CDCConnected
-		}
+		mergeHealthCDC(&report, child)
 		if child.CDCError != "" {
 			if report.CDCError != "" {
 				report.CDCError += "; "
@@ -819,6 +836,7 @@ func (my *Gateway) Health(ctx context.Context) (HealthReport, error) {
 	}
 	if !report.CDCConfigured {
 		report.CDCConnected = false
+		report.CDCState = ""
 	}
 	return report, errors.Join(failures...)
 }

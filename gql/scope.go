@@ -28,7 +28,18 @@ func IdentityFromContext(ctx context.Context) (Identity, bool) {
 //
 //	ctx = gql.WithScope(ctx, map[string]any{"tenant": claims.Tenant, "userId": claims.UserId})
 func WithScope(ctx context.Context, values map[string]any) context.Context {
-	return context.WithValue(ctx, scopeKey{}, values)
+	return context.WithValue(ctx, scopeKey{}, cloneVariables(values))
+}
+
+// Scope returns the trusted request scope without identity-derived values.
+// The returned map is detached from the context and safe for cache keys and
+// transport boundaries to retain.
+func Scope(ctx context.Context) map[string]any {
+	values, _ := ctx.Value(scopeKey{}).(map[string]any)
+	if values == nil {
+		return nil
+	}
+	return cloneVariables(values)
 }
 
 // scopeValues 取出请求上下文中的作用域值表（无则nil，作用域参数解析为nil=匹配不到行）

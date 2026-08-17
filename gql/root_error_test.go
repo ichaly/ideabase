@@ -94,7 +94,7 @@ func TestNullableMutationRootErrorContinuesButRollsBack(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	insert := func(ctx context.Context, name string) error {
-		return Tx(ctx).Exec("INSERT INTO users(name, email) VALUES (?, ?)", name, name+"@x").Error
+		return transactionFromContext(ctx).Exec("INSERT INTO users(name, email) VALUES (?, ?)", name, name+"@x").Error
 	}
 	require.NoError(t, executor.register(
 		NewResolver[Root, struct{}, string]("Mutation", "firstWrite", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) { return "first", insert(ctx, "first") }, Result("String")),
@@ -120,7 +120,7 @@ func TestNonNullMutationRootErrorStopsAndRollsBack(t *testing.T) {
 	defer cleanup()
 	var afterCalls int
 	insert := func(ctx context.Context, name string) error {
-		return Tx(ctx).Exec("INSERT INTO users(name, email) VALUES (?, ?)", name, name+"@x").Error
+		return transactionFromContext(ctx).Exec("INSERT INTO users(name, email) VALUES (?, ?)", name, name+"@x").Error
 	}
 	require.NoError(t, executor.register(
 		NewResolver[Root, struct{}, string]("Mutation", "nnFirst", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) { return "first", insert(ctx, "nn-first") }, Result("String")),

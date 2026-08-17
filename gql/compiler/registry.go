@@ -1,26 +1,51 @@
 package compiler
 
-import "slices"
+import (
+	"maps"
+	"slices"
+	"sync"
+	"sync/atomic"
+)
 
-// 方言自注册表（database/sql驱动同款模式）：
-// 方言包在init中调用Register，应用空白导入方言包即可启用，
-// 新增数据库支持只需新增方言包，不修改编译器与现有方言的任何代码
-var registry []Dialect
+// Factory creates one engine-owned dialect. Registered factories must not
+// return shared mutable instances.
+type Factory func() Dialect
 
-// Register 注册方言实现（在方言包init中调用）
-func Register(dialect Dialect) {
+var (
+	registryMu sync.Mutex
+	registry   atomic.Pointer[registrySnapshot]
+)
+
+type registrySnapshot struct{ factories map[string]Factory }
+
+func init() { registry.Store(&registrySnapshot{factories: map[string]Factory{}}) }
+
+func Register(factory Factory) {
+	if factory == nil {
+		panic("compiler: register invalid dialect")
+	}
+	dialect := factory()
 	if dialect == nil || dialect.Name() == "" {
 		panic("compiler: register invalid dialect")
 	}
-	for _, registered := range registry {
-		if registered.Name() == dialect.Name() {
-			panic("compiler: register duplicate dialect " + dialect.Name())
-		}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	current := registry.Load()
+	if _, exists := current.factories[dialect.Name()]; exists {
+		panic("compiler: register duplicate dialect " + dialect.Name())
 	}
-	registry = append(registry, dialect)
+	factories := maps.Clone(current.factories)
+	factories[dialect.Name()] = factory
+	registry.Store(&registrySnapshot{factories: factories})
 }
 
-// Dialects 返回所有已注册的方言
+// Dialects creates a fresh dialect set for one compiler build.
 func Dialects() []Dialect {
-	return slices.Clone(registry)
+	factories := registry.Load().factories
+	names := slices.Sorted(maps.Keys(factories))
+	result := make([]Dialect, len(names))
+	for index, name := range names {
+		result[index] = factories[name]()
+	}
+	return result
 }

@@ -14,7 +14,17 @@ func (my *Engine) executionContext(ctx context.Context, selection ast.SelectionS
 	if my.snapshot != nil {
 		fingerprint = my.snapshot.Fingerprint()
 	}
-	return WithExecutionContext(ctx, selection, fingerprint, my.database)
+	return withExecutionContext(ctx, selection, fingerprint, my.database)
+}
+
+func (my *Engine) executionContextFor(ctx context.Context, selection ast.SelectionSet, coordinate string) context.Context {
+	if my.snapshot != nil {
+		if capability, ok := my.snapshot.Capability(coordinate); ok {
+			fingerprint := my.snapshot.Fingerprint()
+			return withExecutionContext(ctx, selection, fingerprint, my.database, capability)
+		}
+	}
+	return my.executionContext(ctx, selection)
 }
 
 func handlerContext(ctx context.Context, handler Handler) (context.Context, context.CancelFunc) {

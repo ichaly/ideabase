@@ -33,22 +33,24 @@ const (
 
 // Capability is the immutable execution contract of one schema coordinate.
 type Capability struct {
-	Coordinate     string        `json:"coordinate"`
-	Parent         string        `json:"parent"`
-	Name           string        `json:"name"`
-	Type           string        `json:"type"`
-	Arguments      []Argument    `json:"arguments"`
-	Handler        HandlerKind   `json:"handler"`
-	Planner        string        `json:"planner"`
-	Actions        []string      `json:"actions"`
-	Resource       string        `json:"resource"`
-	Cost           uint32        `json:"cost"`
-	PolicyAware    bool          `json:"policyAware"`
-	Requires       []string      `json:"requires"`
-	Timeout        time.Duration `json:"timeout"`
-	RetrySafe      bool          `json:"retrySafe"`
-	IdempotencyKey string        `json:"idempotencyKey"`
-	MaxBatch       int           `json:"maxBatch"`
+	Coordinate      string        `json:"coordinate"`
+	Parent          string        `json:"parent"`
+	Name            string        `json:"name"`
+	Type            string        `json:"type"`
+	Arguments       []Argument    `json:"arguments"`
+	Handler         HandlerKind   `json:"handler"`
+	Planner         string        `json:"planner"`
+	Actions         []string      `json:"actions"`
+	Resource        string        `json:"resource"`
+	Cost            uint32        `json:"cost"`
+	PolicyAware     bool          `json:"policyAware"`
+	Requires        []string      `json:"requires"`
+	Timeout         time.Duration `json:"timeout"`
+	RetrySafe       bool          `json:"retrySafe"`
+	IdempotencyKey  string        `json:"idempotencyKey"`
+	MaxBatch        int           `json:"maxBatch"`
+	SemanticKind    SemanticKind  `json:"semanticKind,omitempty"`
+	RefreshRequired bool          `json:"refreshRequired,omitempty"`
 }
 
 // Argument is the introspectable invocation contract of one field argument.
@@ -92,13 +94,13 @@ func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
 		}
 		insertFields := writableFields(metadata, class, protocol.OP_INSERT)
 		updateFields := writableFields(metadata, class, protocol.OP_UPDATE)
-		create := catalogAllows(class, protocol.OP_INSERT) && len(insertFields) > 0
+		create := catalogAllows(class, protocol.OP_INSERT) && (len(insertFields) > 0 || class.CanInsertWithoutInput())
 		update := catalogAllows(class, protocol.OP_UPDATE) && len(updateFields) > 0
 		plural := inflection.Plural(name)
 		batch := mutationBatchName(name)
 		if create {
 			add("Mutation", protocol.CREATE+name, class, compiler.ShapeSingle, protocol.CREATE, protocol.OP_INSERT)
-			if plural != name {
+			if plural != name && len(insertFields) > 0 {
 				add("Mutation", protocol.CREATE+plural, class, compiler.ShapeBulk, protocol.CREATE, protocol.OP_INSERT)
 			}
 			upsertFields := slices.DeleteFunc(append([]string(nil), insertFields...), func(name string) bool {
@@ -293,6 +295,18 @@ func cloneCapability(capability Capability) Capability {
 	return capability
 }
 
+func nestedRelationWrite(class *protocol.Class, operation string) bool {
+	if class == nil || (operation != protocol.CREATE && operation != protocol.OP_UPDATE) {
+		return false
+	}
+	for _, field := range class.Fields {
+		if field != nil && field.Relation != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func completeCapabilities(schema *ast.Schema, capabilities []Capability, fallback HandlerKind, planner string) []Capability {
 	seen := make(map[string]struct{}, len(capabilities))
 	for _, capability := range capabilities {
@@ -314,6 +328,7 @@ func completeCapabilities(schema *ast.Schema, capabilities []Capability, fallbac
 			capabilities = append(capabilities, Capability{
 				Coordinate: coordinate, Parent: parent.Name, Name: field.Name, Type: field.Type.String(),
 				Arguments: fieldArguments(field), Handler: handler, Planner: planner, Cost: 1,
+				SemanticKind: defaultSemanticKind(parent.Name, handler),
 			})
 		}
 	}
@@ -486,6 +501,7 @@ func (my *Engine) fieldCapability(parent *ast.Definition, field *ast.FieldDefini
 	capability := Capability{
 		Coordinate: coordinate, Parent: parent.Name, Name: field.Name,
 		Type: field.Type.String(), Arguments: fieldArguments(field), Handler: HandlerProjection, Cost: 1,
+		SemanticKind: defaultSemanticKind(parent.Name, HandlerProjection),
 	}
 	if strings.HasPrefix(parent.Name, "__") || strings.HasPrefix(field.Name, "__") {
 		capability.Handler = HandlerIntrospection
@@ -497,6 +513,10 @@ func (my *Engine) fieldCapability(parent *ast.Definition, field *ast.FieldDefini
 		capability.Resource = define.Resource
 		capability.Actions = append([]string(nil), define.Actions...)
 		capability.PolicyAware = define.PolicyAware
+		capability.SemanticKind = deriveSemanticKind(define)
+		if !validSemanticKind(capability.SemanticKind) {
+			return Capability{}, fmt.Errorf("resolver %s has invalid semantic kind %q", coordinate, capability.SemanticKind)
+		}
 		capability.Requires = append([]string(nil), define.Requires...)
 		capability.Timeout = define.Timeout
 		capability.RetrySafe, capability.IdempotencyKey = define.RetrySafe, define.IdempotencyKey
@@ -520,6 +540,10 @@ func (my *Engine) fieldCapability(parent *ast.Definition, field *ast.FieldDefini
 		capability.Handler = HandlerRemote
 		if mounted, exists := remote.(mounted); exists {
 			define := mounted.Define()
+			capability.SemanticKind = deriveSemanticKind(define)
+			if !validSemanticKind(capability.SemanticKind) {
+				return Capability{}, fmt.Errorf("remote %s has invalid semantic kind %q", coordinate, capability.SemanticKind)
+			}
 			capability.Resource = define.Resource
 			capability.Actions = append([]string(nil), define.Actions...)
 			capability.Requires = append([]string(nil), define.Requires...)
@@ -560,6 +584,7 @@ func (my *Engine) fieldCapability(parent *ast.Definition, field *ast.FieldDefini
 		capability.Handler, capability.Resource = HandlerSQL, resource
 		capability.Actions = []string{protocol.OP_SELECT}
 		capability.Planner = "sql"
+		capability.SemanticKind = SemanticProjection
 		return capability, nil
 	}
 	if parent == my.schema.Query || parent == my.schema.Mutation || parent == my.schema.Subscription {
@@ -573,8 +598,27 @@ func (my *Engine) fieldCapability(parent *ast.Definition, field *ast.FieldDefini
 		capability.Handler, capability.Resource = HandlerSQL, operation.class.Name
 		capability.Actions = append([]string(nil), operation.actions...)
 		capability.Planner = "sql"
+		if nestedRelationWrite(operation.class, operation.operation) {
+			capability.RefreshRequired = true
+		}
 	}
 	return capability, nil
+}
+
+func defaultSemanticKind(parent string, handler HandlerKind) SemanticKind {
+	if handler == HandlerIntrospection {
+		return SemanticProjection
+	}
+	if parent == "Mutation" {
+		return SemanticCommand
+	}
+	if parent == "Query" || parent == "Subscription" {
+		return SemanticPrimitive
+	}
+	if handler == HandlerProjection {
+		return SemanticProjection
+	}
+	return SemanticPrimitive
 }
 
 func fieldArguments(field *ast.FieldDefinition) []Argument {

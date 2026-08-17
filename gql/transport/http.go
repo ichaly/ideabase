@@ -31,6 +31,7 @@ type snapshotPinner interface {
 // Options controls the HTTP resource limits. Zero values use safe defaults.
 type Options struct {
 	MaxBodyBytes, MaxResponseBytes int64
+	MaxConcurrent, MaxQueued       int
 	Timeout                        time.Duration
 	Delegation                     DelegationVerifier
 }
@@ -43,6 +44,8 @@ type DelegationVerifier interface {
 const (
 	defaultMaxBodyBytes = 1 << 20
 	defaultMaxResponse  = 8 << 20
+	defaultConcurrent   = 64
+	defaultQueued       = 128
 	defaultTimeout      = 30 * time.Second
 	responseType        = "application/graphql-response+json"
 	delegationScheme    = "GQL-Delegation "
@@ -56,7 +59,11 @@ func delegationToken(r *http.Request) (string, bool) {
 // NewHandler returns a GraphQL-over-HTTP handler.
 func NewHandler(endpoint Endpoint, opts Options) http.Handler {
 	opts = defaultOptions(opts)
-	return &handler{endpoint: endpoint, options: opts}
+	return &handler{
+		endpoint: endpoint, options: opts,
+		admission: make(chan struct{}, opts.MaxConcurrent+opts.MaxQueued),
+		execution: make(chan struct{}, opts.MaxConcurrent),
+	}
 }
 
 func defaultOptions(opts Options) Options {
@@ -69,12 +76,19 @@ func defaultOptions(opts Options) Options {
 	if opts.Timeout <= 0 {
 		opts.Timeout = defaultTimeout
 	}
+	if opts.MaxConcurrent <= 0 {
+		opts.MaxConcurrent = defaultConcurrent
+	}
+	if opts.MaxQueued <= 0 {
+		opts.MaxQueued = defaultQueued
+	}
 	return opts
 }
 
 type handler struct {
-	endpoint Endpoint
-	options  Options
+	endpoint             Endpoint
+	options              Options
+	admission, execution chan struct{}
 }
 
 type request struct {
@@ -92,6 +106,14 @@ func (e codedError) ErrorCode() string { return e.code }
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.endpoint == nil {
 		writeProblem(w, http.StatusInternalServerError, "ENDPOINT_UNAVAILABLE", "endpoint unavailable", true)
+		return
+	}
+	select {
+	case h.admission <- struct{}{}:
+		defer func() { <-h.admission }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		writeProblem(w, http.StatusTooManyRequests, "REQUEST_OVERLOADED", "request capacity exhausted", true)
 		return
 	}
 	responseMedia := negotiateGraphQL(r.Header.Get("Accept"))
@@ -162,86 +184,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("GQL-Mutation-Commit") == "1" {
 		ctx = core.WithMutationCommitMetadata(ctx)
 	}
-	if h.options.Delegation != nil {
-		token, ok := delegationToken(r)
-		if !ok {
-			writeProblem(w, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", "delegation required", false)
-			return
-		}
-		var authErr error
-		ctx, authErr = h.options.Delegation.Verify(ctx, token, operationDigest(req, r.Header.Get("GQL-Snapshot"), r.Header.Get(executionPinHeader)))
-		if authErr != nil {
-			writeProblem(w, http.StatusUnauthorized, "INVALID_DELEGATION", "invalid delegation", false)
-			return
-		}
-		ctx = core.WithDelegatedExecution(ctx)
-	}
 	execution := h.endpoint
-	revision := r.Header.Get("GQL-Snapshot")
-	if revision != "" {
-		if h.options.Delegation == nil {
-			source, ok := h.endpoint.(manifestEndpoint)
-			if !ok {
-				writeProblem(w, http.StatusConflict, "SNAPSHOT_UNAVAILABLE", "snapshot pinning unavailable", true)
-				return
-			}
-			current, snapshotErr := source.Snapshot()
-			if snapshotErr != nil || current == nil || current.Fingerprint() != revision {
-				writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
-				return
-			}
-		}
-		if pinner, ok := h.endpoint.(snapshotPinner); ok {
-			pinned, pinErr := pinner.ForSnapshot(revision)
-			var executable bool
-			execution, executable = pinned.(Endpoint)
-			if pinErr != nil || !executable {
-				writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
-				return
-			}
-		} else {
-			source, ok := h.endpoint.(manifestEndpoint)
-			if !ok {
-				writeProblem(w, http.StatusConflict, "SNAPSHOT_UNAVAILABLE", "snapshot pinning unavailable", true)
-				return
-			}
-			snapshot, snapshotErr := source.Snapshot()
-			if snapshotErr != nil || snapshot == nil || snapshot.Fingerprint() != revision {
-				writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
-				return
-			}
-		}
-	}
-	if revision == "" {
-		if source, ok := h.endpoint.(manifestEndpoint); ok {
-			if pinner, pinnable := h.endpoint.(snapshotPinner); pinnable {
-				snapshot, snapshotErr := source.Snapshot()
-				if snapshotErr != nil || snapshot == nil {
-					writeProblem(w, http.StatusServiceUnavailable, "SNAPSHOT_UNAVAILABLE", "snapshot unavailable", true)
-					return
-				}
-				pinned, pinErr := pinner.ForSnapshot(snapshot.Fingerprint())
-				var executable bool
-				execution, executable = pinned.(Endpoint)
-				if pinErr != nil || !executable {
-					writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
-					return
-				}
-			}
-		}
-	}
-	if pin := r.Header.Get(executionPinHeader); pin != "" {
-		source, ok := execution.(effectiveSchemaEndpoint)
-		if !ok {
-			writeProblem(w, http.StatusConflict, "SNAPSHOT_CONFLICT", "effective schema execution pin unavailable", true)
-			return
-		}
-		artifact, err := source.EffectiveSchema(ctx)
-		if err != nil || artifact.ExecutionPin == "" || artifact.ExecutionPin != pin {
-			writeProblem(w, http.StatusConflict, "SNAPSHOT_CONFLICT", "effective schema execution pin changed", true)
-			return
-		}
-		ctx = core.WithExecutionPin(ctx, pin)
+	ctx, execution, _, failure := prepareRequest(ctx, r, h.endpoint, execution, h.options.Delegation,
+		operationDigest(req, r.Header.Get("GQL-Snapshot"), r.Header.Get(executionPinHeader)),
+		func(value any) (Endpoint, bool) { endpoint, ok := value.(Endpoint); return endpoint, ok })
+	if failure != nil {
+		writeRequestFailure(w, failure)
+		return
 	}
 	if r.Method == http.MethodGet && req.Query == "" {
 		w.Header().Set("Allow", "POST")
@@ -269,6 +218,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if snapshot, snapshotErr := source.Snapshot(); snapshotErr == nil && snapshot != nil {
 			w.Header().Set("GQL-Snapshot", snapshot.Fingerprint())
 		}
+	}
+	select {
+	case h.execution <- struct{}{}:
+		defer func() { <-h.execution }()
+	case <-ctx.Done():
+		writeProblem(w, http.StatusServiceUnavailable, "REQUEST_TIMEOUT", "request expired while awaiting execution", true)
+		return
 	}
 	body, err = execution.ExecuteOperation(ctx, req.Query, req.Variables, req.OperationName)
 	if len(body) != 0 {

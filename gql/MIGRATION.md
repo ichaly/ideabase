@@ -27,8 +27,9 @@ GOWORK=off go test ./internal/modules/gql/api ./internal/modules/bot/api
 
 ## 3. Resolver 复用请求事务
 
-Query、Mutation 和实体字段统一注册 `Resolver`。Mutation 业务代码必须从
-`gql.DB(ctx)`/`gql.RequireDB(ctx)` 获取连接，并继续传给 service/repository；捕获全局
+Query、Mutation 和实体字段统一注册 `Resolver`。Mutation 业务代码必须通过
+`gql.ExecutionContextFromContext(ctx)` 取得唯一执行视图，再调用 `execution.RequireDB()` 获取
+连接并继续传给 service/repository；捕获全局
 `*gorm.DB` 或在 service 内另开事务不会加入当前 GraphQL Mutation 的原子边界。
 
 跨 namespace Mutation 没有分布式事务：字段按文档顺序执行，响应的 commit metadata
@@ -68,3 +69,26 @@ Schema/拓扑刷新失败可继续服务已验证的旧 snapshot。
 - `pgsql.AuditOutboxDDL`：物理删除审计事实。
 
 共享 store 构造器和生产 purge Engine 会在启动期校验这些迁移，缺失时 fail closed，不再等到首个请求暴露。
+
+## 8. GA transport 与 Resolver 元数据
+
+- 为第三方客户端挂载 `transport.NewTransportDescriptorHandler`；客户端用
+  `transport.DiscoverRemoteEndpoint` 发现后仍进入唯一 `RemoteEndpoint` 安全校验路径。
+- 自定义 Handler 用 `gql.Semantic(gql.SemanticPrimitive|SemanticProjection|SemanticCommand|SemanticWorkflow)`
+  声明工具语义；未声明时按根类型和 Handler 类型确定性推导。
+- 嵌套关系写 capability 的 `refreshRequired=true` 表示写后应重新查询关系；不要假设同一
+  PostgreSQL mutation CTE 的读回能看到关系子操作。
+- 一致读场景显式使用 `gql.WithReadSnapshot(ctx)`；默认 Query 不额外开启事务。
+- 自定义 Mutation 需要唤醒 latest-state 订阅时调用 `execution.Invalidate`，发布严格发生在引擎事务提交后。
+
+## 9. GA major API 收敛
+
+GA 以单一路径替换预发布兼容入口：Resolver 只使用 `ExecutionContext`，不再暴露可伪造的
+`WithExecutionContext`/`WithExecutionCapability`，也不再并列提供 `DB`、`RequireDB`、`Tx`
+和包级 `Invalidate`。协议内置表也不再以可变全局变量暴露：
+
+- `protocol.DataTypes` → `protocol.DefaultDataTypes()`；
+- `protocol.Operators` → `protocol.GetOperator(name)` / `protocol.OperatorsForScalar(type)`；
+- `protocol.Grouping` → `protocol.ScalarTypes()` 与对应查询函数。
+
+这些是 GA major 边界的显式编译期不兼容项，目的是消除跨 Engine 全局污染和同义 API。

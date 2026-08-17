@@ -202,26 +202,35 @@ func (my *TenantGateway) Health(ctx context.Context) (HealthReport, error) {
 	if my == nil || len(my.sources) == 0 {
 		return HealthReport{}, fmt.Errorf("tenant gateway is unavailable")
 	}
-	report := HealthReport{Ready: true, SnapshotOK: my.snapshot != nil, RouteRevision: my.router.revision, DatabaseOK: true, CDCConfigured: true, CDCConnected: true, SubscriptionAvailable: true}
+	if _, ok := IdentityFromContext(ctx); ok {
+		target, routed, route, err := my.route(ctx)
+		if err != nil {
+			return HealthReport{RouteScoped: true, RouteRevision: my.router.revision}, err
+		}
+		report, err := target.Health(routed)
+		report.RouteScoped, report.RouteRevision = true, route.Revision
+		return report, err
+	}
+	report := HealthReport{SnapshotOK: my.snapshot != nil, RouteRevision: my.router.revision, DatabaseOK: true, CDCConnected: true, CDCState: CDCStateConnected}
 	if my.snapshot != nil {
 		report.SnapshotFingerprint = my.snapshot.Fingerprint()
 	}
 	names := sortedMapKeys(my.sources)
 	results := collectHealth(names, func(name string) (HealthReport, error) { return my.sources[name].Health(ctx) })
 	var failures []error
+	ready := 0
 	for index, name := range names {
 		child, err := results[index].report, results[index].err
 		report.SnapshotOK = report.SnapshotOK && child.SnapshotOK
 		report.DatabaseOK = report.DatabaseOK && child.DatabaseOK
-		report.CDCConfigured = report.CDCConfigured && child.CDCConfigured
-		report.CDCConnected = report.CDCConnected && child.CDCConnected
+		mergeHealthCDC(&report, child)
 		if child.CDCError != "" {
 			if report.CDCError != "" {
 				report.CDCError += "; "
 			}
 			report.CDCError += name + ": " + child.CDCError
 		}
-		report.SubscriptionAvailable = report.SubscriptionAvailable && child.SubscriptionAvailable
+		report.SubscriptionAvailable = report.SubscriptionAvailable || child.SubscriptionAvailable
 		if child.DatabaseError != "" {
 			if report.DatabaseError != "" {
 				report.DatabaseError += "; "
@@ -229,12 +238,23 @@ func (my *TenantGateway) Health(ctx context.Context) (HealthReport, error) {
 			report.DatabaseError += name + ": " + child.DatabaseError
 		}
 		if err != nil || !child.Ready {
-			report.Ready = false
+			report.DegradedSources = append(report.DegradedSources, name)
 			if err == nil {
 				err = fmt.Errorf("not ready")
 			}
 			failures = append(failures, fmt.Errorf("tenant datasource %s: %w", name, err))
+		} else {
+			ready++
 		}
+	}
+	report.Degraded = len(failures) != 0
+	report.Ready = report.SnapshotOK && ready != 0
+	if !report.CDCConfigured {
+		report.CDCConnected = false
+		report.CDCState = ""
+	}
+	if report.Ready {
+		return report, nil
 	}
 	return report, errors.Join(failures...)
 }

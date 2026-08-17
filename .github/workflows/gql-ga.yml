@@ -17,7 +17,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 1.26.6
-          cache-dependency-path: gql/go.sum
+          cache-dependency-path: |
+            gql/go.sum
+            gql/tools/go.sum
       - run: GOWORK=off go vet ./...
 
   correctness:
@@ -37,13 +39,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 1.26.6
-          cache-dependency-path: gql/go.sum
+          cache-dependency-path: |
+            gql/go.sum
+            gql/tools/go.sum
       - run: go test ./... -count=1
       - run: go test ./transport -run '^TestGraphQLHTTPProtocolAudit$' -count=1
       - name: Run real multi-process cluster GA
         env:
           GQL_RUN_CLUSTER_GA: "1"
         run: go test . -run '^TestGACluster' -count=1
+      - name: Run real HTTP Remote/Gateway multi-process GA
+        env:
+          GQL_RUN_CLUSTER_GA: "1"
+        run: go test ./transport -run '^TestGAHTTPRemoteGatewayRoundTripAndStateChange$' -count=1
 
   race-and-fuzz:
     runs-on: ubuntu-latest
@@ -58,7 +66,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 1.26.6
-          cache-dependency-path: gql/go.sum
+          cache-dependency-path: |
+            gql/go.sum
+            gql/tools/go.sum
       - run: go test -race ./... -count=1
       - run: go test . -run '^$' -fuzz '^FuzzExecutableFrontend$' -fuzztime 10s
 
@@ -74,7 +84,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 1.26.6
-          cache-dependency-path: gql/go.sum
+          cache-dependency-path: |
+            gql/go.sum
+            gql/tools/go.sum
       - run: GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
       - run: '"$RUNNER_TEMP/bin/govulncheck" ./...'
 
@@ -92,12 +104,14 @@ jobs:
           go-version: 1.26.6
           cache-dependency-path: gql/go.sum
       - run: GOWORK=off ./scripts/perf.sh allocations | tee performance.txt
+      - name: Test performance tools module
+        run: cd tools && GOWORK=off go test ./...
       - name: Enforce real PostgreSQL SQL-count budgets
         env:
           GOWORK: "off"
           GQL_RUN_CLUSTER_GA: "1"
           GQL_TEST_POSTGRES_IMAGE: postgres:15-alpine
-        run: go test . -run '^TestGAPerformanceRealPostgresMutationSQLGate$' -count=1
+        run: go test . -run '^TestGAPerformanceRealPostgres(MutationSQL|ConcurrentWarm)Gate$' -count=1
       - name: Compare base and head
         shell: bash
         run: |

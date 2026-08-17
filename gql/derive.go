@@ -19,6 +19,37 @@ import (
 // Option 微调反射推导的声明
 type Option func(*Define)
 
+// SemanticKind describes the business meaning of a custom handler for
+// agent/tooling discovery. It is independent from the execution HandlerKind.
+type SemanticKind string
+
+const (
+	SemanticPrimitive  SemanticKind = "primitive"
+	SemanticProjection SemanticKind = "projection"
+	SemanticCommand    SemanticKind = "command"
+	SemanticWorkflow   SemanticKind = "workflow"
+)
+
+// Semantic explicitly overrides the location-derived semantic kind.
+func Semantic(kind SemanticKind) Option { return func(my *Define) { my.SemanticKind = kind } }
+
+func deriveSemanticKind(define Define) SemanticKind {
+	if define.SemanticKind != "" {
+		return define.SemanticKind
+	}
+	if define.Class == "Mutation" {
+		return SemanticCommand
+	}
+	if define.Class == "Query" || define.Class == "Subscription" {
+		return SemanticPrimitive
+	}
+	return SemanticProjection
+}
+
+func validSemanticKind(kind SemanticKind) bool {
+	return kind == SemanticPrimitive || kind == SemanticProjection || kind == SemanticCommand || kind == SemanticWorkflow
+}
+
 // Result 覆盖结果类型：Go类型名与元数据实体名不一致时用（如 ent.Profile → BotProfile）
 func Result(name string) Option { return func(my *Define) { my.Result = name } }
 

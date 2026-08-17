@@ -4,6 +4,7 @@ import (
 	"context"
 	stdjson "encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -17,19 +18,63 @@ import (
 )
 
 type SchemaArtifact struct {
-	Version               string       `json:"version"`
-	Schema                string       `json:"schema"`
-	Fingerprint           string       `json:"fingerprint"`
-	StructuralFingerprint string       `json:"structuralFingerprint"`
-	PermissionSignature   string       `json:"permissionSignature"`
-	PolicyRevision        uint64       `json:"policyRevision"`
-	RouteRevision         uint64       `json:"routeRevision"`
-	CacheIdentity         string       `json:"cacheIdentity,omitempty"`
-	ExecutionPin          string       `json:"executionPin"`
-	Capabilities          []Capability `json:"capabilities"`
+	Version               string               `json:"version"`
+	Schema                string               `json:"schema"`
+	Fingerprint           string               `json:"fingerprint"`
+	StructuralFingerprint string               `json:"structuralFingerprint"`
+	PermissionSignature   string               `json:"permissionSignature"`
+	PolicyRevision        uint64               `json:"policyRevision"`
+	RouteRevision         uint64               `json:"routeRevision"`
+	CacheIdentity         string               `json:"cacheIdentity,omitempty"`
+	ExecutionPin          string               `json:"executionPin"`
+	Capabilities          []Capability         `json:"capabilities"`
+	ExecutionMode         ExecutionMode        `json:"executionMode"`
+	Identity              *IdentityDescriptor  `json:"identity,omitempty"`
+	PersistedOperations   []PersistedOperation `json:"persistedOperations,omitempty"`
 }
 
-const SchemaArtifactVersion = "schema-artifact-v1"
+// IdentityDescriptor is a pseudonymous, verifiable summary of the identity
+// under which an effective schema was produced. Digests prevent plaintext
+// disclosure but low-entropy identifiers remain dictionary-enumerable.
+type IdentityDescriptor struct {
+	TenantDigest    string   `json:"tenantDigest,omitempty"`
+	SubjectDigest   string   `json:"subjectDigest,omitempty"`
+	ActorDigest     string   `json:"actorDigest,omitempty"`
+	Roles           []string `json:"roles,omitempty"`
+	PolicyRevision  uint64   `json:"policyRevision,omitempty"`
+	CredentialEpoch uint64   `json:"credentialEpoch,omitempty"`
+}
+
+func IdentityDescriptorFromIdentity(identity Identity) *IdentityDescriptor {
+	roles := identity.Roles()
+	sort.Strings(roles)
+	return &IdentityDescriptor{TenantDigest: digest(identity.Tenant()), SubjectDigest: digest(identity.Subject()), ActorDigest: digest(identity.Actor()), Roles: roles, PolicyRevision: identity.PolicyRevision(), CredentialEpoch: identity.CredentialEpoch()}
+}
+
+const (
+	// SchemaArtifactVersion is the only supported effective-schema contract.
+	SchemaArtifactVersion = "schema-artifact-v2"
+)
+
+type ExecutionMode string
+
+const (
+	ExecutionModeDynamic       ExecutionMode = "dynamic"
+	ExecutionModePersistedOnly ExecutionMode = "persisted-only"
+)
+
+type PersistedOperation struct {
+	Name      string              `json:"name"`
+	Type      string              `json:"type"`
+	Hash      string              `json:"hash"`
+	Variables []PersistedVariable `json:"variables,omitempty"`
+}
+
+type PersistedVariable struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Default string `json:"default,omitempty"`
+}
 
 type executionPinContextKey struct{}
 
@@ -49,28 +94,56 @@ func ExecutionPinFromContext(ctx context.Context) (string, bool) {
 }
 
 func schemaArtifactExecutionPin(artifact SchemaArtifact) string {
-	parts := []string{SchemaArtifactVersion, artifact.Fingerprint, artifact.StructuralFingerprint,
-		artifact.PermissionSignature, fmt.Sprint(artifact.PolicyRevision), fmt.Sprint(artifact.RouteRevision)}
+	version := artifact.Version
+	if version == "" {
+		version = SchemaArtifactVersion
+	}
+	parts := []string{version, artifact.Fingerprint, artifact.StructuralFingerprint,
+		artifact.PermissionSignature, fmt.Sprint(artifact.PolicyRevision), fmt.Sprint(artifact.RouteRevision), string(artifact.ExecutionMode)}
 	if artifact.CacheIdentity != "" {
 		parts = append(parts, artifact.CacheIdentity)
 	}
 	capabilities, _ := stdjson.Marshal(artifact.Capabilities)
-	parts = append(parts, string(capabilities))
+	operations, _ := stdjson.Marshal(artifact.PersistedOperations)
+	identity, _ := stdjson.Marshal(artifact.Identity)
+	parts = append(parts, string(capabilities), string(operations), string(identity))
 	return digest(strings.Join(parts, "\x00"))
 }
 
 func enforceExecutionPin(ctx context.Context, artifact SchemaArtifact) error {
 	pin, ok := ExecutionPinFromContext(ctx)
-	if !ok || pin == FinalizeSchemaArtifact(artifact).ExecutionPin {
+	if !ok || pin == finalizeSchemaArtifactForContext(ctx, artifact).ExecutionPin {
 		return nil
 	}
 	return &publicFailure{"effective schema execution pin changed", "SNAPSHOT_CONFLICT"}
 }
 
+func finalizeSchemaArtifactForContext(ctx context.Context, artifact SchemaArtifact) SchemaArtifact {
+	if identity, ok := IdentityFromContext(ctx); ok {
+		artifact.Identity = IdentityDescriptorFromIdentity(identity)
+	}
+	return FinalizeSchemaArtifact(artifact)
+}
+
 // FinalizeSchemaArtifact applies the versioned execution envelope after all
 // schema, policy, route, and cache identity fields have been populated.
 func FinalizeSchemaArtifact(artifact SchemaArtifact) SchemaArtifact {
+	artifact.Capabilities = cloneCapabilities(artifact.Capabilities)
+	for index := range artifact.Capabilities {
+		if artifact.Capabilities[index].SemanticKind == "" {
+			artifact.Capabilities[index].SemanticKind = defaultSemanticKind(artifact.Capabilities[index].Parent, artifact.Capabilities[index].Handler)
+		}
+	}
+	artifact.PersistedOperations = clonePersistedOperations(artifact.PersistedOperations)
+	if artifact.Identity != nil {
+		identity := *artifact.Identity
+		identity.Roles = append([]string(nil), identity.Roles...)
+		artifact.Identity = &identity
+	}
 	artifact.Version = SchemaArtifactVersion
+	if artifact.ExecutionMode == "" {
+		artifact.ExecutionMode = ExecutionModeDynamic
+	}
 	artifact.ExecutionPin = schemaArtifactExecutionPin(artifact)
 	return artifact
 }
@@ -78,11 +151,61 @@ func FinalizeSchemaArtifact(artifact SchemaArtifact) SchemaArtifact {
 // ValidateSchemaArtifact verifies the complete identity-independent artifact
 // envelope before it is used for composition or delegated execution.
 func ValidateSchemaArtifact(artifact SchemaArtifact) error {
-	if artifact.Version != SchemaArtifactVersion || artifact.ExecutionPin == "" || artifact.ExecutionPin != schemaArtifactExecutionPin(artifact) {
+	if artifact.Version != SchemaArtifactVersion {
+		return fmt.Errorf("unsupported effective artifact version %q", artifact.Version)
+	}
+	if artifact.ExecutionPin == "" || artifact.ExecutionPin != schemaArtifactExecutionPin(artifact) {
 		return fmt.Errorf("effective artifact version or execution pin mismatch")
 	}
 	if artifact.Schema == "" || artifact.Fingerprint != digest(artifact.Schema) {
 		return fmt.Errorf("effective artifact fingerprint mismatch")
+	}
+	if artifact.ExecutionMode != ExecutionModeDynamic && artifact.ExecutionMode != ExecutionModePersistedOnly {
+		return fmt.Errorf("invalid effective artifact execution mode %q", artifact.ExecutionMode)
+	}
+	if artifact.ExecutionMode == ExecutionModePersistedOnly && len(artifact.PersistedOperations) == 0 {
+		return fmt.Errorf("persisted-only effective artifact requires persisted operations")
+	}
+	for _, operation := range artifact.PersistedOperations {
+		if operation.Name == "" || operation.Hash == "" || (operation.Type != "query" && operation.Type != "mutation" && operation.Type != "subscription") {
+			return fmt.Errorf("invalid persisted operation %q", operation.Name)
+		}
+		seen := make(map[string]struct{}, len(operation.Variables))
+		for _, variable := range operation.Variables {
+			if variable.Name == "" || variable.Type == "" {
+				return fmt.Errorf("invalid persisted operation variable in %q", operation.Name)
+			}
+			if _, ok := seen[variable.Name]; ok {
+				return fmt.Errorf("duplicate persisted operation variable %q", variable.Name)
+			}
+			seen[variable.Name] = struct{}{}
+		}
+	}
+	for _, capability := range artifact.Capabilities {
+		if !validSemanticKind(capability.SemanticKind) {
+			return fmt.Errorf("invalid capability semantic kind %q", capability.SemanticKind)
+		}
+	}
+	return nil
+}
+
+// ValidateArtifactIdentity verifies that an identity-aware artifact was
+// materialized for the same non-sensitive execution identity as the caller.
+// A nil context identity requires a nil descriptor; this prevents a cached
+// privileged schema from crossing an anonymous request boundary.
+func ValidateArtifactIdentity(ctx context.Context, artifact SchemaArtifact) error {
+	identity, ok := IdentityFromContext(ctx)
+	if !ok {
+		if artifact.Identity != nil {
+			return fmt.Errorf("effective artifact identity mismatch")
+		}
+		return nil
+	}
+	if artifact.Identity == nil {
+		return fmt.Errorf("effective artifact identity mismatch")
+	}
+	if !reflect.DeepEqual(artifact.Identity, IdentityDescriptorFromIdentity(identity)) {
+		return fmt.Errorf("effective artifact identity mismatch")
 	}
 	return nil
 }
@@ -323,9 +446,7 @@ func (my *Engine) EffectiveSchema(ctx context.Context) (SchemaArtifact, error) {
 		return SchemaArtifact{}, err
 	}
 	artifact := view.artifact
-	artifact = FinalizeSchemaArtifact(artifact)
-	artifact.Capabilities = cloneCapabilities(artifact.Capabilities)
-	return artifact, nil
+	return finalizeSchemaArtifactForContext(ctx, artifact), nil
 }
 
 // EffectiveSchemaCacheIdentity returns a stable provider-declared key without
@@ -393,7 +514,7 @@ func (my *Engine) effectiveSchema(ctx context.Context) (view *effectiveView, err
 	if cached, ok := my.effectiveCache.Get(key); ok {
 		return cached, nil
 	}
-	return sharedBuild(ctx, &my.effectiveFlight, key, func(shared context.Context) (*effectiveView, error) {
+	return sharedBuild(ctx, &my.effectiveFlight, my.buildLimiter, key, func(shared context.Context) (*effectiveView, error) {
 		if cached, ok := my.effectiveCache.Get(key); ok {
 			return cached, nil
 		}
@@ -434,6 +555,9 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 			return nil, fmt.Errorf("policy %s: %w", capability.Coordinate, publicPolicyFailure("POLICY_REVISION_MISMATCH", "policy revision mismatch"))
 		}
 		class, governed := my.metadata.GetNode(capability.Resource)
+		// nil means the provider does not shape fields; a non-nil map is an
+		// explicit shape, including an empty deny-all shape.
+		hasFieldShape := decision.Fields != nil
 		if governed && capability.Parent == "Mutation" {
 			action := ""
 			switch capability.Coordinate {
@@ -446,12 +570,13 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 				if relationActions[class.Name] == nil {
 					relationActions[class.Name] = make(map[string]bool)
 				}
-				relationActions[class.Name][action] = decision.Allow
+				allowed := decision.Allow
+				if action == protocol.OP_UPDATE && hasFieldShape && !primaryKeysAllowed(decision.Fields[FieldUseFilter], class) {
+					allowed = false
+				}
+				relationActions[class.Name][action] = allowed
 			}
 		}
-		// nil means the provider does not shape fields; a non-nil map is an
-		// explicit shape, including an empty deny-all shape.
-		hasFieldShape := decision.Fields != nil
 		signatures = append(signatures, decision.PermissionSignature+":"+decision.ShapeSignature)
 		if !decision.Allow {
 			denied[capability.Coordinate] = true
@@ -572,8 +697,10 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 	view := &effectiveView{artifact: SchemaArtifact{
 		Schema: source, Fingerprint: digest(source), StructuralFingerprint: my.snapshot.Fingerprint(),
 		PermissionSignature: permission, PolicyRevision: identity.PolicyRevision(), RouteRevision: route.Revision,
-		Capabilities: schemaCapabilities(schema, my.snapshot.Capabilities()),
+		Capabilities: schemaCapabilities(schema, my.snapshot.Capabilities()), ExecutionMode: my.executionMode(),
+		PersistedOperations: my.persistedOperationCatalog(schema),
 	}, schema: schema, intro: intro.New(schema)}
+	view.artifact.Identity = IdentityDescriptorFromIdentity(identity)
 	if cacheable && len(cacheIdentity) > 0 {
 		view.artifact.CacheIdentity = cacheIdentity[0]
 	}
@@ -594,6 +721,50 @@ func schemaCapabilities(schema *ast.Schema, capabilities []Capability) []Capabil
 				out = append(out, capability)
 			}
 		}
+	}
+	return out
+}
+
+func (my *Engine) executionMode() ExecutionMode {
+	if my != nil && my.options().PersistedOnly {
+		return ExecutionModePersistedOnly
+	}
+	return ExecutionModeDynamic
+}
+
+func (my *Engine) persistedOperationCatalog(schema *ast.Schema) []PersistedOperation {
+	if my == nil || schema == nil || !my.options().PersistedOnly {
+		return nil
+	}
+	operations := make([]PersistedOperation, 0, len(my.documents))
+	for _, name := range sortedMapKeys(my.documents) {
+		persisted := my.documents[name]
+		doc, errs := loadQuery(schema, persisted.query, my.metadata.MaxTokens(), my.validation)
+		if len(errs) > 0 {
+			continue
+		}
+		operation := doc.Operations.ForName(name)
+		if operation == nil {
+			continue
+		}
+		entry := PersistedOperation{Name: name, Type: string(operation.Operation), Hash: digest(persisted.query + "\x00" + name)}
+		entry.Variables = make([]PersistedVariable, 0, len(operation.VariableDefinitions))
+		for _, variable := range operation.VariableDefinitions {
+			item := PersistedVariable{Name: variable.Variable, Type: variable.Type.String()}
+			if variable.DefaultValue != nil {
+				item.Default = variable.DefaultValue.String()
+			}
+			entry.Variables = append(entry.Variables, item)
+		}
+		operations = append(operations, entry)
+	}
+	return operations
+}
+
+func clonePersistedOperations(operations []PersistedOperation) []PersistedOperation {
+	out := append([]PersistedOperation(nil), operations...)
+	for index := range out {
+		out[index].Variables = append([]PersistedVariable(nil), out[index].Variables...)
 	}
 	return out
 }
@@ -744,6 +915,7 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 		}
 	}
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_KEY_INPUT], class, uses[FieldUseFilter], true)
+	removeUnauthorizedPrimaryKeyArguments(schema, class, uses[FieldUseFilter])
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_HAVING_INPUT], class, uses[FieldUseGroup], true)
 	filterEffectiveFields(schema.Types[class.Name+protocol.SUFFIX_STATS], class, uses[FieldUseAggregate], true)
 	if !filterEffectiveEnum(schema.Types[class.Name+protocol.SUFFIX_DISTINCT_FIELD], class, uses[FieldUseGroup]) {
@@ -753,6 +925,78 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 	if !filterEffectiveEnum(schema.Types[class.Name+protocol.SUFFIX_GROUP_FIELD], class, uses[FieldUseGroup]) {
 		removeFieldArgument(schema.Types["Query"], strcase.ToLowerCamel(class.Name)+protocol.SUFFIX_STATS, protocol.GROUP_BY)
 	}
+}
+
+func primaryKeysAllowed(fields []string, class *protocol.Class) bool {
+	if class == nil || len(class.PrimaryKeys) == 0 {
+		return true
+	}
+	for _, primary := range class.PrimaryKeys {
+		if !allowedColumn(fields, class.Fields[primary]) {
+			return false
+		}
+	}
+	return true
+}
+
+func removeUnauthorizedPrimaryKeyArguments(schema *ast.Schema, class *protocol.Class, allowed []string) {
+	if schema == nil || class == nil || primaryKeysAllowed(allowed, class) {
+		return
+	}
+	roots := []struct {
+		root  *ast.Definition
+		names []string
+	}{
+		{schema.Query, []string{queryField(class.Name)}},
+		{schema.Subscription, []string{queryField(class.Name)}},
+		{schema.Mutation, []string{
+			protocol.UPDATE + class.Name,
+			protocol.DELETE + class.Name,
+			protocol.DELETE + class.Name + protocol.SUFFIX_BY_PK,
+			"restore" + class.Name + protocol.SUFFIX_BY_PK,
+			protocol.PURGE + class.Name + protocol.SUFFIX_BY_PK,
+		}},
+	}
+	for _, entry := range roots {
+		root := entry.root
+		if root == nil {
+			continue
+		}
+		for _, name := range entry.names {
+			field := root.Fields.ForName(name)
+			if field == nil {
+				continue
+			}
+			remove := false
+			arguments := field.Arguments[:0]
+			for _, argument := range field.Arguments {
+				key := argument.Name == protocol.ID || argument.Name == protocol.KEY
+				if !key || !primaryKeyArgumentForClass(argument, class) {
+					arguments = append(arguments, argument)
+					continue
+				}
+				if argument.Type.NonNull {
+					remove = true
+					continue
+				}
+			}
+			if remove {
+				root.Fields = removeSchemaField(root.Fields, name)
+			} else {
+				field.Arguments = arguments
+			}
+		}
+	}
+}
+
+func primaryKeyArgumentForClass(argument *ast.ArgumentDefinition, class *protocol.Class) bool {
+	if argument == nil || class == nil {
+		return false
+	}
+	if argument.Name == protocol.ID {
+		return len(class.PrimaryKeys) == 1
+	}
+	return argument.Name == protocol.KEY && argument.Type.Name() == class.Name+protocol.SUFFIX_KEY_INPUT
 }
 
 func removeCursorArguments(schema *ast.Schema, className string) {

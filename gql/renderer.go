@@ -117,7 +117,7 @@ func (my *Renderer) eachCodecScalar(fn func(name, base string)) {
 	seen := make(map[string]bool, len(my.meta.codecs))
 	for _, codec := range my.meta.codecs {
 		name := codec.Name()
-		if _, builtin := protocol.Grouping[name]; builtin || seen[name] {
+		if protocol.IsBuiltinScalar(name) || seen[name] {
 			continue
 		}
 		seen[name] = true
@@ -561,12 +561,11 @@ func (my *Renderer) renderFilter() error {
 	my.writeLine("# ", SEPARATOR_LINE, " ", SECTION_FILTER, " ", SEPARATOR_LINE, "\n")
 
 	// 内置标量按操作符分组渲染；codec自定义标量借用其底层标量的操作符集
-	keys := utl.SortKeys(protocol.Grouping)
-	for _, scalarType := range keys {
-		my.writeScalarFilter(scalarType, protocol.Grouping[scalarType])
+	for _, scalarType := range protocol.ScalarTypes() {
+		my.writeScalarFilter(scalarType, protocol.OperatorsForScalar(scalarType))
 	}
 	my.eachCodecScalar(func(name, base string) {
-		my.writeScalarFilter(name, protocol.Grouping[base])
+		my.writeScalarFilter(name, protocol.OperatorsForScalar(base))
 	})
 	return nil
 }
@@ -827,9 +826,11 @@ func (my *Renderer) renderMutation() error {
 		plural := inflection.Plural(className)
 		if operationExists(protocol.CREATE + className) {
 			my.writeLine("  # ", class.Name, "创建")
-			my.writeField(protocol.CREATE+className, className, renderer.NonNull(), renderer.WithArgs([]renderer.Argument{
-				{Name: protocol.INPUT, Type: className + protocol.SUFFIX_CREATE_INPUT + "!"},
-			}...))
+			args := []renderer.Argument(nil)
+			if len(writableFields(my.meta, class, protocol.OP_INSERT)) > 0 {
+				args = []renderer.Argument{{Name: protocol.INPUT, Type: className + protocol.SUFFIX_CREATE_INPUT + "!"}}
+			}
+			my.writeField(protocol.CREATE+className, className, renderer.NonNull(), renderer.WithArgs(args...))
 		}
 		// 不可数类名（Series/News）复数同形，catalog不会生成批量字段。
 		if plural != className && operationExists(protocol.CREATE+plural) {

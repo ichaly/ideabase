@@ -31,5 +31,8 @@ benchmark() {
 benchmark "$base_dir" "$scratch/base.txt"
 benchmark "$repo" "$scratch/head.txt"
 cd "$repo/gql"
-go run ./cmd/perfgate -budget 0.10 "$scratch/base.txt" "$scratch/head.txt"
-go run golang.org/x/perf/cmd/benchstat@v0.0.0-20260709024250-82a0b07e230d "$scratch/base.txt" "$scratch/head.txt"
+(
+  cd tools
+  go run ./cmd/perfgate -budget 0.10 "$scratch/base.txt" "$scratch/head.txt"
+)
+GOWORK=off go run golang.org/x/perf/cmd/benchstat@v0.0.0-20260709024250-82a0b07e230d "$scratch/base.txt" "$scratch/head.txt"

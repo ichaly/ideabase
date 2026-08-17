@@ -1,10 +1,10 @@
 package gql
 
 import (
-	"container/list"
 	"crypto/sha256"
 	"sync"
 
+	"github.com/ichaly/ideabase/gql/internal/lru"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -36,51 +36,10 @@ type planEntry struct {
 // effectiveCache bounds identity-shaped schema artifacts. Schema construction
 // is relatively expensive and an unbounded map lets high-cardinality tenants
 // retain every shape forever.
-type lruCache[K comparable, V any] struct {
-	mu    sync.Mutex
-	limit int
-	items map[K]*list.Element
-	order *list.List
-}
-
-type lruCacheEntry[K comparable, V any] struct {
-	key   K
-	value V
-}
+type lruCache[K comparable, V any] = lru.Cache[K, V]
 
 func newLRU[K comparable, V any](limit int) *lruCache[K, V] {
-	if limit < 1 {
-		limit = 1
-	}
-	return &lruCache[K, V]{limit: limit, items: make(map[K]*list.Element, limit), order: list.New()}
-}
-
-func (my *lruCache[K, V]) Get(key K) (V, bool) {
-	my.mu.Lock()
-	defer my.mu.Unlock()
-	e, ok := my.items[key]
-	if !ok {
-		var zero V
-		return zero, false
-	}
-	my.order.MoveToFront(e)
-	return e.Value.(*lruCacheEntry[K, V]).value, true
-}
-
-func (my *lruCache[K, V]) Put(key K, value V) {
-	my.mu.Lock()
-	defer my.mu.Unlock()
-	if e, ok := my.items[key]; ok {
-		e.Value.(*lruCacheEntry[K, V]).value = value
-		my.order.MoveToFront(e)
-		return
-	}
-	my.items[key] = my.order.PushFront(&lruCacheEntry[K, V]{key: key, value: value})
-	if my.order.Len() > my.limit {
-		e := my.order.Back()
-		my.order.Remove(e)
-		delete(my.items, e.Value.(*lruCacheEntry[K, V]).key)
-	}
+	return lru.New[K, V](limit)
 }
 
 type planCache = lruCache[planKey, *planEntry]
