@@ -93,6 +93,9 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 		}
 		w.WriteHeader(http.StatusOK)
 		heartbeatInterval := min(opts.Timeout/2, 15*time.Second)
+		if heartbeatInterval <= 0 {
+			heartbeatInterval = time.Millisecond
+		}
 		heartbeat := time.NewTicker(heartbeatInterval)
 		defer heartbeat.Stop()
 		for {

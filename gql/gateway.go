@@ -277,12 +277,16 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 	if cacheKey != "" {
 		key = cacheKey
 	}
-	if cached, ok := my.effectiveCache.Get(key); ok {
-		return cached, nil
-	}
-	return sharedBuild(ctx, &my.effectiveFlight, my.buildLimiter, key, func(context.Context) (*gatewayState, error) {
+	if cacheable {
 		if cached, ok := my.effectiveCache.Get(key); ok {
 			return cached, nil
+		}
+	}
+	build := func(context.Context) (*gatewayState, error) {
+		if cacheable {
+			if cached, ok := my.effectiveCache.Get(key); ok {
+				return cached, nil
+			}
 		}
 		namespaces := make([]Namespace, 0, len(sources))
 		for _, source := range sources {
@@ -326,10 +330,16 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 		if buildErr == nil {
 			state.cache = my.cache
 			state.effectiveArtifact = aggregateGatewayArtifact(my.snapshot.Fingerprint(), state.snapshot.Schema(), sources, state.snapshot.Capabilities())
-			my.effectiveCache.Put(key, state)
+			if cacheable {
+				my.effectiveCache.Put(key, state)
+			}
 		}
 		return state, buildErr
-	})
+	}
+	if !cacheable {
+		return build(ctx)
+	}
+	return sharedBuild(ctx, &my.effectiveFlight, my.buildLimiter, key, build)
 }
 
 func effectiveArtifactRevision(artifact SchemaArtifact) (string, error) {
@@ -853,7 +863,13 @@ func (my *Gateway) manifestState() (*gatewayState, uint64) {
 // Subscribe validates the public single-root subscription, then forwards one
 // child stream while preserving the namespace response and error paths.
 func (my *Gateway) Subscribe(ctx context.Context, query string, variables map[string]any, operationName string) (<-chan []byte, error) {
+	if my == nil {
+		return nil, fmt.Errorf("gateway不可用")
+	}
 	state := my.current()
+	if state == nil {
+		return nil, fmt.Errorf("gateway subscription不可用")
+	}
 	return state.subscribe(ctx, query, variables, operationName)
 }
 

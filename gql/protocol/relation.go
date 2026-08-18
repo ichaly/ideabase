@@ -21,7 +21,7 @@ type Relation struct {
 // SourceColumns 源列组：复合外键返回列组，单列关系返回单元素切片
 func (my *Relation) SourceColumns() []string {
 	if len(my.SourceFields) > 1 {
-		return my.SourceFields
+		return append([]string(nil), my.SourceFields...)
 	}
 	return []string{my.SourceField}
 }
@@ -29,7 +29,7 @@ func (my *Relation) SourceColumns() []string {
 // TargetColumns 目标列组，与SourceColumns按序对齐
 func (my *Relation) TargetColumns() []string {
 	if len(my.TargetFields) > 1 {
-		return my.TargetFields
+		return append([]string(nil), my.TargetFields...)
 	}
 	return []string{my.TargetField}
 }
@@ -44,10 +44,10 @@ func (my *Relation) Clone(relType RelationType, reverse bool) *Relation {
 		Name:         my.Name,
 		SourceClass:  my.SourceClass,
 		SourceField:  my.SourceField,
-		SourceFields: my.SourceFields,
+		SourceFields: append([]string(nil), my.SourceFields...),
 		TargetClass:  my.TargetClass,
 		TargetField:  my.TargetField,
-		TargetFields: my.TargetFields,
+		TargetFields: append([]string(nil), my.TargetFields...),
 	}
 	if reverse {
 		result.SourceClass, result.TargetClass = result.TargetClass, result.SourceClass

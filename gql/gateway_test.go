@@ -951,6 +951,35 @@ func TestGatewayRejectsEffectiveArtifactWithoutVersionOrExecutionPin(t *testing.
 	require.Zero(t, child.calls.Load())
 }
 
+func TestGatewayDoesNotCacheIdentityEffectiveSchemaWithoutCacheIdentity(t *testing.T) {
+	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
+	var calls atomic.Int32
+	endpoint := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effectiveFn: func(ctx context.Context) (SchemaArtifact, error) {
+		calls.Add(1)
+		identity, ok := IdentityFromContext(ctx)
+		if !ok {
+			return SchemaArtifact{}, fmt.Errorf("identity required")
+		}
+		schema := gatewayChildSchema
+		if identity.Tenant() == "tenant-b" {
+			schema = strings.Replace(schema, ", status: Status", "", 1)
+		}
+		return SchemaArtifact{Schema: schema, Fingerprint: digest(schema), Identity: IdentityDescriptorFromIdentity(identity)}, nil
+	}}
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: endpoint})
+	require.NoError(t, err)
+	a, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user"})
+	require.NoError(t, err)
+	b, err := NewIdentity(IdentityInput{Tenant: "tenant-b", Subject: "user"})
+	require.NoError(t, err)
+	_, err = gateway.EffectiveSchema(WithIdentity(context.Background(), a))
+	require.NoError(t, err)
+	second, err := gateway.EffectiveSchema(WithIdentity(context.Background(), b))
+	require.NoError(t, err)
+	require.Equal(t, int32(2), calls.Load(), "an uncacheable child must be materialized per identity")
+	require.NotContains(t, second.Schema, "status")
+}
+
 func TestGatewayRejectsEffectiveArtifactForDifferentIdentity(t *testing.T) {
 	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
 	artifact := FinalizeSchemaArtifact(SchemaArtifact{Schema: gatewayChildSchema, Fingerprint: digest(gatewayChildSchema)})

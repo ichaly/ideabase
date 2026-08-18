@@ -14,6 +14,7 @@ import (
 	"time"
 
 	core "github.com/ichaly/ideabase/gql"
+	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -180,6 +181,17 @@ func TestSubscriptionHandlerKeepsIdleStreamAlive(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("subscription handler did not stop")
 	}
+}
+
+func TestSubscriptionHandlerClampsTinyTimeout(t *testing.T) {
+	events := make(chan []byte)
+	close(events)
+	r := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { value }"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Accept", "text/event-stream")
+	require.NotPanics(t, func() {
+		NewSubscriptionHandler(subscriptionStub{events: events}, Options{Timeout: time.Nanosecond}).ServeHTTP(httptest.NewRecorder(), r)
+	})
 }
 
 type subscriptionRevision struct {
