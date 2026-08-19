@@ -19,11 +19,16 @@ import (
 func benchEngine(b *testing.B) *gql.Engine {
 	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
 	if err != nil {
-		b.Skipf("demo数据库不可用（docker compose up -d）: %v", err)
+		b.Fatalf("demo数据库不可用（先运行 docker compose up -d）: %v", err)
 	}
-	if sqlDB, err := db.DB(); err != nil || sqlDB.Ping() != nil {
-		b.Skip("demo数据库无法连接（docker compose up -d）")
+	sqlDB, err := db.DB()
+	if err != nil {
+		b.Fatalf("获取demo数据库连接失败: %v", err)
 	}
+	if err = sqlDB.Ping(); err != nil {
+		b.Fatalf("demo数据库无法连接（先运行 docker compose up -d）: %v", err)
+	}
+	b.Cleanup(func() { _ = sqlDB.Close() })
 	executor, err := buildEngine(db)
 	if err != nil {
 		b.Fatalf("引擎装配失败: %v", err)

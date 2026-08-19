@@ -42,6 +42,7 @@ jobs:
           cache-dependency-path: |
             gql/go.sum
             gql/tools/go.sum
+      - run: docker compose -f examples/docker-compose.yml up -d --wait
       - run: go test ./... -count=1
       - run: go test ./transport -run '^TestGraphQLHTTPProtocolAudit$' -count=1
       - name: Run real multi-process cluster GA
@@ -69,6 +70,7 @@ jobs:
           cache-dependency-path: |
             gql/go.sum
             gql/tools/go.sum
+      - run: docker compose -f examples/docker-compose.yml up -d --wait
       - run: go test -race ./... -count=1
       - run: go test . -run '^$' -fuzz '^FuzzExecutableFrontend$' -fuzztime 10s
 
@@ -126,3 +128,16 @@ jobs:
           path: |
             gql/performance.txt
             gql/performance-delta.txt
+
+  demo-e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.6
+          cache-dependency-path: gql/go.sum
+      - run: ./examples/scripts/test-demo.sh

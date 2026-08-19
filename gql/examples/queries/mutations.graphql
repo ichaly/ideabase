@@ -20,7 +20,7 @@ mutation BatchCreate {
 mutation UpsertByUnique {
   upsertUsers(
     input: [{ name: "张三更新", email: "zhang@demo.dev" }]
-    on: ["email"]
+    on: UNIQUE_1
   ) { id name email }
 }
 

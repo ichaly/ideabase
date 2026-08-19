@@ -18,8 +18,3 @@ query CustomRootQuery {
 mutation CustomRootMutation($message: String!) {
   echo(message: $message)
 }
-
-query StandardIntrospection {
-  __schema { queryType { name } mutationType { name } }
-  __type(name: "User") { name kind fields { name } }
-}

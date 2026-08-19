@@ -8,8 +8,9 @@ GraphQL 文档或测试作为证据，避免文档声称支持但示例缺失。
 
 ```bash
 cd gql/examples
-docker compose up -d
-go run .
+docker compose up -d --wait
+go run .                         # 默认监听 :8080
+# 端口冲突时：DEMO_HTTP_ADDR=:18080 go run .
 ```
 
 服务地址为 `http://localhost:8080/graphql`。Demo 默认注入租户 `1`，可用
@@ -47,7 +48,7 @@ GQL '{"query":"mutation { echo(message: \"hello\") }"}'
 | variables、alias、fragment、typename | `FilterSortOffset/PostList` | `queries/*.graphql` |
 | 普通字段 Resolver | `greeting` | `main.go`, `ResolverAndRemote` |
 | Batch Resolver | `sign` | `main.go`, `ResolverAndRemote` |
-| Query/Mutation 根 Resolver | `serverInfo/echo` | `main.go`, `extensions.graphql` |
+| Query/Mutation 根 Resolver | `serverInfo/echo` | `main.go`, `operations/public/extensions.graphql` |
 | Resolver middleware | `User.greeting` 的 `[wrapped]` 前缀 | `main.go` |
 | ID 与自定义 Codec、Matcher、Baser | `id`、所有 `name` 字段 | `UpperCodec`, `buildEngine` |
 | 自增、UUID、雪花、自定义主键 | `GeneratedPrimaryKeys` | `main.go`, `schema.sql` |
@@ -55,9 +56,17 @@ GQL '{"query":"mutation { echo(message: \"hello\") }"}'
 | 行级作用域 | `Post.tenant_id ↔ tenant` | `main.go`, `TenantScopedPosts` |
 | 持久化查询与缓存预热 | 所有命名 operation | `queries/*.graphql` |
 | CDC SSE 订阅 | `subscription { users { total } }` | `docker-compose.yml` |
-| 标准自省 | `StandardIntrospection` | `operations/extensions.graphql` |
+| 标准自省 | `StandardIntrospection` | `operations/dev/introspection.graphql` |
 | 安全开关 | introspection/persisted-only/max-depth | `config.production.yml` |
 | 字节响应快路径 | `Engine.Execute` | `demo_test.go` |
+| Gateway HTTP 组合 | `/gateway/graphql` 的 `blog` namespace | `main.go`, `http_test.go` |
+| TenantGateway 路由 | `/tenant/graphql` 的租户 1/2 与未知租户拒绝 | `main.go`, `http_test.go` |
+| 控制面健康/Manifest | `/health`, `/manifest` 及未授权拒绝 | `main.go`, `http_test.go` |
+| Effective Schema | `/effective-schema` delegation 验证 | `main.go`, `http_test.go` |
+| Transport Descriptor | `/.well-known/gql-gateway` | `main.go`, `http_test.go` |
+| 权限拒绝 | `X-Demo-Deny` 真实错误响应 | `main.go`, `http_test.go` |
+| 多副本共享状态 | 两个 PostgreSQL provider/replay store 观察同一撤权与 replay 事实源 | `http_test.go`, `docker-compose.yml` |
+| Remote → Gateway HTTP | 独立 child 进程的 manifest/effective schema/执行/health/撤权链路 | `scripts/test-demo.sh` |
 
 JSON 形式的同一矩阵见 `coverage.json`，增加或删除 README 公开能力时应同步更新。
 
@@ -150,8 +159,16 @@ curl -N http://localhost:8080/graphql/stream -H 'Accept: text/event-stream' \
 使用动态 schema，便于观察注册即声明的 Resolver/Remote 字段。
 
 ```bash
-go test ./examples -count=1
-go test . -run TestExamplesCoverDocumentedCapabilities -count=1
-go test ./... -count=1
-go test ./examples -run '^$' -bench . -benchmem  # 数据库可用时
+docker compose down --volumes --remove-orphans
+docker compose up -d --wait
+go test -count=1                         # 必须连接真实 PostgreSQL，不可用时直接失败
+cd .. && go test . -run TestExamplesCoverDocumentedCapabilities -count=1
+cd examples && go test -run '^$' -bench . -benchmem
+./scripts/test-demo.sh                   # 重置数据库、全能力测试、真实HTTP启动访问
 ```
+
+`go test` 会执行 `queries/` 和 `operations/` 下的每一个持久化 operation，并通过真实 HTTP
+入口验证持久化查询和 SSE 首个事件。`test-demo.sh` 还会启动两个独立 test binary，连接同一
+PostgreSQL，验证 replay 一次消费、撤权传播、活动副本撤权和 revision 栅栏。数据库不可达、
+operation 未加载、GraphQL errors、HTTP 启动失败或多进程门禁失败都会使命令失败，不会以跳过
+方式报告成功。
