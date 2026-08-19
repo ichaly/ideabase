@@ -1,6 +1,6 @@
 // 端到端性能基准：复用demo实际装配（buildEngine），打真实PostgreSQL。
 // 前提与e2e一致——demo数据库需在运行（docker compose up -d，暴露5433）；
-// 不可达时跳过。运行：go test -bench=. -benchmem -run=^$
+// 不可达时直接失败，避免基准空成功。运行：go test -bench=. -benchmem -run=^$
 package main
 
 import (
@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// benchEngine 连demo库并装配引擎；库不可达则跳过基准
+// benchEngine 连demo库并装配引擎；库不可达则直接失败
 func benchEngine(b *testing.B) *gql.Engine {
 	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
 	if err != nil {

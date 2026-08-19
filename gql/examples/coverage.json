@@ -34,4 +34,5 @@
   ,{"id":"policy-denial","artifacts":["main.go","http_test.go"]}
   ,{"id":"shared-postgres-state","artifacts":["http_test.go","docker-compose.yml"]}
   ,{"id":"remote-gateway-http","artifacts":["scripts/test-demo.sh","README.md"]}
+  ,{"id":"performance-gate","artifacts":["performance_test.go","bench_test.go","README.md"]}
 ]

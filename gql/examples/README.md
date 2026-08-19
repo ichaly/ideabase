@@ -67,6 +67,7 @@ GQL '{"query":"mutation { echo(message: \"hello\") }"}'
 | 权限拒绝 | `X-Demo-Deny` 真实错误响应 | `main.go`, `http_test.go` |
 | 多副本共享状态 | 两个 PostgreSQL provider/replay store 观察同一撤权与 replay 事实源 | `http_test.go`, `docker-compose.yml` |
 | Remote → Gateway HTTP | 独立 child 进程的 manifest/effective schema/执行/health/撤权链路 | `scripts/test-demo.sh` |
+| 性能基线与门禁 | 真实 PostgreSQL 嵌套单 SQL、8 并发、吞吐/P99 预算；另有 benchmark | `performance_test.go`, `bench_test.go` |
 
 JSON 形式的同一矩阵见 `coverage.json`，增加或删除 README 公开能力时应同步更新。
 
@@ -172,3 +173,11 @@ cd examples && go test -run '^$' -bench . -benchmem
 PostgreSQL，验证 replay 一次消费、撤权传播、活动副本撤权和 revision 栅栏。数据库不可达、
 operation 未加载、GraphQL errors、HTTP 启动失败或多进程门禁失败都会使命令失败，不会以跳过
 方式报告成功。
+
+性能门禁在同一套 Demo PostgreSQL 上验证：嵌套关系查询必须保持单条 SQL；8 个并发 worker
+执行 64 个 warm 请求，错误率必须为零，吞吐至少 50 req/s，P99 不超过 500ms。详细的
+ns/op、allocs/op 和不同查询形状使用 `go test -bench=. -benchmem -run=^$` 获取。
+
+在 Apple M1 Max、本地 Docker PostgreSQL 16 的一次基线采样中：平铺查询约 4.36–4.49ms /
+请求、嵌套关系约 4.64–4.89ms / 请求、Batch Resolver 约 4.39–4.61ms / 请求；每请求约
+2.78–2.81MB、36K 次分配。该数据用于同机 base/head 回归比较，不作为生产硬件 SLO。
