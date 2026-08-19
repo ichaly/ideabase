@@ -284,6 +284,20 @@ func TestSubscriptionInitializationHasIndependentTimeout(t *testing.T) {
 	}
 }
 
+func TestRemoteRetryHelpersHonorDelayAndCancellation(t *testing.T) {
+	if err := waitSubscriptionRetry(context.Background(), 0); err != nil {
+		t.Fatalf("retry wait failed: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitSubscriptionRetryWith(ctx, 1, func(int) time.Duration { return time.Hour }); err != context.Canceled {
+		t.Fatalf("canceled retry wait = %v", err)
+	}
+	if remoteRetryDelay(100) < remoteSSEMaxBackoff {
+		t.Fatal("retry delay did not reach the configured maximum backoff")
+	}
+}
+
 func TestSubscriptionEstablishFailureKeepsGraphQLErrorMetadata(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { users }"}`))
 	r.Header.Set("Content-Type", "application/json")
