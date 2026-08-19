@@ -157,8 +157,7 @@ func collectHealth(names []string, check func(string) (HealthReport, error)) []h
 
 type delegatedExecutionKey struct{}
 
-// WithDelegatedExecution marks a document already admitted by a trusted gateway.
-func WithDelegatedExecution(ctx context.Context) context.Context {
+func withDelegatedExecution(ctx context.Context) context.Context {
 	return context.WithValue(ctx, delegatedExecutionKey{}, true)
 }
 

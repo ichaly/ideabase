@@ -261,6 +261,29 @@ func (subscriptionErrorStub) Subscribe(context.Context, string, map[string]any, 
 	return nil, gqlerror.List{&gqlerror.Error{Message: "denied", Path: ast.Path{ast.PathName("users")}, Extensions: map[string]any{"code": "POLICY_DENIED", "reason": "role"}}}
 }
 
+type blockingSubscription struct{}
+
+func (blockingSubscription) Subscribe(ctx context.Context, _ string, _ map[string]any, _ string) (<-chan []byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestSubscriptionInitializationHasIndependentTimeout(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { users }"}`))
+	r = r.WithContext(context.Background())
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Accept", "text/event-stream")
+	w := &deadlineRecorder{httptest.NewRecorder()}
+	started := time.Now()
+	NewSubscriptionHandler(blockingSubscription{}, Options{Timeout: 20 * time.Millisecond}).ServeHTTP(w, r)
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("subscription initialization exceeded timeout: %s", elapsed)
+	}
+	if w.Body.Len() == 0 {
+		t.Fatal("subscription timeout returned an empty response")
+	}
+}
+
 func TestSubscriptionEstablishFailureKeepsGraphQLErrorMetadata(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { users }"}`))
 	r.Header.Set("Content-Type", "application/json")

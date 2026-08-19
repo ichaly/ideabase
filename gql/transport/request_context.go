@@ -25,7 +25,6 @@ func prepareRequest[T any](ctx context.Context, r *http.Request, endpoint any, e
 		if err != nil {
 			return ctx, execution, "", &requestFailure{http.StatusUnauthorized, "INVALID_DELEGATION", "invalid delegation", false}
 		}
-		ctx = core.WithDelegatedExecution(ctx)
 	}
 
 	revision := r.Header.Get("GQL-Snapshot")

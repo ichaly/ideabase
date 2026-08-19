@@ -166,7 +166,8 @@ func (my *DelegationCodec) Verify(ctx context.Context, token, operation string) 
 	if scope != nil {
 		verified = WithScope(verified, scope)
 	}
-	return context.WithValue(verified, delegationDepthKey{}, claims.Depth), nil
+	verified = context.WithValue(verified, delegationDepthKey{}, claims.Depth)
+	return withDelegatedExecution(verified), nil
 }
 
 func scopeVersion(scope map[string]any) uint8 {

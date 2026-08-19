@@ -76,6 +76,8 @@ func TestDelegationCodecAuthenticatesBoundIdentityOnce(t *testing.T) {
 
 	verified, err := codec.Verify(context.Background(), token, "operation-sha256")
 	require.NoError(t, err)
+	require.False(t, delegatedExecution(WithIdentity(context.Background(), identity)))
+	require.True(t, delegatedExecution(verified))
 	got, ok := IdentityFromContext(verified)
 	require.True(t, ok)
 	require.Equal(t, identity.Tenant(), got.Tenant())

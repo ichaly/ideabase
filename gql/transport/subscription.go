@@ -72,7 +72,7 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 			writeProblem(w, http.StatusServiceUnavailable, "REQUEST_TIMEOUT", "request expired while awaiting subscription capacity", true)
 			return
 		}
-		events, err := execution.Subscribe(ctx, params.Query, params.Variables, params.OperationName)
+		events, err := subscribeWithTimeout(ctx, execution, params, opts.Timeout)
 		if err != nil || events == nil {
 			writeSubscriptionError(w, err)
 			return
@@ -132,6 +132,37 @@ func NewSubscriptionHandler(endpoint subscriptionEndpoint, opts Options) http.Ha
 			}
 		}
 	})
+}
+
+type subscriptionResult struct {
+	events <-chan []byte
+	err    error
+}
+
+func subscribeWithTimeout(ctx context.Context, endpoint subscriptionEndpoint, params request, timeout time.Duration) (<-chan []byte, error) {
+	attemptCtx, cancel := context.WithCancel(ctx)
+	defer func() {
+		if ctx.Err() != nil {
+			cancel()
+		}
+	}()
+	result := make(chan subscriptionResult, 1)
+	go func() {
+		events, err := endpoint.Subscribe(attemptCtx, params.Query, params.Variables, params.OperationName)
+		result <- subscriptionResult{events: events, err: err}
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case reply := <-result:
+		return reply.events, reply.err
+	case <-timer.C:
+		cancel()
+		return nil, context.DeadlineExceeded
+	case <-ctx.Done():
+		cancel()
+		return nil, ctx.Err()
+	}
 }
 
 func writeSSEFrame(w http.ResponseWriter, flusher http.Flusher, timeout time.Duration, frame []byte) error {

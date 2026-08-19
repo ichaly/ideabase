@@ -1508,13 +1508,13 @@ func responseKey(field *ast.Field) string {
 
 func executeChild(ctx context.Context, endpoint Endpoint, query string, variables map[string]any) (body []byte, err error) {
 	return safelyCall(func() ([]byte, error) {
-		return endpoint.ExecuteOperation(WithDelegatedExecution(ctx), query, variables, "")
+		return endpoint.ExecuteOperation(withDelegatedExecution(ctx), query, variables, "")
 	})
 }
 
 func subscribeChild(ctx context.Context, endpoint SubscriptionEndpoint, query string, variables map[string]any) (events <-chan []byte, err error) {
 	return safelyCall(func() (<-chan []byte, error) {
-		return endpoint.Subscribe(WithDelegatedExecution(ctx), query, variables, "")
+		return endpoint.Subscribe(withDelegatedExecution(ctx), query, variables, "")
 	})
 }
 
