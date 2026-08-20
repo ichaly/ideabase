@@ -6,7 +6,7 @@ GraphQL schema，请求编译为**单条 SQL**（LATERAL JOIN + JSONB 聚合）�
 
 ## 架构
 
-完整使用教程见 [`docs/README.md`](docs/README.md)。
+标准使用文档见 [`docs/README.md`](docs/README.md)，按教程、指南、参考和运维四类组织。
 
 ```
 GraphQL 请求
