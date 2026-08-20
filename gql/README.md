@@ -580,6 +580,18 @@ fail closed，不会以部分元数据启动。
 
 ## 性能要点
 
+### 全量测试
+
+需要真实 PostgreSQL 的测试使用 `examples/docker-compose.yml` 中的临时 fixture。
+脚本会清理旧 volume、启动并等待数据库、运行全量测试，结束时自动销毁 fixture：
+
+```bash
+./scripts/test-all.sh
+```
+
+可通过 `GQL_TEST_KEEP_DB=1` 保留数据库用于失败排查；`DEMO_DSN` 仍可覆盖测试连接串。
+真实 Demo、HTTP、多实例和性能门禁使用 `./examples/scripts/test-demo.sh`。
+
 - 任意深度嵌套 = 单条 SQL，无 N+1
 - 编译计划 LRU 缓存（默认 512），key 为操作名+查询文本，变量不参与 key；
   未命中经 singleflight 收敛，并发的同一冷查询只解析编译一次（防缓存击穿）
