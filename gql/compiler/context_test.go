@@ -205,3 +205,19 @@ func TestDecodeCursorBigintPrecision(t *testing.T) {
 		t.Fatalf("小数键应还原为float64(3.14), 实际 %T(%v)", keys[2], keys[2])
 	}
 }
+
+func TestCursorErrorsAndScopeResolution(t *testing.T) {
+	err := BadCursor(fmt.Errorf("bad"))
+	cursorErr, ok := err.(CursorError)
+	if !ok || cursorErr.Error() != "bad" || cursorErr.ErrorCode() != "BAD_CURSOR" || cursorErr.Unwrap() == nil {
+		t.Fatal("cursor error contract is incomplete")
+	}
+	contract := CursorContract{StructuralFingerprint: "shape", Tenant: "old", Route: "old", Coordinate: "Query.users", Sort: []string{"id"}}
+	resolved := ResolveCursorContract(contract, map[string]any{CursorTenantContext: "new", CursorRouteContext: "route", CursorPolicyContext: int64(9)})
+	if resolved.Tenant != "new" || resolved.Route != "route" || resolved.PolicyRevision != 9 {
+		t.Fatalf("resolved cursor contract = %#v", resolved)
+	}
+	if _, err := EncodeCursorToken(CursorContract{}, nil); err == nil {
+		t.Fatal("incomplete cursor contract should fail")
+	}
+}

@@ -149,6 +149,22 @@ func TestGatewayHealthChecksChildrenConcurrently(t *testing.T) {
 	require.True(t, report.Ready)
 }
 
+func TestGatewayPublishesControlAndManifestViews(t *testing.T) {
+	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: newGatewayEndpoint("crm", gatewayChildSchema, nil)})
+	require.NoError(t, err)
+	require.Equal(t, "root", gateway.EndpointID())
+	require.False(t, gateway.EffectiveSchemaAvailable())
+	require.Equal(t, uint64(0), gateway.ManifestRevision())
+	state := gateway.ControlState()
+	require.NotEmpty(t, state.Fingerprint)
+	snapshot, revision, err := gateway.ManifestState()
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), revision)
+	require.Equal(t, state.Fingerprint, snapshot.Fingerprint())
+	_, err = gateway.ForSnapshot("missing")
+	require.Error(t, err)
+}
+
 func (my *gatewaySubscriptionEndpoint) Subscribe(context.Context, string, map[string]any, string) (<-chan []byte, error) {
 	return my.events, nil
 }

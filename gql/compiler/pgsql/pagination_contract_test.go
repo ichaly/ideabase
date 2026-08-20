@@ -34,6 +34,19 @@ func TestCursorParamsRejectsCrossEntityAndOrderingBeforeSQL(t *testing.T) {
 	ctx.Release()
 }
 
+func TestPaginationIntConvertsIntegerTypes(t *testing.T) {
+	for _, value := range []any{1, int64(2), int8(3), uint16(4)} {
+		if got, ok := paginationInt(value); !ok || got < 1 {
+			t.Fatalf("paginationInt(%#v) = %d, %v", value, got, ok)
+		}
+	}
+	for _, value := range []any{1.5, "2", nil} {
+		if _, ok := paginationInt(value); ok {
+			t.Fatalf("paginationInt(%#v) unexpectedly accepted", value)
+		}
+	}
+}
+
 func TestVariablePaginationRangeMatchesLiteralValidation(t *testing.T) {
 	class := &protocol.Class{Name: "User", PrimaryKeys: []string{"id"}, Fields: map[string]*protocol.Field{"id": {Name: "id", Column: "id"}}}
 	for _, tc := range []struct {

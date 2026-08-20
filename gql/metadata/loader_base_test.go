@@ -8,6 +8,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type routineHoster struct {
+	*fakeHoster
+	routines map[string]*protocol.Routine
+}
+
+func (h *routineHoster) PutRoutine(key string, routine *protocol.Routine) error {
+	if h.routines == nil {
+		h.routines = make(map[string]*protocol.Routine)
+	}
+	h.routines[key] = routine
+	return nil
+}
+
+func TestCatalogBuildsFieldsConstraintsRelationsIndexesAndRoutines(t *testing.T) {
+	h := &routineHoster{fakeHoster: newFakeHoster()}
+	err := (&baseLoader{}).loadCatalog(h, catalogData{
+		Tables: []tableInfo{{Schema: "public", TableName: "users", TableKind: string(protocol.TableBase)}, {TableName: "posts", TableKind: string(protocol.TableBase)}},
+		Columns: []columnInfo{
+			{TableName: "users", ColumnName: "id", DataType: "int8", TypeKind: string(protocol.TypeBase), TypeName: "int8", DefaultExpression: "nextval"},
+			{TableName: "users", ColumnName: "name", DataType: "text", TypeKind: string(protocol.TypeBase), TypeName: "text"},
+			{TableName: "posts", ColumnName: "id", DataType: "int8", TypeKind: string(protocol.TypeBase), TypeName: "int8", GenerationKind: "stored", GenerationExpression: "identity"},
+			{TableName: "posts", ColumnName: "user_id", DataType: "int8", TypeKind: string(protocol.TypeBase), TypeName: "int8"},
+		},
+		Constraints: []constraintInfo{
+			{TableName: "users", Name: "users_pk", Kind: string(protocol.ConstraintPrimary), Columns: []string{"id"}},
+			{TableName: "posts", Name: "posts_pk", Kind: string(protocol.ConstraintPrimary), Columns: []string{"id"}},
+			{TableName: "posts", Name: "posts_user_fk", Kind: string(protocol.ConstraintForeign), Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{TableName: "users", Name: "users_name_unique", Kind: string(protocol.ConstraintUnique), Columns: []string{"name"}},
+		},
+		Indexes:  []indexInfo{{TableName: "users", Name: "users_name_idx", Keys: []indexKeyInfo{{Column: "name"}}, Unique: true}},
+		Routines: []routineInfo{{Schema: "public", Name: "count_users", IdentityArguments: "", Kind: "function", ReturnType: "int8", Volatility: "stable", Arguments: []routineArgumentInfo{{Name: "tenant", Type: "int8"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, ok := h.GetNode("users")
+	if !ok || !users.Fields["id"].IsPrimary || !users.Fields["name"].IsUnique || len(users.Relations) != 1 {
+		t.Fatalf("users catalog incomplete: %#v", users)
+	}
+	posts, ok := h.GetNode("posts")
+	if !ok || !posts.Fields["id"].ReadOnly || len(posts.Relations) != 1 {
+		t.Fatalf("posts catalog incomplete: %#v", posts)
+	}
+	if _, ok := h.routines["public.count_users()"]; !ok || h.version == "" {
+		t.Fatal("routine or catalog version was not injected")
+	}
+}
+
 // 自引用多对多(user_friends两外键均指向users):两方向关系必须并存——
 // 单指针模型下r2覆盖r1只剩一个方向
 func TestManyToManySelfReference(t *testing.T) {
