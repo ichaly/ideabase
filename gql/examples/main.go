@@ -129,7 +129,7 @@ func signResolver() gql.Resolver {
 
 // demoDSN demo数据库连接串（docker compose暴露5433），可用DEMO_DSN覆盖
 func demoDSN() string {
-	return cmp.Or(os.Getenv("DEMO_DSN"), "host=localhost port=5433 user=demo password=demo dbname=demo sslmode=disable")
+	return cmp.Or(os.Getenv("DEMO_DSN"), "host=localhost port=5678 user=postgres password=postgres dbname=demo sslmode=disable")
 }
 
 // buildEngine 用统一入口装配完整引擎；Builder 是元数据、编译器与运行时的唯一组装点。
