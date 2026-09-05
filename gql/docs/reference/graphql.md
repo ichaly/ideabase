@@ -19,7 +19,7 @@
 
 ## 生成输入
 
-典型类型包括 `WhereInput`、`SortInput`、`CreateInput`、`UpdateInput`、`Connection`、`Edge`、`PageInfo`、`MutationResult` 和 `DeletionMode`。字段是否 nullable、可写或可过滤由 catalog、数据库 default 和 policy 决定。
+输入类型按实体生成，例如 `CustomerCreateInput`；分页字段包括 `items`、`total` 和 `pageInfo`。单条 create/update 返回实体，批量返回实体列表，delete 返回形状以生成 Schema 为准；没有通用 `MutationResult` 包装。字段是否 nullable、可写或可过滤由 catalog、数据库 default 和 policy 决定。
 
 ## 自省与能力 artifact
 

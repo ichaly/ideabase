@@ -2,11 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -120,5 +124,46 @@ func TestOrderSSEEndsWhenAccessTokenExpires(t *testing.T) {
 	case <-done:
 	case <-time.After(4 * time.Second):
 		t.Fatal("expired JWT left SSE stream active")
+	}
+}
+
+// Execute the tutorial's literal requests, so documentation cannot drift from the API.
+func TestOrderTutorialRequests(t *testing.T) {
+	e, _ := testEndpoint(t)
+	h, err := newHTTPHandler(e, testSecret)
+	require.NoError(t, err)
+	document, err := os.ReadFile("../../docs/tutorial/02-first-query.md")
+	require.NoError(t, err)
+	blocks := regexp.MustCompile("(?s)```json\\n(.*?)\\n```").FindAllSubmatch(document, -1)
+	require.Len(t, blocks, 6)
+	for i, block := range blocks {
+		t.Run(fmt.Sprint(i+1), func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(block[1]))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer "+token(t, "a", "operator", time.Now().Add(time.Hour)))
+			response := httptest.NewRecorder()
+			h.ServeHTTP(response, request)
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			var result map[string]any
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
+			require.Empty(t, result["errors"], response.Body.String())
+			require.NotEmpty(t, result["data"], response.Body.String())
+			data := result["data"].(map[string]any)
+			switch i {
+			case 0:
+				require.EqualValues(t, 1, data["customers"].(map[string]any)["total"])
+			case 1:
+				require.Len(t, data["customers"].(map[string]any)["items"], 1)
+			case 2:
+				require.Equal(t, "Tutorial Customer", data["createCustomer"].(map[string]any)["name"])
+			case 3:
+				require.Equal(t, "Alice Updated", data["updateCustomer"].(map[string]any)["name"])
+			case 4:
+				require.Equal(t, "placed", data["placeOrder"].(map[string]any)["status"])
+			case 5:
+				require.EqualValues(t, 1, data["orders"].(map[string]any)["total"])
+			}
+
+		})
 	}
 }

@@ -13,7 +13,7 @@ GQL Engine 是一个把数据库映射为 GraphQL 的 Go 引擎。它自动生�
 
 1. [数据库映射与 Schema 配置](guides/database.md)
 2. [多租户、权限和审计](guides/security.md)
-3. [自定义 Resolver 与 Remote](guides/resolvers.md)
+3. [自定义 Resolver 与 Codec](guides/resolvers.md)
 4. [Gateway、命名空间和多实例](guides/gateway.md)
 
 ## 参考：查 API 和协议
@@ -40,7 +40,7 @@ GQL Engine 是一个把数据库映射为 GraphQL 的 Go 引擎。它自动生�
 
 ## 示例代码
 
-[`examples/README.md`](../examples/README.md) 是可运行契约，覆盖 CRUD、关系、分页、聚合、Resolver、Remote、Gateway、订阅、权限和性能。
+从 [`examples/orders`](../examples/orders/README.md) 开始 review 生产接入和业务闭环，再通过 [`examples/README.md`](../examples/README.md) 阅读博客的全能力矩阵，覆盖 CRUD、关系、分页、聚合、Resolver、远程实例组合、订阅和权限。
 
 ## 文档约定
 

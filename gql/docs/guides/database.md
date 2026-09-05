@@ -6,7 +6,6 @@
 
 ```yaml
 schema:
-  file: ./cfg/schema.graphql
   default-limit: 50
   max-depth: 12
   max-tokens: 10000
@@ -19,11 +18,11 @@ metadata:
   table-prefix: [cms_]
 ```
 
-`schema.file` 用于锁定 Schema artifact；启动时类型、参数、输入字段和坐标漂移会被拒绝。`metadata.file` 用于补充表、字段、关系、Scope、权限和删除治理。
+`schema.file` 用于锁定 Schema artifact；启动时类型、参数、输入字段和坐标漂移会被拒绝。显式设置 `metadata.file` 会以该文件替代数据库 catalog 加载，失败时拒绝启动；`metadata.classes` 用于覆盖命名、字段、Scope、权限和删除治理。通常不需要配置这两个 artifact 文件。
 
 ## 表、字段和关系
 
-表映射为对象类型，主键生成 `ByPk` 和定位输入，外键生成关系字段。支持一对一、多对一、一对多、多对多和自关联。关系查询、递归查询和 batch Resolver 应优先保持单 SQL。
+表映射为对象类型，主键生成 `ByPk` 和定位输入，外键生成关系字段。支持一对一、多对一、一对多、多对多和自关联。数据库关系查询和递归查询走 SQL 编译；batch Resolver 一次处理一批宿主，外部调用不属于这条 SQL。
 
 字段可配置：
 

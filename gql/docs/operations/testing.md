@@ -1,5 +1,17 @@
 # 运维：测试与性能
 
+## 从 examples 开始
+
+以下命令均从 `gql` 目录执行。订单测试自动创建和删除自己的 PostgreSQL 容器，不会清理开发库：
+
+```bash
+GOWORK=off go test ./examples/orders -count=1
+GOWORK=off go test ./examples/orders -run TestOrderTutorialRequests -count=1 -v
+GOWORK=off ORDERS_SOAK_SECONDS=300 go test ./examples/orders -run TestOrderPopulatedHTTPWorkload -count=1 -v
+```
+
+教程测试直接读取第二章 JSON 请求，验证认证 HTTP、查询、游标、客户写入、下单和关联查询。博客覆盖清单测试只验证能力证据文件存在；真实行为由 demo 测试执行，不能把清单通过当作全能力验证。
+
 ## 全量测试
 
 ```bash

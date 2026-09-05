@@ -40,15 +40,15 @@ metadata:
       permissions:
         reader:
           select: [id, name]
-          insert: [name]
-          update: [name]
           delete: false
         admin:
           select: ["*"]
           insert: ["*"]
           update: ["*"]
-          delete: true
+          delete: false
 ```
+
+此例 reader 只读，admin 可创建和更新；类级 operations 未开放 delete，因此即使角色允许也不会生成删除入口。
 
 支持 `select`、`aggregate`、`insert`、`update`、`delete`、`restore`、`purge`。未命中角色、未声明操作、字段不在白名单或治理 loader 失败时拒绝。
 

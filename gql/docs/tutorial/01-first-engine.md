@@ -1,6 +1,6 @@
 # 教程：创建第一个 Engine
 
-需要 Go 1.26.6、PostgreSQL 15–18。推荐从 [可运行的订单示例](../../../examples/orders/README.md)
+需要 Go 1.26.6、PostgreSQL 15–18。推荐从 [可运行的订单示例](../../examples/orders/README.md)
 开始：它使用真实生产模式、受限数据库账号和签名身份，不需要先生成元数据文件。
 
 ## 最少需要理解的内容
@@ -13,14 +13,14 @@
 安全状态提供者，注册业务 Resolver。`Build()` 冻结 Schema 和执行配置；缺失权限、安全
 状态或必需迁移时明确失败。
 
-完整装配以 [app.go](../../../examples/orders/app.go) 为唯一可执行示例，避免复制一份会
+完整装配以 [app.go](../../examples/orders/app.go) 为唯一可执行示例，避免复制一份会
 逐渐过期的启动程序。数据库与应用共享 `*sql.DB`，不需要第二个 ORM 或连接池。
 
 ## 查询、突变与订阅
 
 同一个 `transport.NewHandler(endpoint, options)` 挂载 `/graphql`：普通请求使用 JSON，
 订阅使用 POST JSON 与 `Accept: text/event-stream`。JWT 认证示例见
-[http.go](../../../examples/orders/http.go)，不会信任客户端提供的租户 Header。
+[http.go](../../examples/orders/http.go)，不会信任客户端提供的租户 Header。
 
 验证命令 `go test ./examples/orders` 自动启动隔离的测试数据库，覆盖第一次启动、查询、
 下单扣库存、取消回补、租户隔离、权限和实例组合。

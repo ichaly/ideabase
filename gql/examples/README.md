@@ -4,6 +4,21 @@
 清单；根目录 `TestExamplesCoverDocumentedCapabilities` 保证每项能力都有实际代码、SQL、
 GraphQL 文档或测试作为证据，避免文档声称支持但示例缺失。
 
+## 从这里 review
+
+先读 [orders/README.md](orders/README.md) 的生产业务闭环，再读本目录的能力矩阵。两者均为 API 示例，没有后台 UI。
+
+| 阅读顺序 | 看什么 |
+| --- | --- |
+| [orders/schema.sql](orders/schema.sql) | 数据约束、索引、复合外键、RLS |
+| [orders/app.go](orders/app.go) | 唯一装配、权限、租户、两个业务 Resolver |
+| [orders/orders.go](orders/orders.go) | 幂等下单、锁序、事务、取消回补 |
+| [orders/http.go](orders/http.go)、[orders/main.go](orders/main.go) | 可信身份、统一 `/graphql`、启动和退出 |
+| [orders/orders_test.go](orders/orders_test.go)、[orders/http_test.go](orders/http_test.go) | 回滚、隔离、副本、远程组合、教程请求 |
+| [main.go](main.go)、[queries](queries)、[demo_test.go](demo_test.go) | 博客的更广能力及断言 |
+
+继续进入引擎时，按请求链阅读 [transport/http.go](../transport/http.go) → [tenant_gateway.go](../tenant_gateway.go) → [executor.go](../executor.go) → [compiler/pgsql](../compiler/pgsql)。自定义业务看 [resolver.go](../resolver.go) 和 [execution_context.go](../execution_context.go)，实例组合看 [gateway.go](../gateway.go)。
+
 ## 快速开始
 
 ```bash
