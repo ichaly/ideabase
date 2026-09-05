@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestRenderRelation 测试关系渲染功能
@@ -38,8 +37,7 @@ func TestRenderRelation(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染类型
-	err := renderer.renderTypes()
-	require.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -101,8 +99,7 @@ func TestRenderRelation(t *testing.T) {
 		renderer.sb = schema
 
 		// 重新渲染
-		err = renderer.renderTypes()
-		require.NoError(t, err, "渲染实体类型失败")
+		renderer.renderTypes()
 
 		// 获取新的schema文本
 		newSchema := schema.String()
@@ -119,8 +116,7 @@ func TestRenderRelation(t *testing.T) {
 		renderer.sb = schema
 
 		// 渲染输入类型
-		err = renderer.renderInput()
-		require.NoError(t, err, "渲染输入类型失败")
+		renderer.renderInput()
 
 		// 获取schema文本
 		inputSchema := schema.String()
@@ -142,8 +138,7 @@ func TestRenderRelation(t *testing.T) {
 		renderer.sb = schema
 
 		// 重新渲染输入类型
-		err = renderer.renderInput()
-		require.NoError(t, err, "渲染输入类型失败")
+		renderer.renderInput()
 
 		// 获取新的schema文本
 		inputSchemaWithoutThrough := schema.String()
@@ -163,8 +158,7 @@ func TestRenderRelation(t *testing.T) {
 		renderer.sb = schema
 
 		// 渲染实体过滤器
-		err = renderer.renderEntity()
-		require.NoError(t, err, "渲染实体过滤器失败")
+		renderer.renderEntity()
 
 		// 获取schema文本
 		filterSchema := schema.String()
@@ -183,8 +177,7 @@ func TestRenderRelation(t *testing.T) {
 		renderer.sb = schema
 
 		// 重新渲染实体过滤器
-		err = renderer.renderEntity()
-		require.NoError(t, err, "渲染实体过滤器失败")
+		renderer.renderEntity()
 
 		// 获取新的schema文本
 		filterSchemaWithoutThrough := schema.String()
@@ -201,7 +194,7 @@ func TestRenderRelation(t *testing.T) {
 		renderer = NewRenderer(meta)
 		schema = &strings.Builder{}
 		renderer.sb = schema
-		require.NoError(t, renderer.renderSort(), "渲染排序失败")
+		renderer.renderSort()
 
 		sortSchema := schema.String()
 		assert.NotContains(t, sortSchema, "postTags: SortDirection", "中间表载体不可排序")

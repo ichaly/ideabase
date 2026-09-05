@@ -62,7 +62,6 @@ func main() {
 ```go
 mux := http.NewServeMux()
 mux.Handle("/graphql", transport.NewHandler(engine, transport.Options{}))
-mux.Handle("/graphql/stream", transport.NewSubscriptionHandler(engine, transport.Options{}))
 log.Fatal(http.ListenAndServe(":8080", mux))
 ```
 

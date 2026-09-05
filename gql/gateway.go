@@ -7,6 +7,7 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ichaly/ideabase/gql/internal/lru"
 	"io"
 	"maps"
 	"sort"
@@ -82,7 +83,7 @@ type Namespace struct {
 type Gateway struct {
 	id       string
 	state    atomic.Pointer[gatewayState]
-	history  *lruCache[string, *gatewayState]
+	history  *lru.Cache[string, *gatewayState]
 	refresh  sync.Mutex
 	revision uint64
 	issued   atomic.Uint64
@@ -115,8 +116,8 @@ type gatewayState struct {
 	schema            *ast.Schema
 	intro             *intro.Handler
 	validation        *validatorrules.Rules
-	cache             *planCache
-	effectiveCache    *lruCache[string, *gatewayState]
+	cache             *lru.Cache[planKey, *planEntry]
+	effectiveCache    *lru.Cache[string, *gatewayState]
 	effectiveFlight   singleflight.Group
 	buildLimiter      *buildLimiter
 	snapshot          *Snapshot
@@ -409,7 +410,7 @@ func NewGateway(id string, namespaces ...Namespace) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	gateway := &Gateway{id: id, history: newLRU[string, *gatewayState](8)}
+	gateway := &Gateway{id: id, history: lru.New[string, *gatewayState](8)}
 	gateway.revision = 0
 	gateway.issued.Store(0)
 	gateway.state.Store(state)
@@ -475,7 +476,7 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 			}
 		}
 	}
-	capabilities = completeCapabilities(schema, capabilities, HandlerRemote, "namespace")
+	capabilities = completeCapabilities(schema, capabilities, HandlerResolver, "namespace")
 	mutations := make(map[string]*namespaceContract)
 	effective := false
 	for _, contract := range contracts {
@@ -524,11 +525,11 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 	snapshot := &Snapshot{schema: source, fingerprint: fmt.Sprintf("%x", fingerprint), capabilities: capabilities, index: index}
 	state := &gatewayState{
 		id: id, schema: schema, intro: intro.New(schema), validation: validatorrules.NewDefaultRules(), snapshot: snapshot,
-		cache: newPlanCache(planCacheSize), contracts: contracts, mutations: mutations, topologyIDs: identitySet(seen), depth: depth, identityAware: effective,
+		cache: lru.New[planKey, *planEntry](planCacheSize), contracts: contracts, mutations: mutations, topologyIDs: identitySet(seen), depth: depth, identityAware: effective,
 		buildLimiter: newBuildLimiter(16, 4),
 	}
 	if effective {
-		state.effectiveCache = newLRU[string, *gatewayState](128)
+		state.effectiveCache = lru.New[string, *gatewayState](128)
 	}
 	return state, nil
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/gql"
+	"github.com/ichaly/ideabase/gql/transport"
 )
 
 func demoEngine(t *testing.T) *gql.Engine {
@@ -59,7 +60,7 @@ func TestDemoHTTPSubscriptionSendsRealSSEEvent(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/graphql/stream", strings.NewReader(`{"query":"subscription { users { total } }"}`))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/graphql", strings.NewReader(`{"query":"subscription { users { total } }"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,13 +193,10 @@ func TestDemoControlPlaneAndComposedGateways(t *testing.T) {
 		body, _ := io.ReadAll(response.Body)
 		return response.StatusCode, string(body)
 	}
-	if status, body := post("/gateway/graphql", `{"query":"{ blog { serverInfo { name } } }"}`, nil); status != http.StatusOK || !strings.Contains(body, "gql-complete-demo") {
-		t.Fatalf("gateway query failed: status=%d body=%s", status, body)
-	}
-	if status, body := post("/tenant/graphql", `{"query":"{ serverInfo { name } }"}`, map[string]string{"X-Demo-Tenant": "2"}); status != http.StatusOK || !strings.Contains(body, "gql-complete-demo") {
+	if status, body := post("/graphql", `{"query":"{ serverInfo { name } }"}`, map[string]string{"X-Demo-Tenant": "2"}); status != http.StatusOK || !strings.Contains(body, "gql-complete-demo") {
 		t.Fatalf("tenant gateway query failed: status=%d body=%s", status, body)
 	}
-	if status, body := post("/tenant/graphql", `{"query":"{ serverInfo { name } }"}`, map[string]string{"X-Demo-Tenant": "999"}); status != http.StatusOK || !strings.Contains(body, `"errors"`) || strings.Contains(body, `"data"`) {
+	if status, body := post("/graphql", `{"query":"{ serverInfo { name } }"}`, map[string]string{"X-Demo-Tenant": "999"}); status != http.StatusOK || !strings.Contains(body, `"errors"`) || strings.Contains(body, `"data"`) {
 		t.Fatalf("unknown tenant was not rejected: status=%d body=%s", status, body)
 	}
 }
@@ -285,5 +283,23 @@ func TestDemoSharedPostgresSecurityAndReplayState(t *testing.T) {
 	}
 	if err = two.Consume(context.Background(), key, time.Now().Add(time.Minute)); err == nil {
 		t.Fatal("second replay store accepted a token consumed by the first store")
+	}
+}
+
+func TestDemoComposedGatewayUsesSinglePath(t *testing.T) {
+	engine := demoEngine(t)
+	gateway, err := gql.NewGateway("demo-gateway", gql.Namespace{Name: "blog", EndpointID: "demo", Endpoint: engine})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/graphql", transport.NewHandler(gateway, transport.Options{}))
+	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ blog { serverInfo { name } } }"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request = request.WithContext(demoContext(request.Context(), 1))
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), `"errors"`) || !strings.Contains(response.Body.String(), "gql-complete-demo") {
+		t.Fatalf("composed endpoint failed: status=%d body=%s", response.Code, response.Body.String())
 	}
 }

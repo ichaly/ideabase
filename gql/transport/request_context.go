@@ -14,7 +14,8 @@ type requestFailure struct {
 	retryable bool
 }
 
-func prepareRequest[T any](ctx context.Context, r *http.Request, endpoint any, execution T, verifier DelegationVerifier, digest string, cast func(any) (T, bool)) (context.Context, T, string, *requestFailure) {
+func prepareRequest(ctx context.Context, r *http.Request, endpoint Endpoint, verifier DelegationVerifier, digest string) (context.Context, Endpoint, string, *requestFailure) {
+	execution := endpoint
 	if verifier != nil {
 		token, ok := delegationToken(r)
 		if !ok {
@@ -50,11 +51,10 @@ func prepareRequest[T any](ctx context.Context, r *http.Request, endpoint any, e
 	if revision != "" {
 		if pinner, ok := endpoint.(snapshotPinner); ok {
 			pinned, err := pinner.ForSnapshot(revision)
-			var executable bool
-			execution, executable = cast(pinned)
-			if err != nil || !executable {
+			if err != nil || pinned == nil {
 				return ctx, execution, revision, &requestFailure{http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true}
 			}
+			execution = pinned
 		} else if hasSnapshot {
 			current, err := source.Snapshot()
 			if err != nil || current == nil || current.Fingerprint() != revision {

@@ -40,7 +40,5 @@ func TestProtocolTableAndRelationHelpers(t *testing.T) {
 	if relation.Type != MANY_TO_ONE || relation.Key() == "" || relation.Composite() {
 		t.Fatal("relation clone/key classification is incorrect")
 	}
-	if (&RemoteRef{Key: "id"}).Alias() != "__rk_id" {
-		t.Fatal("remote reference alias is incorrect")
-	}
+
 }

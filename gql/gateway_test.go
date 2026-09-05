@@ -715,8 +715,8 @@ func TestGatewaySnapshotCoversEveryIntrospectableCoordinate(t *testing.T) {
 func TestGatewayPreservesChildCapabilitySemanticsWhenRenaming(t *testing.T) {
 	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
 	child.snapshot.capabilities = []Capability{
-		{Coordinate: "Query.user", Parent: "Query", Name: "user", Type: "User!", Handler: HandlerRemote, Planner: "child", Resource: "users", Actions: []string{"select"}, Cost: 7, PolicyAware: true, Timeout: 3 * time.Second, RetrySafe: true},
-		{Coordinate: "User.name", Parent: "User", Name: "name", Type: "String", Handler: HandlerRemote, Planner: "child", Resource: "users", Actions: []string{"select"}, Cost: 11, Timeout: time.Second},
+		{Coordinate: "Query.user", Parent: "Query", Name: "user", Type: "User!", Handler: HandlerResolver, Planner: "child", Resource: "users", Actions: []string{"select"}, Cost: 7, PolicyAware: true, Timeout: 3 * time.Second, RetrySafe: true},
+		{Coordinate: "User.name", Parent: "User", Name: "name", Type: "String", Handler: HandlerResolver, Planner: "child", Resource: "users", Actions: []string{"select"}, Cost: 11, Timeout: time.Second},
 	}
 	gateway, err := NewGateway("root", Namespace{Name: "crm", Endpoint: child})
 	require.NoError(t, err)
@@ -736,7 +736,7 @@ func TestGatewayPreservesChildCapabilitySemanticsWhenRenaming(t *testing.T) {
 
 func TestGatewayEffectiveSnapshotPreservesAllowedChildCapabilitySemantics(t *testing.T) {
 	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
-	child.snapshot.capabilities = []Capability{{Coordinate: "Query.user", Parent: "Query", Name: "user", Type: "User!", Handler: HandlerRemote, Planner: "child", Resource: "users", Actions: []string{"select"}, Cost: 7, PolicyAware: true}}
+	child.snapshot.capabilities = []Capability{{Coordinate: "Query.user", Parent: "Query", Name: "user", Type: "User!", Handler: HandlerResolver, Planner: "child", Resource: "users", Actions: []string{"select"}, Cost: 7, PolicyAware: true}}
 	child.snapshot.index = map[string]Capability{"Query.user": child.snapshot.capabilities[0]}
 	effectiveSchema := strings.Replace(gatewayChildSchema, ", status: Status", "", 1)
 	endpoint := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effective: SchemaArtifact{Schema: effectiveSchema, Fingerprint: digest(effectiveSchema), Capabilities: child.snapshot.Capabilities()}}
@@ -753,7 +753,7 @@ func TestGatewayEffectiveSnapshotPreservesAllowedChildCapabilitySemantics(t *tes
 
 func TestGatewayEffectiveSnapshotFingerprintIncludesCapabilities(t *testing.T) {
 	child := newGatewayEndpoint("crm", gatewayChildSchema, nil)
-	capability := Capability{Coordinate: "Query.user", Parent: "Query", Name: "user", Type: "User!", Handler: HandlerRemote, Cost: 1}
+	capability := Capability{Coordinate: "Query.user", Parent: "Query", Name: "user", Type: "User!", Handler: HandlerResolver, Cost: 1}
 	endpoint := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effective: SchemaArtifact{
 		Schema: gatewayChildSchema, Fingerprint: digest(gatewayChildSchema), Capabilities: []Capability{capability},
 	}}

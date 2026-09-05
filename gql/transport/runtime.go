@@ -268,9 +268,7 @@ type RemoteEndpoint struct {
 	retryDelay        func(int) time.Duration
 	state             atomic.Pointer[remoteState]
 	refresh           sync.Mutex
-	historyMu         sync.RWMutex
-	history           map[string]*remoteState
-	order             []string
+	history           *lru.Cache[string, *remoteState]
 	unarySlots        chan struct{}
 	subscriptionSlots chan struct{}
 	effectiveCache    *remoteEffectiveCache
@@ -402,7 +400,7 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 		client: client, signer: options.Delegation, maxResponse: options.MaxResponseBytes, timeout: options.Timeout, subscribe: options.SubscribeURL,
 		health:      options.HealthURL,
 		idleTimeout: 30 * time.Second,
-		history:     make(map[string]*remoteState, 8),
+		history:     lru.New[string, *remoteState](8),
 		unarySlots:  make(chan struct{}, options.MaxConcurrent), subscriptionSlots: make(chan struct{}, options.MaxSubscriptions),
 		effectiveCache: newRemoteEffectiveCache(64), effectiveCacheTTL: options.EffectiveCacheTTL, clock: time.Now,
 	}
@@ -662,20 +660,13 @@ func (my *RemoteEndpoint) Snapshot() (*core.Snapshot, error) {
 func (my *RemoteEndpoint) ForSnapshot(fingerprint string) (core.ComposableEndpoint, error) {
 	state := my.state.Load()
 	if state == nil || state.snapshot == nil || state.snapshot.Fingerprint() != fingerprint {
-		my.historyMu.Lock()
-		state = my.history[fingerprint]
+		state = nil
+		if my.history != nil {
+			state, _ = my.history.Get(fingerprint)
+		}
 		if state == nil {
-			my.historyMu.Unlock()
 			return nil, fmt.Errorf("remote snapshot revision unavailable")
 		}
-		for i, revision := range my.order {
-			if revision == fingerprint {
-				copy(my.order[i:], my.order[i+1:])
-				my.order[len(my.order)-1] = fingerprint
-				break
-			}
-		}
-		my.historyMu.Unlock()
 	}
 	return &remoteRevision{endpoint: my, snapshot: state.snapshot, subscriptionAvailable: state.subscriptionAvailable, healthAvailable: state.healthAvailable}, nil
 }
@@ -752,22 +743,8 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 	}
 	next := &remoteState{snapshot: snapshot, revision: manifest.Revision, subscriptionAvailable: manifest.Subscription, healthAvailable: manifest.Health}
 	if current != nil && current.snapshot.Fingerprint() != snapshot.Fingerprint() {
-		my.historyMu.Lock()
-		for index, revision := range my.order {
-			if revision == snapshot.Fingerprint() {
-				delete(my.history, revision)
-				my.order = append(my.order[:index], my.order[index+1:]...)
-				break
-			}
-		}
-		fingerprint := current.snapshot.Fingerprint()
-		my.history[fingerprint] = current
-		my.order = append(my.order, fingerprint)
-		if len(my.order) > 8 {
-			delete(my.history, my.order[0])
-			my.order = my.order[1:]
-		}
-		my.historyMu.Unlock()
+		my.history.Delete(snapshot.Fingerprint())
+		my.history.Put(current.snapshot.Fingerprint(), current)
 	}
 	my.state.Store(next)
 	return nil
@@ -1007,11 +984,6 @@ func (my *cancelReadCloser) Close() error {
 	return err
 }
 
-func (my *RemoteEndpoint) readSubscription(ctx context.Context, body io.ReadCloser, events chan<- []byte) (bool, error) {
-	complete, err, _ := my.readSubscriptionProgress(ctx, body, events)
-	return complete, err
-}
-
 func (my *RemoteEndpoint) readSubscriptionProgress(ctx context.Context, body io.ReadCloser, events chan<- []byte) (bool, error, bool) {
 	idle := my.idleTimeout
 	if idle <= 0 {
@@ -1072,10 +1044,6 @@ func (my *RemoteEndpoint) readSubscriptionProgress(ctx context.Context, body io.
 
 func retryableReadError(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, errRemoteSSEStream)
-}
-
-func waitSubscriptionRetry(ctx context.Context, attempt int) error {
-	return waitSubscriptionRetryWith(ctx, attempt, remoteRetryDelay)
 }
 
 func waitSubscriptionRetryWith(ctx context.Context, attempt int, delayFunc func(int) time.Duration) error {

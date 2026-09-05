@@ -27,7 +27,7 @@ func (my *Engine) executionContextFor(ctx context.Context, selection ast.Selecti
 	return my.executionContext(ctx, selection)
 }
 
-func handlerContext(ctx context.Context, handler Handler) (context.Context, context.CancelFunc) {
+func handlerContext(ctx context.Context, handler Resolver) (context.Context, context.CancelFunc) {
 	if timeout := handler.Define().Timeout; timeout > 0 {
 		return context.WithTimeout(ctx, timeout)
 	}
@@ -41,14 +41,14 @@ func handlerResult(ctx context.Context, err error) error {
 	return ctx.Err()
 }
 
-func handlerBatchLimit(handler Handler) int {
+func handlerBatchLimit(handler Resolver) int {
 	if limit := handler.Define().MaxBatch; limit > 0 {
 		return limit
 	}
 	return defaultBatchLimit
 }
 
-func validateHandler(handler Handler) error {
+func validateHandler(handler Resolver) error {
 	d := handler.Define()
 	if d.Class == "" || d.Name == "" || d.Result == "" {
 		return fmt.Errorf("handler声明不完整: %s", handler.Name())

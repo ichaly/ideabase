@@ -255,7 +255,7 @@ func (my *Dialect) buildConnectionWrap(ctx *compiler.Context, u *unit) error {
 	if totalField != nil {
 		commaField()
 		ctx.Write(`'`, totalField.Alias, `', `)
-		if err := my.buildConnectionTotal(ctx, u); err != nil {
+		if err := my.buildFilteredTotal(ctx, u, protocol.FIRST, protocol.AFTER, protocol.LAST, protocol.BEFORE, protocol.SORT); err != nil {
 			return err
 		}
 	}
@@ -270,10 +270,6 @@ func (my *Dialect) buildConnectionWrap(ctx *compiler.Context, u *unit) error {
 	ctx.Write(`) AS `)
 	sr()
 	return nil
-}
-
-func (my *Dialect) buildConnectionTotal(ctx *compiler.Context, u *unit) error {
-	return my.buildFilteredTotal(ctx, u, protocol.FIRST, protocol.AFTER, protocol.LAST, protocol.BEFORE, protocol.SORT)
 }
 
 func (my *Dialect) buildFilteredTotal(ctx *compiler.Context, u *unit, ignored ...string) error {
@@ -345,6 +341,7 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	if len(items) > 0 {
 		next()
 		// items聚合：游标模式剔除辅助列、按行号FILTER并保持显示顺序
+		// Fixed aliases avoid boxing dynamic strings on the compiler hot path.
 		if itemsAlias == protocol.ITEMS {
 			ctx.Write(`'items', COALESCE(JSONB_AGG(`)
 		} else {
@@ -559,18 +556,16 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 					appendColumn(required.Column)
 				}
 			}
-			continue
-		}
-		if field.Remote != nil {
-			// 远程关系字段不落SQL，但把宿主键列以内部别名补进投影：
-			// 执行期批量取数依赖它，别名避开选择集与codec路径保证键值原始，回填后剥除
-			alias := field.Remote.Alias()
-			if !hasAlias(scalars, alias) {
-				scalars = append(scalars, &ast.Field{Name: field.Remote.Key, Alias: alias})
-				appendColumn(sc.column(field.Remote.Key))
+			if field.BatchKey != "" {
+				alias := "__rk_" + field.BatchKey
+				if !hasAlias(scalars, alias) {
+					scalars = append(scalars, &ast.Field{Name: field.BatchKey, Alias: alias})
+					appendColumn(sc.column(field.BatchKey))
+				}
 			}
 			continue
 		}
+
 		if field.Column == "" {
 			continue // 虚拟字段（resolver等）不参与SQL
 		}

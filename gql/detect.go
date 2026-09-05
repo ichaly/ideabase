@@ -1,5 +1,4 @@
-// 全文搜索能力探测：按数据库驱动注册（与CDC唤醒源同款自注册模式）
-// 新数据库实现探测函数并registerSearchDetector注册，执行器只负责传播探测错误
+// 全文搜索能力探测：PostgreSQL启动时探测，其他驱动使用ilike。
 package gql
 
 import (
@@ -12,18 +11,6 @@ import (
 )
 
 const startupProbeTimeout = 5 * time.Second
-
-// searchDetectors 搜索能力探测器注册表（key=数据库驱动名），返回(模式,分词配置)
-var searchDetectors = map[string]func(db *Database) (string, string, error){}
-
-// registerSearchDetector 注册搜索能力探测器
-func registerSearchDetector(driver string, detect func(db *Database) (string, string, error)) {
-	searchDetectors[driver] = detect
-}
-
-func init() {
-	registerSearchDetector("postgres", detectPostgresSearch)
-}
 
 // detectPostgresSearch 探测PostgreSQL全文搜索能力：
 // 1. 存在挂在jieba/zhparser解析器上的分词配置则tsvector（中文真分词）；

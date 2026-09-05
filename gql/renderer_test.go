@@ -10,7 +10,6 @@ import (
 
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/ichaly/ideabase/gql/renderer"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -400,9 +399,9 @@ func TestRenderer_WithMockData(t *testing.T) {
 	renderer.sb = schema
 
 	// 生成schema但不保存到文件
-	for _, fn := range []func() error{
+	require.NoError(t, renderer.renderEnums())
+	for _, fn := range []func(){
 		renderer.renderScalars,
-		renderer.renderEnums,
 		renderer.renderTypes,
 		renderer.renderPaging,
 		renderer.renderFilter,
@@ -412,8 +411,7 @@ func TestRenderer_WithMockData(t *testing.T) {
 		renderer.renderQuery,
 		renderer.renderMutation,
 	} {
-		err := fn()
-		assert.NoError(t, err, "渲染schema部分失败")
+		fn()
 	}
 
 	// 验证生成成功
@@ -455,8 +453,7 @@ func TestRenderer_RenderScalars(t *testing.T) {
 	renderer.sb = schema
 
 	// 只渲染标量类型
-	err := renderer.renderScalars()
-	assert.NoError(t, err, "渲染标量类型失败")
+	renderer.renderScalars()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -505,11 +502,9 @@ func TestRenderer_RenderPaging(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染实体类型和分页类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
-	err = renderer.renderPaging()
-	assert.NoError(t, err, "渲染分页类型失败")
+	renderer.renderPaging()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -535,8 +530,7 @@ func TestRenderer_RenderFilter(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染过滤器类型
-	err := renderer.renderFilter()
-	assert.NoError(t, err, "渲染过滤器类型失败")
+	renderer.renderFilter()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -560,11 +554,9 @@ func TestRenderer_RenderSort(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染类型和排序类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
-	err = renderer.renderSort()
-	assert.NoError(t, err, "渲染排序类型失败")
+	renderer.renderSort()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -587,14 +579,11 @@ func TestRenderer_RenderQuery(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染所需类型和查询类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
-	err = renderer.renderPaging()
-	assert.NoError(t, err, "渲染分页类型失败")
+	renderer.renderPaging()
 
-	err = renderer.renderQuery()
-	assert.NoError(t, err, "渲染查询类型失败")
+	renderer.renderQuery()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -622,14 +611,11 @@ func TestRenderer_RenderMutation(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染所需类型和变更类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
-	err = renderer.renderInput()
-	assert.NoError(t, err, "渲染输入类型失败")
+	renderer.renderInput()
 
-	err = renderer.renderMutation()
-	assert.NoError(t, err, "渲染变更类型失败")
+	renderer.renderMutation()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -664,11 +650,9 @@ func TestRenderer_RenderInput(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染所需类型和输入类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
-	err = renderer.renderInput()
-	assert.NoError(t, err, "渲染输入类型失败")
+	renderer.renderInput()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -698,13 +682,12 @@ func TestRenderer_SaveToFile(t *testing.T) {
 	renderer.sb = schema
 
 	// 生成schema但不保存到文件
-	for _, fn := range []func() error{
+	require.NoError(t, renderer.renderEnums())
+	for _, fn := range []func(){
 		renderer.renderScalars,
-		renderer.renderEnums,
 		renderer.renderTypes,
 	} {
-		err := fn()
-		assert.NoError(t, err, "渲染schema部分失败")
+		fn()
 	}
 
 	// 验证生成成功
@@ -783,8 +766,7 @@ func TestRenderer_DataTypeMapping(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -810,8 +792,7 @@ func TestRenderer_RenderRelation(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染类型时会自动调用renderRelation
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染类型失败")
+	renderer.renderTypes()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -887,22 +868,22 @@ func TestRenderer_WriteField(t *testing.T) {
 
 	// 测试用例：必填字段
 	buf.Reset()
-	r.writeField("id", "ID", renderer.NonNull())
+	r.writeField("id", "ID!", "")
 	require.Equal(t, "  id: ID!\n", buf.String())
 
 	// 测试用例：带描述的字段
 	buf.Reset()
-	r.writeField("name", "String", renderer.WithComment("用户名称"))
+	r.writeField("name", "String", "用户名称")
 	require.Equal(t, "  name: String  # 用户名称\n", buf.String())
 
 	// 测试用例：非必填字段
 	buf.Reset()
-	r.writeField("age", "Int", renderer.List())
+	r.writeField("age", "[Int]", "")
 	require.Equal(t, "  age: [Int]\n", buf.String())
 
 	// 测试用例：列表字段
 	buf.Reset()
-	r.writeField("tags", "String", renderer.ListNonNull(), renderer.NonNull())
+	r.writeField("tags", "[String!]!", "")
 	require.Equal(t, "  tags: [String!]!\n", buf.String())
 }
 

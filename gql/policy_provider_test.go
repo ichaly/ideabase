@@ -12,13 +12,13 @@ func TestPolicyDecisionValidatesAndSeparatesShapeFromValues(t *testing.T) {
 	require.NoError(t, err)
 	route := TenantRoute{Mode: TenantModeSharedTable, Tenant: "t1", DataSource: "db", Revision: 8, CacheKey: "route"}
 	request := PolicyRequest{Identity: id, Route: route, Coordinate: "Query.users", Resource: "users", Actions: []string{"select"}, FieldUses: []FieldUse{FieldUseSelect, FieldUseFilter}, Values: map[string]any{"tenant": "t1"}}
-	decision := PolicyDecision{Allow: true, PolicyRevision: 4, RowPredicates: []TypedPredicate{{Column: "tenant_id", Operator: "eq", Context: "tenant"}}, Limit: 50, Cost: 3}
+	decision := PolicyDecision{Allow: true, PolicyRevision: 4, RowPredicates: []Predicate{{Column: "tenant_id", Operator: "eq", Context: "tenant"}}, Limit: 50, Cost: 3}
 	got, err := NormalizeDecision(request, decision)
 	require.NoError(t, err)
 	require.NotEmpty(t, got.PermissionSignature)
 	require.NotEmpty(t, got.ShapeSignature)
 	changed := decision
-	changed.RowPredicates = []TypedPredicate{{Column: "tenant_id", Operator: "eq", Context: "tenant", Value: "different"}}
+	changed.RowPredicates = []Predicate{{Column: "tenant_id", Operator: "eq", Context: "tenant", Value: "different"}}
 	changed, err = NormalizeDecision(request, changed)
 	require.NoError(t, err)
 	require.Equal(t, got.ShapeSignature, changed.ShapeSignature)
@@ -138,7 +138,7 @@ func TestBuiltinPolicyProviderIntersectsUpsertWildcardAcrossActions(t *testing.T
 func TestNormalizeDecisionRejectsInvalidRoleBranch(t *testing.T) {
 	request := PolicyRequest{Identity: mustPolicyIdentity(t, "u"), Route: TenantRoute{Tenant: "t1"}, Coordinate: "Query.users", Resource: "users"}
 	request.Actions = []string{"select"}
-	_, err := NormalizeDecision(request, PolicyDecision{Allow: true, RoleBranches: []RolePolicyBranch{{Role: "reader", RowPredicates: []TypedPredicate{{Column: "", Operator: "eq"}}}}})
+	_, err := NormalizeDecision(request, PolicyDecision{Allow: true, RoleBranches: []RolePolicyBranch{{Role: "reader", RowPredicates: []Predicate{{Column: "", Operator: "eq"}}}}})
 	require.Error(t, err)
 }
 
@@ -147,14 +147,14 @@ func TestPolicyDecisionValidatesEveryCatalogReference(t *testing.T) {
 	class.AddField(&protocol.Field{Name: "tenantId", Column: "tenant id"})
 	valid := PolicyDecision{
 		Fields:        map[FieldUse][]string{FieldUseFilter: {"tenantId"}},
-		RowPredicates: []TypedPredicate{{Column: "tenant id", Operator: "eq", Context: "tenant"}},
+		RowPredicates: []Predicate{{Column: "tenant id", Operator: "eq", Context: "tenant"}},
 	}
 	require.NoError(t, ValidateDecisionCatalog(class, valid))
 	invalid := valid
 	invalid.Fields = map[FieldUse][]string{FieldUseFilter: {"missing"}}
 	require.ErrorContains(t, ValidateDecisionCatalog(class, invalid), "missing")
 	invalid = valid
-	invalid.RowPredicates = []TypedPredicate{{Column: "missing", Operator: "eq"}}
+	invalid.RowPredicates = []Predicate{{Column: "missing", Operator: "eq"}}
 	require.ErrorContains(t, ValidateDecisionCatalog(class, invalid), "missing")
 }
 

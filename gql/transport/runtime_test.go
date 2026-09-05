@@ -36,7 +36,7 @@ func newArtifact(t *testing.T, schema string) *core.Snapshot {
 			for _, arg := range field.Arguments {
 				args = append(args, core.Argument{Name: arg.Name, Type: arg.Type.String()})
 			}
-			capabilities = append(capabilities, core.Capability{Coordinate: root.Name + "." + field.Name, Parent: root.Name, Name: field.Name, Type: field.Type.String(), Arguments: args, Handler: core.HandlerRemote})
+			capabilities = append(capabilities, core.Capability{Coordinate: root.Name + "." + field.Name, Parent: root.Name, Name: field.Name, Type: field.Type.String(), Arguments: args, Handler: core.HandlerResolver})
 		}
 	}
 	fingerprint, err := core.ArtifactFingerprint(schema, capabilities)
@@ -794,7 +794,7 @@ func TestRemoteGatewaySubscriptionUsesSignedSSEStream(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("/manifest", testManifestHandler("child", endpoint))
 	mux.Handle("/graphql", NewHandler(endpoint, Options{Delegation: serverCodec}))
-	mux.Handle("/subscribe", NewSubscriptionHandler(endpoint, Options{Delegation: serverCodec}))
+	mux.Handle("/subscribe", NewHandler(endpoint, Options{Delegation: serverCodec}))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	remote, err := NewRemoteEndpoint(context.Background(), RemoteOptions{
@@ -1044,7 +1044,7 @@ func TestRemoteSubscriptionIdleWatchdogUnblocksRead(t *testing.T) {
 	remote := &RemoteEndpoint{maxResponse: 1024, idleTimeout: 10 * time.Millisecond}
 	done := make(chan error, 1)
 	go func() {
-		_, err := remote.readSubscription(context.Background(), reader, make(chan []byte, 1))
+		_, err, _ := remote.readSubscriptionProgress(context.Background(), reader, make(chan []byte, 1))
 		done <- err
 	}()
 	select {
@@ -1059,7 +1059,7 @@ func TestRemoteSubscriptionIdleWatchdogUnblocksRead(t *testing.T) {
 
 func TestRemoteSubscriptionRejectsOversizedTokenWithoutRetry(t *testing.T) {
 	remote := &RemoteEndpoint{maxResponse: 4096, idleTimeout: time.Second}
-	_, err := remote.readSubscription(context.Background(), io.NopCloser(strings.NewReader("data: "+strings.Repeat("x", 5000)+"\n\n")), make(chan []byte, 1))
+	_, err, _ := remote.readSubscriptionProgress(context.Background(), io.NopCloser(strings.NewReader("data: "+strings.Repeat("x", 5000)+"\n\n")), make(chan []byte, 1))
 	if err == nil || retryableReadError(err) || !strings.Contains(err.Error(), "response limit") {
 		t.Fatalf("oversized token error = %v", err)
 	}
@@ -1100,7 +1100,7 @@ func TestSubscriptionHandlerLimitsEventFrames(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
 	response := &deadlineRecorder{httptest.NewRecorder()}
-	NewSubscriptionHandler(endpoint, Options{MaxResponseBytes: 32}).ServeHTTP(response, request)
+	NewHandler(endpoint, Options{MaxResponseBytes: 32}).ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "LIMIT_EXCEEDED") || strings.Contains(response.Body.String(), strings.Repeat("x", 64)) {
 		t.Fatalf("oversized subscription frame = %d %s", response.Code, response.Body.String())
 	}

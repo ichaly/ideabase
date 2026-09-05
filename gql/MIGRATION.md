@@ -4,7 +4,7 @@
 低级构造器不再是运行时装配入口。
 自定义业务统一注册 `Resolver`。HTTP 统一使用 `transport.NewHandler`；Fiber 等框架通过官方
 `net/http` adaptor 挂载该 handler。旧 `Bind` 和 GraphQL WebSocket 入口已经移除，订阅统一
-迁移到 `transport.NewSubscriptionHandler` 的 SSE。单数据源使用 `Engine`；多租户数据源
+迁移到 `transport.NewHandler` 的 SSE。单数据源使用 `Engine`；多租户数据源
 路由使用 `TenantGateway`，跨引擎命名空间组合使用 `Gateway`，三者都经由同一执行契约暴露。
 
 ## 1. 先升级引擎，再迁调用方
@@ -60,7 +60,7 @@ Schema/拓扑刷新失败可继续服务已验证的旧 snapshot。
 
 ## 6. HTTP transport 只接受一个配置对象
 
-`transport.NewHandler` 与 `transport.NewSubscriptionHandler` 统一要求显式传入一个
+`transport.NewHandler` 要求显式传入一个
 `transport.Options`。无自定义配置时传 `transport.Options{}`；不要再传多个 options，避免
 安全配置被静默覆盖。
 
@@ -96,3 +96,25 @@ GA 以单一路径替换预发布兼容入口：Resolver 只使用 `ExecutionCon
 - `protocol.Grouping` → `protocol.ScalarTypes()` 与对应查询函数。
 
 这些是 GA major 边界的显式编译期不兼容项，目的是消除跨 Engine 全局污染和同义 API。
+
+## Resolver 与 HTTP 概念收敛
+
+- `NewRemote` 改为 `NewLoader`，返回同一个 `Resolver`；删除 `Remote`、`RemoteRef` 和单独的 Remote 注册/执行路径。
+- `Builder.Register` 只接受 `Resolver`。普通、批量、按键加载均经此入口；策略只通过 `Builder.Policy` 配置。
+- `Handler` 声明接口并入 `Resolver`，不再额外实现。直接实现 Resolver 的实体字段也从 `Define` 挂载。
+- `Replace` 自身声明覆盖意图，删除 `Existing()` 和 `Define.Existing`；`Register` 仍拒绝覆盖已有字段。
+- 批量中间件的 source/result 类型使用切片，例如 `NextResolver[[]Source, Args, []Value]`，保持一次批量调用。
+- `NewSubscriptionHandler` 合并到 `NewHandler`。只挂载 `/graphql`；SSE 请求使用 POST JSON 和 `Accept: text/event-stream`。长连接与普通请求分别限流。
+- capability 的 `handler: remote` 统一为 `handler: resolver`。发布时重新获取 manifest/effective schema 和 snapshot pin；旧的结构指纹不能继续使用。
+- 示例只暴露带租户路由的 `/graphql`。Gateway 同样可挂载该路径，namespace 出现在 GraphQL Schema 中，而非要求另一个 URL。
+
+远程实例组合仍使用 `RemoteEndpoint`：它提供整个服务的 Schema 和执行契约，不是字段加载器。SQL 快路径、三种租户隔离、多副本共享撤权/重放与订阅能力保留。
+
+## 全量生产代码精简
+
+- 运行时权限的 `gql.TypedPredicate` 改为 `gql.Predicate`，与 `protocol.Predicate` 是同一个类型；不再复制结构或逐项转换。JSON 字段统一为 `column`、`operator`、`context`、`value`。
+- 删除独立的 `gql/renderer` 子包。Schema 生成直接使用 SDL 类型字符串和已有的 `gql.Argument`；应用继续通过 `Builder.Build` / `Engine.Schema` 获取 Schema。
+- SDL 字段参数统一行内输出。语义不变，但原始 Schema 文本与结构指纹会变化，需重新获取 Schema、manifest 和执行 pin。
+- 删除仅在包内使用的 CDC、搜索探测注册表；公开 SQL 方言注册入口保持不变。
+
+完整审阅范围与验证结果见 [生产代码精简记录](docs/reviews/2026-09-05-production-simplification.md)。

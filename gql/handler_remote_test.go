@@ -12,7 +12,7 @@ func TestRemoteHandlerReceivesRequestedSelection(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	var selection ast.SelectionSet
-	require.NoError(t, executor.register(NewRemote(
+	require.NoError(t, executor.register(NewLoader(
 		"User", "selectedProfile", "", "id",
 		func(ctx context.Context, keys []any) (map[any]Profile, error) {
 			view, ok := ExecutionContextFromContext(ctx)

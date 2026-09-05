@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -112,7 +113,7 @@ func TestPolicyProviderRejectsStaleRevisionAndUnawareHandler(t *testing.T) {
 		want     string
 	}{
 		"stale":    {PolicyDecision{Allow: true, PolicyRevision: 4}, "revision mismatch"},
-		"row fact": {PolicyDecision{Allow: true, RowPredicates: []TypedPredicate{{Column: "id", Operator: "eq", Value: 1}}}, "policy-aware"},
+		"row fact": {PolicyDecision{Allow: true, RowPredicates: []Predicate{{Column: "id", Operator: "eq", Value: 1}}}, "policy-aware"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			meta := emptyMetadata(t)
@@ -145,7 +146,7 @@ func TestPolicyAwareResolverReceivesDefensiveDecision(t *testing.T) {
 	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
 	require.NoError(t, err)
 	installTestPolicy(t, executor, OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
-		return PolicyDecision{Allow: true, RowPredicates: []TypedPredicate{{Column: "id", Operator: "eq", Value: 1}}}, nil
+		return PolicyDecision{Allow: true, RowPredicates: []Predicate{{Column: "id", Operator: "eq", Value: 1}}}, nil
 	}))
 	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
 		decision, ok := PolicyDecisionFromContext(ctx, "Query.health")
@@ -211,7 +212,7 @@ func TestPolicyProviderRowPredicateIsCompiledWithRequestValue(t *testing.T) {
 	provider := OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{
 			Allow: true, Fields: request.Fields,
-			RowPredicates: []TypedPredicate{{Column: "email", Operator: "eq", Value: request.Identity.Subject()}},
+			RowPredicates: []Predicate{{Column: "email", Operator: "eq", Value: request.Identity.Subject()}},
 		}, nil
 	})
 	installTestPolicy(t, executor, provider)
@@ -234,7 +235,7 @@ func TestPolicyProviderCreateCheckRejectsBeforeWrite(t *testing.T) {
 	provider := OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{
 			Allow: true, Fields: request.Fields,
-			Check: []TypedPredicate{{Column: "name", Operator: "eq", Value: "Allowed"}},
+			Check: []Predicate{{Column: "name", Operator: "eq", Value: "Allowed"}},
 		}, nil
 	})
 	installTestPolicy(t, executor, provider)
@@ -260,7 +261,7 @@ func TestPolicyProviderUpdateCheckReadsUnsubmittedColumns(t *testing.T) {
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{
 			Allow: true, Fields: request.Fields,
-			Check: []TypedPredicate{{Column: "name", Operator: "eq", Value: "Allowed"}},
+			Check: []Predicate{{Column: "name", Operator: "eq", Value: "Allowed"}},
 		}, nil
 	}))
 	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
@@ -292,8 +293,8 @@ func TestPolicyProviderUpdateKeepsRoleFilterAndCheckAtomic(t *testing.T) {
 	require.NoError(t, testQueryRow(db, `INSERT INTO users(name, email) VALUES ($1, $2) RETURNING id`, "Before", "a@x.com").Scan(&user.ID))
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{Allow: true, Fields: request.Fields, RoleBranches: []RolePolicyBranch{
-			{Role: "a", RowPredicates: []TypedPredicate{{Column: "email", Operator: "eq", Value: "a@x.com"}}, Check: []TypedPredicate{{Column: "name", Operator: "eq", Value: "Allowed"}}},
-			{Role: "b", RowPredicates: []TypedPredicate{{Column: "email", Operator: "eq", Value: "b@x.com"}}, Check: []TypedPredicate{{Column: "name", Operator: "eq", Value: "Denied"}}},
+			{Role: "a", RowPredicates: []Predicate{{Column: "email", Operator: "eq", Value: "a@x.com"}}, Check: []Predicate{{Column: "name", Operator: "eq", Value: "Allowed"}}},
+			{Role: "b", RowPredicates: []Predicate{{Column: "email", Operator: "eq", Value: "b@x.com"}}, Check: []Predicate{{Column: "name", Operator: "eq", Value: "Denied"}}},
 		}}, nil
 	}))
 	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
@@ -328,11 +329,11 @@ func TestPolicyProviderChecksRelationOnlyParentAndTargetUpdates(t *testing.T) {
 	first, second := posts[0], posts[1]
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		decision := PolicyDecision{Allow: true, Fields: request.Fields}
-		if request.Resource == "User" && operationInList(request.Actions, protocol.OP_UPDATE) {
-			decision.Check = []TypedPredicate{{Column: "name", Operator: "eq", Value: "Allowed"}}
+		if request.Resource == "User" && slices.Contains(request.Actions, protocol.OP_UPDATE) {
+			decision.Check = []Predicate{{Column: "name", Operator: "eq", Value: "Allowed"}}
 		}
-		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_UPDATE) {
-			decision.Check = []TypedPredicate{{Column: "user_id", Operator: "in", Value: []any{owner.ID, denied.ID}}}
+		if request.Resource == "Post" && slices.Contains(request.Actions, protocol.OP_UPDATE) {
+			decision.Check = []Predicate{{Column: "user_id", Operator: "in", Value: []any{owner.ID, denied.ID}}}
 		}
 		return decision, nil
 	}))
@@ -383,7 +384,7 @@ func TestPolicyProviderAuthorizesNestedRelationTarget(t *testing.T) {
 	defer cleanup()
 	seenTarget := false
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
-		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_UPDATE) && len(request.Fields) > 0 {
+		if request.Resource == "Post" && slices.Contains(request.Actions, protocol.OP_UPDATE) && len(request.Fields) > 0 {
 			seenTarget = true
 			require.ElementsMatch(t, []string{"id"}, request.Fields[FieldUseFilter], "nested relation target keys must be authorized as filters")
 			require.ElementsMatch(t, []string{"userId"}, request.Fields[FieldUseWrite], "nested relation foreign key must be authorized as a write")
@@ -413,8 +414,8 @@ func TestPolicyProviderChecksNestedRelationCreate(t *testing.T) {
 	defer cleanup()
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		decision := PolicyDecision{Allow: true, Fields: request.Fields}
-		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_INSERT) && len(request.Fields) > 0 {
-			decision.Check = []TypedPredicate{{Column: "title", Operator: "eq", Value: "Allowed"}}
+		if request.Resource == "Post" && slices.Contains(request.Actions, protocol.OP_INSERT) && len(request.Fields) > 0 {
+			decision.Check = []Predicate{{Column: "title", Operator: "eq", Value: "Allowed"}}
 		}
 		return decision, nil
 	}))
@@ -431,7 +432,7 @@ func TestPolicyProviderAuthorizesNestedCreateForeignKeyWrite(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
-		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_INSERT) && len(request.Fields) > 0 {
+		if request.Resource == "Post" && slices.Contains(request.Actions, protocol.OP_INSERT) && len(request.Fields) > 0 {
 			require.ElementsMatch(t, []string{"title", "userId"}, request.Fields[FieldUseWrite])
 			return PolicyDecision{Allow: true, Fields: map[FieldUse][]string{FieldUseWrite: {"title"}}}, nil
 		}
@@ -453,7 +454,7 @@ func TestPolicyProviderAuthorizesManyToManyThroughWrite(t *testing.T) {
 	defer cleanup()
 	seen := false
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
-		if request.Resource == "PostTag" && operationInList(request.Actions, protocol.OP_INSERT) {
+		if request.Resource == "PostTag" && slices.Contains(request.Actions, protocol.OP_INSERT) {
 			seen = true
 			return PolicyDecision{Allow: false}, nil
 		}
@@ -474,7 +475,7 @@ func TestManyToManyDisconnectUsesThroughFilterFields(t *testing.T) {
 	defer cleanup()
 	seen := false
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
-		if request.Resource == "PostTag" && operationInList(request.Actions, protocol.OP_DELETE) && len(request.Fields[FieldUseFilter]) > 0 {
+		if request.Resource == "PostTag" && slices.Contains(request.Actions, protocol.OP_DELETE) && len(request.Fields[FieldUseFilter]) > 0 {
 			seen = true
 			require.Empty(t, request.Fields[FieldUseWrite])
 			require.ElementsMatch(t, []string{"postId", "tagId"}, request.Fields[FieldUseFilter])
@@ -499,8 +500,8 @@ func TestManyToManyConnectChecksCompleteThroughRowInSQL(t *testing.T) {
 	allowedSource := 1
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		decision := PolicyDecision{Allow: true, Fields: request.Fields}
-		if request.Resource == "PostTag" && operationInList(request.Actions, protocol.OP_INSERT) {
-			decision.Check = []TypedPredicate{{Column: "postId", Operator: "eq", Value: allowedSource}}
+		if request.Resource == "PostTag" && slices.Contains(request.Actions, protocol.OP_INSERT) {
+			decision.Check = []Predicate{{Column: "postId", Operator: "eq", Value: allowedSource}}
 		}
 		return decision, nil
 	}))

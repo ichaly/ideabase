@@ -196,9 +196,12 @@ func cloneValue(value *ast.Value) *ast.Value {
 	if len(value.Children) > 0 {
 		copy.Children = make(ast.ChildValueList, len(value.Children))
 		for i, child := range value.Children {
-			childCopy := child
+			if child == nil {
+				continue
+			}
+			childCopy := *child
 			childCopy.Value = cloneValue(child.Value)
-			copy.Children[i] = childCopy
+			copy.Children[i] = &childCopy
 		}
 	}
 	return &copy

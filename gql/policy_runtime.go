@@ -5,6 +5,7 @@ import (
 	stdjson "encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -122,7 +123,7 @@ func (my *Engine) validatePolicyBudget(target policyTarget, decision PolicyDecis
 			return fmt.Errorf("cost %d exceeds %d", cost, decision.Cost)
 		}
 	}
-	if decision.Limit <= 0 || !operationInList(target.capability.Actions, protocol.OP_SELECT) && !operationInList(target.capability.Actions, protocol.OP_AGGREGATE) {
+	if decision.Limit <= 0 || !slices.Contains(target.capability.Actions, protocol.OP_SELECT) && !slices.Contains(target.capability.Actions, protocol.OP_AGGREGATE) {
 		return nil
 	}
 	for _, node := range target.nodes {
@@ -471,7 +472,7 @@ func evaluatePolicyChecks(target policyTarget, decision PolicyDecision, variable
 	for _, node := range target.nodes {
 		argument := node.Arguments.ForName(protocol.INPUT)
 		if argument == nil {
-			if (operationInList(target.capability.Actions, protocol.OP_INSERT) || operationInList(target.capability.Actions, protocol.OP_UPDATE)) && (len(decision.Preset) > 0 || len(decision.Check) > 0) {
+			if (slices.Contains(target.capability.Actions, protocol.OP_INSERT) || slices.Contains(target.capability.Actions, protocol.OP_UPDATE)) && (len(decision.Preset) > 0 || len(decision.Check) > 0) {
 				return fmt.Errorf("write check/preset requires input")
 			}
 			continue
@@ -515,12 +516,12 @@ func evaluatePolicyChecks(target policyTarget, decision PolicyDecision, variable
 		// Update checks are enforced by mutation SQL against the post-update
 		// row. The request only contains submitted columns, so untouched columns
 		// must be resolved by the database rather than rejected here.
-		if !operationInList(target.capability.Actions, protocol.OP_UPDATE) || operationInList(target.capability.Actions, protocol.OP_INSERT) {
+		if !slices.Contains(target.capability.Actions, protocol.OP_UPDATE) || slices.Contains(target.capability.Actions, protocol.OP_INSERT) {
 			if err := matchPolicyPredicates(target.class, decision.Check, values, scope); err != nil {
 				return err
 			}
 		}
-		if len(decision.RoleBranches) > 0 && (!operationInList(target.capability.Actions, protocol.OP_UPDATE) || operationInList(target.capability.Actions, protocol.OP_INSERT)) {
+		if len(decision.RoleBranches) > 0 && (!slices.Contains(target.capability.Actions, protocol.OP_UPDATE) || slices.Contains(target.capability.Actions, protocol.OP_INSERT)) {
 			matched := false
 			for _, branch := range decision.RoleBranches {
 				if matchPolicyPredicates(target.class, branch.Check, values, scope) == nil {
@@ -536,7 +537,7 @@ func evaluatePolicyChecks(target policyTarget, decision PolicyDecision, variable
 	return nil
 }
 
-func matchPolicyPredicates(class *protocol.Class, predicates []TypedPredicate, values, scope map[string]any) error {
+func matchPolicyPredicates(class *protocol.Class, predicates []Predicate, values, scope map[string]any) error {
 	rules := make([]protocol.Predicate, 0, len(predicates))
 	for _, predicate := range predicates {
 		field := class.Fields[predicate.Column]
@@ -565,7 +566,7 @@ func (my *Engine) collectPolicyChildren(class *protocol.Class, set ast.Selection
 			}
 			continue
 		}
-		if declared.Relation == nil && declared.Resolver == "" && declared.Remote == nil {
+		if declared.Relation == nil && declared.Resolver == "" {
 			continue
 		}
 		var target *protocol.Class
@@ -648,7 +649,7 @@ func (my *Engine) collectPolicyFields(target *policyTarget, class *protocol.Clas
 				walk(field.SelectionSet)
 				continue
 			}
-			if declared.Relation != nil || declared.Resolver != "" || declared.Remote != nil {
+			if declared.Relation != nil || declared.Resolver != "" {
 				target.add(FieldUseJoin, field.Name)
 				if declared.Relation != nil {
 					for _, name := range declared.Relation.SourceColumns() {
@@ -658,13 +659,14 @@ func (my *Engine) collectPolicyFields(target *policyTarget, class *protocol.Clas
 					for _, name := range declared.Requires {
 						target.add(FieldUseInternalDependency, name)
 					}
-				} else if declared.Remote != nil {
-					target.add(FieldUseInternalDependency, declared.Remote.Key)
+				}
+				if declared.BatchKey != "" {
+					target.add(FieldUseInternalDependency, declared.BatchKey)
 				}
 				continue
 			}
 			target.add(FieldUseReturn, field.Name)
-			if operationInList(target.capability.Actions, protocol.OP_SELECT) {
+			if slices.Contains(target.capability.Actions, protocol.OP_SELECT) {
 				target.add(FieldUseSelect, field.Name)
 			}
 		}
@@ -744,7 +746,7 @@ func (my *Engine) policyPlan(ctx context.Context, base *Plan, variables map[stri
 			if err != nil {
 				return nil, fmt.Errorf("policy %s: %w", coordinate, err)
 			}
-			permission.Check, err = appendPolicyPredicates(permission.Check, class, append(append([]TypedPredicate(nil), decision.Check...), branch.Check...), scope, fmt.Sprintf("%d_%d_c", coordinateIndex, branchIndex))
+			permission.Check, err = appendPolicyPredicates(permission.Check, class, append(append([]Predicate(nil), decision.Check...), branch.Check...), scope, fmt.Sprintf("%d_%d_c", coordinateIndex, branchIndex))
 			if err != nil {
 				return nil, fmt.Errorf("policy %s: %w", coordinate, err)
 			}
@@ -760,7 +762,7 @@ func (my *Engine) policyPlan(ctx context.Context, base *Plan, variables map[stri
 	if err != nil {
 		return nil, err
 	}
-	plan.resolvers, plan.paths, plan.intro = base.resolvers, base.paths, base.intro
+	plan.resolvers, plan.decode, plan.paths, plan.intro = base.resolvers, base.decode, base.paths, base.intro
 	plan.policyRoles = sortedUnique(roles)
 	plan.policyScope = scope
 	if !plan.Volatile() {
@@ -809,7 +811,7 @@ func applyDecisionFields(permission *protocol.Permission, actions []string, fiel
 	permission.Update = sortedUnique(permission.Update)
 }
 
-func appendPolicyPredicates(out []protocol.Predicate, class *protocol.Class, predicates []TypedPredicate, scope map[string]any, prefix string) ([]protocol.Predicate, error) {
+func appendPolicyPredicates(out []protocol.Predicate, class *protocol.Class, predicates []Predicate, scope map[string]any, prefix string) ([]protocol.Predicate, error) {
 	for index, predicate := range predicates {
 		field := class.Fields[predicate.Column]
 		if field == nil || field.Column == "" {
@@ -829,7 +831,7 @@ func appendPolicyPredicates(out []protocol.Predicate, class *protocol.Class, pre
 	return out, nil
 }
 
-func applyPolicyPresets(overlay *policyOverlay, class *protocol.Class, actions []string, presets []TypedPredicate, scope map[string]any, prefix string) error {
+func applyPolicyPresets(overlay *policyOverlay, class *protocol.Class, actions []string, presets []Predicate, scope map[string]any, prefix string) error {
 	for index, preset := range presets {
 		if preset.Operator != "eq" {
 			return fmt.Errorf("preset %s only supports eq", preset.Column)
@@ -873,25 +875,25 @@ func (my *Engine) policyDecisionScope(decisions map[string]PolicyDecision) map[s
 		}
 		for branchIndex, branch := range branches {
 			putPolicyValues(scope, fmt.Sprintf("%d_%d_f", coordinateIndex, branchIndex), policyFilterPredicates(capability.Actions, decision, branch))
-			putPolicyValues(scope, fmt.Sprintf("%d_%d_c", coordinateIndex, branchIndex), append(append([]TypedPredicate(nil), decision.Check...), branch.Check...))
+			putPolicyValues(scope, fmt.Sprintf("%d_%d_c", coordinateIndex, branchIndex), append(append([]Predicate(nil), decision.Check...), branch.Check...))
 		}
 		putPolicyValues(scope, fmt.Sprintf("%d_p", coordinateIndex), decision.Preset)
 	}
 	return scope
 }
 
-func policyFilterPredicates(actions []string, decision PolicyDecision, branch RolePolicyBranch) []TypedPredicate {
-	filters := append(append([]TypedPredicate(nil), decision.RowPredicates...), branch.RowPredicates...)
+func policyFilterPredicates(actions []string, decision PolicyDecision, branch RolePolicyBranch) []Predicate {
+	filters := append(append([]Predicate(nil), decision.RowPredicates...), branch.RowPredicates...)
 	// Check is a post-write invariant for updates, not an old-row filter.
 	// Delete/restore still use it as a precondition over the existing row.
-	if operationInList(actions, protocol.OP_DELETE) || operationInList(actions, protocol.OP_PURGE) || operationInList(actions, protocol.OP_RESTORE) {
+	if slices.Contains(actions, protocol.OP_DELETE) || slices.Contains(actions, protocol.OP_PURGE) || slices.Contains(actions, protocol.OP_RESTORE) {
 		filters = append(filters, decision.Check...)
 		filters = append(filters, branch.Check...)
 	}
 	return filters
 }
 
-func putPolicyValues(scope map[string]any, prefix string, predicates []TypedPredicate) {
+func putPolicyValues(scope map[string]any, prefix string, predicates []Predicate) {
 	for index, predicate := range predicates {
 		if predicate.Context == "" && predicate.Operator != "is-null" && predicate.Operator != "not-null" {
 			scope[fmt.Sprintf("__gql_policy_%s_%d", prefix, index)] = predicate.Value
@@ -916,9 +918,9 @@ func policyRuntimeSignature(decisions map[string]PolicyDecision) string {
 	for _, coordinate := range sortedMapKeys(decisions) {
 		decision := decisions[coordinate]
 		value, _ := stdjson.Marshal(struct {
-			Row      []TypedPredicate
-			Preset   []TypedPredicate
-			Check    []TypedPredicate
+			Row      []Predicate
+			Preset   []Predicate
+			Check    []Predicate
 			Branches []RolePolicyBranch
 		}{decision.RowPredicates, decision.Preset, decision.Check, decision.RoleBranches})
 		parts = append(parts, coordinate+"\x00"+string(value))

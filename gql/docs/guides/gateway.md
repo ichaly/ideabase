@@ -34,8 +34,7 @@ gateway, err := gql.NewTenantGateway(router, sources,
 | --- | --- |
 | `/manifest` | 静态 Schema、Capability、控制 revision |
 | `/effective-schema` | 按 delegation identity 过滤的 Schema artifact |
-| `/graphql` | 固定执行入口 |
-| `/graphql/stream` | 固定快照的 SSE |
+| `/graphql` | 查询、突变与固定快照的 SSE |
 | `/health` | DB、CDC、策略、迁移和版本状态 |
 | `/.well-known/gql-gateway` | 传输发现描述 |
 
@@ -48,3 +47,11 @@ Gateway 不能只使用静态 Manifest 生成身份相关 Schema；需要 Effect
 ---
 
 [← Resolver 扩展](resolvers.md) · [文档首页](../README.md) · [下一章：配置参考 →](../reference/configuration.md)
+
+独立 Engine、TenantGateway 和组合后的 Gateway 使用同一个传输入口：
+
+```go
+mux.Handle("/graphql", transport.NewHandler(gateway, transport.Options{}))
+```
+
+不需要额外的 `/gateway/graphql` 或 `/tenant/graphql`。选择服务装配方式后，客户端只使用一个业务 URL。

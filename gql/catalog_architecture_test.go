@@ -15,7 +15,7 @@ func TestNewSnapshotArtifactRejectsForgedAdvertisedFingerprint(t *testing.T) {
 			Parent:     "Query",
 			Name:       "hello",
 			Type:       "String",
-			Handler:    HandlerRemote,
+			Handler:    HandlerResolver,
 		},
 	})
 

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"sync/atomic"
+
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 type responseLimitKey struct{}
@@ -105,7 +107,7 @@ func replyWireValue(reply gqlReply) any {
 	if reply.nullData {
 		return struct {
 			Data       any                    `json:"data"`
-			Errors     any                    `json:"errors,omitempty"`
+			Errors     gqlerror.List          `json:"errors,omitempty"`
 			Extensions map[string]interface{} `json:"extensions,omitempty"`
 		}{nil, reply.Errors, reply.Extensions}
 	}

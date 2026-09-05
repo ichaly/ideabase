@@ -2,6 +2,8 @@ package gql
 
 import (
 	"context"
+	"github.com/ichaly/ideabase/gql/internal/lru"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,16 +108,6 @@ func TestEffectiveSchemaCacheIncludesScopeValues(t *testing.T) {
 	require.True(t, strings.Contains(wide.Schema, "name"))
 }
 
-func TestIntersectFieldShapePreservesUsesMissingFromNextDecision(t *testing.T) {
-	current := map[FieldUse][]string{
-		FieldUseSelect: {"id", "name"},
-		FieldUseReturn: {"id", "name"},
-	}
-	intersectFieldShape(current, map[FieldUse][]string{FieldUseReturn: {"name"}})
-	require.Equal(t, []string{"id", "name"}, current[FieldUseSelect])
-	require.Equal(t, []string{"name"}, current[FieldUseReturn])
-}
-
 func TestEffectiveSchemaIntersectsOutputAcrossSelectAndReturn(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
@@ -180,7 +172,7 @@ func TestEffectiveSchemaDoesNotExposeCursorsForHiddenOrderingValues(t *testing.T
 }
 
 func TestEffectiveSchemaCacheIsBoundedLRU(t *testing.T) {
-	cache := newEffectiveCache(2)
+	cache := lru.New[string, *effectiveView](2)
 	a := &effectiveView{}
 	b := &effectiveView{}
 	c := &effectiveView{}
@@ -243,7 +235,7 @@ func TestEffectiveSchemaRemovesUnauthorizedRelationOperations(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
-		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_UPDATE) {
+		if request.Resource == "Post" && slices.Contains(request.Actions, protocol.OP_UPDATE) {
 			return PolicyDecision{Allow: false}, nil
 		}
 		return PolicyDecision{Allow: true, Fields: map[FieldUse][]string{
@@ -268,7 +260,7 @@ func TestEffectiveSchemaRemovesRelationWritesWithoutTargetKeyFilter(t *testing.T
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
-		if request.Resource == "Post" && operationInList(request.Actions, protocol.OP_UPDATE) {
+		if request.Resource == "Post" && slices.Contains(request.Actions, protocol.OP_UPDATE) {
 			return PolicyDecision{Allow: true, Fields: map[FieldUse][]string{
 				FieldUseSelect: {"*"}, FieldUseReturn: {"*"}, FieldUseWrite: {"title"},
 			}}, nil

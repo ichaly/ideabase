@@ -37,7 +37,7 @@ func requireTransportError(t *testing.T, w *httptest.ResponseRecorder, code stri
 }
 
 func TestTransportConstructorsHaveOneOptionsContract(t *testing.T) {
-	if reflect.TypeOf(NewHandler).IsVariadic() || reflect.TypeOf(NewSubscriptionHandler).IsVariadic() {
+	if reflect.TypeOf(NewHandler).IsVariadic() {
 		t.Fatal("transport constructors must not silently accept multiple option sets")
 	}
 }

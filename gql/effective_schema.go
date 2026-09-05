@@ -4,6 +4,7 @@ import (
 	"context"
 	stdjson "encoding/json"
 	"fmt"
+	"github.com/ichaly/ideabase/gql/internal/lru"
 	"reflect"
 	"slices"
 	"sort"
@@ -497,7 +498,7 @@ func (my *Engine) effectiveSchema(ctx context.Context) (view *effectiveView, err
 		return my.baseView, nil
 	}
 	if my.effectiveCache == nil {
-		my.effectiveCache = newEffectiveCache(128)
+		my.effectiveCache = lru.New[string, *effectiveView](128)
 	}
 	cacheable := builtin
 	providerKey := ""
@@ -542,7 +543,7 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 	var signatures []string
 	for _, capability := range my.snapshot.Capabilities() {
 		root := capability.Parent == "Query" || capability.Parent == "Mutation" || capability.Parent == "Subscription"
-		custom := capability.Handler == HandlerResolver || capability.Handler == HandlerRemote
+		custom := capability.Handler == HandlerResolver
 		if capability.Resource == "" || len(capability.Actions) == 0 || !root && !custom {
 			continue
 		}
@@ -649,7 +650,7 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 					writeSeen[class.Name] = make(map[string]bool)
 				}
 				key := ""
-				if len(capability.Actions) > 1 && operationInList(capability.Actions, protocol.OP_INSERT) && operationInList(capability.Actions, protocol.OP_UPDATE) {
+				if len(capability.Actions) > 1 && slices.Contains(capability.Actions, protocol.OP_INSERT) && slices.Contains(capability.Actions, protocol.OP_UPDATE) {
 					key = protocol.UPSERT
 				} else if len(capability.Actions) == 1 && (capability.Actions[0] == protocol.OP_INSERT || capability.Actions[0] == protocol.OP_UPDATE) {
 					key = capability.Actions[0]
@@ -779,17 +780,6 @@ func removeSchemaArgument(arguments ast.ArgumentDefinitionList, name string) ast
 	return out
 }
 
-func intersectFieldShape(current map[FieldUse][]string, next map[FieldUse][]string) {
-	for use, fields := range current {
-		if use == FieldUseWrite {
-			continue
-		}
-		if allowed, ok := next[use]; ok {
-			current[use] = intersectFieldNames(fields, allowed)
-		}
-	}
-}
-
 func intersectFieldNames(a, b []string) []string {
 	if slices.Contains(a, "*") {
 		return sortedUnique(b)
@@ -881,9 +871,10 @@ func filterEffectiveTypes(schema *ast.Schema, class *protocol.Class, uses map[Fi
 			case field.Relation != nil:
 				dependencies = field.Relation.SourceColumns()
 			case field.Resolver != "":
-				dependencies = field.Requires
-			case field.Remote != nil:
-				dependencies = []string{field.Remote.Key}
+				dependencies = append([]string(nil), field.Requires...)
+				if field.BatchKey != "" {
+					dependencies = append(dependencies, field.BatchKey)
+				}
 			}
 		}
 		allowed := true

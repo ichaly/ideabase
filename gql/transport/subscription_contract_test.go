@@ -33,7 +33,7 @@ func (endpoint *blockingSubscriptionEndpoint) Subscribe(context.Context, string,
 
 func TestSubscriptionAdmissionBoundsQueuedAndActiveStreams(t *testing.T) {
 	endpoint := &blockingSubscriptionEndpoint{entered: make(chan struct{}, 2), events: make(chan []byte)}
-	handler := NewSubscriptionHandler(endpoint, Options{MaxConcurrent: 1, MaxQueued: 1, Timeout: time.Second})
+	handler := NewHandler(endpoint, Options{MaxConcurrent: 1, MaxQueued: 1, Timeout: time.Second})
 	request := func(ctx context.Context, body io.Reader) *http.Request {
 		r := httptest.NewRequest(http.MethodPost, "/subscribe", body).WithContext(ctx)
 		r.Header.Set("Content-Type", "application/json")
@@ -149,7 +149,7 @@ func TestSubscriptionHandlerStopsAfterFlushError(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { value }"}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "text/event-stream")
-	NewSubscriptionHandler(subscriptionStub{events: events}, Options{}).ServeHTTP(w, r)
+	NewHandler(subscriptionStub{events: events}, Options{}).ServeHTTP(w, r)
 	if w.writes != 1 {
 		t.Fatalf("writes = %d, want 1 after FlushError", w.writes)
 	}
@@ -164,7 +164,7 @@ func TestSubscriptionHandlerKeepsIdleStreamAlive(t *testing.T) {
 	w := &heartbeatWriter{header: make(http.Header), wrote: make(chan string, 1)}
 	done := make(chan struct{})
 	go func() {
-		NewSubscriptionHandler(subscriptionStub{events: events}, Options{Timeout: 20 * time.Millisecond}).ServeHTTP(w, r)
+		NewHandler(subscriptionStub{events: events}, Options{Timeout: 20 * time.Millisecond}).ServeHTTP(w, r)
 		close(done)
 	}()
 	select {
@@ -190,7 +190,7 @@ func TestSubscriptionHandlerClampsTinyTimeout(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "text/event-stream")
 	require.NotPanics(t, func() {
-		NewSubscriptionHandler(subscriptionStub{events: events}, Options{Timeout: time.Nanosecond}).ServeHTTP(httptest.NewRecorder(), r)
+		NewHandler(subscriptionStub{events: events}, Options{Timeout: time.Nanosecond}).ServeHTTP(httptest.NewRecorder(), r)
 	})
 }
 
@@ -275,7 +275,7 @@ func TestSubscriptionInitializationHasIndependentTimeout(t *testing.T) {
 	r.Header.Set("Accept", "text/event-stream")
 	w := &deadlineRecorder{httptest.NewRecorder()}
 	started := time.Now()
-	NewSubscriptionHandler(blockingSubscription{}, Options{Timeout: 20 * time.Millisecond}).ServeHTTP(w, r)
+	NewHandler(blockingSubscription{}, Options{Timeout: 20 * time.Millisecond}).ServeHTTP(w, r)
 	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
 		t.Fatalf("subscription initialization exceeded timeout: %s", elapsed)
 	}
@@ -285,7 +285,7 @@ func TestSubscriptionInitializationHasIndependentTimeout(t *testing.T) {
 }
 
 func TestRemoteRetryHelpersHonorDelayAndCancellation(t *testing.T) {
-	if err := waitSubscriptionRetry(context.Background(), 0); err != nil {
+	if err := waitSubscriptionRetryWith(context.Background(), 0, remoteRetryDelay); err != nil {
 		t.Fatalf("retry wait failed: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -303,7 +303,7 @@ func TestSubscriptionEstablishFailureKeepsGraphQLErrorMetadata(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "text/event-stream")
 	w := &deadlineRecorder{httptest.NewRecorder()}
-	NewSubscriptionHandler(subscriptionErrorStub{}, Options{}).ServeHTTP(w, r)
+	NewHandler(subscriptionErrorStub{}, Options{}).ServeHTTP(w, r)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"path":["users"]`) || !strings.Contains(w.Body.String(), `"code":"POLICY_DENIED"`) {
 		t.Fatalf("status/body = %d/%s", w.Code, w.Body.String())
 	}
@@ -317,7 +317,7 @@ func TestSubscriptionSnapshotHeaderRejectsHistoricalRevisionWithoutDelegation(t 
 	r.Header.Set("Accept", "text/event-stream")
 	r.Header.Set("GQL-Snapshot", old.snapshot.Fingerprint())
 	w := httptest.NewRecorder()
-	NewSubscriptionHandler(&pinningSubscription{current: newer, pinned: old}, Options{}).ServeHTTP(w, r)
+	NewHandler(&pinningSubscription{current: newer, pinned: old}, Options{}).ServeHTTP(w, r)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status/body = %d/%s", w.Code, w.Body.String())
 	}
@@ -331,7 +331,7 @@ func TestSubscriptionExecutionPinUsesHistoricalSnapshotView(t *testing.T) {
 	}
 	old := &effectiveSubscriptionRevision{effectiveRevision: &effectiveRevision{snapshot: oldSnapshot, artifact: artifact(oldSnapshot)}}
 	current := &effectiveSubscriptionRevision{effectiveRevision: &effectiveRevision{snapshot: currentSnapshot, artifact: artifact(currentSnapshot)}}
-	handler := NewSubscriptionHandler(&effectiveSubscriptionHistory{current: current, pinned: old}, Options{Delegation: acceptVerifier{}})
+	handler := NewHandler(&effectiveSubscriptionHistory{current: current, pinned: old}, Options{Delegation: acceptVerifier{}})
 	request := func(pin string) *http.Request {
 		r := httptest.NewRequest(http.MethodPost, "/subscribe", strings.NewReader(`{"query":"subscription { x }"}`))
 		r.Header.Set("Content-Type", "application/json")
@@ -361,7 +361,7 @@ func TestSubscriptionAcknowledgesPinnedSnapshot(t *testing.T) {
 	r.Header.Set("Accept", "text/event-stream")
 	r.Header.Set("GQL-Snapshot", snapshot.Fingerprint())
 	w := httptest.NewRecorder()
-	NewSubscriptionHandler(endpoint, Options{}).ServeHTTP(w, r)
+	NewHandler(endpoint, Options{}).ServeHTTP(w, r)
 	if w.Code != http.StatusOK || w.Header().Get("GQL-Snapshot") != snapshot.Fingerprint() {
 		t.Fatalf("status/snapshot = %d/%q", w.Code, w.Header().Get("GQL-Snapshot"))
 	}

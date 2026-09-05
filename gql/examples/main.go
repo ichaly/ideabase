@@ -98,8 +98,8 @@ func echoResolver() gql.Resolver {
 		func(_ context.Context, _ gql.Root, args echoArgs) (string, error) { return args.Message, nil }, gql.Access("system", "write"))
 }
 
-func reputationRemote() gql.Remote {
-	return gql.NewRemote("User", "reputation", "远程声望", "id",
+func reputationResolver() gql.Resolver {
+	return gql.NewLoader("User", "reputation", "远程声望", "id",
 		func(_ context.Context, keys []any) (map[any]Reputation, error) {
 			out := make(map[any]Reputation, len(keys))
 			for _, key := range keys {
@@ -201,7 +201,7 @@ func buildEngineConfigured(db *gql.Database, production bool, observer gql.Obser
 		return nil, err
 	}
 	// 普通/批量/根字段Resolver与远程关系使用同一个注册入口。
-	if err = builder.Register(signResolver(), greetingResolver(), serverInfoResolver(), echoResolver(), reputationRemote()); err != nil {
+	if err = builder.Register(signResolver(), greetingResolver(), serverInfoResolver(), echoResolver(), reputationResolver()); err != nil {
 		return nil, err
 	}
 	// 中间件按坐标增强已注册Resolver，不重写业务函数。
@@ -272,12 +272,6 @@ func openDemoDB() (*gql.Database, error) {
 // newDemoHandler 是真实 Demo 服务与 HTTP 验收测试共用的生产入口。
 func newDemoHandler(engine *gql.Engine) http.Handler {
 	mux := http.NewServeMux()
-	graphql := transport.NewHandler(engine, transport.Options{})
-	stream := transport.NewSubscriptionHandler(engine, transport.Options{})
-	gateway, err := gql.NewGateway("demo-gateway", gql.Namespace{Name: "blog", EndpointID: "demo", Endpoint: engine})
-	if err != nil {
-		panic(fmt.Sprintf("build demo gateway: %v", err))
-	}
 	router, err := gql.NewTenantRouter(gql.TenantRouterConfig{Mode: gql.TenantModeDatabase, Revision: 1, Routes: map[string]gql.TenantRoute{
 		"1": {DataSource: "demo"}, "2": {DataSource: "demo"},
 	}})
@@ -292,11 +286,11 @@ func newDemoHandler(engine *gql.Engine) http.Handler {
 		panic(fmt.Sprintf("build demo tenant gateway: %v", err))
 	}
 	controlAuth := func(r *http.Request) bool { return r.Header.Get("X-Demo-Control") == "demo" }
-	mux.Handle("/health", transport.NewHealthHandler(engine))
-	mux.Handle("/manifest", transport.NewManifestHandler("demo", engine, controlAuth))
-	mux.Handle("/effective-schema", transport.NewEffectiveSchemaHandler(engine, demoDelegationVerifier{}))
+	mux.Handle("/health", transport.NewHealthHandler(tenantGateway))
+	mux.Handle("/manifest", transport.NewManifestHandler("demo", tenantGateway, controlAuth))
+	mux.Handle("/effective-schema", transport.NewEffectiveSchemaHandler(tenantGateway, demoDelegationVerifier{}))
 	mux.Handle("/.well-known/gql-gateway", transport.NewTransportDescriptorHandler(transport.TransportDescriptor{
-		EndpointID: "demo", ManifestURL: "/manifest", EffectiveSchemaURL: "/effective-schema", ExecuteURL: "/graphql", SubscribeURL: "/graphql/stream", HealthURL: "/health",
+		EndpointID: "demo", ManifestURL: "/manifest", EffectiveSchemaURL: "/effective-schema", ExecuteURL: "/graphql", SubscribeURL: "/graphql", HealthURL: "/health",
 	}))
 	// 演示服务端作用域注入。生产应从认证声明读取，不能信任客户端Header。
 	withDemoContext := func(next http.Handler) http.Handler {
@@ -312,10 +306,7 @@ func newDemoHandler(engine *gql.Engine) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
-	mux.Handle("/graphql", withDemoContext(graphql))
-	mux.Handle("/graphql/stream", withDemoContext(stream))
-	mux.Handle("/gateway/graphql", withDemoContext(transport.NewHandler(gateway, transport.Options{})))
-	mux.Handle("/tenant/graphql", withDemoContext(transport.NewHandler(tenantGateway, transport.Options{})))
+	mux.Handle("/graphql", withDemoContext(transport.NewHandler(tenantGateway, transport.Options{})))
 	return mux
 }
 

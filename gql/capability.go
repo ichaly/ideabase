@@ -26,7 +26,6 @@ type HandlerKind string
 const (
 	HandlerSQL           HandlerKind = "sql"
 	HandlerResolver      HandlerKind = "resolver"
-	HandlerRemote        HandlerKind = "remote"
 	HandlerProjection    HandlerKind = "projection"
 	HandlerIntrospection HandlerKind = "introspection"
 )
@@ -426,11 +425,7 @@ func buildSnapshot(engine *Engine) (*Snapshot, error) {
 			return nil, fmt.Errorf("resolver没有可执行schema coordinate: %s", name)
 		}
 	}
-	for name := range engine.remotes {
-		if capability, ok := index[name]; !ok || capability.Handler != HandlerRemote {
-			return nil, fmt.Errorf("remote没有可执行schema coordinate: %s", name)
-		}
-	}
+
 	sort.Slice(capabilities, func(i, j int) bool { return capabilities[i].Coordinate < capabilities[j].Coordinate })
 	fingerprint, err := ArtifactFingerprint(schema, capabilities)
 	if err != nil {
@@ -536,28 +531,7 @@ func (my *Engine) fieldCapability(parent *ast.Definition, field *ast.FieldDefini
 		}
 		return capability, nil
 	}
-	if remote, ok := my.remotes[coordinate]; ok {
-		capability.Handler = HandlerRemote
-		if mounted, exists := remote.(mounted); exists {
-			define := mounted.Define()
-			capability.SemanticKind = deriveSemanticKind(define)
-			if !validSemanticKind(capability.SemanticKind) {
-				return Capability{}, fmt.Errorf("remote %s has invalid semantic kind %q", coordinate, capability.SemanticKind)
-			}
-			capability.Resource = define.Resource
-			capability.Actions = append([]string(nil), define.Actions...)
-			capability.Requires = append([]string(nil), define.Requires...)
-			capability.Timeout = define.Timeout
-			capability.RetrySafe, capability.IdempotencyKey = define.RetrySafe, define.IdempotencyKey
-			if handler, ok := remote.(Handler); ok {
-				capability.MaxBatch = handlerBatchLimit(handler)
-			}
-		}
-		if my.policy != nil && (capability.Resource == "" || len(capability.Actions) == 0) {
-			return Capability{}, fmt.Errorf("remote %s requires explicit policy resource/action", coordinate)
-		}
-		return capability, nil
-	}
+
 	if class, ok := my.metadata.GetNode(parent.Name); ok {
 		declared, exists := class.Fields[field.Name]
 		if !exists {
@@ -570,13 +544,7 @@ func (my *Engine) fieldCapability(parent *ast.Definition, field *ast.FieldDefini
 			capability.Handler = HandlerResolver
 			return capability, nil
 		}
-		if declared.Remote != nil {
-			if _, exists := my.remotes[declared.Remote.Source]; !exists {
-				return Capability{}, fmt.Errorf("schema字段%s引用未注册remote: %s", coordinate, declared.Remote.Source)
-			}
-			capability.Handler = HandlerRemote
-			return capability, nil
-		}
+
 		resource := class.Name
 		if declared.Relation != nil {
 			resource = declared.Relation.TargetClass

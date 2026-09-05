@@ -167,7 +167,7 @@ func importNamespace(namespace Namespace) (*namespaceContract, map[string]*ast.D
 }
 
 func namespaceRootCapability(contract *namespaceContract, parent, name, typ string) Capability {
-	return Capability{Coordinate: parent + "." + name, Parent: parent, Name: name, Type: typ, Handler: HandlerRemote, Planner: "namespace", Cost: 1}
+	return Capability{Coordinate: parent + "." + name, Parent: parent, Name: name, Type: typ, Handler: HandlerResolver, Planner: "namespace", Cost: 1}
 }
 
 func renameNamespaceCapabilities(source []Capability, contract *namespaceContract, rename map[string]string) []Capability {

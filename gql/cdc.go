@@ -20,8 +20,6 @@ import (
 )
 
 // notifier 订阅唤醒源接口：按表变更唤醒watcher
-// 新数据库的CDC实现（如MySQL binlog）实现本接口并registerNotifier注册，
-// 执行器与订阅链路零修改
 type notifier interface {
 	watch(tables []string) (*watcher, error)
 	unwatch(w *watcher)
@@ -29,8 +27,6 @@ type notifier interface {
 	cdcState() (string, string)
 	close() // 停止监听并释放连接（Engine.Close调用，须幂等）
 }
-
-func (my *listener) invalidate(tables ...string) { my.notify(tables...) }
 
 const (
 	CDCStateIdleValidated = "IdleValidated"
@@ -43,19 +39,6 @@ const (
 	cdcStateIdleValidated
 	cdcStateConnected
 )
-
-// notifiers 唤醒源工厂注册表（key=数据库驱动名），在各实现文件的init中登记
-var notifiers = map[string]func(db *Database, cfg internal.SubscriptionConfig) (notifier, error){}
-
-// registerNotifier 注册唤醒源工厂
-func registerNotifier(driver string, factory func(db *Database, cfg internal.SubscriptionConfig) (notifier, error)) {
-	notifiers[driver] = factory
-}
-
-// 导入本包即注册PostgreSQL逻辑复制唤醒源
-func init() {
-	registerNotifier("postgres", newPostgresNotifier)
-}
 
 // newPostgresNotifier 构造PG唤醒源：DSN取subscription.dsn配置，缺省从数据库连接配置读取
 func newPostgresNotifier(db *Database, cfg internal.SubscriptionConfig) (notifier, error) {
@@ -193,7 +176,7 @@ func (my *listener) unwatch(w *watcher) {
 }
 
 // notify 表变更扇出；tables为空表示广播（重连后补偿可能错过的变更）
-func (my *listener) notify(tables ...string) {
+func (my *listener) invalidate(tables ...string) {
 	wake := func(w *watcher) {
 		select {
 		case w.wake <- struct{}{}:
@@ -327,7 +310,7 @@ func (my *listener) run(conn *pgconn.PgConn) {
 			err = &publicFailure{"CDC replication connection lost", "SUBSCRIPTION_SOURCE_UNAVAILABLE"}
 		}
 		my.setStatus(false, err)
-		my.notify() // wake existing feeds so they fail explicitly instead of going stale
+		my.invalidate() // wake existing feeds so they fail explicitly instead of going stale
 		my.closeConn(conn)
 		if my.ctx.Err() != nil {
 			return
@@ -353,7 +336,7 @@ func (my *listener) run(conn *pgconn.PgConn) {
 			}
 			conn, backoff = next, time.Second
 			my.setStatus(true, nil)
-			my.notify() // 广播：补偿断线期间可能错过的变更
+			my.invalidate() // 广播：补偿断线期间可能错过的变更
 			break
 		}
 	}
@@ -518,7 +501,7 @@ func (my *listener) dispatch(walData []byte, relations map[uint32]string, touche
 				tables = append(tables, table)
 			}
 			clear(touched) // 单次runtime清空替代逐项delete
-			my.notify(tables...)
+			my.invalidate(tables...)
 		}
 	}
 	return nil

@@ -1,63 +1,48 @@
-# 指南：Resolver、Remote 和 Codec
+# 指南：Resolver 和 Codec
 
-通用 CRUD 不需要手写 Resolver。只有业务计算、外部服务或真正不能声明的工作流才使用扩展字段。
+数据库 CRUD 自动生成。自定义计算、批量加载、本地或远程业务都注册同一个 `Resolver`。
 
-## Field Resolver
+## 普通字段
 
 ```go
-resolver := gql.NewResolver[User, map[string]any, string](
-    "User", "greeting", "Personal greeting",
-    func(ctx context.Context, source gql.Source, input map[string]any) (string, error) {
+builder.Register(gql.NewResolver("User", "greeting", "问候",
+    func(ctx context.Context, source gql.Source, input struct{}) (string, error) {
         return "Hello, " + fmt.Sprint(source["name"]), nil
-    },
-    gql.Access("users", "read"),
-)
-builder.Register(resolver)
+    }, gql.Requires("name")))
 ```
 
-## Batch Resolver
+`Requires` 声明数据库字段依赖，由引擎补投影并剥除未选择字段。根字段使用 `Query` 或 `Mutation` 和 `gql.Root`；生产根字段还需用 `Access` 声明实际资源/动作。
+
+## 批量计算
 
 ```go
-resolver := gql.NewBatch[map[string]any, struct{}, string](
-    "User", "reputation", "Reputation",
+builder.Register(gql.NewBatch("User", "reputation", "信誉",
     func(ctx context.Context, sources []gql.Source, input struct{}) ([]string, error) {
         return loadReputations(ctx, sources)
-    },
-)
-builder.Register(resolver)
+    }, gql.Requires("id")))
 ```
 
-返回顺序必须和 `sources` 对齐。Batch 是避免 N+1 的唯一推荐路径。
+结果必须与 sources 等长对位。一次处理整批宿主，避免逐行查询。
 
-## Root Resolver
-
-`NewResolver("Query", ...)` 和 `NewResolver("Mutation", ...)` 用于复杂根字段。它们仍然经过统一的身份、策略、事务、错误和 capability 流程，不应绕过 Engine 直接写数据库。
-
-## Remote Join
+## 按键加载
 
 ```go
-remote := gql.NewRemote("User", "reputation", "Reputation", "id",
-    func(ctx context.Context, keys []any) (map[any]Reputation, error) {
+builder.Register(gql.NewLoader("User", "profile", "画像", "id",
+    func(ctx context.Context, keys []any) (map[any]Profile, error) {
         return service.BatchGet(ctx, keys)
-    })
-builder.Register(remote)
+    }))
 ```
 
-Remote 按宿主键批量回填，不声明数据库 CRUD，也不能绕过子 Engine 的租户和权限边界。
+这是一个批量 Resolver 的构造方式：引擎投影原始数据库键、去重取值并按宿主顺序回填；缺失键返回 null。数据来源可以是本地或远程。独立加载器并发取数，结果统一按 GraphQL Schema 完成，遵守租户与权限边界。`MaxBatch` 对按键加载限制去重键数，对普通批量计算限制宿主数。
 
-## Replace、Wrap 和语义
+## 覆盖和中间件
 
-```go
-builder.Replace(customResolver)
-builder.Wrap("User.greeting", middleware)
-```
+`builder.Replace(resolver)` 显式覆盖已有字段，无需额外声明。`builder.Wrap(coordinate, middleware)` 装饰已注册 Resolver；普通 Register 不会静默覆盖。
 
-`Replace` 覆盖生成字段，`Wrap` 添加日志、指标或错误处理。使用 `Semantic(Primitive)` 或 `Semantic(Workflow)` 让 capability 消费者知道字段语义；复杂 Workflow 不应伪装成数据库原语。
+普通中间件使用 `NextResolver[Source, Args, Value]`；批量中间件使用 `NextResolver[[]Source, Args, []Value]`，next 一次处理整个批次。中间件保持字段声明、权限和批量能力。
+
+Mutation 业务通过 `ExecutionContextFromContext(ctx)` 的 `RequireDB()` 获取当前事务。远程调用的外部副作用不加入本地数据库事务。
 
 ## Codec
 
-`WithCodecs` 注册 ID、日期或自定义标量的输入/输出转换。未选择 Codec 字段时不会触发解包，因此不会破坏普通查询字节快路径。
-
----
-
-[← 安全治理](security.md) · [文档首页](../README.md) · [下一章：Gateway →](gateway.md)
+`WithCodecs` 注册 ID、日期或自定义标量的输入/输出转换。按键加载的内部键保留数据库原值；没有自定义字段的查询保持 JSON 字节直通。

@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,20 +35,9 @@ func TestBuilderPolicyIsTheOnlyProviderSource(t *testing.T) {
 	})
 	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...)
 	require.NoError(t, builder.Policy(provider))
-	require.ErrorContains(t, builder.Register(provider), "PolicyProvider")
 	engine, err := builder.Build()
 	require.NoError(t, err)
 	require.IsType(t, provider, engine.policy)
-}
-
-func TestEngineAssemblyRejectsPolicyProviderRegistration(t *testing.T) {
-	meta := emptyMetadata(t)
-	compiler, err := NewCompiler(meta, nil)
-	require.NoError(t, err)
-	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
-	require.NoError(t, err)
-	provider := NewProtocolPolicyProvider(map[string]map[string]*protocol.Permission{})
-	require.ErrorContains(t, executor.register(provider), "Builder.Policy")
 }
 
 // installTestPolicy models the pre-Build injection used by direct Engine

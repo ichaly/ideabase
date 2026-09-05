@@ -71,3 +71,12 @@ func (cache *Cache[K, V]) Len() int {
 	defer cache.mu.Unlock()
 	return cache.order.Len()
 }
+
+func (cache *Cache[K, V]) Delete(key K) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if element, ok := cache.items[key]; ok {
+		delete(cache.items, key)
+		cache.order.Remove(element)
+	}
+}

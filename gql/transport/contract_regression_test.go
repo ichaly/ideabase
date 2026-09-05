@@ -175,7 +175,7 @@ func TestContractSSELimitsCumulativeDataLines(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "text/event-stream")
 	w := &deadlineRecorder{httptest.NewRecorder()}
-	NewSubscriptionHandler(subscriptionStub{events: events}, Options{MaxResponseBytes: 30}).ServeHTTP(w, r)
+	NewHandler(subscriptionStub{events: events}, Options{MaxResponseBytes: 30}).ServeHTTP(w, r)
 	if !strings.Contains(w.Body.String(), "LIMIT_EXCEEDED") {
 		t.Fatalf("event was not limited: %s", w.Body)
 	}

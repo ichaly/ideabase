@@ -61,8 +61,10 @@ func NewHandler(endpoint Endpoint, opts Options) http.Handler {
 	opts = defaultOptions(opts)
 	return &handler{
 		endpoint: endpoint, options: opts,
-		admission: make(chan struct{}, opts.MaxConcurrent+opts.MaxQueued),
-		execution: make(chan struct{}, opts.MaxConcurrent),
+		admission:       make(chan struct{}, opts.MaxConcurrent+opts.MaxQueued),
+		execution:       make(chan struct{}, opts.MaxConcurrent),
+		streamAdmission: make(chan struct{}, opts.MaxConcurrent+opts.MaxQueued),
+		streams:         make(chan struct{}, opts.MaxConcurrent),
 	}
 }
 
@@ -86,9 +88,10 @@ func defaultOptions(opts Options) Options {
 }
 
 type handler struct {
-	endpoint             Endpoint
-	options              Options
-	admission, execution chan struct{}
+	endpoint                 Endpoint
+	options                  Options
+	admission, execution     chan struct{}
+	streamAdmission, streams chan struct{}
 }
 
 type request struct {
@@ -108,17 +111,27 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusInternalServerError, "ENDPOINT_UNAVAILABLE", "endpoint unavailable", true)
 		return
 	}
+	responseMedia := negotiateGraphQL(r.Header.Get("Accept"))
+	if responseMedia == "" {
+		writeProblem(w, http.StatusNotAcceptable, "NOT_ACCEPTABLE", "unsupported Accept", false)
+		return
+	}
+	streaming := responseMedia == "text/event-stream"
+	admission, slots := h.admission, h.execution
+	if streaming {
+		admission, slots = h.streamAdmission, h.streams
+	}
 	select {
-	case h.admission <- struct{}{}:
-		defer func() { <-h.admission }()
+	case admission <- struct{}{}:
+		defer func() { <-admission }()
 	default:
 		w.Header().Set("Retry-After", "1")
 		writeProblem(w, http.StatusTooManyRequests, "REQUEST_OVERLOADED", "request capacity exhausted", true)
 		return
 	}
-	responseMedia := negotiateGraphQL(r.Header.Get("Accept"))
-	if responseMedia == "" {
-		writeProblem(w, http.StatusNotAcceptable, "NOT_ACCEPTABLE", "unsupported Accept", false)
+	if streaming && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeProblem(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "SSE requires POST", false)
 		return
 	}
 	var req request
@@ -176,7 +189,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	ctx = core.WithResponseLimit(ctx, h.options.MaxResponseBytes)
-	if h.options.Timeout > 0 {
+	if !streaming && h.options.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, h.options.Timeout)
 		defer cancel()
@@ -185,9 +198,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx = core.WithMutationCommitMetadata(ctx)
 	}
 	execution := h.endpoint
-	ctx, execution, _, failure := prepareRequest(ctx, r, h.endpoint, execution, h.options.Delegation,
-		operationDigest(req, r.Header.Get("GQL-Snapshot"), r.Header.Get(executionPinHeader)),
-		func(value any) (Endpoint, bool) { endpoint, ok := value.(Endpoint); return endpoint, ok })
+	ctx, execution, revision, failure := prepareRequest(ctx, r, h.endpoint, h.options.Delegation,
+		operationDigest(req, r.Header.Get("GQL-Snapshot"), r.Header.Get(executionPinHeader)))
 	if failure != nil {
 		writeRequestFailure(w, failure)
 		return
@@ -220,10 +232,19 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	select {
-	case h.execution <- struct{}{}:
-		defer func() { <-h.execution }()
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
 	case <-ctx.Done():
 		writeProblem(w, http.StatusServiceUnavailable, "REQUEST_TIMEOUT", "request expired while awaiting execution", true)
+		return
+	}
+	if streaming {
+		source, ok := execution.(subscriptionEndpoint)
+		if !ok {
+			writeProblem(w, http.StatusServiceUnavailable, "SUBSCRIPTION_UNAVAILABLE", "subscription unavailable", true)
+			return
+		}
+		h.subscribe(w, r, ctx, source, req, revision)
 		return
 	}
 	body, err = execution.ExecuteOperation(ctx, req.Query, req.Variables, req.OperationName)
@@ -305,8 +326,8 @@ func negotiateGraphQL(value string) string {
 		}
 		candidate := ""
 		switch mediaType {
-		case responseType:
-			candidate = responseType
+		case responseType, "text/event-stream":
+			candidate = mediaType
 		case "application/json", "application/*", "*/*":
 			candidate = "application/json"
 		}

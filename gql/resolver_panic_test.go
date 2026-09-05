@@ -19,7 +19,7 @@ func TestResolverPanicIsolation(t *testing.T) {
 			func(_ context.Context, _ Source, _ struct{}) (string, error) { panic("resolver炸了") }),
 		NewBatch("User", "batchBoom", "批量panic字段",
 			func(_ context.Context, sources []Source, _ struct{}) ([]string, error) { panic("batch炸了") }),
-		NewRemote("User", "extra", "远程panic", "id",
+		NewLoader("User", "extra", "远程panic", "id",
 			func(_ context.Context, keys []any) (map[any]Profile, error) { panic("remote炸了") }),
 	))
 

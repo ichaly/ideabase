@@ -15,7 +15,7 @@ type Builder struct {
 	k         *std.Konfig
 	database  *Database
 	metadata  []MetadataOption
-	items     []any
+	items     []Resolver
 	replaces  []Resolver
 	wraps     []resolverWrap
 	documents []string
@@ -82,15 +82,10 @@ func (my *Builder) Policy(provider PolicyProvider) error {
 	return nil
 }
 
-// Register adds Resolver/Batch/Remote handlers before Build.
-func (my *Builder) Register(items ...any) error {
+// Register adds Resolver handlers before Build.
+func (my *Builder) Register(items ...Resolver) error {
 	if my.built {
 		return fmt.Errorf("builder已冻结：Register仅限Build前调用")
-	}
-	for _, item := range items {
-		if _, ok := item.(PolicyProvider); ok {
-			return fmt.Errorf("PolicyProvider必须通过Builder.Policy设置")
-		}
 	}
 	my.items = append(my.items, items...)
 	return nil

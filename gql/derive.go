@@ -88,9 +88,6 @@ func RetrySafe(idempotencyKey string) Option {
 // MaxBatch 限制一次Batch Resolver接收的最大宿主数；0表示使用引擎默认。
 func MaxBatch(size int) Option { return func(my *Define) { my.MaxBatch = size } }
 
-// Existing 声明 Resolver 绑定 schema 已有字段，只能通过 Builder.Replace 显式装配。
-func Existing() Option { return func(my *Define) { my.Existing = true } }
-
 // decode 入参json往返解码进强类型struct并校验validate标签
 func decode[I any](args map[string]interface{}) (I, error) {
 	var in I
@@ -137,9 +134,7 @@ type fieldResolver[S, I, O any] struct {
 
 func (my *fieldResolver[S, I, O]) Name() string   { return my.define.Class + "." + my.define.Name }
 func (my *fieldResolver[S, I, O]) Define() Define { return my.define }
-func (my *fieldResolver[S, I, O]) field() *protocol.Field {
-	return &protocol.Field{Resolver: my.Name(), Requires: append([]string(nil), my.define.Requires...)}
-}
+
 func (my *fieldResolver[S, I, O]) Resolve(ctx context.Context, source any, args map[string]interface{}) (interface{}, error) {
 	typed, ok := source.(S)
 	if !ok {
@@ -174,7 +169,7 @@ func defineField[I, O any](class, name, doc string) Define {
 	input, output := reflect.TypeFor[I](), reflect.TypeFor[O]()
 	return Define{
 		Class: class, Name: name, Doc: doc,
-		Args: deriveArgs(input), Result: deriveResult(output),
+		Args: deriveArgs(input), Result: deriveType(output, false),
 		inputType: input, outputType: output,
 	}
 }
@@ -187,9 +182,6 @@ type batch[I, O any] struct {
 
 func (my *batch[I, O]) Name() string   { return my.define.Class + "." + my.define.Name }
 func (my *batch[I, O]) Define() Define { return my.define }
-func (my *batch[I, O]) field() *protocol.Field {
-	return &protocol.Field{Resolver: my.Name(), Requires: append([]string(nil), my.define.Requires...)}
-}
 
 func (my *batch[I, O]) Resolve(context.Context, any, map[string]interface{}) (interface{}, error) {
 	return nil, fmt.Errorf("批量解析器不支持单对象路径")
@@ -200,7 +192,7 @@ func (my *batch[I, O]) ResolveBatch(ctx context.Context, sources []map[string]in
 	if err != nil {
 		return nil, err
 	}
-	outs, err := my.fn(ctx, sources, in)
+	outs, err := my.resolveTyped(ctx, sources, in)
 	if err != nil {
 		return nil, err
 	}
@@ -211,44 +203,56 @@ func (my *batch[I, O]) ResolveBatch(ctx context.Context, sources []map[string]in
 	return values, nil
 }
 
-// NewRemote 注册即声明的远程关系：挂载为class实体的虚拟字段，key为宿主键字段名；
-// O为命名struct时自动反射出虚拟类型SDL（多个远程共享同一类型时重建期按文本去重）
-func NewRemote[O any](class, name, doc, key string, fn func(context.Context, []any) (map[any]O, error), opts ...Option) Remote {
-	t := reflect.TypeFor[O]()
-	define := Define{Class: class, Name: name, Doc: doc, Result: deriveResult(t), outputType: t}
+func (my *batch[I, O]) resolveTyped(ctx context.Context, sources []Source, input I) ([]O, error) {
+	return my.fn(ctx, sources, input)
+}
+
+// NewLoader creates a batch Resolver that loads values by a raw database key.
+// Duplicate keys are fetched once; missing keys become null. The loader may
+// call a local database, REST, gRPC, or another GraphQL service.
+func NewLoader[O any](class, name, doc, key string, fn func(context.Context, []any) (map[any]O, error), opts ...Option) Resolver {
+	define := defineField[struct{}, O](class, name, doc)
 	for _, opt := range opts {
 		opt(&define)
 	}
-	return &distant[O]{
-		define: define,
-		key:    key,
-		fn:     fn,
+	define.batchKey = key
+	resolver := &batch[struct{}, any]{define: define}
+	resolver.fn = func(ctx context.Context, sources []Source, _ struct{}) ([]any, error) {
+		seen := make(map[any]bool, len(sources))
+		keys := make([]any, 0, len(sources))
+		alias := "__rk_" + key
+		for _, source := range sources {
+			value := source[alias]
+			if value == nil {
+				continue
+			}
+			if !reflect.TypeOf(value).Comparable() {
+				return nil, fmt.Errorf("loader %s key is not comparable: %T", resolver.Name(), value)
+			}
+			if !seen[value] {
+				seen[value] = true
+				keys = append(keys, value)
+			}
+		}
+		if len(keys) > handlerBatchLimit(resolver) {
+			return nil, fmt.Errorf("batch超过限制: %d", handlerBatchLimit(resolver))
+		}
+		out := make([]any, len(sources))
+		if len(keys) == 0 {
+			return out, nil
+		}
+		values, err := fn(ctx, keys)
+		if err != nil {
+			return nil, err
+		}
+		for i, source := range sources {
+			if value, ok := values[source[alias]]; ok {
+				out[i] = plain(value)
+			}
+		}
+		return out, nil
 	}
-}
-
-// distant 远程数据源（NewRemote反射装配）
-type distant[O any] struct {
-	define Define
-	key    string
-	fn     func(context.Context, []any) (map[any]O, error)
-}
-
-func (my *distant[O]) Name() string   { return my.define.Class + "." + my.define.Name }
-func (my *distant[O]) Define() Define { return my.define }
-func (my *distant[O]) field() *protocol.Field {
-	return &protocol.Field{Remote: &protocol.RemoteRef{Source: my.Name(), Key: my.key}}
-}
-
-func (my *distant[O]) Fetch(ctx context.Context, keys []any) (map[any]any, error) {
-	values, err := my.fn(ctx, keys)
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[any]any, len(values))
-	for k, v := range values {
-		out[k] = plain(v) // 归一为json形态：程序化Data与HTTP输出一致，json标签生效
-	}
-	return out, nil
+	return resolver
 }
 
 // plain 值经json往返归一为通用形态（map/切片/标量）；失败原样返回
@@ -365,15 +369,8 @@ func deriveType(t reflect.Type, input bool) string {
 	}
 }
 
-// deriveResult Go类型→GraphQL结果类型：struct取类型名（与元数据实体同名即触发
-// 回查补全，不一致用Result选项覆盖），其余同入参规则
-func deriveResult(t reflect.Type) string {
-	return deriveType(t, false)
-}
-
-// generatedTypes emits only the named shapes reachable from a handler's Go
-// signature. Top-level input structs stay flattened as GraphQL arguments;
-// nested structs become input objects. Existing schema types are reused.
+// generatedTypes emits named shapes reachable from the resolver signature.
+// Top-level inputs become arguments; existing schema types are reused.
 func generatedTypes(d Define, known map[string]bool) string {
 	var definitions []string
 	seen := map[string]bool{}
@@ -422,7 +419,7 @@ func generatedTypes(d Define, known map[string]bool) string {
 		}
 	}
 	// Explicit Extra remains the escape hatch and owns output declarations.
-	if d.Extra == "" && d.outputType != nil && d.Result == deriveResult(d.outputType) {
+	if d.Extra == "" && d.outputType != nil && d.Result == deriveType(d.outputType, false) {
 		collect(d.outputType, false)
 	}
 	return strings.Join(definitions, "\n")

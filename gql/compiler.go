@@ -132,12 +132,6 @@ func inline(set ast.SelectionSet, fragments ast.FragmentDefinitionList) ast.Sele
 
 // Compile 编译GraphQL操作为执行计划
 func (my *Compiler) Compile(operation *ast.OperationDefinition, variables map[string]interface{}) (*Plan, error) {
-	return my.compile(operation, variables, true)
-}
-
-// compile 可跳过治理探测；Engine 的 volatile 缓存命中已持有首次探测结果，
-// 重编 SQL 时复用 planEntry 标记，避免再次遍历 AST。
-func (my *Compiler) compile(operation *ast.OperationDefinition, variables map[string]interface{}, inspectGovernance bool) (*Plan, error) {
 	// 深度护栏：嵌套LATERAL单元无上限时深选择集可编译出巨大SQL树（代价攻击面）
 	if max := my.meta.MaxDepth(); max > 0 {
 		if depth := depthOf(operation.SelectionSet); depth > max {

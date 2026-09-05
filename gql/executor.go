@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	stdjson "encoding/json"
 	"fmt"
+	"github.com/ichaly/ideabase/gql/internal/lru"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -37,8 +38,8 @@ func configureSearchMode(metadata *Metadata, database *Database) error {
 		metadata.SetSearchMode(mode, metadata.cfg.Search.Config)
 		return nil
 	}
-	if detect, ok := searchDetectors[database.Driver()]; ok {
-		mode, config, err := detect(database)
+	if database.Driver() == "postgres" {
+		mode, config, err := detectPostgresSearch(database)
 		if err != nil {
 			return err
 		}
@@ -74,27 +75,14 @@ type (
 // MarshalJSON 直通快路径：__root字节直接拼入响应，免解包重序列化
 // （典型列表响应实测省~0.7ms与上万次分配，HTTP与订阅推送共用）
 func (my gqlReply) MarshalJSON() ([]byte, error) {
-	if my.nullData {
-		return jsonReply.Marshal(struct {
-			Data       any                    `json:"data"`
-			Errors     gqlerror.List          `json:"errors,omitempty"`
-			Extensions map[string]interface{} `json:"extensions,omitempty"`
-		}{Data: nil, Errors: my.Errors, Extensions: my.Extensions})
-	}
-	if my.raw == nil || len(my.Errors) > 0 {
-		type alias gqlReply // 别名擦除方法集，避免递归
-		return jsonReply.Marshal(alias(my))
+	if my.nullData || my.raw == nil || len(my.Errors) > 0 || len(my.Extensions) > 0 {
+		return jsonReply.Marshal(replyWireValue(my))
 	}
 	data := my.raw
 	if len(data) == 0 {
 		data = []byte(`{}`)
 	}
-	if len(my.Extensions) > 0 {
-		return jsonReply.Marshal(struct {
-			Data       stdjson.RawMessage     `json:"data"`
-			Extensions map[string]interface{} `json:"extensions"`
-		}{Data: data, Extensions: my.Extensions})
-	}
+
 	buf := make([]byte, 0, len(data)+9)
 	buf = append(buf, `{"data":`...)
 	buf = append(buf, data...)
@@ -125,21 +113,20 @@ func (my gqlReply) mutationCommit(ctx context.Context, state string) gqlReply {
 // 负责解析GraphQL查询、编译为SQL并执行查询，支持多种数据库方言
 // 可作为Fiber插件集成到Web服务中，提供标准的GraphQL API
 type Engine struct {
-	intro             *intro.Handler               // 自省处理器，处理__schema和__type查询
-	schema            *ast.Schema                  // GraphQL模式定义
-	database          *Database                    // 数据库连接，用于执行生成的SQL
-	metadata          *Metadata                    // 元数据信息，包含表结构、关系等
-	compiler          *Compiler                    // 编译器，将GraphQL查询编译为SQL
-	cache             *planCache                   // 执行计划缓存，命中路径零解析零编译
-	policyCache       *planCache                   // 外部策略形状计划；请求值只留参数槽
-	flight            singleflight.Group           // 未命中收敛：并发的同一冷查询只解析编译一次
-	feedMu            sync.Mutex                   // 保护feeds及各feed的订阅者集合
-	feeds             map[string]*feed             // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
-	resolvers         map[string]Resolver          // 自定义字段解析器注册表
-	source            string                       // 原始schema文本，启动期注册声明合并时重建的基底
-	documents         map[string]persistedDocument // 持久化查询文档：操作名 -> 已验证模板
-	remotes           map[string]Remote            // 远程数据源注册表：数据源名 -> 实现
-	cdc               notifier                     // CDC唤醒源（按数据库驱动从注册表选取）
+	intro             *intro.Handler                  // 自省处理器，处理__schema和__type查询
+	schema            *ast.Schema                     // GraphQL模式定义
+	database          *Database                       // 数据库连接，用于执行生成的SQL
+	metadata          *Metadata                       // 元数据信息，包含表结构、关系等
+	compiler          *Compiler                       // 编译器，将GraphQL查询编译为SQL
+	cache             *lru.Cache[planKey, *planEntry] // 执行计划缓存，命中路径零解析零编译
+	policyCache       *lru.Cache[planKey, *planEntry] // 外部策略形状计划；请求值只留参数槽
+	flight            singleflight.Group              // 未命中收敛：并发的同一冷查询只解析编译一次
+	feedMu            sync.Mutex                      // 保护feeds及各feed的订阅者集合
+	feeds             map[string]*feed                // 共享订阅流：同构订阅（查询+变量+作用域）共用一次重查
+	resolvers         map[string]Resolver             // 自定义字段解析器注册表
+	source            string                          // 原始schema文本，启动期注册声明合并时重建的基底
+	documents         map[string]persistedDocument    // 持久化查询文档：操作名 -> 已验证模板
+	cdc               notifier                        // CDC唤醒源（按数据库驱动从注册表选取）
 	finalizeOnce      sync.Once
 	snapshot          *Snapshot
 	snapshotErr       error
@@ -149,7 +136,7 @@ type Engine struct {
 	policy            PolicyProvider
 	policyBuiltin     bool
 	rls               bool
-	effectiveCache    *effectiveCache
+	effectiveCache    *lru.Cache[string, *effectiveView]
 	effectiveFlight   singleflight.Group
 	buildLimiter      *buildLimiter
 	subscriptionLease time.Duration
@@ -194,37 +181,28 @@ func (my *Engine) Close() {
 	my.streamWG.Wait()
 }
 
-// register 是 Builder 唯一使用的启动期装配入口：Resolver/Remote 按实现路由
+// register 是 Builder 唯一使用的启动期装配入口：Resolver 按实现路由
 // 到注册表，字段声明挂载进宿主实体并重建 schema。
-func (my *Engine) register(items ...any) error {
-	for _, item := range items {
-		if _, ok := item.(PolicyProvider); ok {
-			return fmt.Errorf("PolicyProvider必须通过Builder.Policy设置")
+func (my *Engine) register(items ...Resolver) error {
+	for _, resolver := range items {
+		if resolver == nil {
+			return fmt.Errorf("resolver不能为空")
 		}
-		if handler, ok := item.(Handler); ok {
-			if err := validateHandler(handler); err != nil {
-				return err
-			}
+		if err := validateHandler(resolver); err != nil {
+			return err
 		}
-		switch v := item.(type) {
-		case Resolver:
-			if v.Define().Existing {
-				return fmt.Errorf("resolver %s绑定已有字段，请使用Replace显式覆盖", v.Name())
-			}
-			if _, exists := my.resolvers[v.Name()]; exists {
-				return fmt.Errorf("resolver已注册: %s", v.Name())
-			}
-			my.resolvers[v.Name()] = v
-		case Remote:
-			my.remotes[v.Name()] = v
-		default:
-			return fmt.Errorf("不支持的注册类型: %T", item)
+		if _, exists := my.resolvers[resolver.Name()]; exists {
+			return fmt.Errorf("resolver已注册: %s", resolver.Name())
 		}
-		if m, ok := item.(mounted); ok {
-			if err := my.mount(m); err != nil {
-				return err
-			}
+		d := resolver.Define()
+		if parent := my.schema.Types[d.Class]; parent != nil && parent.Fields.ForName(d.Name) != nil {
+			return fmt.Errorf("schema字段已存在: %s，请使用Replace", resolver.Name())
 		}
+		if err := my.mount(resolver.Define(), false); err != nil {
+			return err
+		}
+
+		my.resolvers[resolver.Name()] = resolver
 	}
 	return my.rebuild()
 }
@@ -232,8 +210,8 @@ func (my *Engine) register(items ...any) error {
 // replace 显式替换 schema 已有字段的默认实现。
 func (my *Engine) replace(resolver Resolver) error {
 	d := resolver.Define()
-	if !d.Existing {
-		return fmt.Errorf("resolver %s必须使用Existing选项声明覆盖已有字段", resolver.Name())
+	if err := validateHandler(resolver); err != nil {
+		return err
 	}
 	if d.Class == "Query" || d.Class == "Mutation" {
 		kind := my.schema.Types[d.Class]
@@ -241,11 +219,9 @@ func (my *Engine) replace(resolver Resolver) error {
 			return fmt.Errorf("schema字段不存在: %s.%s", d.Class, d.Name)
 		}
 	} else {
-		class, ok := my.metadata.GetNode(d.Class)
-		if !ok || class.Fields[d.Name] == nil {
-			return fmt.Errorf("实体字段不存在: %s.%s", d.Class, d.Name)
+		if err := my.mount(d, true); err != nil {
+			return err
 		}
-		class.Fields[d.Name].Resolver = resolver.Name()
 	}
 	my.resolvers[resolver.Name()] = resolver
 	return my.rebuild()
@@ -258,7 +234,7 @@ func (my *Engine) wrap(coordinate string, middleware ResolverMiddleware) error {
 		return fmt.Errorf("resolver未注册: %s", coordinate)
 	}
 	my.resolvers[coordinate] = middleware(resolver)
-	my.cache = newPlanCache(planCacheSize)
+	my.cache = lru.New[planKey, *planEntry](planCacheSize)
 	return nil
 }
 
@@ -284,15 +260,14 @@ func newEngine(d *Database, m *Metadata, c *Compiler, data string) (*Engine, err
 		database:       d,
 		metadata:       m,
 		compiler:       c,
-		cache:          newPlanCache(planCacheSize),
-		policyCache:    newPlanCache(planCacheSize),
-		effectiveCache: newEffectiveCache(128),
+		cache:          lru.New[planKey, *planEntry](planCacheSize),
+		policyCache:    lru.New[planKey, *planEntry](planCacheSize),
+		effectiveCache: lru.New[string, *effectiveView](128),
 		buildLimiter:   newBuildLimiter(16, 4),
 		feeds:          make(map[string]*feed),
 		resolvers:      make(map[string]Resolver),
 		documents:      make(map[string]persistedDocument),
 		refreshSem:     make(chan struct{}, 16),
-		remotes:        make(map[string]Remote),
 		validation:     validatorrules.NewDefaultRules(),
 	}
 	for i := range executor.tenantRefresh {
@@ -314,15 +289,12 @@ func newEngine(d *Database, m *Metadata, c *Compiler, data string) (*Engine, err
 	executor.source = data
 	executor.schema = s
 
-	if d != nil {
-		// 订阅唤醒源：按驱动名从注册表选取CDC实现（复制连接延迟到首个订阅时建立）
-		if factory, ok := notifiers[d.Driver()]; ok {
-			source, err := factory(d, m.cfg.Subscription)
-			if err != nil {
-				return nil, fmt.Errorf("CDC唤醒源初始化失败（%s）: %w", d.Driver(), err)
-			}
-			executor.cdc = source
+	if d != nil && d.Driver() == "postgres" {
+		source, err := newPostgresNotifier(d, m.cfg.Subscription)
+		if err != nil {
+			return nil, fmt.Errorf("CDC唤醒源初始化失败（%s）: %w", d.Driver(), err)
 		}
+		executor.cdc = source
 	}
 	synchronizeSubscriptionSchema(executor, s)
 	executor.intro = intro.New(s)
@@ -1041,7 +1013,7 @@ func (my *Engine) preparedPlan(view *effectiveView, entry *planEntry, variables 
 		return entry.plan, nil
 	}
 	// volatile：仅重做SQL构建，binding与codec路径树复用缓存（均只依赖AST）
-	plan, err := my.compiler.compile(entry.operation, variables, false)
+	plan, err := my.compiler.Compile(entry.operation, variables)
 	if err != nil {
 		return nil, err
 	}
@@ -1182,13 +1154,10 @@ func (my *Engine) OperationCost(query, operationName string, variables map[strin
 // compile 编译并缓存：resolver绑定与codec路径树在此一次性收集（均只依赖AST）；
 // volatile计划SQL不可复用但AST与两类产物可以——缓存供后续请求免解析重收集
 func (my *Engine) compile(key planKey, operation, introspection *ast.OperationDefinition, variables map[string]interface{}) (*planEntry, *Plan, error) {
-	plan, err := my.compiler.Compile(operation, variables)
+	plan, err := my.compileSQL(operation, variables)
 	if err != nil {
 		return nil, nil, err
 	}
-	plan.resolvers = collectBindings(my.metadata, operation)
-	plan.decode = pathTrie(plan.resolvers)
-	plan.paths = collectCodecPaths(operation.SelectionSet, my.metadata)
 	plan.intro = introspection
 	entry := &planEntry{operation: operation, intro: introspection, resolvers: plan.resolvers, decode: plan.decode, paths: plan.paths}
 	if !plan.Volatile() {
@@ -1246,4 +1215,16 @@ func (my *Engine) mergeIntrospection(ctx context.Context, data map[string]interf
 		data[key] = value
 	}
 	return nil
+}
+
+// compileSQL attaches all result processing once for ordinary and mixed root operations.
+func (my *Engine) compileSQL(operation *ast.OperationDefinition, variables map[string]any) (*Plan, error) {
+	plan, err := my.compiler.Compile(operation, variables)
+	if err != nil {
+		return nil, err
+	}
+	plan.resolvers = collectBindings(my.metadata, operation)
+	plan.decode = pathTrie(plan.resolvers)
+	plan.paths = collectCodecPaths(operation.SelectionSet, my.metadata)
+	return plan, nil
 }

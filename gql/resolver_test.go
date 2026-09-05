@@ -255,7 +255,7 @@ func TestFieldResolverReplaceGenerated(t *testing.T) {
 	override := NewResolver("Mutation", "createUser", "",
 		func(_ context.Context, _ Root, input args) (map[string]any, error) {
 			return map[string]any{"id": int64(99), "name": "custom:" + input.Input["name"].(string)}, nil
-		}, Existing())
+		})
 
 	require.Error(t, executor.register(override), "已有schema字段必须显式Replace")
 	require.NoError(t, executor.replace(override))

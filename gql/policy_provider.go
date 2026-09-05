@@ -36,26 +36,22 @@ type PolicyRequest struct {
 	Values     map[string]any
 }
 
-type TypedPredicate struct {
-	Column   string
-	Operator string
-	Context  string
-	Value    any
-}
+// Predicate is shared by metadata filters and runtime policy decisions.
+type Predicate = protocol.Predicate
 
 type RolePolicyBranch struct {
 	Role          string
-	RowPredicates []TypedPredicate
-	Check         []TypedPredicate
+	RowPredicates []Predicate
+	Check         []Predicate
 }
 
 type PolicyDecision struct {
 	Allow               bool
 	Fields              map[FieldUse][]string
-	RowPredicates       []TypedPredicate
+	RowPredicates       []Predicate
 	RoleBranches        []RolePolicyBranch
-	Preset              []TypedPredicate
-	Check               []TypedPredicate
+	Preset              []Predicate
+	Check               []Predicate
 	Limit               int
 	Cost                int
 	PolicyRevision      uint64
@@ -86,9 +82,11 @@ func NormalizeDecision(request PolicyRequest, decision PolicyDecision) (PolicyDe
 	if err != nil {
 		return PolicyDecision{}, err
 	}
-	for _, p := range append(append(append([]TypedPredicate{}, decision.RowPredicates...), decision.Preset...), decision.Check...) {
-		if err := validateTypedPredicate(p); err != nil {
-			return PolicyDecision{}, err
+	for _, predicates := range [][]Predicate{decision.RowPredicates, decision.Preset, decision.Check} {
+		for _, p := range predicates {
+			if err := validatePredicate(p); err != nil {
+				return PolicyDecision{}, err
+			}
 		}
 	}
 	if decision.PolicyRevision == 0 {
@@ -142,9 +140,11 @@ func cloneRoleBranches(in []RolePolicyBranch) ([]RolePolicyBranch, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, predicate := range append(append([]TypedPredicate(nil), out[n].RowPredicates...), out[n].Check...) {
-			if err := validateTypedPredicate(predicate); err != nil {
-				return nil, err
+		for _, predicates := range [][]Predicate{out[n].RowPredicates, out[n].Check} {
+			for _, predicate := range predicates {
+				if err := validatePredicate(predicate); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -174,7 +174,7 @@ func validatePolicyRequest(request PolicyRequest) error {
 	return nil
 }
 
-func validateTypedPredicate(p TypedPredicate) error {
+func validatePredicate(p Predicate) error {
 	if p.Column == "" || strings.IndexByte(p.Column, 0) >= 0 {
 		return fmt.Errorf("unsafe policy column %q", p.Column)
 	}
@@ -198,7 +198,7 @@ func ValidateDecisionCatalog(class *protocol.Class, decision PolicyDecision) err
 			return nil
 		}
 		candidate := class.Fields[name]
-		if candidate == nil || (candidate.Column == "" && (!relation || candidate.Relation == nil && candidate.Resolver == "" && candidate.Remote == nil)) {
+		if candidate == nil || (candidate.Column == "" && (!relation || candidate.Relation == nil && candidate.Resolver == "")) {
 			return fmt.Errorf("policy references unknown field %s.%s", class.Name, name)
 		}
 		return nil
@@ -210,7 +210,7 @@ func ValidateDecisionCatalog(class *protocol.Class, decision PolicyDecision) err
 			}
 		}
 	}
-	groups := [][]TypedPredicate{decision.RowPredicates, decision.Preset, decision.Check}
+	groups := [][]Predicate{decision.RowPredicates, decision.Preset, decision.Check}
 	for _, branch := range decision.RoleBranches {
 		groups = append(groups, branch.RowPredicates, branch.Check)
 	}
@@ -224,8 +224,8 @@ func ValidateDecisionCatalog(class *protocol.Class, decision PolicyDecision) err
 	return nil
 }
 
-func clonePredicates(in []TypedPredicate) ([]TypedPredicate, error) {
-	out := make([]TypedPredicate, len(in))
+func clonePredicates(in []Predicate) ([]Predicate, error) {
+	out := make([]Predicate, len(in))
 	for n, p := range in {
 		out[n] = p
 		value, err := cloneClaim(p.Value)
@@ -255,7 +255,7 @@ func permissionSignature(r PolicyRequest, d PolicyDecision) string {
 
 func shapeSignature(d PolicyDecision) string {
 	parts := []string{fmt.Sprintf("limit=%d", d.Limit), fmt.Sprintf("cost=%d", d.Cost)}
-	for _, group := range [][]TypedPredicate{d.RowPredicates, d.Preset, d.Check} {
+	for _, group := range [][]Predicate{d.RowPredicates, d.Preset, d.Check} {
 		shape := make([]string, len(group))
 		for n, p := range group {
 			shape[n] = p.Column + ":" + p.Operator + ":" + p.Context
@@ -265,7 +265,7 @@ func shapeSignature(d PolicyDecision) string {
 	}
 	for _, branch := range d.RoleBranches {
 		parts = append(parts, "role="+branch.Role)
-		for _, group := range [][]TypedPredicate{branch.RowPredicates, branch.Check} {
+		for _, group := range [][]Predicate{branch.RowPredicates, branch.Check} {
 			shape := make([]string, len(group))
 			for i, predicate := range group {
 				shape[i] = predicate.Column + ":" + predicate.Operator + ":" + predicate.Context
@@ -295,28 +295,18 @@ func NewProtocolPolicyProvider(permissions map[string]map[string]*protocol.Permi
 				copy.Select = append([]string(nil), permission.Select...)
 				copy.Insert = append([]string(nil), permission.Insert...)
 				copy.Update = append([]string(nil), permission.Update...)
-				copy.Filter, invalid = cloneProtocolPredicates(permission.Filter)
+				copy.Filter, invalid = clonePredicates(permission.Filter)
 				if invalid == nil {
-					copy.Check, invalid = cloneProtocolPredicates(permission.Check)
+					copy.Check, invalid = clonePredicates(permission.Check)
+				}
+				if invalid != nil {
+					return &ProtocolPolicyProvider{err: invalid}
 				}
 				out[resource][role] = &copy
 			}
 		}
 	}
 	return &ProtocolPolicyProvider{permissions: out, err: invalid}
-}
-
-func cloneProtocolPredicates(in []protocol.Predicate) ([]protocol.Predicate, error) {
-	out := make([]protocol.Predicate, len(in))
-	for n, predicate := range in {
-		out[n] = predicate
-		var err error
-		out[n].Value, err = cloneClaim(predicate.Value)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
 }
 
 func (p *ProtocolPolicyProvider) Decide(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
@@ -381,18 +371,10 @@ func (p *ProtocolPolicyProvider) Decide(_ context.Context, request PolicyRequest
 		d, err := NormalizeDecision(request, PolicyDecision{})
 		return d, err
 	}
-	readAction := operationInList(request.Actions, protocol.OP_SELECT) || operationInList(request.Actions, protocol.OP_AGGREGATE)
+	readAction := slices.Contains(request.Actions, protocol.OP_SELECT) || slices.Contains(request.Actions, protocol.OP_AGGREGATE)
 	for _, role := range authorizedRoles {
 		permission := byRole[role]
-		branch := RolePolicyBranch{Role: role}
-		for _, predicate := range permission.Filter {
-			value, _ := cloneClaim(predicate.Value)
-			branch.RowPredicates = append(branch.RowPredicates, TypedPredicate{Column: predicate.Column, Operator: predicate.Operator, Context: predicate.Context, Value: value})
-		}
-		for _, predicate := range permission.Check {
-			value, _ := cloneClaim(predicate.Value)
-			branch.Check = append(branch.Check, TypedPredicate{Column: predicate.Column, Operator: predicate.Operator, Context: predicate.Context, Value: value})
-		}
+		branch := RolePolicyBranch{Role: role, RowPredicates: permission.Filter, Check: permission.Check}
 		// Keep an authorized role even when it contributes no predicates. An
 		// empty branch is the explicit unrestricted arm of the role union.
 		d.RoleBranches = append(d.RoleBranches, branch)

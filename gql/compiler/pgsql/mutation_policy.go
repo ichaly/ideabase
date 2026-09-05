@@ -34,7 +34,7 @@ func (my *Dialect) updatePolicyConjunct(ctx *compiler.Context, class *protocol.C
 			ctx.Write(`(`).Write(my.Placeholder(ctx.AddParam(role))).Write(` = ANY(`).Write(my.Placeholder(ctx.AddContextListSlot(protocol.CONTEXT_ROLES))).Write(`)`)
 			for _, predicate := range permission.Filter {
 				ctx.Space(`AND`).Column(class.Table, predicate.Column)
-				if err := my.writeUpdatePredicateRHS(ctx, predicate); err != nil {
+				if err := my.writePredicateRHS(ctx, predicate); err != nil {
 					return err
 				}
 			}
@@ -51,7 +51,7 @@ func (my *Dialect) updatePolicyConjunct(ctx *compiler.Context, class *protocol.C
 				} else {
 					ctx.Column(class.Table, predicate.Column)
 				}
-				if err := my.writeUpdatePredicateRHS(ctx, predicate); err != nil {
+				if err := my.writePredicateRHS(ctx, predicate); err != nil {
 					return err
 				}
 			}
@@ -141,7 +141,7 @@ func (my *Dialect) relationUpdateOverrides(ctx *compiler.Context, class *protoco
 	return overrides
 }
 
-func (my *Dialect) writeUpdatePredicateRHS(ctx *compiler.Context, predicate protocol.Predicate) error {
+func (my *Dialect) writePredicateRHS(ctx *compiler.Context, predicate protocol.Predicate) error {
 	switch predicate.Operator {
 	case "eq", "ne", "lt", "lte", "gt", "gte":
 		ctx.Space(map[string]string{"eq": "=", "ne": "<>", "lt": "<", "lte": "<=", "gt": ">", "gte": ">="}[predicate.Operator])
@@ -163,7 +163,7 @@ func (my *Dialect) writeUpdatePredicateRHS(ctx *compiler.Context, predicate prot
 	case "not-null", "is-not-null":
 		ctx.Write(` IS NOT NULL`)
 	default:
-		return fmt.Errorf("不支持的更新检查操作符: %s", predicate.Operator)
+		return fmt.Errorf("不支持的固定谓词操作符: %s", predicate.Operator)
 	}
 	return nil
 }

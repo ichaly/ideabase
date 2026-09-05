@@ -15,7 +15,7 @@ type Field struct {
 	Relation     *Relation    `json:"relation"`    // 若为关系字段,指向关系定义
 	Resolver     string       `json:"resolver"`    // 字段级别自定义Resolver
 	Requires     []string     `json:"requires,omitempty"`
-	Remote       *RemoteRef   `json:"remote,omitempty"` // 远程关系：字段值来自注册的远程数据源
+	BatchKey     string       `json:"batchKey,omitempty"` // 按键Resolver依赖的原始数据库字段
 	ReadOnly     bool         `json:"readOnly,omitempty"`
 	InsertPreset *ValueSource `json:"insertPreset,omitempty"`
 	UpdatePreset *ValueSource `json:"updatePreset,omitempty"`

@@ -26,9 +26,9 @@ func TestResolverExamples(t *testing.T) {
 		t.Fatalf("根Resolver示例失败: value=%v err=%v", root, err)
 	}
 
-	remote, err := reputationRemote().Fetch(context.Background(), []any{int64(1), int64(2)})
+	remote, err := reputationResolver().(gql.BatchResolver).ResolveBatch(context.Background(), []gql.Source{{"__rk_id": int64(1)}, {"__rk_id": int64(2)}}, nil)
 	if err != nil || len(remote) != 2 {
-		t.Fatalf("Remote示例失败: values=%v err=%v", remote, err)
+		t.Fatalf("按键Resolver示例失败: values=%v err=%v", remote, err)
 	}
 }
 

@@ -15,7 +15,7 @@ type Profile struct {
 	Level string `json:"level" doc:"等级"`
 }
 
-// TestRemoteJoin 远程关系端到端（注册即声明）：NewRemote挂载关系字段+反射虚拟类型→
+// TestRemoteJoin 远程关系端到端（注册即声明）：NewLoader挂载关系字段+反射虚拟类型→
 // 无查询面→自动补投影→批量取数回填→内部键剥除→键缺失容错置null
 func TestRemoteJoin(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
@@ -23,7 +23,7 @@ func TestRemoteJoin(t *testing.T) {
 	ctx := context.Background()
 
 	data := map[any]Profile{}
-	require.NoError(t, executor.register(NewRemote("User", "profile", "用户画像", "id",
+	require.NoError(t, executor.register(NewLoader("User", "profile", "用户画像", "id",
 		func(_ context.Context, keys []any) (map[any]Profile, error) {
 			out := make(map[any]Profile, len(keys))
 			for _, k := range keys {
@@ -85,8 +85,8 @@ func TestRemoteSharedKey(t *testing.T) {
 		}
 	}
 	require.NoError(t, executor.register(
-		NewRemote("User", "profileA", "画像A", "id", fetch("gold")),
-		NewRemote("User", "profileB", "画像B", "id", fetch("silver")),
+		NewLoader("User", "profileA", "画像A", "id", fetch("gold")),
+		NewLoader("User", "profileB", "画像B", "id", fetch("silver")),
 	))
 
 	reply := executor.run(ctx, `mutation { createUser(input: { name: "S", email: "s@x.com" }) { id } }`, nil, "")
@@ -102,13 +102,11 @@ func TestRemoteSharedKey(t *testing.T) {
 	assert.NotContains(t, item, "__rk_id", "内部键最终仍须剥除")
 }
 
-func TestRemoteIncomparableKeyDoesNotPanic(t *testing.T) {
-	job := &remoteJob{
-		binding: binding{Name: "profiles", Field: "profile", Key: "id"},
-		sources: []map[string]any{{"id": []string{"not-comparable"}}},
-	}
-	job.fetch(context.Background(), map[string]Remote{})
-	require.Error(t, job.err)
-	job.fill()
-	require.Nil(t, job.sources[0]["profile"])
+func TestLoaderIncomparableKeyDoesNotPanic(t *testing.T) {
+	loader := NewLoader("User", "profile", "", "id", func(context.Context, []any) (map[any]Profile, error) {
+		t.Fatal("invalid keys must not reach loader")
+		return nil, nil
+	})
+	_, err := loader.(BatchResolver).ResolveBatch(context.Background(), []Source{{"__rk_id": []string{"invalid"}}}, nil)
+	require.ErrorContains(t, err, "not comparable")
 }

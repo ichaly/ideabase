@@ -3,7 +3,6 @@ package gql
 import (
 	"fmt"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -17,10 +16,6 @@ func policyError(class *protocol.Class, action, field string) error {
 		name = class.Name
 	}
 	return fmt.Errorf("授权拒绝 class=%s action=%s field=%s", name, action, field)
-}
-
-func operationInList(list []string, action string) bool {
-	return slices.Contains(list, action)
 }
 
 func allowedColumn(list []string, field *protocol.Field) bool {

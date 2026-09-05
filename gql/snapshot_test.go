@@ -166,7 +166,7 @@ func TestBuilderSupportsReplaceAndWrapBeforeFreeze(t *testing.T) {
 		"Query", "users", "replace generated query",
 		func(context.Context, Root, struct{}) (map[string]interface{}, error) {
 			return map[string]interface{}{"items": []interface{}{}, "total": 0}, nil
-		}, Existing(), Result("UserResult!"), Access("test", "read"),
+		}, Result("UserResult!"), Access("test", "read"),
 	)
 	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 	require.NoError(t, builder.Replace(replacement))
@@ -246,20 +246,20 @@ func TestRemoteSnapshotRejectsExecutableDirectiveWithoutRuntime(t *testing.T) {
 
 func TestRemoteSnapshotDerivesCompleteCapabilityCatalog(t *testing.T) {
 	schema := "type Query { hello(name: String): String }"
-	capabilities := []Capability{{Coordinate: "Query.hello", Parent: "Query", Name: "hello", Type: "String", Arguments: []Argument{{Name: "name", Type: "String"}}, Handler: HandlerRemote}}
+	capabilities := []Capability{{Coordinate: "Query.hello", Parent: "Query", Name: "hello", Type: "String", Arguments: []Argument{{Name: "name", Type: "String"}}, Handler: HandlerResolver}}
 	fingerprint, err := ArtifactFingerprint(schema, capabilities)
 	require.NoError(t, err)
 	snapshot, err := NewSnapshotArtifact(schema, fingerprint, capabilities)
 	require.NoError(t, err)
 	capability, ok := snapshot.Capability("Query.hello")
 	require.True(t, ok)
-	require.Equal(t, HandlerRemote, capability.Handler)
+	require.Equal(t, HandlerResolver, capability.Handler)
 	require.Equal(t, "String", capability.Type)
 	require.Equal(t, []Argument{{Name: "name", Type: "String"}}, capability.Arguments)
 
 	schema = "type Query { hello: String }"
 	capabilities = []Capability{{
-		Coordinate: "Query.missing", Parent: "Query", Name: "missing", Type: "String", Handler: HandlerRemote,
+		Coordinate: "Query.missing", Parent: "Query", Name: "missing", Type: "String", Handler: HandlerResolver,
 	}}
 	fingerprint, err = ArtifactFingerprint(schema, capabilities)
 	require.NoError(t, err)
@@ -269,8 +269,8 @@ func TestRemoteSnapshotDerivesCompleteCapabilityCatalog(t *testing.T) {
 
 func TestRemoteSnapshotDoesNotMutateCallerCapabilities(t *testing.T) {
 	capabilities := append(make([]Capability, 0, 256),
-		Capability{Coordinate: "Query.second", Parent: "Query", Name: "second", Type: "String", Handler: HandlerRemote},
-		Capability{Coordinate: "Query.first", Parent: "Query", Name: "first", Type: "String", Handler: HandlerRemote},
+		Capability{Coordinate: "Query.second", Parent: "Query", Name: "second", Type: "String", Handler: HandlerResolver},
+		Capability{Coordinate: "Query.first", Parent: "Query", Name: "first", Type: "String", Handler: HandlerResolver},
 	)
 	schema := "type Query { first: String, second: String }"
 	fingerprint, err := ArtifactFingerprint(schema, capabilities)

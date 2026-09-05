@@ -28,7 +28,7 @@ GraphQL 请求
 | `renderer` | 从元数据生成 GraphQL schema（Result/WhereInput/SortInput/CreateInput/UpdateInput） |
 | `compiler` | 编译上下文（对象池、参数槽位、全局别名计数）与 Dialect 接口 |
 | `compiler/pgsql` | PostgreSQL 方言：SELECT 单元化编译 + 变更 CTE |
-| `executor` | 计划 LRU 缓存、执行与结果组织、Resolver/Remote 分发、codec 出入参转换、持久化查询 |
+| `executor` | 计划 LRU 缓存、执行与结果组织、Resolver 分发、codec 出入参转换、持久化查询 |
 | `Snapshot` | Build 后不可变的 SDL、参数、Handler、Planner、授权 action、resource、cost 与稳定指纹 |
 
 ## 快速开始
@@ -50,7 +50,6 @@ engine, err := builder.Build()  // 构建一次 capability snapshot，随后冻�
 if err != nil { log.Fatal(err) }
 
 http.Handle("/graphql", transport.NewHandler(engine, transport.Options{}))
-http.Handle("/graphql/stream", transport.NewSubscriptionHandler(engine, transport.Options{}))
 
 // 非HTTP场景使用同一字节快路径；GraphQL字段错误位于响应体errors中
 body, err := engine.Execute(ctx, `query { users { items { id name } } }`, nil)
@@ -75,13 +74,12 @@ singleflight；依赖请求临时状态的 provider 不声明缓存身份，引�
 
 ```go
 mux.Handle("/graphql", transport.NewHandler(engine, transport.Options{}))
-mux.Handle("/graphql/stream", transport.NewSubscriptionHandler(engine, transport.Options{})) // 仅在有 CDC 时挂载
 mux.Handle("/gql/manifest", transport.NewManifestHandler("accounts", engine, authenticateManifest))
 mux.Handle("/gql/effective-schema", transport.NewEffectiveSchemaHandler(engine, delegationVerifier))
 mux.Handle("/health/gql", transport.NewHealthHandler(engine))
 mux.Handle("/.well-known/gql", transport.NewTransportDescriptorHandler(transport.TransportDescriptor{
     EndpointID: "accounts", ManifestURL: "/gql/manifest", EffectiveSchemaURL: "/gql/effective-schema",
-    ExecuteURL: "/graphql", SubscribeURL: "/graphql/stream", HealthURL: "/health/gql",
+    ExecuteURL: "/graphql", SubscribeURL: "/graphql", HealthURL: "/health/gql",
 }))
 
 gateway, err := gql.NewGateway("public-api",
@@ -288,7 +286,7 @@ GQL 不依赖 GORM，连接池的生命周期仍由应用负责。
 事务不会误唤醒。需要 SQL 与后处理 Resolver 共享一致读快照时，执行入口传
 `gql.WithReadSnapshot(ctx)`；它只接受 Query，并使用 read-only repeatable-read 事务。
 
-`Register` 新增字段；构造时传 `gql.Existing()` 后用 `Replace` 显式覆盖 schema 已有字段；
+`Register` 新增字段；用 `Replace` 显式覆盖 schema 已有字段；
 `Wrap` 用强类型中间件增强已注册 Resolver。自定义根字段可与默认数据库字段混排；
 单根默认 CRUD 保持原单 SQL 快路径，多根 Mutation 按文本顺序在同一事务中执行。
 
@@ -337,7 +335,7 @@ Match 认领为 ID。注册同名 `"ID"` codec 即可整体替换为自定义实
 内置 ID 实现）。注意 Encode 收到的是原始 JSON token 字节：字符串 token 含引号与
 原始转义，返回值须是合法 JSON token。
 
-## 远程关系（Remote Join）
+## 按键批量 Resolver
 
 把外部服务（REST/gRPC/另一个 GraphQL）声明为图里的关系字段，客户端一次查询同时
 拿到数据库数据与远程数据，拼接由引擎完成。**注册即声明**：关系字段与虚拟类型
@@ -350,19 +348,19 @@ type Profile struct {
 }
 
 // "id" 为宿主键字段；Fetch 一次收到本批去重后的键集合，天然免 N+1
-builder.Register(gql.NewRemote("User", "profile", "用户画像", "id",
+builder.Register(gql.NewLoader("User", "profile", "用户画像", "id",
     func(ctx context.Context, keys []any) (map[any]Profile, error) {
         // 批量调用外部服务，返回 键→值 映射；超时用 ctx 自行控制
     }))
 ```
 
 执行语义：编译期自动把 key 列以内部别名补进投影（不受 codec 转换影响，回填后
-剥除，响应形状严格等于选择集）；Fetch 失败时字段整体置 null 并记录告警，
+剥除，响应形状严格等于选择集）；加载失败时字段置 null 并返回 GraphQL 字段错误（Non-Null 字段按 Schema 冒泡），
 不中断主查询；键未命中的行该字段为 null。变更读回的选择集同样生效。
-多个远程共享同一返回类型时，虚拟类型 SDL 按文本去重。
+`NewLoader` 返回 `Resolver`，内部复用批量执行、权限、超时和结果完成流程。数据可以来自本地或远程；独立按键加载并发执行，多个字段共享类型声明。
 
 > 诚实边界：远程字段不支持 where/sort 下推（数据不在库里），虚拟类型不渲染任何
-> 查询面——schema 里看不到的就是不能用的。要完全控制时直接实现 `Remote` 接口。
+> 查询面——schema 里看不到的就是不能用的。要完全控制时直接实现 `BatchResolver` 接口。
 
 ## 行级作用域（多租户 / 当前登录人）
 
@@ -379,7 +377,7 @@ metadata:
 ```
 
 认证中间件把值注入请求上下文（`gql.WithScope`）。HTTP 生产入口统一使用
-`transport.NewHandler`，订阅统一使用 `transport.NewSubscriptionHandler`（SSE）；根包不再提供
+`transport.NewHandler`，同一路径同时支持 JSON 查询/突变与 SSE 订阅；根包不再提供
 Fiber 适配器或 GraphQL WebSocket 协议实现：
 
 ```go
@@ -536,7 +534,7 @@ events, _ := executor.Subscribe(ctx, `subscription { users { items { name } tota
 for reply := range events { ... } // ctx取消后通道关闭
 ```
 
-HTTP 订阅只走 `transport.NewSubscriptionHandler` 的 SSE 协议，与程序内 `Subscribe`
+HTTP 订阅只走 `transport.NewHandler` 的 SSE 协议，与程序内 `Subscribe`
 共用同一执行链。其他 Web 框架通过其标准 `net/http` adaptor 挂载；引擎不再维护第二套
 WebSocket 状态机。
 
@@ -638,23 +636,14 @@ fail closed，不会以部分元数据启动。
   打真实 PostgreSQL，覆盖平铺查询、嵌套关系（单条 SQL 零 N+1）、batch resolver。
   `cd example && go test -bench=. -benchmem -run=^$`。
 
-## 扩展新数据库（纯新增，零修改）
+## 扩展新数据库
 
-所有数据库相关能力都走自注册（`database/sql` 驱动同款模式），
-将来支持 MySQL 只需**新增**以下代码，不修改任何现有文件：
+SQL 方言保留公开的 `compiler.Register` 扩展入口，空白导入方言包后，
+`NewCompiler(meta, nil)` 按驱动选择实现。当前提供 PostgreSQL 方言。
 
-1. **方言**：新建 `compiler/mysql` 包实现 `compiler.Dialect` 的 5 个方法
-   （契约见接口注释：单行单列 __root JSON、参数槽位、MarkTable 等），
-   `init` 中 `compiler.Register(NewDialect())`——空白导入即生效，
-   `NewCompiler(meta, nil)` 自动按驱动名路由；已知驱动未注册方言会明确报错
-2. **订阅唤醒源**：新增文件实现 `notifier` 接口（binlog 监听）并
-   `registerNotifier("mysql", 工厂)`——执行器按 `db.Name()` 自动选取
-3. **全文搜索探测**：新增文件实现探测函数并 `registerSearchDetector("mysql", 探测)`
-   ——执行器按 `db.Name()` 自动选取；未注册的驱动降级为 ilike
-4. **元数据**：`MysqlLoader` 已就绪，按驱动自动启用，无需任何动作
-
-当前未注册 MySQL 的任何实现：连 MySQL 时编译器报「没有注册对应的SQL
-方言实现」，订阅报「没有注册CDC唤醒源」，搜索降级 ilike，不会静默出错。
+`MysqlLoader` 已支持元数据读取，但执行 MySQL 查询仍需实现对应方言。
+CDC 和搜索探测目前只有 PostgreSQL 实现，直接在启动装配中选择；其他驱动
+不提供 CDC，搜索使用 ilike。将来新增实际实现时再扩展装配，不预设注册框架。
 
 ## 契约一致性
 
