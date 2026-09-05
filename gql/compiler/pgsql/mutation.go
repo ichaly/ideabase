@@ -6,13 +6,14 @@
 package pgsql
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -270,7 +271,7 @@ func (my *Dialect) buildUpsert(ctx *compiler.Context, m *mutation) error {
 	// 冲突目标只能是catalog已证明的全局unique/primary key；
 	// GraphQL enum标签由protocol与Renderer共用，不接受任意列名。
 	sc := scope{class: m.class}
-	primary, hasPrimary := m.class.PrimaryUpsertConflictTarget()
+	primary, hasPrimary := m.class.UpsertConflictTarget("PRIMARY")
 	label := primary.Name
 	if arg := m.field.Arguments.ForName(protocol.ON); arg != nil && arg.Value != nil {
 		label = arg.Value.Raw
@@ -689,13 +690,9 @@ func (my *Dialect) applyPreset(class *protocol.Class, rows []inputRow, operation
 }
 
 func setInputValue(row *inputRow, column string, value paramWriter) {
-	for _, existing := range row.columns {
-		if existing == column {
-			row.values[column] = value
-			return
-		}
+	if !slices.Contains(row.columns, column) {
+		row.columns = append(row.columns, column)
 	}
-	row.columns = append(row.columns, column)
 	row.values[column] = value
 }
 
@@ -726,7 +723,7 @@ func sortedClassFields(class *protocol.Class) []*protocol.Field {
 			fields = append(fields, f)
 		}
 	}
-	sort.SliceStable(fields, func(i, j int) bool { return fields[i].Column < fields[j].Column })
+	slices.SortStableFunc(fields, func(a, b *protocol.Field) int { return cmp.Compare(a.Column, b.Column) })
 	return fields
 }
 
@@ -841,7 +838,7 @@ func (my *Dialect) literalRow(ctx *compiler.Context, class *protocol.Class, valu
 // rawRow 运行期对象转行（键排序保证SQL确定性）
 func (my *Dialect) rawRow(ctx *compiler.Context, class *protocol.Class, object map[string]interface{}, operation string) (inputRow, error) {
 	row := inputRow{values: make(map[string]paramWriter)}
-	for _, name := range utl.SortKeys(object) {
+	for _, name := range slices.Sorted(maps.Keys(object)) {
 		if rel := relationField(class, name); rel != nil {
 			op, err := my.rawRelationOp(ctx, rel, object[name])
 			if err != nil {
@@ -1216,11 +1213,26 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 		// 一对多：更新/解除/内联创建目标表行
 		ctx.MarkTable(target.Table)
 		fk := sc.column(op.rel.TargetField)
-		if len(op.connect) > 0 {
+		// Both relationship updates share presets, audit, tenant scope and policy checks.
+		for action, ids := range [][]paramWriter{op.connect, op.disconnect} {
+			if len(ids) == 0 {
+				continue
+			}
+			connect := action == 0
+			value := func() error {
+				if connect {
+					ctx.Write(`"__parent".`).Quote(scope{class: class}.column(op.rel.SourceField))
+				} else {
+					ctx.Write(`NULL`)
+				}
+				return nil
+			}
 			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (UPDATE `)
 			tableRef(ctx, target.Table)
 			ctx.Write(` SET `).Quote(fk).Write(` = `)
-			ctx.Write(`"__parent".`).Quote(scope{class: class}.column(op.rel.SourceField))
+			if err := value(); err != nil {
+				return err
+			}
 			if err := my.appendUpdatePresets(ctx, target, fk); err != nil {
 				return err
 			}
@@ -1228,39 +1240,16 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			if err := my.appendAuditAssignments(ctx, []string{columns.updatedAt, columns.updatedBy}, false); err != nil {
 				return err
 			}
-			ctx.Write(` FROM `).Quote(class.Table).Write(` AS "__parent"`)
-			ctx.Write(` WHERE `).Column(target.Table, pk).Write(` IN (`)
-			if err := params(op.connect); err != nil {
-				return err
+			if connect {
+				ctx.Write(` FROM `).Quote(class.Table).Write(` AS "__parent"`)
+				ctx.Write(` WHERE `).Column(target.Table, pk)
+			} else {
+				ctx.Write(` WHERE `).Quote(fk).Write(` = `)
+				anchor(op.rel)
+				ctx.Write(` AND `).Quote(pk)
 			}
-			ctx.Write(`)`)
-			my.appendScope(ctx, target.Table, target.Scope) // 只能挂接当前作用域的目标行（防跨租户劫持）
-			if err := my.appendMetadataWhere(ctx, target); err != nil {
-				return err
-			}
-			if err := my.appendUpdatePolicy(ctx, target, my.relationUpdateOverrides(ctx, target, fk, func() error {
-				ctx.Write(`"__parent".`).Quote(scope{class: class}.column(op.rel.SourceField))
-				return nil
-			})); err != nil {
-				return err
-			}
-			ctx.Write(`)`)
-		}
-		if len(op.disconnect) > 0 {
-			ctx.Write(`, `).Quote(`__c_`, ctx.NextIndex()).Write(` AS (UPDATE `)
-			tableRef(ctx, target.Table)
-			ctx.Write(` SET `).Quote(fk).Write(` = NULL`)
-			if err := my.appendUpdatePresets(ctx, target, fk); err != nil {
-				return err
-			}
-			columns := auditColumnsFor(target)
-			if err := my.appendAuditAssignments(ctx, []string{columns.updatedAt, columns.updatedBy}, false); err != nil {
-				return err
-			}
-			ctx.Write(` WHERE `).Quote(fk).Write(` = `)
-			anchor(op.rel)
-			ctx.Write(` AND `).Quote(pk).Write(` IN (`)
-			if err := params(op.disconnect); err != nil {
+			ctx.Write(` IN (`)
+			if err := params(ids); err != nil {
 				return err
 			}
 			ctx.Write(`)`)
@@ -1268,10 +1257,7 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			if err := my.appendMetadataWhere(ctx, target); err != nil {
 				return err
 			}
-			if err := my.appendUpdatePolicy(ctx, target, my.relationUpdateOverrides(ctx, target, fk, func() error {
-				ctx.Write(`NULL`)
-				return nil
-			})); err != nil {
+			if err := my.appendUpdatePolicy(ctx, target, my.relationUpdateOverrides(ctx, target, fk, value)); err != nil {
 				return err
 			}
 			ctx.Write(`)`)
@@ -1281,13 +1267,10 @@ func (my *Dialect) buildRelationOps(ctx *compiler.Context, class *protocol.Class
 			rel := op.rel
 			for i := range op.create {
 				row := &op.create[i]
-				if _, exists := row.values[fk]; !exists {
-					row.columns = append(row.columns, fk)
-				}
-				row.values[fk] = func(*compiler.Context) error {
+				setInputValue(row, fk, func(*compiler.Context) error {
 					anchor(rel)
 					return nil
-				}
+				})
 			}
 			my.applyPreset(target, op.create, protocol.OP_INSERT)
 			my.applyAudit(target, op.create, protocol.OP_INSERT)

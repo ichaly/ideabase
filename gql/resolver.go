@@ -5,14 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/ichaly/ideabase/gql/internal/lru"
+	"maps"
 	"reflect"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal/intro"
+	"github.com/ichaly/ideabase/gql/internal/lru"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
 	"github.com/vektah/gqlparser/v2"
@@ -616,7 +618,7 @@ func (my *Engine) rebuild() error {
 		defines[name] = r.Define()
 	}
 
-	names := sortedMapKeys(defines)
+	names := slices.Sorted(maps.Keys(defines))
 
 	var sb strings.Builder
 	sb.WriteString(my.source)

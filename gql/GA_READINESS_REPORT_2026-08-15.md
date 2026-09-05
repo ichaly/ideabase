@@ -1,5 +1,7 @@
 # GQL 引擎 GA 就绪度全面评估
 
+> 历史评估：以下结论对应当时基线。当前版本以 [2026-09-05 生产订单验证](docs/reviews/2026-09-05-production-order-validation.md) 的实测范围、迁移要求和发布判断为准。
+
 > 最终复评日期：2026-08-16  
 > 分支：`optimize/gql-engine-five-round-simplification`  
 > 基线：`115a7c5354c9af0936e36c8bec38e56dae7d6fbb`  

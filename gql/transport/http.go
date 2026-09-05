@@ -2,7 +2,6 @@
 package transport
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -20,9 +19,6 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
 )
-
-// Endpoint reuses the core transport-neutral execution contract.
-type Endpoint = core.Endpoint
 
 type snapshotPinner interface {
 	ForSnapshot(string) (core.ComposableEndpoint, error)
@@ -57,7 +53,7 @@ func delegationToken(r *http.Request) (string, bool) {
 }
 
 // NewHandler returns a GraphQL-over-HTTP handler.
-func NewHandler(endpoint Endpoint, opts Options) http.Handler {
+func NewHandler(endpoint core.Endpoint, opts Options) http.Handler {
 	opts = defaultOptions(opts)
 	return &handler{
 		endpoint: endpoint, options: opts,
@@ -88,7 +84,7 @@ func defaultOptions(opts Options) Options {
 }
 
 type handler struct {
-	endpoint                 Endpoint
+	endpoint                 core.Endpoint
 	options                  Options
 	admission, execution     chan struct{}
 	streamAdmission, streams chan struct{}
@@ -141,7 +137,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json", false)
 			return
 		}
-		if err := decodeLimited(r, h.options.MaxBodyBytes, &req); err != nil {
+		r.Body = http.MaxBytesReader(nil, r.Body, h.options.MaxBodyBytes)
+		if err := decodeJSON(r.Body, &req, "request body must contain one JSON value"); err != nil {
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {
 				writeProblem(w, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "request body too large", false)
@@ -160,11 +157,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		req.Query = r.URL.Query().Get("query")
 		req.OperationName = r.URL.Query().Get("operationName")
 		if raw := r.URL.Query().Get("variables"); raw != "" {
-			err = decodeJSON([]byte(raw), &req.Variables)
+			err = decodeJSON(strings.NewReader(raw), &req.Variables, "JSON must contain one value")
 		}
 		if err == nil {
 			if raw := r.URL.Query().Get("extensions"); raw != "" {
-				err = decodeJSON([]byte(raw), &req.Extensions)
+				err = decodeJSON(strings.NewReader(raw), &req.Extensions, "JSON must contain one value")
 			}
 		}
 		if err != nil {
@@ -239,7 +236,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if streaming {
-		source, ok := execution.(subscriptionEndpoint)
+		source, ok := execution.(core.SubscriptionEndpoint)
 		if !ok {
 			writeProblem(w, http.StatusServiceUnavailable, "SUBSCRIPTION_UNAVAILABLE", "subscription unavailable", true)
 			return
@@ -274,9 +271,8 @@ func operationDigest(req request, revision, executionPin string) string {
 	return fmt.Sprintf("%x", sha256.Sum256(body))
 }
 
-func decodeLimited(r *http.Request, limit int64, dst any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, limit)
-	dec := json.NewDecoder(r.Body)
+func decodeJSON(reader io.Reader, dst any, multipleValues string) error {
+	dec := json.NewDecoder(reader)
 	dec.UseNumber()
 	if err := dec.Decode(dst); err != nil {
 		return err
@@ -284,23 +280,7 @@ func decodeLimited(r *http.Request, limit int64, dst any) error {
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("request body must contain one JSON value")
-		}
-		return err
-	}
-	return nil
-}
-
-func decodeJSON(raw []byte, dst any) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	if err := dec.Decode(dst); err != nil {
-		return err
-	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return fmt.Errorf("JSON must contain one value")
+			return fmt.Errorf("%s", multipleValues)
 		}
 		return err
 	}

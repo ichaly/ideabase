@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/std"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,4 +92,19 @@ func TestGACDCRejectsNarrowPublicationInsteadOfServingStaleStreams(t *testing.T)
 	testExec(t, db, `CREATE PUBLICATION ideabase_cdc FOR TABLE users`)
 	_, err := engine.subscribe(context.Background(), `subscription { users { total } }`, nil, "")
 	require.ErrorContains(t, err, "FOR ALL TABLES")
+}
+
+func TestGACDCUsesPrecreatedPublicationWithRestrictedRole(t *testing.T) {
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+	testExec(t, db, `CREATE PUBLICATION ideabase_cdc FOR ALL TABLES`)
+	testExec(t, db, `CREATE ROLE gql_cdc_restricted NOLOGIN NOSUPERUSER NOBYPASSRLS`)
+	defer testExec(t, db, `DROP ROLE gql_cdc_restricted`)
+	conn, err := pgconn.Connect(context.Background(), db.DSN())
+	require.NoError(t, err)
+	defer conn.Close(context.Background())
+	_, err = conn.Exec(context.Background(), `SET ROLE gql_cdc_restricted`).ReadAll()
+	require.NoError(t, err)
+	source := &listener{publication: "ideabase_cdc"}
+	require.NoError(t, source.ensurePublication(context.Background(), conn), "a precreated publication must not require CREATE privileges")
 }

@@ -261,8 +261,15 @@ func identifierStart(c byte) bool {
 }
 
 func (my *listener) ensurePublication(ctx context.Context, conn *pgconn.PgConn) error {
-	if _, err := conn.Exec(ctx, `CREATE PUBLICATION "`+my.publication+`" FOR ALL TABLES`).ReadAll(); err != nil &&
-		!strings.Contains(err.Error(), "42710") { // duplicate_object
+	// Check inside PostgreSQL so an existing publication needs no CREATE privilege.
+	// The duplicate handler covers two replicas initializing an absent publication.
+	statement := fmt.Sprintf(`DO $publication$ BEGIN
+   IF NOT EXISTS (SELECT FROM pg_publication WHERE pubname = '%s') THEN
+     CREATE PUBLICATION "%s" FOR ALL TABLES;
+   END IF;
+ EXCEPTION WHEN duplicate_object THEN NULL;
+ END $publication$`, my.publication, my.publication)
+	if _, err := conn.Exec(ctx, statement).ReadAll(); err != nil {
 		return fmt.Errorf("创建发布失败: %w", err)
 	}
 	return my.auditPublication(ctx, conn)

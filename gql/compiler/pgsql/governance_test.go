@@ -174,14 +174,14 @@ func (my *_DialectSuite) TestGovernanceRelationUpdateInjectsTargetPolicy() {
 			},
 			"Post": {
 				Table: "sys_post", Operations: []string{protocol.OP_UPDATE},
-				Where: []internal.PredicateConfig{{Column: "active", Operator: "eq", Value: true}},
-				Permissions: map[string]*internal.PermissionConfig{"writer": {
-					Update: []string{"userId"}, Filter: []internal.PredicateConfig{{Column: "ownerId", Operator: "eq", Context: "userId"}},
+				Where: []protocol.Predicate{{Column: "active", Operator: "eq", Value: true}},
+				Permissions: map[string]*protocol.Permission{"writer": {
+					Update: []string{"userId"}, Filter: []protocol.Predicate{{Column: "ownerId", Operator: "eq", Context: "userId"}},
 				}},
 				Fields: map[string]*internal.FieldConfig{
 					"id": {Type: "ID", Column: "id", IsPrimary: true}, "ownerId": {Type: "ID", Column: "owner_id"}, "active": {Type: "Boolean", Column: "active"},
 					"userId":    {Type: "ID", Column: "user_id", Relation: &internal.RelationConfig{TargetClass: "User", TargetField: "id", Type: "ManyToOne"}},
-					"updatedAt": {Type: "DateTime", Column: "updated_at", UpdatePreset: &internal.ValueConfig{Context: "now"}},
+					"updatedAt": {Type: "DateTime", Column: "updated_at", UpdatePreset: &protocol.ValueSource{Context: "now"}},
 				},
 			},
 		},
@@ -224,8 +224,8 @@ func (my *_DialectSuite) TestGovernanceManyToManyDisconnectInjectsTargetPolicy()
 			},
 			"Tag": {
 				Table: "sys_tag", Operations: []string{protocol.OP_UPDATE},
-				Permissions: map[string]*internal.PermissionConfig{"writer": {
-					Update: []string{"id"}, Filter: []internal.PredicateConfig{{Column: "ownerId", Operator: "eq", Context: "userId"}},
+				Permissions: map[string]*protocol.Permission{"writer": {
+					Update: []string{"id"}, Filter: []protocol.Predicate{{Column: "ownerId", Operator: "eq", Context: "userId"}},
 				}},
 				Fields: map[string]*internal.FieldConfig{
 					"id": {Type: "ID", Column: "id", IsPrimary: true}, "ownerId": {Type: "ID", Column: "owner_id"},

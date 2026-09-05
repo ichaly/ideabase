@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -82,7 +82,7 @@ func invalidationTables(ctx context.Context) []string {
 	for table := range state.tables {
 		tables = append(tables, table)
 	}
-	sort.Strings(tables)
+	slices.Sort(tables)
 	return tables
 }
 

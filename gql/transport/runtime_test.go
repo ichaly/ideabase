@@ -1105,3 +1105,23 @@ func TestSubscriptionHandlerLimitsEventFrames(t *testing.T) {
 		t.Fatalf("oversized subscription frame = %d %s", response.Code, response.Body.String())
 	}
 }
+
+func TestEffectiveSchemaAcceptsImmutableEndpointAndRejectsStaleRevision(t *testing.T) {
+	endpoint := &runtimeEndpoint{snapshot: newArtifact(t, "type Query { hello: String }")}
+	// An immutable endpoint needs no revision-history wrapper.
+	frozen := struct{ core.EffectiveSchemaEndpoint }{endpoint}
+	handler := NewEffectiveSchemaHandler(frozen, acceptVerifier{})
+	for _, revision := range []string{endpoint.snapshot.Fingerprint(), "stale"} {
+		request := httptest.NewRequest(http.MethodGet, "/effective-schema", nil)
+		request.Header.Set("Authorization", "GQL-Delegation test")
+		request.Header.Set("GQL-Snapshot", revision)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if revision == "stale" {
+			require.Equal(t, http.StatusConflict, response.Code)
+			require.Contains(t, response.Body.String(), "SNAPSHOT_CHANGED")
+		} else {
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		}
+	}
+}

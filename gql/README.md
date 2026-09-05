@@ -586,6 +586,12 @@ fail closed，不会以部分元数据启动。
   `execute/plan/authorize/database/handler`、耗时和稳定错误码，不包含 query、variables、
   token、cursor、tenant 或 user；observer panic 会被隔离，关闭时热路径约 2ns、零分配
 
+## 生产业务验收
+
+[多租户订单示例](examples/orders/README.md) 使用生产模式、JWT、RLS 和两个业务 Resolver，验证幂等、防超卖、实例组合和有数据的持续负载。
+
+默认在启动时读取已连接数据库的 catalog；显式配置 `metadata.file` 时改用该 artifact，不混用隐式缓存。
+
 ## 性能要点
 
 ### 全量测试
@@ -656,7 +662,7 @@ schema、能力、自省三者严格一致，没有任何方向的偏差：
 ## 当前限制
 
 - MySQL 方言未实现（扩展方式见上节；已知驱动未注册方言会明确报错，不会静默回退）
-- 同一 mutation 内不能两次变更同一张表（变更 CTE 同名限制）
+- 同一 Engine 的多个 mutation 根字段按顺序执行并共享事务，可再次修改同一张表；因此整个操作不保证只有一条 SQL。跨 Gateway namespace 不提供分布式事务。
 - 复合外键关系支持查询 JOIN（逐列 AND），不支持嵌套关系操作（connect/create，编译期明确报错）；
   复合自引用外键不生成递归字段；中间表识别限单列外键约束
 

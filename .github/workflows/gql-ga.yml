@@ -114,6 +114,11 @@ jobs:
           GQL_RUN_CLUSTER_GA: "1"
           GQL_TEST_POSTGRES_IMAGE: postgres:15-alpine
         run: go test . -run '^TestGAPerformanceRealPostgres(MutationSQL|ConcurrentWarm)Gate$' -count=1
+      - name: Run populated tenant order workload
+        env:
+          GOWORK: "off"
+          ORDERS_SOAK_SECONDS: "30"
+        run: go test ./examples/orders -run TestOrderPopulatedHTTPWorkload -count=1 -v | tee orders-performance.txt
       - name: Compare base and head
         shell: bash
         run: |
@@ -128,6 +133,7 @@ jobs:
           path: |
             gql/performance.txt
             gql/performance-delta.txt
+            gql/orders-performance.txt
 
   demo-e2e:
     runs-on: ubuntu-latest

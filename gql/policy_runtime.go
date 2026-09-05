@@ -1,12 +1,13 @@
 package gql
 
 import (
+	"cmp"
 	"context"
 	stdjson "encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -293,7 +294,7 @@ func (t policyTarget) uses() []FieldUse {
 		t.fields[use] = sortedUnique(t.fields[use])
 		uses = append(uses, use)
 	}
-	sort.Slice(uses, func(i, j int) bool { return uses[i] < uses[j] })
+	slices.SortFunc(uses, func(a, b FieldUse) int { return cmp.Compare(a, b) })
 	return uses
 }
 
@@ -706,7 +707,7 @@ func (my *Engine) policyPlan(ctx context.Context, base *Plan, variables map[stri
 	}
 	overlay := newPolicyOverlay(my.metadata)
 
-	coordinates := sortedMapKeys(decisions)
+	coordinates := slices.Sorted(maps.Keys(decisions))
 	roles := make([]string, 0, len(coordinates))
 	scope := my.policyDecisionScope(decisions)
 	for coordinateIndex, coordinate := range coordinates {
@@ -864,7 +865,7 @@ func applyPolicyPresets(overlay *policyOverlay, class *protocol.Class, actions [
 }
 
 func (my *Engine) policyDecisionScope(decisions map[string]PolicyDecision) map[string]any {
-	coordinates := sortedMapKeys(decisions)
+	coordinates := slices.Sorted(maps.Keys(decisions))
 	scope := make(map[string]any)
 	for coordinateIndex, coordinate := range coordinates {
 		decision := decisions[coordinate]
@@ -903,7 +904,7 @@ func putPolicyValues(scope map[string]any, prefix string, predicates []Predicate
 
 func policyPlanSignature(decisions map[string]PolicyDecision) string {
 	parts := make([]string, 0, len(decisions))
-	for _, coordinate := range sortedMapKeys(decisions) {
+	for _, coordinate := range slices.Sorted(maps.Keys(decisions)) {
 		decision := decisions[coordinate]
 		parts = append(parts, fmt.Sprintf("%s:%d:%s:%s", coordinate, decision.PolicyRevision, decision.PermissionSignature, decision.ShapeSignature))
 	}
@@ -915,7 +916,7 @@ func policyPlanSignature(decisions map[string]PolicyDecision) string {
 // the values feeding that SQL change.
 func policyRuntimeSignature(decisions map[string]PolicyDecision) string {
 	parts := make([]string, 0, len(decisions))
-	for _, coordinate := range sortedMapKeys(decisions) {
+	for _, coordinate := range slices.Sorted(maps.Keys(decisions)) {
 		decision := decisions[coordinate]
 		value, _ := stdjson.Marshal(struct {
 			Row      []Predicate

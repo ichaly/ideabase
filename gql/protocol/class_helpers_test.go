@@ -31,7 +31,7 @@ func TestClassConflictTargetLookups(t *testing.T) {
 	if _, ok := class.ConflictTarget("missing"); ok {
 		t.Fatal("missing conflict target resolved")
 	}
-	if _, ok := class.PrimaryUpsertConflictTarget(); !ok {
+	if _, ok := class.UpsertConflictTarget("PRIMARY"); !ok {
 		t.Fatal("primary upsert conflict target missing")
 	}
 	if _, ok := class.UpsertConflictTarget("PRIMARY"); !ok {

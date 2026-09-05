@@ -3,6 +3,7 @@ package internal
 import (
 	"time"
 
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 )
 
@@ -110,16 +111,16 @@ type ClassConfig struct {
 	Search []string `mapstructure:"search"`
 
 	// 行级作用域：编译期强制注入的过滤（租户/属主隔离），值由 gql.WithScope 在请求上下文注入
-	Scope []ScopeConfig `mapstructure:"scope"`
+	Scope []protocol.ScopeRule `mapstructure:"scope"`
 	// Global 显式声明shared-table模式下该实体跨租户共享；默认false必须有tenant scope。
 	Global bool `mapstructure:"global"`
 
 	// 允许的GraphQL操作；为空表示保持现有全开放语义
-	Operations []string          `mapstructure:"operations"`
-	SoftDelete *SoftDeleteConfig `mapstructure:"soft_delete"`
-	Where      []PredicateConfig `mapstructure:"where"`
+	Operations []string             `mapstructure:"operations"`
+	SoftDelete *protocol.SoftDelete `mapstructure:"soft_delete"`
+	Where      []protocol.Predicate `mapstructure:"where"`
 	// 配置permissions后，未命中角色默认拒绝；未配置permissions时保持legacy全允许。
-	Permissions map[string]*PermissionConfig `mapstructure:"permissions"`
+	Permissions map[string]*protocol.Permission `mapstructure:"permissions"`
 
 	// 字段过滤配置
 	ExcludeFields []string `mapstructure:"exclude_fields"` // 排除这些字段
@@ -127,40 +128,6 @@ type ClassConfig struct {
 
 	// override: true 表示别名覆盖主类指针，false（默认）为附加模式
 	Override bool `mapstructure:"override"`
-}
-
-// ScopeConfig 行级作用域规则配置
-type ScopeConfig struct {
-	Column  string `mapstructure:"column"`  // 数据库列名（如 tenant_id / user_id）
-	Context string `mapstructure:"context"` // 上下文键名（如 tenant / userId）
-}
-
-type ValueConfig struct {
-	Context string `mapstructure:"context"`
-	Value   any    `mapstructure:"value"`
-}
-
-type SoftDeleteConfig struct {
-	Column string `mapstructure:"column"`
-}
-
-type PredicateConfig struct {
-	Column   string `mapstructure:"column"`
-	Operator string `mapstructure:"operator"`
-	Context  string `mapstructure:"context"`
-	Value    any    `mapstructure:"value"`
-}
-
-type PermissionConfig struct {
-	Select    []string          `mapstructure:"select"`
-	Insert    []string          `mapstructure:"insert"`
-	Update    []string          `mapstructure:"update"`
-	Delete    bool              `mapstructure:"delete"`
-	Restore   bool              `mapstructure:"restore"`
-	Purge     bool              `mapstructure:"purge"`
-	Aggregate bool              `mapstructure:"aggregate"`
-	Filter    []PredicateConfig `mapstructure:"filter"`
-	Check     []PredicateConfig `mapstructure:"check"`
 }
 
 // FieldConfig 表示字段配置
@@ -175,12 +142,12 @@ type FieldConfig struct {
 	Description string `mapstructure:"description"`
 
 	// 字段特性
-	IsPrimary    bool         `mapstructure:"primary"`
-	IsNullable   bool         `mapstructure:"nullable"`
-	IsUnique     bool         `mapstructure:"unique"`
-	ReadOnly     bool         `mapstructure:"read_only"`
-	InsertPreset *ValueConfig `mapstructure:"insert_preset"`
-	UpdatePreset *ValueConfig `mapstructure:"update_preset"`
+	IsPrimary    bool                  `mapstructure:"primary"`
+	IsNullable   bool                  `mapstructure:"nullable"`
+	IsUnique     bool                  `mapstructure:"unique"`
+	ReadOnly     bool                  `mapstructure:"read_only"`
+	InsertPreset *protocol.ValueSource `mapstructure:"insert_preset"`
+	UpdatePreset *protocol.ValueSource `mapstructure:"update_preset"`
 
 	// 默认值
 	DefaultValue string `mapstructure:"default_value"`

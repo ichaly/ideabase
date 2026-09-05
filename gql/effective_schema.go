@@ -1,17 +1,18 @@
 package gql
 
 import (
+	"cmp"
 	"context"
 	stdjson "encoding/json"
 	"fmt"
-	"github.com/ichaly/ideabase/gql/internal/lru"
+	"maps"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal/intro"
+	"github.com/ichaly/ideabase/gql/internal/lru"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -48,7 +49,7 @@ type IdentityDescriptor struct {
 
 func IdentityDescriptorFromIdentity(identity Identity) *IdentityDescriptor {
 	roles := identity.Roles()
-	sort.Strings(roles)
+	slices.Sort(roles)
 	return &IdentityDescriptor{TenantDigest: digest(identity.Tenant()), SubjectDigest: digest(identity.Subject()), ActorDigest: digest(identity.Actor()), Roles: roles, PolicyRevision: identity.PolicyRevision(), CredentialEpoch: identity.CredentialEpoch()}
 }
 
@@ -363,11 +364,8 @@ func CheckProfileCompatibility(previous, next SchemaProfile) error {
 		}
 	}
 	if len(breaking) > 0 {
-		sort.Slice(breaking, func(i, j int) bool {
-			if breaking[i].Coordinate == breaking[j].Coordinate {
-				return breaking[i].Category < breaking[j].Category
-			}
-			return breaking[i].Coordinate < breaking[j].Coordinate
+		slices.SortFunc(breaking, func(a, b SchemaCompatibilityViolation) int {
+			return cmp.Or(cmp.Compare(a.Coordinate, b.Coordinate), cmp.Compare(a.Category, b.Category))
 		})
 		return SchemaCompatibilityError{Violations: breaking}
 	}
@@ -515,7 +513,7 @@ func (my *Engine) effectiveSchema(ctx context.Context) (view *effectiveView, err
 	if cached, ok := my.effectiveCache.Get(key); ok {
 		return cached, nil
 	}
-	return sharedBuild(ctx, &my.effectiveFlight, my.buildLimiter, key, func(shared context.Context) (*effectiveView, error) {
+	return sharedBuild(ctx, &my.effectiveFlight, my.buildLimiter, key, sharedBuildTimeout, func(shared context.Context) (*effectiveView, error) {
 		if cached, ok := my.effectiveCache.Get(key); ok {
 			return cached, nil
 		}
@@ -693,7 +691,7 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 	}
 	disableUnsupportedDirectives(schema)
 	source := formatSchema(schema)
-	sort.Strings(signatures)
+	slices.Sort(signatures)
 	permission := digest(strings.Join(signatures, "\x00"))
 	view := &effectiveView{artifact: SchemaArtifact{
 		Schema: source, Fingerprint: digest(source), StructuralFingerprint: my.snapshot.Fingerprint(),
@@ -738,7 +736,7 @@ func (my *Engine) persistedOperationCatalog(schema *ast.Schema) []PersistedOpera
 		return nil
 	}
 	operations := make([]PersistedOperation, 0, len(my.documents))
-	for _, name := range sortedMapKeys(my.documents) {
+	for _, name := range slices.Sorted(maps.Keys(my.documents)) {
 		persisted := my.documents[name]
 		doc, errs := loadQuery(schema, persisted.query, my.metadata.MaxTokens(), my.validation)
 		if len(errs) > 0 {
@@ -825,7 +823,7 @@ func hasMetadataPermissions(metadata *Metadata) bool {
 
 func metadataPolicy(metadata *Metadata) PolicyProvider {
 	permissions := make(map[string]map[string]*protocol.Permission)
-	for _, name := range sortedMapKeys(metadata.Nodes) {
+	for _, name := range slices.Sorted(maps.Keys(metadata.Nodes)) {
 		class := metadata.Nodes[name]
 		if class != nil && name == class.Name && len(class.Permissions) > 0 {
 			permissions[class.Name] = class.Permissions

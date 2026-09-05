@@ -4,9 +4,6 @@
 
 ```yaml
 schema:
-  file: ./cfg/schema.graphql
-  introspection: false
-  persisted-only: true
   default-limit: 50
   max-depth: 12
   max-tokens: 10000
@@ -14,6 +11,8 @@ schema:
 subscription:
   publication: ideabase_cdc
 ```
+
+完整可运行装配见 [订单示例](../../../examples/orders/README.md)。若要限制为预登记操作，再启用 persisted-only 并加载相应文档。
 
 生产 PostgreSQL Engine 必须显式安装 SecurityStateProvider；Build 时会检查 metadata、权限、搜索能力和必需迁移。
 
@@ -31,7 +30,7 @@ readiness 应检查：数据库 Ping、schema/capability fingerprint、control/p
 
 ## 安全边界
 
-关闭 introspection、启用 persisted-only、限制深度/cost/body/response，并通过 delegation verifier 绑定身份、租户、策略和路由版本。不要用普通 Header 传递可信租户。
+限制深度、cost、body 和 response；远程组合通过 delegation verifier 绑定身份、租户、策略和路由版本。不要用普通 Header 传递可信租户。面向固定客户端时可关闭 introspection 并启用 persisted-only；通用管理后台可按实际需要保留受权限约束的动态查询。
 
 ---
 

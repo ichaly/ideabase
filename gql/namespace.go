@@ -1,9 +1,10 @@
 package gql
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/iancoleman/strcase"
@@ -30,7 +31,7 @@ func composeNamespaces(namespaces []Namespace) (*ast.Schema, string, map[string]
 	contracts := make(map[string]*namespaceContract, len(namespaces))
 	var capabilities []Capability
 	sorted := append([]Namespace(nil), namespaces...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	slices.SortFunc(sorted, func(a, b Namespace) int { return cmp.Compare(a.Name, b.Name) })
 	for _, namespace := range sorted {
 		contract, definitions, fields, err := importNamespace(namespace)
 		if err != nil {

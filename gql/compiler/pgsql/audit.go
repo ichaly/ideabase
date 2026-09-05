@@ -134,11 +134,7 @@ func (my *Dialect) applyAudit(class *protocol.Class, rows []inputRow, operation 
 			continue
 		}
 		for i := range rows {
-			row := &rows[i]
-			if _, ok := row.values[column]; !ok {
-				row.columns = append(row.columns, column)
-			}
-			row.values[column] = my.auditWriter(column)
+			setInputValue(&rows[i], column, my.auditWriter(column))
 		}
 	}
 }

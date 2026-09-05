@@ -88,8 +88,8 @@ Schema/拓扑刷新失败可继续服务已验证的旧 snapshot。
 ## 9. GA major API 收敛
 
 GA 以单一路径替换预发布兼容入口：Resolver 只使用 `ExecutionContext`，不再暴露可伪造的
-`WithExecutionContext`/`WithExecutionCapability`，也不再并列提供 `DB`、`RequireDB`、`Tx`
-和包级 `Invalidate`。协议内置表也不再以可变全局变量暴露：
+`WithExecutionContext`/`WithExecutionCapability`，也不再提供独立的 `Tx`
+和包级 `Invalidate`。`DB()` 返回请求连接（可能为空），`RequireDB()` 在无连接时返回明确错误。协议内置表也不再以可变全局变量暴露：
 
 - `protocol.DataTypes` → `protocol.DefaultDataTypes()`；
 - `protocol.Operators` → `protocol.GetOperator(name)` / `protocol.OperatorsForScalar(type)`；
@@ -118,3 +118,19 @@ GA 以单一路径替换预发布兼容入口：Resolver 只使用 `ExecutionCon
 - 删除仅在包内使用的 CDC、搜索探测注册表；公开 SQL 方言注册入口保持不变。
 
 完整审阅范围与验证结果见 [生产代码精简记录](docs/reviews/2026-09-05-production-simplification.md)。
+
+## 五轮精简后的单一入口
+
+- `transport.Endpoint` 别名删除，直接使用 `gql.Endpoint`；健康、订阅和有效 Schema 的传输实现复用核心包接口。
+- 删除 `gql.HookedLoader`。自定义元数据加载器直接实现 `protocol.Loader`；内置数据库加载器的开发环境缓存由 `NewMetadata` 统一保存。
+- `Class.PrimaryConflictTarget()` 改为 `Class.ConflictTarget("PRIMARY")`；`Class.PrimaryUpsertConflictTarget()` 改为 `Class.UpsertConflictTarget("PRIMARY")`。
+- 内部配置复用 `protocol.ScopeRule`、`ValueSource`、`SoftDelete`、`Predicate`、`Permission`，配置键保持不变。
+
+以上 Go 符号删除属于编译期不兼容调整；GraphQL 请求、响应、租户隔离和权限语义保持不变。
+验证与性能对比见 [五轮精简记录](docs/reviews/2026-09-05-five-round-simplification.md)。
+
+## 生产 catalog 来源
+
+连接数据库后，dev/prod 均默认读取数据库 catalog。需要固定 artifact 的部署必须显式设置
+`metadata.file`；该文件替代内置数据库加载器，加载失败仍拒绝启动。没有数据库的文件/配置模式保留。
+旧部署若依赖隐式 `cfg/metadata.prod.json`，升级前应显式配置路径，或允许启动账号读取 catalog。

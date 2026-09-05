@@ -15,10 +15,6 @@ const healthTimeout = 5 * time.Second
 const healthMaxConcurrent = 8
 const HealthProtocolVersion = 1
 
-type healthEndpoint interface {
-	Health(context.Context) (core.HealthReport, error)
-}
-
 type healthStatus struct {
 	Version               int      `json:"version"`
 	Ready                 bool     `json:"ready"`
@@ -39,7 +35,7 @@ type healthStatus struct {
 	SubscriptionAvailable bool     `json:"subscriptionAvailable"`
 }
 
-func NewHealthHandler(endpoint healthEndpoint) http.Handler {
+func NewHealthHandler(endpoint core.HealthEndpoint) http.Handler {
 	concurrency := make(chan struct{}, healthMaxConcurrent)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if endpoint == nil {

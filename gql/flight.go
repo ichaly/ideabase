@@ -44,11 +44,7 @@ func (limiter *buildLimiter) acquire(ctx context.Context) (func(), error) {
 	}
 }
 
-func sharedBuild[T any](ctx context.Context, group *singleflight.Group, limiter *buildLimiter, key string, build func(context.Context) (T, error)) (T, error) {
-	return sharedBuildWithin(ctx, group, limiter, key, sharedBuildTimeout, build)
-}
-
-func sharedBuildWithin[T any](ctx context.Context, group *singleflight.Group, limiter *buildLimiter, key string, timeout time.Duration, build func(context.Context) (T, error)) (T, error) {
+func sharedBuild[T any](ctx context.Context, group *singleflight.Group, limiter *buildLimiter, key string, timeout time.Duration, build func(context.Context) (T, error)) (T, error) {
 	return sharedflight.Do(ctx, group, key, timeout, func(shared context.Context) (T, error) {
 		release, err := limiter.acquire(shared)
 		if err != nil {

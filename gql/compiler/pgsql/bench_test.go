@@ -138,3 +138,24 @@ func BenchmarkCompileNested(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkCompileMutation covers the shared relation writer and sorted variable inputs.
+func BenchmarkCompileMutation(b *testing.B) {
+	for name, query := range map[string]string{
+		"relation":  `mutation { updateUser(id: "1", input: {posts: {connect: ["2"], disconnect: ["3"]}}) { id } }`,
+		"variables": `mutation($input: UserUpdateInput!) { updateUser(id: "1", input: $input) { id name } }`,
+	} {
+		b.Run(name, func(b *testing.B) {
+			compile, schema := benchCompiler(b)
+			op := benchOperation(b, schema, query)
+			variables := map[string]any{"input": map[string]any{"name": "A"}}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, _, err := compile.Build(op, variables); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

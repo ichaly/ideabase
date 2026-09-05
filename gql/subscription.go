@@ -7,7 +7,7 @@ import (
 	"hash"
 	"hash/fnv"
 	"math/rand"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -468,7 +468,7 @@ func (my *Engine) expireFeed(f *feed, err error) {
 
 func subscriptionFeedKey(query, operation string, variables, scope map[string]any, identity Identity, route TenantRoute, policy string) string {
 	roles := identity.Roles()
-	sort.Strings(roles)
+	slices.Sort(roles)
 	canonical, _ := json.Marshal(struct {
 		Query, Operation       string
 		Variables, Scope       map[string]any

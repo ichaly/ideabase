@@ -17,7 +17,7 @@
 
 | 键 | 说明 |
 | --- | --- |
-| `metadata.file` | 文件 loader，支持 `{mode}` |
+| `metadata.file` | 显式指定时使用文件替代数据库 catalog，支持 `{mode}`；连接数据库时默认直接读取 catalog |
 | `metadata.classes` | 类、字段、关系和治理覆盖 |
 | `metadata.use-camel` | GraphQL 名称使用 camelCase |
 | `metadata.use-singular` | 表名转 singular 类名 |

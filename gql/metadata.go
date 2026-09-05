@@ -1,13 +1,14 @@
 package gql
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,7 +21,6 @@ import (
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/sony/sonyflake"
 )
@@ -158,22 +158,6 @@ func WithoutLoader(names ...string) MetadataOption {
 	}
 }
 
-// HookedLoader 装饰器，支持afterLoad钩子
-type HookedLoader struct {
-	protocol.Loader
-	afterLoad func(h protocol.Hoster) error
-}
-
-func (my *HookedLoader) Load(h protocol.Hoster) error {
-	if err := my.Loader.Load(h); err != nil {
-		return err
-	}
-	if my.afterLoad != nil {
-		return my.afterLoad(h)
-	}
-	return nil
-}
-
 // NewMetadata 策略模式重构，支持Loader注册与优先级排序
 func NewMetadata(k *std.Konfig, d *Database, opts ...MetadataOption) (*Metadata, error) {
 	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: protocol.DefaultDataTypes()}}
@@ -192,7 +176,6 @@ func NewMetadata(k *std.Konfig, d *Database, opts ...MetadataOption) (*Metadata,
 	k.SetDefault("schema.exclude-fields", []string{})
 
 	// 设置元数据默认配置
-	k.SetDefault("metadata.file", "cfg/metadata.{mode}.json")
 	k.SetDefault("metadata.use-camel", true)
 	k.SetDefault("metadata.use-singular", true)
 	k.SetDefault("metadata.show-through", true)
@@ -214,19 +197,8 @@ func NewMetadata(k *std.Konfig, d *Database, opts ...MetadataOption) (*Metadata,
 		searchConfig: cfg.Search.Config,
 	}
 
-	// 默认Loader注册，Pgsql和Mysql用HookedLoader包装，dev模式下自动保存
-	after := func(h protocol.Hoster) error {
-		if cfg.IsDebug() {
-			return my.saveToFile(metadata.ResolveMetadataPath(cfg))
-		}
-		return nil
-	}
-	defaultLoaders := []protocol.Loader{
-		&HookedLoader{Loader: metadata.NewPgsqlLoader(cfg, d), afterLoad: after},
-		&HookedLoader{Loader: metadata.NewMysqlLoader(cfg, d), afterLoad: after},
-		metadata.NewFileLoader(cfg),
-		metadata.NewConfigLoader(cfg),
-	}
+	pgsql, mysql := metadata.NewPgsqlLoader(cfg, d), metadata.NewMysqlLoader(cfg, d)
+	defaultLoaders := []protocol.Loader{pgsql, mysql, metadata.NewFileLoader(cfg), metadata.NewConfigLoader(cfg)}
 	options := &metadataOptions{
 		loaders:         defaultLoaders,
 		optionalLoaders: make(map[string]bool),
@@ -254,18 +226,25 @@ func NewMetadata(k *std.Konfig, d *Database, opts ...MetadataOption) (*Metadata,
 	my.setCodecs(options.codecs)
 	// 按优先级排序
 	loaders := options.loaders
-	sort.Slice(loaders, func(i, j int) bool { return loaders[i].Priority() < loaders[j].Priority() })
+	slices.SortFunc(loaders, func(a, b protocol.Loader) int { return cmp.Compare(a.Priority(), b.Priority()) })
 
 	// 依次执行Loader
 	for _, loader := range loaders {
-		// FileLoader historically reports unsupported in dev, but an explicitly
-		// configured artifact is authoritative in every mode.
+		// A connected database is the default source in every mode. An explicit
+		// artifact replaces catalog inspection; do not merge stale cached files.
 		supported := loader.Support()
-		if fileConfigured && loader.Name() == metadata.LoaderFile {
-			supported = true
+		if loader.Name() == metadata.LoaderFile {
+			supported = fileConfigured || (d == nil && supported)
+		}
+		if fileConfigured && (loader == pgsql || loader == mysql) {
+			supported = false
 		}
 		if supported {
-			if err := loader.Load(my); err != nil {
+			err := loader.Load(my)
+			if err == nil && cfg.IsDebug() && (loader == pgsql || loader == mysql) {
+				err = my.saveToFile(metadata.ResolveMetadataPath(cfg))
+			}
+			if err != nil {
 				loaderErr := &LoaderError{Loader: loader.Name(), Optional: options.optionalLoaders[loader.Name()], Err: err}
 				if loaderErr.Optional {
 					log.Warn().Err(loaderErr).Str("loader", loader.Name()).Msg("可选加载器执行失败，已跳过")
@@ -288,7 +267,7 @@ func NewMetadata(k *std.Konfig, d *Database, opts ...MetadataOption) (*Metadata,
 	// 进行驼峰命名和过滤处理
 	my.normalize()
 	// 启动期把命名策略绑定为函数；database/空策略完全不进入生成路径。
-	for _, name := range utl.SortKeys(my.Nodes) {
+	for _, name := range slices.Sorted(maps.Keys(my.Nodes)) {
 		class := my.Nodes[name]
 		if name != class.Name || class.IDGenerator == "" || class.IDGenerator == "database" {
 			continue
@@ -404,7 +383,7 @@ func (my *Metadata) freeze() *Metadata {
 
 // eachClass 按类名有序遍历主名类（跳过表名/别名索引）
 func (my *Metadata) eachClass(fn func(class *protocol.Class)) {
-	for _, className := range utl.SortKeys(my.Nodes) {
+	for _, className := range slices.Sorted(maps.Keys(my.Nodes)) {
 		if class := my.Nodes[className]; className == class.Name {
 			fn(class)
 		}
@@ -528,13 +507,13 @@ func (my *Metadata) CatalogFingerprint() (string, error) {
 		return ref
 	}
 	classes := make([]classShape, 0)
-	for _, name := range sortedMapKeys(my.Nodes) {
+	for _, name := range slices.Sorted(maps.Keys(my.Nodes)) {
 		class := my.Nodes[name]
 		if class == nil || name != class.Name {
 			continue
 		}
 		fields := make([]fieldShape, 0)
-		for _, fieldName := range utl.SortKeys(class.Fields) {
+		for _, fieldName := range slices.Sorted(maps.Keys(class.Fields)) {
 			if field := class.Fields[fieldName]; field != nil && fieldName == field.Name && !field.Virtual {
 				var catalog *protocol.Column
 				if field.Catalog != nil {
@@ -578,7 +557,7 @@ func (my *Metadata) CatalogFingerprint() (string, error) {
 		classes = append(classes, classShape{class.Name, class.Table, class.TableKind, class.ReadOnly, class.PrimaryKeys, fields, constraints, indexes})
 	}
 	routines := make([]protocol.Routine, 0, len(my.Routines))
-	for _, key := range utl.SortKeys(my.Routines) {
+	for _, key := range slices.Sorted(maps.Keys(my.Routines)) {
 		if routine := my.Routines[key]; routine != nil {
 			shape := *routine
 			schema := shape.Schema
@@ -767,7 +746,7 @@ type relationField struct {
 // 递归只收外键侧方向；AddRelation按身份键去重，db已登记的不重复
 func (my *Metadata) collectRelations() {
 	my.eachClass(func(class *protocol.Class) {
-		for _, fieldName := range utl.SortKeys(class.Fields) {
+		for _, fieldName := range slices.Sorted(maps.Keys(class.Fields)) {
 			field := class.Fields[fieldName]
 			if fieldName != field.Name || field.Relation == nil || field.Virtual || field.Column == "" {
 				continue
@@ -807,7 +786,7 @@ func (my *Metadata) processRelations() {
 	// 排序遍历保证收集顺序确定，命名跨启动稳定
 	my.eachClass(func(class *protocol.Class) {
 		relations := append([]*protocol.Relation(nil), class.Relations...)
-		sort.Slice(relations, func(i, j int) bool { return relations[i].Key() < relations[j].Key() })
+		slices.SortFunc(relations, func(a, b *protocol.Relation) int { return cmp.Compare(a.Key(), b.Key()) })
 		for _, relation := range relations {
 			targetClass := my.Nodes[relation.TargetClass]
 			if targetClass == nil {

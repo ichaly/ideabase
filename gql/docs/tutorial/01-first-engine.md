@@ -1,93 +1,34 @@
 # 教程：创建第一个 Engine
 
-## 目标
+需要 Go 1.26.6、PostgreSQL 15–18。推荐从 [可运行的订单示例](../../../examples/orders/README.md)
+开始：它使用真实生产模式、受限数据库账号和签名身份，不需要先生成元数据文件。
 
-本章会连接一个 PostgreSQL 数据库，构建 Engine，并通过标准 HTTP 端点执行一条查询。
+## 最少需要理解的内容
 
-## 前置条件
+1. **数据库**：表、约束、索引决定自动生成的数据 API。
+2. **权限与身份**：认证中间件验证登录声明，策略决定允许的操作；租户隔离由 scope 与 RLS 强制执行。
+3. **Resolver**：只实现数据库 CRUD 无法表达的业务命令，如下单和取消。
 
-- Go 1.26.5 或更高版本
-- PostgreSQL 15 或更高版本
-- 一个有 catalog 读取权限的数据库用户
+应用通过 `gql.New(config, db)` 创建 Builder，在 `Build()` 前安装唯一权限提供者和生产
+安全状态提供者，注册业务 Resolver。`Build()` 冻结 Schema 和执行配置；缺失权限、安全
+状态或必需迁移时明确失败。
 
-## 1. 安装依赖
+完整装配以 [app.go](../../../examples/orders/app.go) 为唯一可执行示例，避免复制一份会
+逐渐过期的启动程序。数据库与应用共享 `*sql.DB`，不需要第二个 ORM 或连接池。
 
-```bash
-go get github.com/ichaly/ideabase/gql
-go get github.com/jackc/pgx/v5
-```
+## 查询、突变与订阅
 
-## 2. 连接数据库并构建
+同一个 `transport.NewHandler(endpoint, options)` 挂载 `/graphql`：普通请求使用 JSON，
+订阅使用 POST JSON 与 `Accept: text/event-stream`。JWT 认证示例见
+[http.go](../../../examples/orders/http.go)，不会信任客户端提供的租户 Header。
 
-```go
-package main
+验证命令 `go test ./examples/orders` 自动启动隔离的测试数据库，覆盖第一次启动、查询、
+下单扣库存、取消回补、租户隔离、权限和实例组合。
 
-import (
-	"database/sql"
-    "log"
-    "github.com/ichaly/ideabase/gql"
-	_ "github.com/ichaly/ideabase/gql/compiler/pgsql"
-    "github.com/ichaly/ideabase/std"
-	_ "github.com/jackc/pgx/v5/stdlib"
-)
+## 接入自己的应用
 
-func main() {
-	dsn := "host=localhost user=app dbname=app sslmode=disable"
-	pool, err := sql.Open("pgx", dsn)
-    if err != nil { log.Fatal(err) }
-	defer pool.Close()
-	if err = pool.Ping(); err != nil { log.Fatal(err) }
+复制示例的数据库/Builder 装配方式，复用应用已有的认证、迁移和观测工具。将 `orderPolicy`
+替换为自己的角色规则，`orders.go` 替换为业务命令；不必复制示例的本地 token 签发或容器凭据。
 
-	db, err := gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(dsn))
-	if err != nil { log.Fatal(err) }
-
-    config, err := std.NewKonfig()
-    if err != nil { log.Fatal(err) }
-    config.Set("schema.introspection", true)
-    config.Set("schema.default-limit", 20)
-
-    engine, err := gql.New(config, db).Build()
-    if err != nil { log.Fatal(err) }
-    defer engine.Close()
-}
-```
-
-`Build` 会读取数据库元数据、生成 Schema、冻结 capability、创建编译器和执行器。任何元数据、策略、安全或迁移错误都会让 Build 失败，不会返回半可用实例。
-
-`Database` 直接持有传入的 `*sql.DB`，所以 GQL 与应用共享同一个连接池。已有 GORM
-应用可以将 `gormDB.DB()` 返回的 `*sql.DB` 传给 `NewDatabase`，无需建立第二个连接池。
-
-## 3. 暴露 HTTP
-
-```go
-mux := http.NewServeMux()
-mux.Handle("/graphql", transport.NewHandler(engine, transport.Options{}))
-log.Fatal(http.ListenAndServe(":8080", mux))
-```
-
-执行：
-
-```bash
-curl http://localhost:8080/graphql \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"{ users { items { id name } } }"}'
-```
-
-## 4. 查看生成 Schema
-
-开发环境打开 `schema.introspection` 后，使用标准 introspection 查询查看实体、输入、分页、关系和自定义字段。生产环境可关闭 introspection，改用受认证保护的 Manifest 和 Effective Schema 端点。
-
-## 验证
-
-仓库自带环境：
-
-```bash
-cd gql
-./scripts/test-all.sh
-```
-
-下一步：[第一次查询和 Mutation →](02-first-query.md)
-
----
-
-[← 文档首页](../README.md) · [下一章 →](02-first-query.md)
+认证后的客户端可以使用标准自省。若业务只允许预先登记的查询，可再启用 persisted-only，
+并通过 `LoadDocuments` 登记操作文档；该限制不是普通管理后台启动的隐式前提。

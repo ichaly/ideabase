@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 )
@@ -275,7 +276,7 @@ func TestSubscribeScope(t *testing.T) {
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
-		"User": {Table: "users", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+		"User": {Table: "users", Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}}},
 	})
 	meta, err := NewMetadata(k, db)
 	require.NoError(t, err)

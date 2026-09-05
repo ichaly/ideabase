@@ -1,11 +1,13 @@
 package pgsql
 
 import (
+	"strings"
+
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2"
-	"strings"
 )
 
 // TestScope 行级作用域：实体声明scope时编译期强制注入 列=上下文值，
@@ -15,7 +17,7 @@ func (my *_DialectSuite) TestScope() {
 		"metadata.classes": map[string]*internal.ClassConfig{
 			"User": {
 				Table: "sys_user",
-				Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}},
+				Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}},
 				Fields: map[string]*internal.FieldConfig{
 					"id":   {Type: "ID", Column: "id", IsPrimary: true},
 					"name": {Type: "String", Column: "name"},
@@ -47,7 +49,7 @@ func (my *_DialectSuite) TestScopeNested() {
 		"metadata.classes": map[string]*internal.ClassConfig{
 			"User": {
 				Table: "sys_user",
-				Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}},
+				Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}},
 				Fields: map[string]*internal.FieldConfig{
 					"id":   {Type: "ID", Column: "id", IsPrimary: true},
 					"name": {Type: "String", Column: "name"},
@@ -55,7 +57,7 @@ func (my *_DialectSuite) TestScopeNested() {
 			},
 			"Post": {
 				Table: "sys_post",
-				Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}},
+				Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}},
 				Fields: map[string]*internal.FieldConfig{
 					"id":    {Type: "ID", Column: "id", IsPrimary: true},
 					"title": {Type: "String", Column: "title"},
@@ -86,7 +88,7 @@ func (my *_DialectSuite) TestScopeRecursive() {
 		"metadata.classes": map[string]*internal.ClassConfig{
 			"Comment": {
 				Table: "sys_comment",
-				Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}},
+				Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}},
 				Fields: map[string]*internal.FieldConfig{
 					"id":      {Type: "ID", Column: "id", IsPrimary: true},
 					"content": {Type: "String", Column: "content"},
@@ -116,7 +118,7 @@ func (my *_DialectSuite) TestScopeMulti() {
 		"metadata.classes": map[string]*internal.ClassConfig{
 			"User": {
 				Table: "sys_user",
-				Scope: []internal.ScopeConfig{
+				Scope: []protocol.ScopeRule{
 					{Column: "tenant_id", Context: "tenant"},
 					{Column: "owner_id", Context: "userId"},
 				},
@@ -146,7 +148,7 @@ func (my *_DialectSuite) TestScopeStats() {
 		"metadata.classes": map[string]*internal.ClassConfig{
 			"User": {
 				Table: "sys_user",
-				Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}},
+				Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}},
 				Fields: map[string]*internal.FieldConfig{
 					"id":   {Type: "ID", Column: "id", IsPrimary: true},
 					"name": {Type: "String", Column: "name"},

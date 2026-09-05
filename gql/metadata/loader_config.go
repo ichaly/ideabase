@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -10,7 +11,6 @@ import (
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 )
 
@@ -129,9 +129,7 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	if classConfig.Global {
 		newClass.Global = true
 	}
-	for _, s := range classConfig.Scope {
-		newClass.Scope = append(newClass.Scope, protocol.ScopeRule(s)) // 字段同构，直接转换
-	}
+	newClass.Scope = append(newClass.Scope, classConfig.Scope...)
 	my.applyFieldFilter(newClass, classConfig)
 	if err := my.applyFieldConfig(newClass, classConfig.Fields); err != nil {
 		return nil, err
@@ -144,7 +142,7 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	}
 	// 主键列表缺省时从IsPrimary字段推导（与db加载器行为对齐）
 	if len(newClass.PrimaryKeys) == 0 {
-		for _, name := range utl.SortKeys(newClass.Fields) {
+		for _, name := range slices.Sorted(maps.Keys(newClass.Fields)) {
 			if field := newClass.Fields[name]; name == field.Name && field.IsPrimary {
 				newClass.PrimaryKeys = append(newClass.PrimaryKeys, name)
 			}
@@ -399,7 +397,7 @@ func validateValue(context string, value any) error {
 	return nil
 }
 
-func validatePredicate(p internal.PredicateConfig) error {
+func validatePredicate(p protocol.Predicate) error {
 	switch p.Operator {
 	case "eq", "ne":
 		if err := validateValue(p.Context, p.Value); err != nil {
@@ -431,7 +429,7 @@ func (my *ConfigLoader) resolveColumn(class *protocol.Class, name string) (*prot
 	return field, nil
 }
 
-func (my *ConfigLoader) resolvePredicate(class *protocol.Class, p internal.PredicateConfig) (protocol.Predicate, error) {
+func (my *ConfigLoader) resolvePredicate(class *protocol.Class, p protocol.Predicate) (protocol.Predicate, error) {
 	if err := validatePredicate(p); err != nil {
 		return protocol.Predicate{}, err
 	}
@@ -439,10 +437,11 @@ func (my *ConfigLoader) resolvePredicate(class *protocol.Class, p internal.Predi
 	if err != nil {
 		return protocol.Predicate{}, err
 	}
-	return protocol.Predicate{Column: field.Column, Operator: p.Operator, Context: p.Context, Value: p.Value}, nil
+	p.Column = field.Column
+	return p, nil
 }
 
-func (my *ConfigLoader) resolvePredicates(class *protocol.Class, configs []internal.PredicateConfig) ([]protocol.Predicate, error) {
+func (my *ConfigLoader) resolvePredicates(class *protocol.Class, configs []protocol.Predicate) ([]protocol.Predicate, error) {
 	result := make([]protocol.Predicate, 0, len(configs))
 	for _, config := range configs {
 		p, err := my.resolvePredicate(class, config)

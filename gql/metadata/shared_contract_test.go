@@ -37,12 +37,12 @@ func TestMetadataNameConversionAndPredicateValidation(t *testing.T) {
 	}
 	loader := NewConfigLoader(&internal.Config{})
 	class := &protocol.Class{Fields: map[string]*protocol.Field{"id": {Name: "id", Column: "id"}}}
-	for _, predicate := range []internal.PredicateConfig{{Operator: "eq", Column: "id", Context: "tenant"}, {Operator: "is-null", Column: "id"}} {
+	for _, predicate := range []protocol.Predicate{{Operator: "eq", Column: "id", Context: "tenant"}, {Operator: "is-null", Column: "id"}} {
 		if _, err := loader.resolvePredicate(class, predicate); err != nil {
 			t.Fatalf("predicate %#v rejected: %v", predicate, err)
 		}
 	}
-	for _, predicate := range []internal.PredicateConfig{{Operator: "eq", Column: "id"}, {Operator: "is-null", Column: "id", Value: true}, {Operator: "bad", Column: "id"}} {
+	for _, predicate := range []protocol.Predicate{{Operator: "eq", Column: "id"}, {Operator: "is-null", Column: "id", Value: true}, {Operator: "bad", Column: "id"}} {
 		if _, err := loader.resolvePredicate(class, predicate); err == nil {
 			t.Fatalf("predicate %#v unexpectedly accepted", predicate)
 		}

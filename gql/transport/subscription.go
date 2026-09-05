@@ -12,13 +12,9 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
-type subscriptionEndpoint interface {
-	Subscribe(context.Context, string, map[string]any, string) (<-chan []byte, error)
-}
-
 // subscribe writes a stream after the shared HTTP boundary has decoded,
 // authenticated and pinned the request. Its lifetime is bounded by the client.
-func (h *handler) subscribe(w http.ResponseWriter, r *http.Request, ctx context.Context, execution subscriptionEndpoint, params request, revision string) {
+func (h *handler) subscribe(w http.ResponseWriter, r *http.Request, ctx context.Context, execution core.SubscriptionEndpoint, params request, revision string) {
 	opts := h.options
 	events, err := subscribeWithTimeout(ctx, execution, params, opts.Timeout)
 	if err != nil || events == nil {
@@ -86,7 +82,7 @@ type subscriptionResult struct {
 	err    error
 }
 
-func subscribeWithTimeout(ctx context.Context, endpoint subscriptionEndpoint, params request, timeout time.Duration) (<-chan []byte, error) {
+func subscribeWithTimeout(ctx context.Context, endpoint core.SubscriptionEndpoint, params request, timeout time.Duration) (<-chan []byte, error) {
 	attemptCtx, cancel := context.WithCancel(ctx)
 	defer func() {
 		if ctx.Err() != nil {

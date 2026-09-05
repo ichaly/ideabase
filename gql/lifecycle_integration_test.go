@@ -6,6 +6,7 @@ import (
 
 	"github.com/ichaly/ideabase/gql/compiler/pgsql"
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 )
@@ -26,7 +27,7 @@ func TestPurgeAndAuditOutboxSharePostgresStatement(t *testing.T) {
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
-		"Article": {Table: "articles", Operations: []string{"select", "delete", "restore", "purge"}, Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+		"Article": {Table: "articles", Operations: []string{"select", "delete", "restore", "purge"}, Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}}},
 	})
 	meta, err := NewMetadata(k, db)
 	require.NoError(t, err)
@@ -113,7 +114,7 @@ func TestProductionBuildRequiresPurgeAuditMigration(t *testing.T) {
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
-		"Article": {Table: "articles", Operations: []string{"select", "purge"}, SoftDelete: &internal.SoftDeleteConfig{Column: "deleted_at"}, Fields: map[string]*internal.FieldConfig{"deletedAt": {Column: "deleted_at", Type: "DateTime"}}},
+		"Article": {Table: "articles", Operations: []string{"select", "purge"}, SoftDelete: &protocol.SoftDelete{Column: "deleted_at"}, Fields: map[string]*internal.FieldConfig{"deletedAt": {Column: "deleted_at", Type: "DateTime"}}},
 	})
 	builder := New(k, db).testAllowAllPolicy()
 	require.NoError(t, builder.Security(security))
@@ -144,7 +145,7 @@ func TestProductionBuildRejectsMalformedPurgeAuditMigration(t *testing.T) {
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
-		"Article": {Table: "articles", Operations: []string{"select", "purge"}, SoftDelete: &internal.SoftDeleteConfig{Column: "deleted_at"}, Fields: map[string]*internal.FieldConfig{"deletedAt": {Column: "deleted_at", Type: "DateTime"}}},
+		"Article": {Table: "articles", Operations: []string{"select", "purge"}, SoftDelete: &protocol.SoftDelete{Column: "deleted_at"}, Fields: map[string]*internal.FieldConfig{"deletedAt": {Column: "deleted_at", Type: "DateTime"}}},
 	})
 	builder := New(k, db).testAllowAllPolicy()
 	require.NoError(t, builder.Security(security))

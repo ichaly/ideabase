@@ -2,13 +2,12 @@ package gql
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
-	"github.com/ichaly/ideabase/gql/protocol"
-
 	"github.com/iancoleman/strcase"
-	"github.com/ichaly/ideabase/utl"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/jinzhu/inflection"
 )
 
@@ -173,7 +172,7 @@ func (my *Renderer) renderEnums() error {
 	if enumErr != nil {
 		return enumErr
 	}
-	for _, name := range utl.SortKeys(enums) {
+	for _, name := range slices.Sorted(maps.Keys(enums)) {
 		if !graphQLName(name) {
 			return fmt.Errorf("PostgreSQL enum类型名无法无损映射: %q", name)
 		}
@@ -221,7 +220,7 @@ func (my *Renderer) renderEnums() error {
 
 // eachClass 遍历可见实体类（跳过表名索引与隐藏的中间表），按类名有序
 func (my *Renderer) eachClass(fn func(className string, class *protocol.Class)) {
-	for _, className := range utl.SortKeys(my.meta.Nodes) {
+	for _, className := range slices.Sorted(maps.Keys(my.meta.Nodes)) {
 		class := my.meta.Nodes[className]
 		if className != class.Name || class.Hidden || (class.IsThrough && !my.meta.cfg.Metadata.ShowThrough) {
 			continue
@@ -242,7 +241,7 @@ func (my *Renderer) eachTableClass(fn func(className string, class *protocol.Cla
 
 // eachField 按名有序遍历类的主名字段（跳过列名索引）
 func (my *Renderer) eachField(class *protocol.Class, fn func(fieldName string, field *protocol.Field)) {
-	for _, fieldName := range utl.SortKeys(class.Fields) {
+	for _, fieldName := range slices.Sorted(maps.Keys(class.Fields)) {
 		if field := class.Fields[fieldName]; fieldName == field.Name {
 			fn(fieldName, field)
 		}
@@ -812,7 +811,7 @@ func (my *Renderer) renderMutation() {
 			my.writeLine("  # ", class.Name, "插入或更新（按on列冲突，缺省主键）")
 			onType := className + "ConflictTarget"
 			defaultTarget := "PRIMARY"
-			if _, ok := class.PrimaryUpsertConflictTarget(); !ok {
+			if _, ok := class.UpsertConflictTarget("PRIMARY"); !ok {
 				onType += "!"
 				defaultTarget = ""
 			}

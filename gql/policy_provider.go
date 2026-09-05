@@ -1,11 +1,11 @@
 package gql
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -148,13 +148,13 @@ func cloneRoleBranches(in []RolePolicyBranch) ([]RolePolicyBranch, error) {
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Role < out[j].Role })
+	slices.SortFunc(out, func(a, b RolePolicyBranch) int { return cmp.Compare(a.Role, b.Role) })
 	return out, nil
 }
 
 func sortedUnique(values []string) []string {
 	result := append([]string(nil), values...)
-	sort.Strings(result)
+	slices.Sort(result)
 	return slices.Compact(result)
 }
 
@@ -239,17 +239,17 @@ func clonePredicates(in []Predicate) ([]Predicate, error) {
 
 func permissionSignature(r PolicyRequest, d PolicyDecision) string {
 	actions := append([]string(nil), r.Actions...)
-	sort.Strings(actions)
+	slices.Sort(actions)
 	uses := make([]string, len(r.FieldUses))
 	for n := range r.FieldUses {
 		uses[n] = string(r.FieldUses[n])
 	}
-	sort.Strings(uses)
+	slices.Sort(uses)
 	fieldShape := make([]string, 0, len(d.Fields))
 	for use, fields := range d.Fields {
 		fieldShape = append(fieldShape, string(use)+"="+strings.Join(fields, ","))
 	}
-	sort.Strings(fieldShape)
+	slices.Sort(fieldShape)
 	return digest(strings.Join([]string{fmt.Sprintf("allow=%t", d.Allow), r.Coordinate, r.Resource, strings.Join(actions, ","), strings.Join(uses, ","), strings.Join(fieldShape, ";")}, "\x00"))
 }
 
@@ -260,7 +260,7 @@ func shapeSignature(d PolicyDecision) string {
 		for n, p := range group {
 			shape[n] = p.Column + ":" + p.Operator + ":" + p.Context
 		}
-		sort.Strings(shape)
+		slices.Sort(shape)
 		parts = append(parts, strings.Join(shape, ","))
 	}
 	for _, branch := range d.RoleBranches {
@@ -270,7 +270,7 @@ func shapeSignature(d PolicyDecision) string {
 			for i, predicate := range group {
 				shape[i] = predicate.Column + ":" + predicate.Operator + ":" + predicate.Context
 			}
-			sort.Strings(shape)
+			slices.Sort(shape)
 			parts = append(parts, strings.Join(shape, ","))
 		}
 	}
@@ -405,7 +405,7 @@ func (p *ProtocolPolicyProvider) PolicyCacheIdentity(_ context.Context, identity
 		return "", false
 	}
 	roles := identity.Roles()
-	sort.Strings(roles)
+	slices.Sort(roles)
 	return strings.Join(roles, "\x00"), true
 }
 

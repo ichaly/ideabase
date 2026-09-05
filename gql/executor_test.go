@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 自注册PostgreSQL方言
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -742,7 +743,7 @@ func TestExecutorScope(t *testing.T) {
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
-		"User": {Table: "users", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+		"User": {Table: "users", Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}}},
 	})
 	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "加载元数据失败")
@@ -843,9 +844,9 @@ func TestExecutorScopeRelation(t *testing.T) {
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
-		"Post":    {Table: "posts", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
-		"Tag":     {Table: "tags", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
-		"PostTag": {Table: "post_tags", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+		"Post":    {Table: "posts", Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}}},
+		"Tag":     {Table: "tags", Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}}},
+		"PostTag": {Table: "post_tags", Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}}},
 	})
 	meta, err := NewMetadata(k, db)
 	require.NoError(t, err)

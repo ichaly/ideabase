@@ -1,8 +1,8 @@
 package protocol
 
 import (
+	"cmp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -103,7 +103,7 @@ func (class *Class) CanonicalizePrimaryKeys() {
 			names = append(names, name)
 		}
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	class.PrimaryKeys = names
 }
 
@@ -123,7 +123,7 @@ func (class *Class) PrimaryKeyFields() []string {
 			names = append(names, name)
 		}
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names
 }
 
@@ -169,16 +169,19 @@ func (class *Class) ConflictTargets() []Key {
 				fieldNames = append(fieldNames, name)
 			}
 		}
-		sort.Strings(fieldNames)
+		slices.Sort(fieldNames)
 		for _, name := range fieldNames {
 			add(name, []string{name}, false)
 		}
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].Primary != keys[j].Primary {
-			return keys[i].Primary
+	slices.SortFunc(keys, func(a, b Key) int {
+		if a.Primary != b.Primary {
+			if a.Primary {
+				return -1
+			}
+			return 1
 		}
-		return keys[i].Name < keys[j].Name
+		return cmp.Compare(a.Name, b.Name)
 	})
 	unique := 0
 	for i := range keys {
@@ -201,29 +204,18 @@ func (class *Class) UpsertConflictTargets() []Key {
 		return keys
 	}
 	return slices.DeleteFunc(keys, func(key Key) bool {
-		columns := make([]string, len(key.Columns))
-		for i, name := range key.Columns {
-			columns[i] = name
-			if field := class.Fields[name]; field != nil && field.Column != "" {
-				columns[i] = field.Column
-			}
-		}
 		for _, rule := range class.Scope {
-			if !slices.Contains(columns, rule.Column) {
+			if !slices.ContainsFunc(key.Columns, func(name string) bool {
+				if field := class.Fields[name]; field != nil && field.Column != "" {
+					name = field.Column
+				}
+				return name == rule.Column
+			}) {
 				return true
 			}
 		}
 		return false
 	})
-}
-
-func (class *Class) PrimaryConflictTarget() (Key, bool) {
-	for _, key := range class.ConflictTargets() {
-		if key.Primary {
-			return key, true
-		}
-	}
-	return Key{}, false
 }
 
 func (class *Class) ConflictTarget(name string) (Key, bool) {
@@ -238,15 +230,6 @@ func (class *Class) ConflictTarget(name string) (Key, bool) {
 func (class *Class) UpsertConflictTarget(name string) (Key, bool) {
 	for _, key := range class.UpsertConflictTargets() {
 		if key.Name == name {
-			return key, true
-		}
-	}
-	return Key{}, false
-}
-
-func (class *Class) PrimaryUpsertConflictTarget() (Key, bool) {
-	for _, key := range class.UpsertConflictTargets() {
-		if key.Primary {
 			return key, true
 		}
 	}

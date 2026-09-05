@@ -12,12 +12,12 @@ import (
 
 func governanceConfig() *internal.Config {
 	return &internal.Config{Metadata: internal.MetadataConfig{UseCamel: true, UseSingular: true, Classes: map[string]*internal.ClassConfig{
-		"User": {Table: "users", Operations: []string{"select"}, SoftDelete: &internal.SoftDeleteConfig{Column: "deleted_at"},
-			Where:       []internal.PredicateConfig{{Column: "tenantId", Operator: "eq", Context: "tenant"}},
-			Permissions: map[string]*internal.PermissionConfig{"admin": {Select: []string{"id", "display_name"}, Delete: true, Filter: []internal.PredicateConfig{{Column: "deleted_at", Operator: "is-null"}}}},
+		"User": {Table: "users", Operations: []string{"select"}, SoftDelete: &protocol.SoftDelete{Column: "deleted_at"},
+			Where:       []protocol.Predicate{{Column: "tenantId", Operator: "eq", Context: "tenant"}},
+			Permissions: map[string]*protocol.Permission{"admin": {Select: []string{"id", "display_name"}, Delete: true, Filter: []protocol.Predicate{{Column: "deleted_at", Operator: "is-null"}}}},
 			Fields: map[string]*internal.FieldConfig{
 				"id":          {Column: "id", IsPrimary: true, ReadOnly: true},
-				"displayName": {Column: "display_name", InsertPreset: &internal.ValueConfig{Context: "name"}},
+				"displayName": {Column: "display_name", InsertPreset: &protocol.ValueSource{Context: "name"}},
 				"tenantId":    {Column: "tenant_id"}, "deletedAt": {Column: "deleted_at"},
 			},
 		},
@@ -48,19 +48,19 @@ func TestConfigLoaderGovernanceRejectsInvalidDefinitions(t *testing.T) {
 		mutate func(*internal.ClassConfig)
 	}{
 		{"unknown column", func(c *internal.ClassConfig) {
-			c.Where = []internal.PredicateConfig{{Column: "missing", Operator: "eq", Value: "x"}}
+			c.Where = []protocol.Predicate{{Column: "missing", Operator: "eq", Value: "x"}}
 		}},
 		{"invalid operator", func(c *internal.ClassConfig) {
-			c.Where = []internal.PredicateConfig{{Column: "id", Operator: "like", Value: "x"}}
+			c.Where = []protocol.Predicate{{Column: "id", Operator: "like", Value: "x"}}
 		}},
 		{"context and value", func(c *internal.ClassConfig) {
-			c.Where = []internal.PredicateConfig{{Column: "id", Operator: "eq", Context: "id", Value: "x"}}
+			c.Where = []protocol.Predicate{{Column: "id", Operator: "eq", Context: "id", Value: "x"}}
 		}},
 		{"null with value", func(c *internal.ClassConfig) {
-			c.Where = []internal.PredicateConfig{{Column: "id", Operator: "is-null", Value: true}}
+			c.Where = []protocol.Predicate{{Column: "id", Operator: "is-null", Value: true}}
 		}},
 		{"empty permission", func(c *internal.ClassConfig) {
-			c.Permissions = map[string]*internal.PermissionConfig{"admin": nil}
+			c.Permissions = map[string]*protocol.Permission{"admin": nil}
 		}},
 	}
 	for _, tc := range cases {

@@ -14,7 +14,7 @@ type requestFailure struct {
 	retryable bool
 }
 
-func prepareRequest(ctx context.Context, r *http.Request, endpoint Endpoint, verifier DelegationVerifier, digest string) (context.Context, Endpoint, string, *requestFailure) {
+func prepareRequest(ctx context.Context, r *http.Request, endpoint core.Endpoint, verifier DelegationVerifier, digest string) (context.Context, core.Endpoint, string, *requestFailure) {
 	execution := endpoint
 	if verifier != nil {
 		token, ok := delegationToken(r)
@@ -65,7 +65,7 @@ func prepareRequest(ctx context.Context, r *http.Request, endpoint Endpoint, ver
 		}
 	}
 	if pin := r.Header.Get(executionPinHeader); pin != "" {
-		effective, ok := any(execution).(effectiveSchemaEndpoint)
+		effective, ok := any(execution).(core.EffectiveSchemaEndpoint)
 		if !ok {
 			return ctx, execution, revision, &requestFailure{http.StatusConflict, "SNAPSHOT_CONFLICT", "effective schema execution pin unavailable", true}
 		}

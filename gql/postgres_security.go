@@ -118,28 +118,27 @@ func (provider *PostgresSecurityStateProvider) Replace(ctx context.Context, revi
 	if err != nil {
 		return err
 	}
-	err = func() error {
-		var current struct {
-			Revision uint64
-			Tenants  []byte
+	defer tx.Rollback()
+	var current struct {
+		Revision uint64
+		Tenants  []byte
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT revision, tenants FROM gql_security_state WHERE singleton FOR UPDATE`).Scan(&current.Revision, &current.Tenants); err != nil {
+		return fmt.Errorf("load security state: %w", err)
+	}
+	if revision < current.Revision {
+		return fmt.Errorf("stale revocation revision %d", revision)
+	}
+	if revision == current.Revision {
+		var existing map[string]TenantSecurityState
+		if err := stdjson.Unmarshal(current.Tenants, &existing); err != nil {
+			return fmt.Errorf("decode security state: %w", err)
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT revision, tenants FROM gql_security_state WHERE singleton FOR UPDATE`).Scan(&current.Revision, &current.Tenants); err != nil {
-			return fmt.Errorf("load security state: %w", err)
-		}
-		if revision < current.Revision {
-			return fmt.Errorf("stale revocation revision %d", revision)
-		}
-		if revision == current.Revision {
-			var existing map[string]TenantSecurityState
-			if err := stdjson.Unmarshal(current.Tenants, &existing); err != nil {
-				return fmt.Errorf("decode security state: %w", err)
-			}
-			if maps.Equal(existing, tenants) {
-				published = &postgresSecuritySnapshot{revision: revision, tenants: cloneTenantStates(existing), loadedAt: time.Now()}
-				return nil
-			}
+		if !maps.Equal(existing, tenants) {
 			return fmt.Errorf("conflicting revocation revision %d", revision)
 		}
+		published = &postgresSecuritySnapshot{revision: revision, tenants: cloneTenantStates(existing), loadedAt: time.Now()}
+	} else {
 		result, err := tx.ExecContext(ctx, `UPDATE gql_security_state SET revision = $1, tenants = $2::jsonb WHERE singleton`, revision, string(encoded))
 		if err != nil {
 			return err
@@ -149,17 +148,12 @@ func (provider *PostgresSecurityStateProvider) Replace(ctx context.Context, revi
 			return fmt.Errorf("security state singleton row is unavailable")
 		}
 		published = &postgresSecuritySnapshot{revision: revision, tenants: cloneTenantStates(tenants), loadedAt: time.Now()}
-		return nil
-	}()
-	if err != nil {
-		_ = tx.Rollback()
-	} else {
-		err = tx.Commit()
 	}
-	if err == nil && published != nil {
-		provider.state.Store(published)
+	if err := tx.Commit(); err != nil {
+		return err
 	}
-	return err
+	provider.state.Store(published)
+	return nil
 }
 
 func (provider *PostgresSecurityStateProvider) Check(ctx context.Context, identity Identity, route TenantRoute) error {
@@ -193,19 +187,12 @@ func (provider *PostgresSecurityStateProvider) snapshot(ctx context.Context) (*p
 	if current != nil && now.Sub(current.loadedAt) <= provider.maxStaleness {
 		return current, nil
 	}
-	next, err := provider.loadSnapshot(ctx)
+	next, err := loadSecuritySnapshot(ctx, provider.db.Pool())
 	if err == nil {
 		provider.state.Store(next)
 		return next, nil
 	}
-	if current != nil && now.Sub(current.loadedAt) <= provider.maxStaleness {
-		return current, nil
-	}
 	return nil, fmt.Errorf("security state unavailable: %w", err)
-}
-
-func (provider *PostgresSecurityStateProvider) loadSnapshot(ctx context.Context) (*postgresSecuritySnapshot, error) {
-	return loadSecuritySnapshot(ctx, provider.db.Pool())
 }
 
 func loadSecuritySnapshot(ctx context.Context, db DBTX) (*postgresSecuritySnapshot, error) {

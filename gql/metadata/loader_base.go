@@ -1,10 +1,11 @@
 package metadata
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 
 	sqldb "github.com/ichaly/ideabase/gql/database"
@@ -236,7 +237,7 @@ func (my *baseLoader) loadCatalog(h protocol.Hoster, catalog catalogData) error 
 	fkKey := func(fk foreignKeyInfo) string {
 		return fmt.Sprintf("%s\x00%s\x00%06d\x00%s", fk.SourceTable, fk.ConstraintName, fk.Position, fk.SourceColumn)
 	}
-	sort.Slice(foreignKeys, func(i, j int) bool { return fkKey(foreignKeys[i]) < fkKey(foreignKeys[j]) })
+	slices.SortFunc(foreignKeys, func(a, b foreignKeyInfo) int { return cmp.Compare(fkKey(a), fkKey(b)) })
 	// 处理外键：按约束聚合（复合外键多行同名收敛为一条关系），关系为一等对象
 	// 进类级Relations集合——同表多外键、复合键、自引用互不覆盖；
 	// 单列关系同时在外键列挂兼容指针（finalize的ID定型与渲染消费）

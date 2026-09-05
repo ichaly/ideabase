@@ -7,15 +7,15 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ichaly/ideabase/gql/internal/lru"
 	"io"
 	"maps"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/ichaly/ideabase/gql/internal/intro"
+	"github.com/ichaly/ideabase/gql/internal/lru"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -181,7 +181,7 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 		}
 	}()
 	revisions := []string{my.snapshot.Fingerprint()}
-	names := sortedMapKeys(my.contracts)
+	names := slices.Sorted(maps.Keys(my.contracts))
 	if len(names) > gatewayMaxFanout {
 		return nil, gatewayLimitError("namespace effective-schema fan-out")
 	}
@@ -243,7 +243,7 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 			var artifact SchemaArtifact
 			var err error
 			if childKey := prefetched[contract.name]; childKey != "" {
-				artifact, err = sharedBuild(groupCtx, &my.effectiveFlight, my.buildLimiter, "child-effective:"+contract.name+"="+childKey, fetch)
+				artifact, err = sharedBuild(groupCtx, &my.effectiveFlight, my.buildLimiter, "child-effective:"+contract.name+"="+childKey, sharedBuildTimeout, fetch)
 			} else {
 				artifact, err = fetch(groupCtx)
 			}
@@ -340,7 +340,7 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 	if !cacheable {
 		return build(ctx)
 	}
-	return sharedBuild(ctx, &my.effectiveFlight, my.buildLimiter, key, build)
+	return sharedBuild(ctx, &my.effectiveFlight, my.buildLimiter, key, sharedBuildTimeout, build)
 }
 
 func effectiveArtifactRevision(artifact SchemaArtifact) (string, error) {
@@ -516,7 +516,7 @@ func buildGatewayState(id string, namespaces []Namespace) (*gatewayState, error)
 		childID, _ := namespaceIdentity(namespace)
 		identity = append(identity, namespace.Name+"\x00"+childID+"\x00"+snapshot.Fingerprint())
 	}
-	sort.Strings(identity[2:])
+	slices.Sort(identity[2:])
 	fingerprint := sha256.Sum256([]byte(strings.Join(identity, "\x01")))
 	index := make(map[string]Capability, len(capabilities))
 	for _, capability := range capabilities {
@@ -630,7 +630,7 @@ func gatewayCacheIdentity(ctx context.Context, state *gatewayState) (string, boo
 		return "", false
 	}
 	parts := make([]string, 0, len(state.contracts))
-	for _, name := range sortedMapKeys(state.contracts) {
+	for _, name := range slices.Sorted(maps.Keys(state.contracts)) {
 		contract := state.contracts[name]
 		aware, ok := contract.endpoint.(EffectiveSchemaCacheIdentityEndpoint)
 		if !ok {
@@ -695,7 +695,7 @@ func aggregateGatewayArtifact(structural, schema string, sources []effectiveName
 		StructuralFingerprint: structural, PermissionSignature: digest(strings.Join(permissions, "\x00")),
 		PolicyRevision: policyRevision, RouteRevision: routeRevision, Capabilities: cloneCapabilities(capabilities)}
 	if cacheable && len(cacheIdentities) > 0 {
-		sort.Strings(cacheIdentities)
+		slices.Sort(cacheIdentities)
 		artifact.CacheIdentity = digest(strings.Join(cacheIdentities, "\x00"))
 	}
 	return FinalizeSchemaArtifact(artifact)
@@ -807,7 +807,7 @@ func (my *Gateway) Health(ctx context.Context) (HealthReport, error) {
 		return HealthReport{}, fmt.Errorf("gateway health unavailable")
 	}
 	report := HealthReport{Ready: true, SnapshotOK: true, DatabaseOK: true, CDCConnected: true, CDCState: CDCStateConnected, SnapshotFingerprint: state.snapshot.Fingerprint(), ControlRevision: revision, SubscriptionAvailable: state.schema.Subscription != nil}
-	names := sortedMapKeys(state.contracts)
+	names := slices.Sorted(maps.Keys(state.contracts))
 	results := collectHealth(names, func(name string) (HealthReport, error) {
 		contract := state.contracts[name]
 		return safelyCall(func() (HealthReport, error) { return contract.endpoint.(HealthEndpoint).Health(ctx) })

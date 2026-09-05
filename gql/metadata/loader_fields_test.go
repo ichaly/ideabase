@@ -18,7 +18,7 @@ func TestConfigLoaderFieldFilteringAndRelationConstruction(t *testing.T) {
 	}
 	field := loader.buildFieldFromConfig("User", "posts", "post_id", &internal.FieldConfig{
 		Type: "ID", Description: "posts", IsUnique: true, DefaultValue: "0",
-		InsertPreset: &internal.ValueConfig{Context: "tenant"}, UpdatePreset: &internal.ValueConfig{Value: "x"},
+		InsertPreset: &protocol.ValueSource{Context: "tenant"}, UpdatePreset: &protocol.ValueSource{Value: "x"},
 		Relation: &internal.RelationConfig{TargetClass: "Post", TargetField: "id", Type: string(protocol.ONE_TO_MANY), SourceFields: []string{"post_id"}, TargetFields: []string{"id"}, Through: &internal.ThroughConfig{TableName: "user_posts", SourceKey: "user_id", TargetKey: "post_id"}},
 	}, nil)
 	if field.Relation == nil || field.Relation.TargetClass != "Post" || field.Relation.Through == nil || field.Catalog == nil || field.InsertPreset == nil || field.UpdatePreset == nil {

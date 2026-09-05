@@ -2,7 +2,7 @@ package pgsql
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -20,7 +20,7 @@ func (my *Dialect) updatePolicyConjunct(ctx *compiler.Context, class *protocol.C
 				roles = append(roles, role)
 			}
 		}
-		sort.Strings(roles)
+		slices.Sort(roles)
 		if len(roles) == 0 {
 			ctx.Write(`FALSE`)
 			return nil
@@ -88,7 +88,7 @@ func (my *Dialect) appendInsertPolicy(ctx *compiler.Context, qualifier string, c
 			roles = append(roles, role)
 		}
 	}
-	sort.Strings(roles)
+	slices.Sort(roles)
 	if len(roles) == 0 {
 		ctx.Space(`AND FALSE`)
 		return nil

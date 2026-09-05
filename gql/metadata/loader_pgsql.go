@@ -193,7 +193,7 @@ func NewPgsqlLoader(cfg *internal.Config, db *sqldb.Connection) *PgsqlLoader {
 func (my *PgsqlLoader) Name() string  { return LoaderPgsql }
 func (my *PgsqlLoader) Priority() int { return 60 }
 func (my *PgsqlLoader) Support() bool {
-	return my.cfg != nil && my.cfg.IsDebug() && my.db != nil && my.db.Driver() == "postgres"
+	return my.cfg != nil && my.db != nil && my.db.Driver() == "postgres"
 }
 func (my *PgsqlLoader) Load(h protocol.Hoster) error {
 	return my.loadMeta(h, pgsqlMetaSQL, []interface{}{my.cfg.Schema.Schema})

@@ -2,9 +2,10 @@
 package pgsql
 
 import (
+	"cmp"
 	"fmt"
 	"reflect"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -208,7 +209,7 @@ func runtimeWhereValue(raw any) (*ast.Value, bool) {
 			return nil, false
 		}
 		keys := rv.MapKeys()
-		sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+		slices.SortFunc(keys, func(a, b reflect.Value) int { return cmp.Compare(a.String(), b.String()) })
 		value := &ast.Value{Kind: ast.ObjectValue, Children: make(ast.ChildValueList, 0, len(keys))}
 		for _, key := range keys {
 			child, ok := runtimeWhereValue(rv.MapIndex(key).Interface())
@@ -547,7 +548,7 @@ func (my *Dialect) fixedWhereConjuncts(ctx *compiler.Context, qualifier string, 
 			roles = append(roles, role)
 		}
 	}
-	sort.Strings(roles)
+	slices.Sort(roles)
 	out = append(out, func() error {
 		if len(roles) == 0 {
 			ctx.Write("FALSE")

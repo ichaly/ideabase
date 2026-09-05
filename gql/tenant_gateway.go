@@ -59,7 +59,7 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 	}
 	targets := make(map[string]*Engine, len(sources))
 	var canonical *Snapshot
-	for _, name := range sortedMapKeys(sources) {
+	for _, name := range slices.Sorted(maps.Keys(sources)) {
 		engine := sources[name]
 		if name == "" || engine == nil {
 			return nil, fmt.Errorf("tenant datasource %q is invalid", name)
@@ -215,7 +215,7 @@ func (my *TenantGateway) Health(ctx context.Context) (HealthReport, error) {
 	if my.snapshot != nil {
 		report.SnapshotFingerprint = my.snapshot.Fingerprint()
 	}
-	names := sortedMapKeys(my.sources)
+	names := slices.Sorted(maps.Keys(my.sources))
 	results := collectHealth(names, func(name string) (HealthReport, error) { return my.sources[name].Health(ctx) })
 	var failures []error
 	ready := 0
@@ -273,10 +273,6 @@ func marshalGatewayError(err error) ([]byte, error) {
 	return marshalReply(context.Background(), gqlReply{Errors: GraphQLErrors(err)})
 }
 
-func sortedMapKeys[T any](sources map[string]T) []string {
-	return slices.Sorted(maps.Keys(sources))
-}
-
 func validateRLSTables(metadata *Metadata, tables []RLSTable) error {
 	configured := make(map[string]bool, len(tables))
 	for _, table := range tables {
@@ -284,7 +280,7 @@ func validateRLSTables(metadata *Metadata, tables []RLSTable) error {
 			configured[table.Name] = true
 		}
 	}
-	for _, name := range sortedMapKeys(metadata.Nodes) {
+	for _, name := range slices.Sorted(maps.Keys(metadata.Nodes)) {
 		class := metadata.Nodes[name]
 		if class != nil && name == class.Name && class.Table != "" && !class.Global && !configured[class.Table] {
 			return fmt.Errorf("tenant table %s is missing RLS protection", class.Table)
@@ -294,7 +290,7 @@ func validateRLSTables(metadata *Metadata, tables []RLSTable) error {
 }
 
 func validateSharedTenantScope(metadata *Metadata) error {
-	for _, name := range sortedMapKeys(metadata.Nodes) {
+	for _, name := range slices.Sorted(maps.Keys(metadata.Nodes)) {
 		class := metadata.Nodes[name]
 		if class == nil || name != class.Name || class.Table == "" || class.Global {
 			continue

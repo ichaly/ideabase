@@ -7,10 +7,11 @@ package intro
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/compiler"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -137,7 +138,7 @@ func filterDeprecated(value interface{}, field *ast.Field, variables map[string]
 
 // build 构建__schema数据集；类型先建空容器再填充，支持相互引用与ofType环
 func (my *Handler) build() {
-	names := utl.SortKeys(my.schema.Types)
+	names := slices.Sorted(maps.Keys(my.schema.Types))
 	for _, name := range names {
 		my.types[name] = map[string]interface{}{"__typename": "__Type"}
 	}
@@ -149,7 +150,7 @@ func (my *Handler) build() {
 	}
 
 	directives := make([]interface{}, 0, len(my.schema.Directives))
-	for _, name := range utl.SortKeys(my.schema.Directives) {
+	for _, name := range slices.Sorted(maps.Keys(my.schema.Directives)) {
 		directives = append(directives, my.directive(my.schema.Directives[name]))
 	}
 

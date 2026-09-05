@@ -72,7 +72,7 @@ func remoteResponseError(resp *http.Response, operation string, limit int64) err
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if mediaType == "application/problem+json" {
 		var wire remoteProblemWire
-		if err := decodeJSON(body, &wire); err == nil && wire.Error.Code != "" {
+		if err := decodeJSON(bytes.NewReader(body), &wire, "JSON must contain one value"); err == nil && wire.Error.Code != "" {
 			return &RemoteProblemError{Operation: operation, Version: wire.Version, Code: wire.Error.Code, Category: wire.Error.Category, Retryable: wire.Error.Retryable, Details: wire.Error.Details, CurrentRevision: wire.Error.CurrentRevision, Message: wire.Error.Message}
 		}
 	}
@@ -107,10 +107,6 @@ type manifestStateEndpoint interface {
 	ManifestState() (*core.Snapshot, uint64, error)
 }
 
-type effectiveSchemaEndpoint interface {
-	EffectiveSchema(context.Context) (core.SchemaArtifact, error)
-}
-
 // ManifestAuthenticator is the explicit trust boundary for schema metadata.
 type ManifestAuthenticator func(*http.Request) bool
 
@@ -120,7 +116,7 @@ func schemaDigest(schema string) string {
 
 // NewEffectiveSchemaHandler exposes identity-aware schema materialization over
 // one authenticated control-plane path.
-func NewEffectiveSchemaHandler(endpoint effectiveSchemaEndpoint, verifier DelegationVerifier) http.Handler {
+func NewEffectiveSchemaHandler(endpoint core.EffectiveSchemaEndpoint, verifier DelegationVerifier) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
@@ -143,15 +139,12 @@ func NewEffectiveSchemaHandler(endpoint effectiveSchemaEndpoint, verifier Delega
 			return
 		}
 		effective := endpoint
-		if revision != "" {
-			pinner, ok := endpoint.(snapshotPinner)
-			if !ok {
-				writeProblem(w, http.StatusConflict, "SNAPSHOT_UNAVAILABLE", "snapshot pinning unavailable", true)
-				return
-			}
+		// Mutable gateways can select retained revisions. Immutable endpoints
+		// prove the requested revision through the validated artifact below.
+		if pinner, ok := endpoint.(snapshotPinner); revision != "" && ok {
 			pinned, pinErr := pinner.ForSnapshot(revision)
 			var effectiveOK bool
-			effective, effectiveOK = pinned.(effectiveSchemaEndpoint)
+			effective, effectiveOK = pinned.(core.EffectiveSchemaEndpoint)
 			if pinErr != nil || !effectiveOK {
 				writeProblem(w, http.StatusConflict, "SNAPSHOT_CHANGED", "snapshot revision changed", true)
 				return
@@ -271,14 +264,10 @@ type RemoteEndpoint struct {
 	history           *lru.Cache[string, *remoteState]
 	unarySlots        chan struct{}
 	subscriptionSlots chan struct{}
-	effectiveCache    *remoteEffectiveCache
+	effectiveCache    *lru.Cache[string, remoteEffectiveEntry]
+	effectiveFlight   singleflight.Group
 	effectiveCacheTTL time.Duration
 	clock             func() time.Time
-}
-
-type remoteEffectiveCache struct {
-	entries *lru.Cache[string, remoteEffectiveEntry]
-	flight  singleflight.Group
 }
 
 type remoteEffectiveEntry struct {
@@ -402,7 +391,7 @@ func NewRemoteEndpoint(ctx context.Context, options RemoteOptions) (*RemoteEndpo
 		idleTimeout: 30 * time.Second,
 		history:     lru.New[string, *remoteState](8),
 		unarySlots:  make(chan struct{}, options.MaxConcurrent), subscriptionSlots: make(chan struct{}, options.MaxSubscriptions),
-		effectiveCache: newRemoteEffectiveCache(64), effectiveCacheTTL: options.EffectiveCacheTTL, clock: time.Now,
+		effectiveCache: lru.New[string, remoteEffectiveEntry](64), effectiveCacheTTL: options.EffectiveCacheTTL, clock: time.Now,
 	}
 	if err := remote.Refresh(ctx); err != nil {
 		return nil, err
@@ -445,20 +434,14 @@ func (my *RemoteEndpoint) EffectiveSchemaCacheIdentity(ctx context.Context) (str
 	return my.cachedEffectiveSchemaIdentity(ctx, state.snapshot.Fingerprint())
 }
 
-func newRemoteEffectiveCache(limit int) *remoteEffectiveCache {
-	if limit <= 0 {
-		limit = 64
+// cachedEffectiveSchema expires and promotes an entry atomically in the shared LRU.
+func (my *RemoteEndpoint) cachedEffectiveSchema(key string) (core.SchemaArtifact, bool) {
+	if my.effectiveCache == nil {
+		return core.SchemaArtifact{}, false
 	}
-	return &remoteEffectiveCache{entries: lru.New[string, remoteEffectiveEntry](limit)}
-}
-
-func (cache *remoteEffectiveCache) get(key string, now time.Time) (core.SchemaArtifact, bool) {
-	entry, ok := cache.entries.GetIf(key, func(entry remoteEffectiveEntry) bool { return entry.expires.After(now) })
+	now := my.clock()
+	entry, ok := my.effectiveCache.GetIf(key, func(entry remoteEffectiveEntry) bool { return entry.expires.After(now) })
 	return entry.artifact, ok
-}
-
-func (cache *remoteEffectiveCache) put(key string, artifact core.SchemaArtifact, expires time.Time) {
-	cache.entries.Put(key, remoteEffectiveEntry{artifact: artifact, expires: expires})
 }
 
 func (my *RemoteEndpoint) effectiveSchemaRequestKey(ctx context.Context, structural string) (string, bool) {
@@ -493,7 +476,7 @@ func (my *RemoteEndpoint) cachedEffectiveSchemaIdentity(ctx context.Context, str
 	if !ok || my.effectiveCache == nil {
 		return "", false
 	}
-	artifact, ok := my.effectiveCache.get(key, my.effectiveNow())
+	artifact, ok := my.cachedEffectiveSchema(key)
 	if !ok || strings.TrimSpace(artifact.CacheIdentity) == "" {
 		return "", false
 	}
@@ -501,16 +484,13 @@ func (my *RemoteEndpoint) cachedEffectiveSchemaIdentity(ctx context.Context, str
 }
 
 func (my *RemoteEndpoint) effectiveSchema(ctx context.Context, structural string) (core.SchemaArtifact, error) {
-	if my.effectiveCache == nil {
-		my.effectiveCache = newRemoteEffectiveCache(64)
-	}
 	key, cacheable := my.effectiveSchemaRequestKey(ctx, structural)
-	if cacheable {
-		if artifact, ok := my.effectiveCache.get(key, my.effectiveNow()); ok {
+	if cacheable && my.effectiveCache != nil {
+		if artifact, ok := my.cachedEffectiveSchema(key); ok {
 			return artifact, nil
 		}
-		return sharedflight.Do(ctx, &my.effectiveCache.flight, key, my.timeout, func(shared context.Context) (core.SchemaArtifact, error) {
-			if artifact, ok := my.effectiveCache.get(key, my.effectiveNow()); ok {
+		return sharedflight.Do(ctx, &my.effectiveFlight, key, my.timeout, func(shared context.Context) (core.SchemaArtifact, error) {
+			if artifact, ok := my.cachedEffectiveSchema(key); ok {
 				return artifact, nil
 			}
 			artifact, err := my.effectiveSchemaFetch(shared, structural)
@@ -518,26 +498,12 @@ func (my *RemoteEndpoint) effectiveSchema(ctx context.Context, structural string
 				return core.SchemaArtifact{}, err
 			}
 			if strings.TrimSpace(artifact.CacheIdentity) != "" {
-				my.effectiveCache.put(key, artifact, my.effectiveNow().Add(my.effectiveTTL()))
+				my.effectiveCache.Put(key, remoteEffectiveEntry{artifact: artifact, expires: my.clock().Add(my.effectiveCacheTTL)})
 			}
 			return artifact, nil
 		})
 	}
 	return my.effectiveSchemaFetch(ctx, structural)
-}
-
-func (my *RemoteEndpoint) effectiveNow() time.Time {
-	if my.clock != nil {
-		return my.clock()
-	}
-	return time.Now()
-}
-
-func (my *RemoteEndpoint) effectiveTTL() time.Duration {
-	if my.effectiveCacheTTL > 0 {
-		return my.effectiveCacheTTL
-	}
-	return defaultEffectiveCacheTTL
 }
 
 func (my *RemoteEndpoint) effectiveSchemaFetch(ctx context.Context, structural string) (core.SchemaArtifact, error) {
@@ -1082,7 +1048,7 @@ func decodeResponse(reader io.Reader, limit int64, value any) error {
 	if err != nil {
 		return err
 	}
-	return decodeJSON(body, value)
+	return decodeJSON(bytes.NewReader(body), value, "JSON must contain one value")
 }
 
 func readLimited(reader io.Reader, limit int64) ([]byte, error) {

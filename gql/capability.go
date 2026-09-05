@@ -2,18 +2,18 @@ package gql
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	stdjson "encoding/json"
 	"fmt"
+	"maps"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -74,7 +74,7 @@ func buildOperationCatalog(metadata *Metadata) map[string]operationCapability {
 	add := func(parent, name string, class *protocol.Class, shape compiler.OperationShape, operation string, actions ...string) {
 		catalog[parent+"."+name] = operationCapability{class: class, actions: actions, operation: operation, shape: shape}
 	}
-	for _, name := range sortedMapKeys(metadata.Nodes) {
+	for _, name := range slices.Sorted(maps.Keys(metadata.Nodes)) {
 		class := metadata.Nodes[name]
 		if class == nil || name != class.Name || class.Table == "" || class.Hidden {
 			continue
@@ -182,7 +182,7 @@ func writableFields(metadata *Metadata, class *protocol.Class, operation string)
 		}
 	}
 	names := make([]string, 0, len(class.Fields))
-	for _, fieldName := range utl.SortKeys(class.Fields) {
+	for _, fieldName := range slices.Sorted(maps.Keys(class.Fields)) {
 		field := class.Fields[fieldName]
 		if field == nil || fieldName != field.Name {
 			continue
@@ -331,7 +331,7 @@ func completeCapabilities(schema *ast.Schema, capabilities []Capability, fallbac
 			})
 		}
 	}
-	sort.Slice(capabilities, func(i, j int) bool { return capabilities[i].Coordinate < capabilities[j].Coordinate })
+	slices.SortFunc(capabilities, func(a, b Capability) int { return cmp.Compare(a.Coordinate, b.Coordinate) })
 	return capabilities
 }
 
@@ -384,7 +384,7 @@ func artifactFingerprint(schema string, capabilities []Capability, parsed *ast.S
 			ordered[i].Requires = []string{}
 		}
 	}
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Coordinate < ordered[j].Coordinate })
+	slices.SortStableFunc(ordered, func(a, b Capability) int { return cmp.Compare(a.Coordinate, b.Coordinate) })
 	contract, err := stdjson.Marshal(struct {
 		Schema       string
 		Capabilities []Capability
@@ -426,7 +426,7 @@ func buildSnapshot(engine *Engine) (*Snapshot, error) {
 		}
 	}
 
-	sort.Slice(capabilities, func(i, j int) bool { return capabilities[i].Coordinate < capabilities[j].Coordinate })
+	slices.SortFunc(capabilities, func(a, b Capability) int { return cmp.Compare(a.Coordinate, b.Coordinate) })
 	fingerprint, err := ArtifactFingerprint(schema, capabilities)
 	if err != nil {
 		return nil, err
@@ -483,7 +483,7 @@ func formatSchema(schema *ast.Schema) string {
 }
 
 func sortedDefinitions(schema *ast.Schema) []*ast.Definition {
-	names := sortedMapKeys(schema.Types)
+	names := slices.Sorted(maps.Keys(schema.Types))
 	definitions := make([]*ast.Definition, 0, len(names))
 	for _, name := range names {
 		definitions = append(definitions, schema.Types[name])

@@ -64,7 +64,7 @@ func TestConflictTargetsExcludeDeferrableAndUnsafeIndexes(t *testing.T) {
 	}
 
 	require.Equal(t, []Key{{Name: "UNIQUE_1", Columns: []string{"tenant", "code"}}}, class.ConflictTargets())
-	_, ok := class.PrimaryConflictTarget()
+	_, ok := class.ConflictTarget("PRIMARY")
 	require.False(t, ok)
 }
 
