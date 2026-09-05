@@ -211,7 +211,7 @@ func (my *Compiler) selectDialect(list []compiler.Dialect) error {
 
 	// 已知驱动严格按名匹配
 	if my.meta != nil && my.meta.db != nil {
-		driver := my.meta.db.Name()
+		driver := my.meta.db.Driver()
 		for prefix, name := range map[string]string{"postgres": "postgresql", "mysql": "mysql"} {
 			if !strings.Contains(driver, prefix) {
 				continue

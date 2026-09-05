@@ -14,7 +14,7 @@ import (
 func TestPostgresReplayStoreIsAtomicAcrossInstances(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresReplayDDL).Error)
+	testExec(t, db, PostgresReplayDDL)
 	one, err := NewPostgresReplayStore(db)
 	require.NoError(t, err)
 	two, err := NewPostgresReplayStore(db)
@@ -46,7 +46,7 @@ func TestPostgresReplayStoreIsAtomicAcrossInstances(t *testing.T) {
 func TestPostgresReplayStoreFailsClosedWhenTableIsUnavailable(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`DROP TABLE IF EXISTS gql_delegation_replay`).Error)
+	testExec(t, db, `DROP TABLE IF EXISTS gql_delegation_replay`)
 	_, err := NewPostgresReplayStore(db)
 	require.ErrorContains(t, err, "migration")
 	require.False(t, errors.Is(err, ErrReplay))
@@ -55,7 +55,7 @@ func TestPostgresReplayStoreFailsClosedWhenTableIsUnavailable(t *testing.T) {
 func TestPostgresReplayStoreFailsClosedForMalformedMigration(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`CREATE TABLE gql_delegation_replay (token_id text PRIMARY KEY)`).Error)
+	testExec(t, db, `CREATE TABLE gql_delegation_replay (token_id text PRIMARY KEY)`)
 	_, err := NewPostgresReplayStore(db)
 	require.ErrorContains(t, err, "migration")
 }
@@ -63,25 +63,25 @@ func TestPostgresReplayStoreFailsClosedForMalformedMigration(t *testing.T) {
 func TestPostgresReplayStorePrunesExpiredRecordsOffTheHotPath(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresReplayDDL).Error)
-	require.NoError(t, db.Exec(`INSERT INTO gql_delegation_replay VALUES ('old', 'old', 'old', clock_timestamp() - interval '1 minute')`).Error)
+	testExec(t, db, PostgresReplayDDL)
+	testExec(t, db, `INSERT INTO gql_delegation_replay VALUES ('old', 'old', 'old', clock_timestamp() - interval '1 minute')`)
 	store, err := NewPostgresReplayStore(db)
 	require.NoError(t, err)
 	store.(*postgresReplayStore).nextPrune.Store(0)
 	require.NoError(t, store.Consume(context.Background(), ReplayKey{Issuer: "new", Audience: "new", ID: "new"}, time.Now().Add(time.Minute)))
 	var count int64
-	require.NoError(t, db.Table("gql_delegation_replay").Where("issuer = ?", "old").Count(&count).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM gql_delegation_replay WHERE issuer = $1`, "old").Scan(&count))
 	require.Zero(t, count)
 }
 
 func TestPostgresReplayStoreContinuesWhenMaintenancePruneFails(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresReplayDDL).Error)
+	testExec(t, db, PostgresReplayDDL)
 	store, err := NewPostgresReplayStore(db)
 	require.NoError(t, err)
-	require.NoError(t, db.Exec(`CREATE FUNCTION reject_replay_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'maintenance unavailable'; END $$`).Error)
-	require.NoError(t, db.Exec(`CREATE TRIGGER reject_replay_delete BEFORE DELETE ON gql_delegation_replay FOR EACH STATEMENT EXECUTE FUNCTION reject_replay_delete()`).Error)
+	testExec(t, db, `CREATE FUNCTION reject_replay_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'maintenance unavailable'; END $$`)
+	testExec(t, db, `CREATE TRIGGER reject_replay_delete BEFORE DELETE ON gql_delegation_replay FOR EACH STATEMENT EXECUTE FUNCTION reject_replay_delete()`)
 	postgres := store.(*postgresReplayStore)
 	postgres.nextPrune.Store(0)
 	require.NoError(t, postgres.Consume(context.Background(), ReplayKey{Issuer: "new", Audience: "new", ID: "fresh"}, time.Now().Add(time.Minute)))
@@ -91,22 +91,22 @@ func TestPostgresReplayStoreContinuesWhenMaintenancePruneFails(t *testing.T) {
 func TestPostgresReplayStoreBoundsEachPruneBatch(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresReplayDDL).Error)
-	require.NoError(t, db.Exec(`INSERT INTO gql_delegation_replay (issuer, audience, token_id, expires_at)
-		SELECT 'old', 'old', generate_series(1, 300)::text, clock_timestamp() - interval '1 minute'`).Error)
+	testExec(t, db, PostgresReplayDDL)
+	testExec(t, db, `INSERT INTO gql_delegation_replay (issuer, audience, token_id, expires_at)
+		SELECT 'old', 'old', generate_series(1, 300)::text, clock_timestamp() - interval '1 minute'`)
 	store, err := NewPostgresReplayStore(db)
 	require.NoError(t, err)
 	store.(*postgresReplayStore).nextPrune.Store(0)
 	require.NoError(t, store.Consume(context.Background(), ReplayKey{Issuer: "new", Audience: "new", ID: "new"}, time.Now().Add(time.Minute)))
 	var remaining int64
-	require.NoError(t, db.Table("gql_delegation_replay").Where("issuer = ?", "old").Count(&remaining).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM gql_delegation_replay WHERE issuer = $1`, "old").Scan(&remaining))
 	require.Positive(t, remaining, "one authentication must not prune an unbounded table")
 }
 
 func TestPostgresReplayStoreRejectsExpiryAtOrBeforeDatabaseClock(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresReplayDDL).Error)
+	testExec(t, db, PostgresReplayDDL)
 	store, err := NewPostgresReplayStore(db)
 	require.NoError(t, err)
 	key := ReplayKey{Issuer: "gateway", Audience: "child", ID: "expired"}

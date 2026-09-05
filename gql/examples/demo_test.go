@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"github.com/ichaly/ideabase/gql"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 func TestResolverExamples(t *testing.T) {
@@ -36,18 +34,11 @@ func TestResolverExamples(t *testing.T) {
 
 // TestCompleteDemoDocuments 使用真实Demo库逐个执行所有持久化操作；数据库不可用直接失败。
 func TestCompleteDemoDocuments(t *testing.T) {
-	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
+	db, err := openDemoDB()
 	if err != nil {
 		t.Fatalf("demo数据库不可用: %v（先运行 docker compose up -d）", err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("获取demo数据库连接失败: %v", err)
-	}
-	if err = sqlDB.Ping(); err != nil {
-		t.Fatalf("demo数据库无法连接: %v（先运行 docker compose up -d）", err)
-	}
-	defer sqlDB.Close()
+	defer db.Pool().Close()
 
 	executor, err := buildEngine(db)
 	if err != nil {

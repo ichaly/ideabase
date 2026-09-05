@@ -206,8 +206,8 @@ func TestPolicyProviderCoversNestedRelationResource(t *testing.T) {
 func TestPolicyProviderRowPredicateIsCompiledWithRequestValue(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.NoError(t, db.Exec(`INSERT INTO users(name, email) VALUES (?, ?), (?, ?)`,
-		"Policy A", "policy-a@x.com", "Policy B", "policy-b@x.com").Error)
+	testExec(t, db, `INSERT INTO users(name, email) VALUES ($1, $2), ($3, $4)`,
+		"Policy A", "policy-a@x.com", "Policy B", "policy-b@x.com")
 	provider := OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{
 			Allow: true, Fields: request.Fields,
@@ -244,7 +244,7 @@ func TestPolicyProviderCreateCheckRejectsBeforeWrite(t *testing.T) {
 	denied := executor.run(ctx, `mutation { createUser(input: { name: "Denied", email: "policy-denied@x.com" }) { id } }`, nil, "")
 	require.NotEmpty(t, denied.Errors)
 	var count int64
-	require.NoError(t, db.Table("users").Where("email = ?", "policy-denied@x.com").Count(&count).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM users WHERE email = $1`, "policy-denied@x.com").Scan(&count))
 	require.Zero(t, count)
 	allowed := executor.run(ctx, `mutation { createUser(input: { name: "Allowed", email: "policy-allowed@x.com" }) { id } }`, nil, "")
 	require.Empty(t, allowed.Errors, "%v", allowed.Errors)
@@ -256,7 +256,7 @@ func TestPolicyProviderUpdateCheckReadsUnsubmittedColumns(t *testing.T) {
 	var user struct {
 		ID int64
 	}
-	require.NoError(t, db.Raw(`INSERT INTO users(name, email) VALUES (?, ?) RETURNING id`, "Allowed", "partial-check@x.com").Scan(&user).Error)
+	require.NoError(t, testQueryRow(db, `INSERT INTO users(name, email) VALUES ($1, $2) RETURNING id`, "Allowed", "partial-check@x.com").Scan(&user.ID))
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{
 			Allow: true, Fields: request.Fields,
@@ -269,11 +269,11 @@ func TestPolicyProviderUpdateCheckReadsUnsubmittedColumns(t *testing.T) {
 		`mutation ($id: ID!) { updateUser(input: { email: "partial-check-updated@x.com" }, id: $id) { id email } }`, map[string]any{"id": user.ID}, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	var email string
-	require.NoError(t, db.Table("users").Where("email = ?", "partial-check-updated@x.com").Pluck("email", &email).Error)
+	require.NoError(t, testQueryRow(db, `SELECT email FROM users WHERE email = $1`, "partial-check-updated@x.com").Scan(&email))
 	require.Equal(t, "partial-check-updated@x.com", email)
 
 	var denied struct{ ID int64 }
-	require.NoError(t, db.Raw(`INSERT INTO users(name, email) VALUES (?, ?) RETURNING id`, "Denied", "post-state@x.com").Scan(&denied).Error)
+	require.NoError(t, testQueryRow(db, `INSERT INTO users(name, email) VALUES ($1, $2) RETURNING id`, "Denied", "post-state@x.com").Scan(&denied.ID))
 	allowed := executor.run(WithIdentity(context.Background(), identity),
 		`mutation ($id: ID!) { updateUser(input: { name: "Allowed" }, id: $id) { id name } }`, map[string]any{"id": denied.ID}, "")
 	require.Empty(t, allowed.Errors, "%v", allowed.Errors)
@@ -281,7 +281,7 @@ func TestPolicyProviderUpdateCheckReadsUnsubmittedColumns(t *testing.T) {
 		`mutation ($id: ID!) { updateUser(input: { name: "Denied" }, id: $id) { id name } }`, map[string]any{"id": denied.ID}, "")
 	require.Nil(t, rejected.Data["updateUser"])
 	var name string
-	require.NoError(t, db.Table("users").Where("id = ?", denied.ID).Pluck("name", &name).Error)
+	require.NoError(t, testQueryRow(db, `SELECT name FROM users WHERE id = $1`, denied.ID).Scan(&name))
 	require.Equal(t, "Allowed", name)
 }
 
@@ -289,7 +289,7 @@ func TestPolicyProviderUpdateKeepsRoleFilterAndCheckAtomic(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	var user struct{ ID int64 }
-	require.NoError(t, db.Raw(`INSERT INTO users(name, email) VALUES (?, ?) RETURNING id`, "Before", "a@x.com").Scan(&user).Error)
+	require.NoError(t, testQueryRow(db, `INSERT INTO users(name, email) VALUES ($1, $2) RETURNING id`, "Before", "a@x.com").Scan(&user.ID))
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{Allow: true, Fields: request.Fields, RoleBranches: []RolePolicyBranch{
 			{Role: "a", RowPredicates: []TypedPredicate{{Column: "email", Operator: "eq", Value: "a@x.com"}}, Check: []TypedPredicate{{Column: "name", Operator: "eq", Value: "Allowed"}}},
@@ -302,7 +302,7 @@ func TestPolicyProviderUpdateKeepsRoleFilterAndCheckAtomic(t *testing.T) {
 		`mutation ($id: ID!) { updateUser(input: { name: "Denied" }, id: $id) { id } }`, map[string]any{"id": user.ID}, "")
 	require.Nil(t, reply.Data["updateUser"])
 	var name string
-	require.NoError(t, db.Table("users").Where("id = ?", user.ID).Pluck("name", &name).Error)
+	require.NoError(t, testQueryRow(db, `SELECT name FROM users WHERE id = $1`, user.ID).Scan(&name))
 	require.Equal(t, "Before", name, "filter from one role must not combine with check from another")
 }
 
@@ -312,10 +312,18 @@ func TestPolicyProviderChecksRelationOnlyParentAndTargetUpdates(t *testing.T) {
 	type row struct{ ID int64 }
 	var owner, denied, allowed row
 	for target, values := range map[*row][2]string{&owner: {"Owner", "owner@x.com"}, &denied: {"Denied", "denied@x.com"}, &allowed: {"Allowed", "allowed@x.com"}} {
-		require.NoError(t, db.Raw(`INSERT INTO users(name, email) VALUES (?, ?) RETURNING id`, values[0], values[1]).Scan(target).Error)
+		require.NoError(t, testQueryRow(db, `INSERT INTO users(name, email) VALUES ($1, $2) RETURNING id`, values[0], values[1]).Scan(&target.ID))
 	}
 	var posts []row
-	require.NoError(t, db.Raw(`INSERT INTO posts(title, user_id) VALUES ('first', ?), ('second', ?) RETURNING id`, owner.ID, owner.ID).Scan(&posts).Error)
+	rows, err := db.Pool().QueryContext(context.Background(), `INSERT INTO posts(title, user_id) VALUES ('first', $1), ('second', $2) RETURNING id`, owner.ID, owner.ID)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var post row
+		require.NoError(t, rows.Scan(&post.ID))
+		posts = append(posts, post)
+	}
+	require.NoError(t, rows.Err())
 	require.Len(t, posts, 2)
 	first, second := posts[0], posts[1]
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
@@ -338,7 +346,15 @@ func TestPolicyProviderChecksRelationOnlyParentAndTargetUpdates(t *testing.T) {
 		_ = executor.run(ctx, mutation, nil, "")
 	}
 	var owners []int64
-	require.NoError(t, db.Table("posts").Where("id IN ?", []int64{first.ID, second.ID}).Order("id").Pluck("user_id", &owners).Error)
+	ownerRows, err := db.Pool().QueryContext(context.Background(), `SELECT user_id FROM posts WHERE id IN ($1, $2) ORDER BY id`, first.ID, second.ID)
+	require.NoError(t, err)
+	defer ownerRows.Close()
+	for ownerRows.Next() {
+		var ownerID int64
+		require.NoError(t, ownerRows.Scan(&ownerID))
+		owners = append(owners, ownerID)
+	}
+	require.NoError(t, ownerRows.Err())
 	require.Equal(t, []int64{owner.ID, owner.ID}, owners)
 }
 
@@ -346,8 +362,8 @@ func TestMutationRelationOpsDoNotCreateRowsWithoutParent(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	beforePosts, beforeTags := int64(0), int64(0)
-	require.NoError(t, db.Table("posts").Count(&beforePosts).Error)
-	require.NoError(t, db.Table("tags").Count(&beforeTags).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM posts`).Scan(&beforePosts))
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM tags`).Scan(&beforeTags))
 	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
 	require.NoError(t, err)
 	ctx := WithIdentity(context.Background(), identity)
@@ -356,8 +372,8 @@ func TestMutationRelationOpsDoNotCreateRowsWithoutParent(t *testing.T) {
 	tagCreate := executor.run(ctx, `mutation { updatePost(input: { tags: { create: [{ name: "orphan-tag" }] } }, id: 999999) { id } }`, nil, "")
 	require.Empty(t, tagCreate.Errors, "%v", tagCreate.Errors)
 	var afterPosts, afterTags int64
-	require.NoError(t, db.Table("posts").Count(&afterPosts).Error)
-	require.NoError(t, db.Table("tags").Count(&afterTags).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM posts`).Scan(&afterPosts))
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM tags`).Scan(&afterTags))
 	require.Equal(t, beforePosts, afterPosts)
 	require.Equal(t, beforeTags, afterTags)
 }
@@ -428,7 +444,7 @@ func TestPolicyProviderAuthorizesNestedCreateForeignKeyWrite(t *testing.T) {
 	}`, nil, "")
 	require.NotEmpty(t, reply.Errors)
 	var count int64
-	require.NoError(t, db.Table("posts").Where("title = ?", "Denied FK").Count(&count).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM posts WHERE title = $1`, "Denied FK").Scan(&count))
 	require.Zero(t, count)
 }
 
@@ -477,9 +493,9 @@ func TestManyToManyDisconnectUsesThroughFilterFields(t *testing.T) {
 func TestManyToManyConnectChecksCompleteThroughRowInSQL(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.NoError(t, db.Exec(`INSERT INTO users (id, name, email) VALUES (1, 'u', 'u@x')`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO posts (id, title, user_id) VALUES (1, 'p', 1)`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO tags (id, name) VALUES (1, 'one'), (2, 'two')`).Error)
+	testExec(t, db, `INSERT INTO users (id, name, email) VALUES (1, 'u', 'u@x')`)
+	testExec(t, db, `INSERT INTO posts (id, title, user_id) VALUES (1, 'p', 1)`)
+	testExec(t, db, `INSERT INTO tags (id, name) VALUES (1, 'one'), (2, 'two')`)
 	allowedSource := 1
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		decision := PolicyDecision{Allow: true, Fields: request.Fields}
@@ -497,8 +513,8 @@ func TestManyToManyConnectChecksCompleteThroughRowInSQL(t *testing.T) {
 	reply = executor.run(ctx, `mutation { updatePost(input: { tags: { connect: [2] } }, id: 1) { id } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	var allowed, denied int64
-	require.NoError(t, db.Table("post_tags").Where("post_id=1 AND tag_id=1").Count(&allowed).Error)
-	require.NoError(t, db.Table("post_tags").Where("post_id=1 AND tag_id=2").Count(&denied).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM post_tags WHERE post_id=1 AND tag_id=1`).Scan(&allowed))
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM post_tags WHERE post_id=1 AND tag_id=2`).Scan(&denied))
 	require.EqualValues(t, 1, allowed)
 	require.Zero(t, denied)
 }

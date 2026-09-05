@@ -2,13 +2,12 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 func TestValidateRLSRoleFailsOpenSecurityProperties(t *testing.T) {
@@ -30,42 +29,42 @@ func TestRLSExecutionUsesTransactionLocalIdentity(t *testing.T) {
 	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-a", Actor: "actor-a"})
 	require.NoError(t, err)
 	sentinel := errors.New("rollback")
-	err = db.Transaction(func(tx *gorm.DB) error {
+	tx, err := db.Pool().BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	err = func() error {
 		ctx := context.WithValue(WithIdentity(context.Background(), identity), transactionKey{}, tx)
 		reply := executor.run(ctx, `{ users { total } }`, nil, "")
 		require.Empty(t, reply.Errors, "%v", reply.Errors)
 		var tenant string
-		require.NoError(t, tx.Raw(`SELECT current_setting('gql.tenant', true)`).Scan(&tenant).Error)
+		require.NoError(t, tx.QueryRowContext(context.Background(), `SELECT current_setting('gql.tenant', true)`).Scan(&tenant))
 		require.Equal(t, "tenant-a", tenant)
 		return sentinel
-	})
+	}()
+	require.NoError(t, tx.Rollback())
 	require.ErrorIs(t, err, sentinel)
 	var tenant string
-	require.NoError(t, db.Raw(`SELECT COALESCE(current_setting('gql.tenant', true), '')`).Scan(&tenant).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COALESCE(current_setting('gql.tenant', true), '')`).Scan(&tenant))
 	require.Empty(t, tenant)
 }
 
 func TestRLSActuallyIsolatesRowsForNonBypassRole(t *testing.T) {
 	executor, admin, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.NoError(t, admin.Exec(`ALTER TABLE users ADD COLUMN tenant_id text NOT NULL DEFAULT 'tenant-a'`).Error)
-	require.NoError(t, admin.Exec(`INSERT INTO users(name,email,tenant_id) VALUES
-		('A','rls-a@example.com','tenant-a'),('B','rls-b@example.com','tenant-b')`).Error)
-	require.NoError(t, admin.Exec(`ALTER TABLE users ENABLE ROW LEVEL SECURITY`).Error)
-	require.NoError(t, admin.Exec(`CREATE POLICY gql_tenant_users ON users USING (tenant_id = current_setting('gql.tenant', true))`).Error)
-	require.NoError(t, admin.Exec(`CREATE ROLE gql_rls LOGIN PASSWORD 'gql_rls_test' NOSUPERUSER NOBYPASSRLS`).Error)
-	require.NoError(t, admin.Exec(`GRANT USAGE ON SCHEMA public TO gql_rls`).Error)
-	require.NoError(t, admin.Exec(`GRANT SELECT ON users TO gql_rls`).Error)
+	testExec(t, admin, `ALTER TABLE users ADD COLUMN tenant_id text NOT NULL DEFAULT 'tenant-a'`)
+	testExec(t, admin, `INSERT INTO users(name,email,tenant_id) VALUES
+		('A','rls-a@example.com','tenant-a'),('B','rls-b@example.com','tenant-b')`)
+	testExec(t, admin, `ALTER TABLE users ENABLE ROW LEVEL SECURITY`)
+	testExec(t, admin, `CREATE POLICY gql_tenant_users ON users USING (tenant_id = current_setting('gql.tenant', true))`)
+	testExec(t, admin, `CREATE ROLE gql_rls LOGIN PASSWORD 'gql_rls_test' NOSUPERUSER NOBYPASSRLS`)
+	testExec(t, admin, `GRANT USAGE ON SCHEMA public TO gql_rls`)
+	testExec(t, admin, `GRANT SELECT ON users TO gql_rls`)
 
-	dsn := admin.Dialector.(*postgres.Dialector).Config.DSN
+	dsn := admin.DSN()
 	dsn = strings.Replace(strings.Replace(dsn, "user=test", "user=gql_rls", 1), "password=test", "password=gql_rls_test", 1)
-	restricted, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	restricted, err := openTestDatabase(dsn)
 	require.NoError(t, err)
 	defer func() {
-		sqlDB, openErr := restricted.DB()
-		if openErr == nil {
-			_ = sqlDB.Close()
-		}
+		_ = restricted.Pool().Close()
 	}()
 	executor.database, executor.rls = restricted, true
 	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-a"})
@@ -80,9 +79,9 @@ func TestRLSActuallyIsolatesRowsForNonBypassRole(t *testing.T) {
 func TestInspectRLSReadsPostgreSQLCatalog(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.NoError(t, db.Exec(`ALTER TABLE users ENABLE ROW LEVEL SECURITY`).Error)
-	require.NoError(t, db.Exec(`ALTER TABLE users FORCE ROW LEVEL SECURITY`).Error)
-	require.NoError(t, db.Exec(`CREATE POLICY gql_test_users ON users USING (true)`).Error)
+	testExec(t, db, `ALTER TABLE users ENABLE ROW LEVEL SECURITY`)
+	testExec(t, db, `ALTER TABLE users FORCE ROW LEVEL SECURITY`)
+	testExec(t, db, `CREATE POLICY gql_test_users ON users USING (true)`)
 	config, err := InspectRLS(db, executor.metadata)
 	require.NoError(t, err)
 	found := false
@@ -117,9 +116,9 @@ func TestRLSIdentityStatementUsesTransactionalParameters(t *testing.T) {
 
 func TestRLSPreparedMarkerIsScopedToTransaction(t *testing.T) {
 	ctx := context.Background()
-	tx := &gorm.DB{}
+	tx := &sql.Tx{}
 	require.False(t, rlsPrepared(ctx, tx))
 	prepared := markRLSPrepared(ctx, tx)
 	require.True(t, rlsPrepared(prepared, tx))
-	require.False(t, rlsPrepared(prepared, &gorm.DB{}))
+	require.False(t, rlsPrepared(prepared, &sql.Tx{}))
 }

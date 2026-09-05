@@ -54,7 +54,7 @@ RETURNS SETOF bigint LANGUAGE SQL STABLE AS $$ SELECT a $$;
 CREATE PROCEDURE "Catalog Case".catalog_refresh(IN account_id bigint, INOUT status text)
 LANGUAGE plpgsql AS $$ BEGIN status := 'done'; END $$;
 `
-	require.NoError(t, db.Exec(fixture).Error)
+	testExec(t, db, fixture)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err)

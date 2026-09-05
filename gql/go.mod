@@ -20,8 +20,6 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/vektah/gqlparser/v2 v2.5.36
 	golang.org/x/sync v0.22.0
-	gorm.io/driver/postgres v1.6.0
-	gorm.io/gorm v1.31.2
 )
 
 require (
@@ -78,4 +76,5 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gorm.io/gorm v1.31.2 // indirect
 )

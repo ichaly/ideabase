@@ -94,7 +94,8 @@ func TestNullableMutationRootErrorContinuesButRollsBack(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	insert := func(ctx context.Context, name string) error {
-		return transactionFromContext(ctx).Exec("INSERT INTO users(name, email) VALUES (?, ?)", name, name+"@x").Error
+		_, err := transactionFromContext(ctx).ExecContext(ctx, "INSERT INTO users(name, email) VALUES ($1, $2)", name, name+"@x")
+		return err
 	}
 	require.NoError(t, executor.register(
 		NewResolver[Root, struct{}, string]("Mutation", "firstWrite", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) { return "first", insert(ctx, "first") }, Result("String")),
@@ -111,7 +112,7 @@ func TestNullableMutationRootErrorContinuesButRollsBack(t *testing.T) {
 	require.Len(t, reply.Errors, 1)
 	require.Equal(t, true, reply.Errors[0].Extensions["transactionRolledBack"])
 	var count int64
-	require.NoError(t, db.Raw("SELECT COUNT(*) FROM users WHERE name IN ('first', 'failed', 'last')").Scan(&count).Error)
+	require.NoError(t, testQueryRow(db, "SELECT COUNT(*) FROM users WHERE name IN ('first', 'failed', 'last')").Scan(&count))
 	require.Zero(t, count)
 }
 
@@ -120,7 +121,8 @@ func TestNonNullMutationRootErrorStopsAndRollsBack(t *testing.T) {
 	defer cleanup()
 	var afterCalls int
 	insert := func(ctx context.Context, name string) error {
-		return transactionFromContext(ctx).Exec("INSERT INTO users(name, email) VALUES (?, ?)", name, name+"@x").Error
+		_, err := transactionFromContext(ctx).ExecContext(ctx, "INSERT INTO users(name, email) VALUES ($1, $2)", name, name+"@x")
+		return err
 	}
 	require.NoError(t, executor.register(
 		NewResolver[Root, struct{}, string]("Mutation", "nnFirst", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) { return "first", insert(ctx, "nn-first") }, Result("String")),
@@ -137,6 +139,6 @@ func TestNonNullMutationRootErrorStopsAndRollsBack(t *testing.T) {
 	require.Zero(t, afterCalls)
 	require.Equal(t, true, reply.Errors[0].Extensions["transactionRolledBack"])
 	var count int64
-	require.NoError(t, db.Raw("SELECT COUNT(*) FROM users WHERE name IN ('nn-first', 'nn-fail')").Scan(&count).Error)
+	require.NoError(t, testQueryRow(db, "SELECT COUNT(*) FROM users WHERE name IN ('nn-first', 'nn-fail')").Scan(&count))
 	require.Zero(t, count)
 }

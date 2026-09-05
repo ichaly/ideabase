@@ -5,6 +5,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,8 +18,7 @@ import (
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/gql/transport"
 	"github.com/ichaly/ideabase/std"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // UpperCodec 展示业务自定义标量、Matcher主动认领字段和Baser复用String过滤器。
@@ -134,11 +134,15 @@ func demoDSN() string {
 
 // buildEngine 用统一入口装配完整引擎；Builder 是元数据、编译器与运行时的唯一组装点。
 // main与性能测试共用，保证基准跑的就是demo实际装配
-func buildEngine(db *gorm.DB) (*gql.Engine, error) {
-	return buildEngineMode(db, false)
+func buildEngine(db *gql.Database) (*gql.Engine, error) {
+	return buildEngineConfigured(db, false, nil)
 }
 
-func buildEngineMode(db *gorm.DB, production bool) (*gql.Engine, error) {
+func buildEngineMode(db *gql.Database, production bool) (*gql.Engine, error) {
+	return buildEngineConfigured(db, production, nil)
+}
+
+func buildEngineConfigured(db *gql.Database, production bool, observer gql.Observer) (*gql.Engine, error) {
 	// 配置：数据侧声明（搜索列等）——生产中可放config.yml，键名一致；
 	// resolver等行为侧声明走注册（NewResolver/NewBatch），不进配置
 	k, err := std.NewKonfig()
@@ -177,6 +181,9 @@ func buildEngineMode(db *gorm.DB, production bool) (*gql.Engine, error) {
 			return "v_" + strconv.FormatInt(time.Now().UnixNano(), 36), nil
 		}),
 	)
+	if err = builder.Observe(observer); err != nil {
+		return nil, err
+	}
 	if err = builder.Policy(gql.OperationPolicyProvider(func(ctx context.Context, _ gql.PolicyRequest) (gql.PolicyDecision, error) {
 		if denied, _ := ctx.Value(demoDenyKey{}).(bool); denied {
 			return gql.PolicyDecision{Allow: false}, nil
@@ -233,8 +240,9 @@ func demoContext(ctx context.Context, tenant int) context.Context {
 
 func main() {
 	// 1. 数据库连接 + 引擎装配
-	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
+	db, err := openDemoDB()
 	die(err)
+	defer db.Pool().Close()
 	engine, err := buildEngine(db)
 	die(err)
 
@@ -242,6 +250,23 @@ func main() {
 	addr := cmp.Or(os.Getenv("DEMO_HTTP_ADDR"), ":8080")
 	fmt.Printf("GraphQL服务: http://localhost%s/graphql （示例见 examples/README.md）\n", addr)
 	die(http.ListenAndServe(addr, newDemoHandler(engine)))
+}
+
+func openDemoDB() (*gql.Database, error) {
+	pool, err := sql.Open("pgx", demoDSN())
+	if err != nil {
+		return nil, fmt.Errorf("demo数据库不可用（先运行 docker compose up -d）: %w", err)
+	}
+	if err = pool.Ping(); err != nil {
+		_ = pool.Close()
+		return nil, fmt.Errorf("demo数据库无法连接（先运行 docker compose up -d）: %w", err)
+	}
+	db, err := gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(demoDSN()))
+	if err != nil {
+		_ = pool.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 // newDemoHandler 是真实 Demo 服务与 HTTP 验收测试共用的生产入口。

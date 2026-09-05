@@ -2,11 +2,11 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vektah/gqlparser/v2/gqlerror"
-	"gorm.io/gorm"
 )
 
 type errorCoder interface{ ErrorCode() string }
@@ -100,7 +100,7 @@ func (my *publicFailure) ErrorCode() string { return my.code }
 
 func mutationDefinitelyRolledBack(err error) bool {
 	var postgres *pgconn.PgError
-	return errors.As(err, &postgres) || errors.Is(err, gorm.ErrDuplicatedKey) || errors.Is(err, gorm.ErrForeignKeyViolated)
+	return errors.As(err, &postgres)
 }
 
 func safeFailure(err error) error {
@@ -110,13 +110,7 @@ func safeFailure(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return &publicFailure{"operation cancelled", "CANCELLED"}
 	}
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return &publicFailure{"resource conflicts with existing data", "CONFLICT"}
-	}
-	if errors.Is(err, gorm.ErrForeignKeyViolated) {
-		return &publicFailure{"referenced resource is invalid", "FOREIGN_KEY_VIOLATION"}
-	}
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &publicFailure{"resource not found", "NOT_FOUND"}
 	}
 	var postgres *pgconn.PgError

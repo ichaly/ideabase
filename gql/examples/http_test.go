@@ -11,24 +11,15 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/gql"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 func demoEngine(t *testing.T) *gql.Engine {
 	t.Helper()
-	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
+	db, err := openDemoDB()
 	if err != nil {
 		t.Fatalf("demo数据库不可用: %v（先运行 docker compose up -d）", err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("获取demo数据库连接失败: %v", err)
-	}
-	if err = sqlDB.Ping(); err != nil {
-		t.Fatalf("demo数据库无法连接: %v（先运行 docker compose up -d）", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
+	t.Cleanup(func() { _ = db.Pool().Close() })
 
 	engine, err := buildEngine(db)
 	if err != nil {
@@ -102,18 +93,11 @@ func TestDemoHTTPSubscriptionSendsRealSSEEvent(t *testing.T) {
 }
 
 func TestDemoProductionSafetyContract(t *testing.T) {
-	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
+	db, err := openDemoDB()
 	if err != nil {
 		t.Fatalf("demo数据库不可用: %v（先运行 docker compose up -d）", err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = sqlDB.Ping(); err != nil {
-		t.Fatalf("demo数据库无法连接: %v（先运行 docker compose up -d）", err)
-	}
-	defer sqlDB.Close()
+	defer db.Pool().Close()
 
 	engine, err := buildEngineMode(db, true)
 	if err != nil {
@@ -240,22 +224,15 @@ func TestDemoPolicyDenialIsNotAFalseSuccess(t *testing.T) {
 }
 
 func TestDemoSharedPostgresSecurityAndReplayState(t *testing.T) {
-	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
+	db, err := openDemoDB()
 	if err != nil {
 		t.Fatalf("demo数据库不可用: %v", err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
+	defer db.Pool().Close()
+	if _, err = db.Pool().ExecContext(context.Background(), gql.PostgresReplayDDL); err != nil {
 		t.Fatal(err)
 	}
-	defer sqlDB.Close()
-	if err = sqlDB.Ping(); err != nil {
-		t.Fatalf("demo数据库无法连接: %v", err)
-	}
-	if err = db.Exec(gql.PostgresReplayDDL).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err = db.Exec(gql.PostgresSecurityStateDDL).Error; err != nil {
+	if _, err = db.Pool().ExecContext(context.Background(), gql.PostgresSecurityStateDDL); err != nil {
 		t.Fatal(err)
 	}
 	first, err := gql.NewPostgresSecurityStateProvider(db)

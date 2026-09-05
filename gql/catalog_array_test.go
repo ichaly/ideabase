@@ -11,10 +11,10 @@ import (
 func TestPostgresArrayMutationRoundTrip(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`CREATE TABLE array_records (
+	testExec(t, db, `CREATE TABLE array_records (
 		id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 		tags text[] NOT NULL
-	)`).Error)
+	)`)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err)

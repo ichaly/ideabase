@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"github.com/vektah/gqlparser/v2/ast"
-	"gorm.io/gorm"
 )
 
 // ErrDatabaseUnavailable reports that a resolver was executed without a
@@ -38,7 +38,7 @@ type ExecutionContext struct {
 	hasIdentity         bool
 	selection           ast.SelectionSet
 	snapshotFingerprint string
-	database            *gorm.DB
+	database            *Database
 	invalidation        *invalidationState
 	coordinate          string
 	capability          Capability
@@ -89,7 +89,7 @@ func invalidationTables(ctx context.Context) []string {
 // withExecutionContext attaches the engine-owned execution view to ctx. The
 // identity is inherited from WithIdentity (or an existing execution view),
 // while selection, snapshot and database are supplied by the engine.
-func withExecutionContext(ctx context.Context, selection ast.SelectionSet, snapshotFingerprint string, database *gorm.DB, selected ...Capability) context.Context {
+func withExecutionContext(ctx context.Context, selection ast.SelectionSet, snapshotFingerprint string, database *Database, selected ...Capability) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -243,21 +243,24 @@ func (my ExecutionContext) PolicyDecision() (PolicyDecision, bool) {
 }
 
 // DB returns the request transaction when present, otherwise its base DB.
-func (my ExecutionContext) DB() *gorm.DB {
+func (my ExecutionContext) DB() DBTX {
 	if tx := transactionFromContext(my.ctx); tx != nil {
 		return tx
 	}
-	if my.database != nil && my.ctx != nil {
-		return my.database.WithContext(my.ctx)
+	if my.database != nil {
+		return my.database.Pool()
 	}
-	return my.database
+	return nil
 }
 
 // RequireDB is the explicit form for resolvers that cannot proceed without
 // the engine-owned request database or transaction.
-func (my ExecutionContext) RequireDB() (*gorm.DB, error) {
+func (my ExecutionContext) RequireDB() (DBTX, error) {
 	if database := my.DB(); database != nil {
 		return database, nil
 	}
 	return nil, ErrDatabaseUnavailable
 }
+
+var _ DBTX = (*sql.DB)(nil)
+var _ DBTX = (*sql.Tx)(nil)

@@ -7,11 +7,11 @@ import (
 	"sort"
 	"time"
 
+	sqldb "github.com/ichaly/ideabase/gql/database"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
 	"github.com/samber/lo"
-	"gorm.io/gorm"
 )
 
 const defaultCatalogTimeout = 30 * time.Second
@@ -19,7 +19,7 @@ const defaultCatalogTimeout = 30 * time.Second
 // baseLoader 只在包内复用，封装数据库元数据加载的主流程
 // 不对外暴露
 type baseLoader struct {
-	db  *gorm.DB
+	db  *sqldb.Connection
 	cfg *internal.Config
 }
 
@@ -45,7 +45,7 @@ func (my *baseLoader) loadMeta(h protocol.Hoster, query string, args []interface
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	rows, err := my.db.WithContext(ctx).Raw(query, args...).Rows()
+	rows, err := my.db.Pool().QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("执行元数据SQL失败: %w", err)
 	}

@@ -13,12 +13,12 @@ import (
 func TestPurgeAndAuditOutboxSharePostgresStatement(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`CREATE TABLE articles (
+	testExec(t, db, `CREATE TABLE articles (
 		id bigserial PRIMARY KEY, tenant_id text NOT NULL, title text NOT NULL,
 		deleted_at timestamptz, deleted_by text
-	)`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO articles (tenant_id,title,deleted_at,deleted_by)
-		VALUES ('tenant-a','expired',CURRENT_TIMESTAMP,'old-actor')`).Error)
+	)`)
+	testExec(t, db, `INSERT INTO articles (tenant_id,title,deleted_at,deleted_by)
+		VALUES ('tenant-a','expired',CURRENT_TIMESTAMP,'old-actor')`)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
@@ -37,7 +37,7 @@ func TestPurgeAndAuditOutboxSharePostgresStatement(t *testing.T) {
 	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-a", Actor: "actor-a", RequestID: "request-a", PolicyRevision: 7})
 	require.NoError(t, err)
 	ctx := WithIdentity(context.Background(), identity)
-	require.NoError(t, db.Exec(`INSERT INTO articles (tenant_id,title) VALUES ('tenant-a','a'),('tenant-a','b'),('tenant-a','c')`).Error)
+	testExec(t, db, `INSERT INTO articles (tenant_id,title) VALUES ('tenant-a','a'),('tenant-a','b'),('tenant-a','c')`)
 	page := executor.run(ctx, `query { articleConnection(first: 1, sort: [{id: ASC}]) {
 		links: edges { token: cursor item: node { id title } } info: pageInfo { hasNext end } count: totalCount
 	} }`, nil, "")
@@ -58,18 +58,18 @@ func TestPurgeAndAuditOutboxSharePostgresStatement(t *testing.T) {
 	reply := executor.run(ctx, mutation, nil, "")
 	require.NotEmpty(t, reply.Errors, "缺失outbox时purge必须失败")
 	var rows int64
-	require.NoError(t, db.Raw(`SELECT COUNT(*) FROM articles WHERE id=1`).Scan(&rows).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM articles WHERE id=1`).Scan(&rows))
 	require.EqualValues(t, 1, rows, "outbox失败必须回滚物理删除")
 
-	require.NoError(t, db.Exec(pgsql.AuditOutboxDDL).Error)
+	testExec(t, db, pgsql.AuditOutboxDDL)
 	reply = executor.run(ctx, mutation, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.NoError(t, db.Raw(`SELECT COUNT(*) FROM articles WHERE id=1`).Scan(&rows).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM articles WHERE id=1`).Scan(&rows))
 	require.Zero(t, rows)
 	var tenant, actor, action, resource, request, snapshot string
 	var revision, affected int64
-	require.NoError(t, db.Raw(`SELECT tenant,actor,action,resource,request_id,snapshot,policy_revision,affected_count
-		FROM gql_audit_outbox WHERE event_key='request-a:tenant-a:purge:Article:0'`).Row().Scan(&tenant, &actor, &action, &resource, &request, &snapshot, &revision, &affected))
+	require.NoError(t, testQueryRow(db, `SELECT tenant,actor,action,resource,request_id,snapshot,policy_revision,affected_count
+		FROM gql_audit_outbox WHERE event_key='request-a:tenant-a:purge:Article:0'`).Scan(&tenant, &actor, &action, &resource, &request, &snapshot, &revision, &affected))
 	require.Equal(t, []string{"tenant-a", "actor-a", "purge", "Article", "request-a"}, []string{tenant, actor, action, resource, request})
 	require.NotEmpty(t, snapshot)
 	require.EqualValues(t, 7, revision)
@@ -78,14 +78,14 @@ func TestPurgeAndAuditOutboxSharePostgresStatement(t *testing.T) {
 	reply = executor.run(ctx, mutation, nil, "")
 	require.Empty(t, reply.Errors)
 	require.EqualValues(t, 0, reply.Data["purgeArticles"].(map[string]interface{})["affectedCount"])
-	require.NoError(t, db.Raw(`SELECT COUNT(*) FROM gql_audit_outbox`).Scan(&rows).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM gql_audit_outbox`).Scan(&rows))
 	require.EqualValues(t, 1, rows, "同一request重试不得产生重复审计事件")
 
 	var otherID int64
-	require.NoError(t, db.Raw(`INSERT INTO articles (tenant_id,title,deleted_at) VALUES ('tenant-a','other',CURRENT_TIMESTAMP) RETURNING id`).Scan(&otherID).Error)
+	require.NoError(t, testQueryRow(db, `INSERT INTO articles (tenant_id,title,deleted_at) VALUES ('tenant-a','other',CURRENT_TIMESTAMP) RETURNING id`).Scan(&otherID))
 	reply = executor.run(ctx, `mutation($id: ID) { purgeArticles(where: { id: { eq: $id } }) { affectedCount } }`, map[string]any{"id": otherID}, "")
 	require.NotEmpty(t, reply.Errors, "同一request不得把另一个删除目标折叠为已审计")
-	require.NoError(t, db.Raw(`SELECT COUNT(*) FROM articles WHERE id=?`, otherID).Scan(&rows).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM articles WHERE id=$1`, otherID).Scan(&rows))
 	require.EqualValues(t, 1, rows, "审计键冲突必须回滚物理删除")
 
 	k2, err := std.NewKonfig()
@@ -103,8 +103,8 @@ func TestPurgeAndAuditOutboxSharePostgresStatement(t *testing.T) {
 func TestProductionBuildRequiresPurgeAuditMigration(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`CREATE TABLE articles (id bigserial PRIMARY KEY, deleted_at timestamptz)`).Error)
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, `CREATE TABLE articles (id bigserial PRIMARY KEY, deleted_at timestamptz)`)
+	testExec(t, db, PostgresSecurityStateDDL)
 	security, err := NewPostgresSecurityStateProvider(db)
 	require.NoError(t, err)
 	k, err := std.NewKonfig()
@@ -133,9 +133,9 @@ func TestProductionMetadataRejectsDisabledCostGuard(t *testing.T) {
 func TestProductionBuildRejectsMalformedPurgeAuditMigration(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`CREATE TABLE articles (id bigserial PRIMARY KEY, deleted_at timestamptz)`).Error)
-	require.NoError(t, db.Exec(`CREATE TABLE gql_audit_outbox (event_key text PRIMARY KEY)`).Error)
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, `CREATE TABLE articles (id bigserial PRIMARY KEY, deleted_at timestamptz)`)
+	testExec(t, db, `CREATE TABLE gql_audit_outbox (event_key text PRIMARY KEY)`)
+	testExec(t, db, PostgresSecurityStateDDL)
 	security, err := NewPostgresSecurityStateProvider(db)
 	require.NoError(t, err)
 	k, err := std.NewKonfig()

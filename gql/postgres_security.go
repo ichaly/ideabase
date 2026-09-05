@@ -2,14 +2,13 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	stdjson "encoding/json"
 	"fmt"
 	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"gorm.io/gorm"
 )
 
 // PostgresSecurityStateDDL creates the single shared revocation snapshot used
@@ -46,13 +45,13 @@ type postgresSecuritySnapshot struct {
 }
 
 type PostgresSecurityStateProvider struct {
-	db           *gorm.DB
+	db           *Database
 	maxStaleness time.Duration
 	state        atomic.Pointer[postgresSecuritySnapshot]
 	refreshMu    sync.Mutex
 }
 
-func NewPostgresSecurityStateProvider(db *gorm.DB, options ...PostgresSecurityStateOption) (*PostgresSecurityStateProvider, error) {
+func NewPostgresSecurityStateProvider(db *Database, options ...PostgresSecurityStateOption) (*PostgresSecurityStateProvider, error) {
 	if db == nil {
 		return nil, fmt.Errorf("postgres security state requires a database")
 	}
@@ -75,16 +74,17 @@ func (provider *PostgresSecurityStateProvider) Ready(ctx context.Context) error 
 	provider.refreshMu.Lock()
 	defer provider.refreshMu.Unlock()
 	var loaded *postgresSecuritySnapshot
-	err := postgresPreflight(ctx, provider.db, "security state", func(tx *gorm.DB) error {
+	err := postgresPreflight(ctx, provider.db, "security state", func(tx *sql.Tx) error {
 		var err error
-		if loaded, err = loadSecuritySnapshot(tx); err != nil {
+		if loaded, err = loadSecuritySnapshot(ctx, tx); err != nil {
 			return err
 		}
-		result := tx.Exec(`UPDATE gql_security_state SET revision=revision WHERE singleton`)
-		if result.Error != nil {
-			return result.Error
+		result, err := tx.ExecContext(ctx, `UPDATE gql_security_state SET revision=revision WHERE singleton`)
+		if err != nil {
+			return err
 		}
-		if result.RowsAffected != 1 {
+		affected, err := result.RowsAffected()
+		if err != nil || affected != 1 {
 			return fmt.Errorf("singleton row is unavailable")
 		}
 		return nil
@@ -114,17 +114,17 @@ func (provider *PostgresSecurityStateProvider) Replace(ctx context.Context, revi
 		return fmt.Errorf("encode security state: %w", err)
 	}
 	var published *postgresSecuritySnapshot
-	err = provider.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	tx, err := provider.db.Pool().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	err = func() error {
 		var current struct {
 			Revision uint64
 			Tenants  []byte
 		}
-		result := tx.Raw(`SELECT revision, tenants FROM gql_security_state WHERE singleton FOR UPDATE`).Scan(&current)
-		if result.Error != nil {
-			return fmt.Errorf("load security state: %w", result.Error)
-		}
-		if result.RowsAffected != 1 {
-			return fmt.Errorf("security state singleton row is unavailable")
+		if err := tx.QueryRowContext(ctx, `SELECT revision, tenants FROM gql_security_state WHERE singleton FOR UPDATE`).Scan(&current.Revision, &current.Tenants); err != nil {
+			return fmt.Errorf("load security state: %w", err)
 		}
 		if revision < current.Revision {
 			return fmt.Errorf("stale revocation revision %d", revision)
@@ -140,16 +140,22 @@ func (provider *PostgresSecurityStateProvider) Replace(ctx context.Context, revi
 			}
 			return fmt.Errorf("conflicting revocation revision %d", revision)
 		}
-		result = tx.Exec(`UPDATE gql_security_state SET revision = ?, tenants = ?::jsonb WHERE singleton`, revision, string(encoded))
-		if result.Error != nil {
-			return result.Error
+		result, err := tx.ExecContext(ctx, `UPDATE gql_security_state SET revision = $1, tenants = $2::jsonb WHERE singleton`, revision, string(encoded))
+		if err != nil {
+			return err
 		}
-		if result.RowsAffected != 1 {
+		affected, err := result.RowsAffected()
+		if err != nil || affected != 1 {
 			return fmt.Errorf("security state singleton row is unavailable")
 		}
 		published = &postgresSecuritySnapshot{revision: revision, tenants: cloneTenantStates(tenants), loadedAt: time.Now()}
 		return nil
-	})
+	}()
+	if err != nil {
+		_ = tx.Rollback()
+	} else {
+		err = tx.Commit()
+	}
 	if err == nil && published != nil {
 		provider.state.Store(published)
 	}
@@ -199,19 +205,18 @@ func (provider *PostgresSecurityStateProvider) snapshot(ctx context.Context) (*p
 }
 
 func (provider *PostgresSecurityStateProvider) loadSnapshot(ctx context.Context) (*postgresSecuritySnapshot, error) {
-	return loadSecuritySnapshot(provider.db.WithContext(ctx))
+	return loadSecuritySnapshot(ctx, provider.db.Pool())
 }
 
-func loadSecuritySnapshot(db *gorm.DB) (*postgresSecuritySnapshot, error) {
+func loadSecuritySnapshot(ctx context.Context, db DBTX) (*postgresSecuritySnapshot, error) {
 	var state struct {
 		Revision uint64
 		Tenants  []byte
 	}
-	result := db.Raw(`SELECT revision, tenants FROM gql_security_state WHERE singleton`).Scan(&state)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := db.QueryRowContext(ctx, `SELECT revision, tenants FROM gql_security_state WHERE singleton`).Scan(&state.Revision, &state.Tenants); err != nil {
+		return nil, err
 	}
-	if result.RowsAffected != 1 || len(state.Tenants) == 0 {
+	if len(state.Tenants) == 0 {
 		return nil, fmt.Errorf("singleton row is unavailable")
 	}
 	var tenants map[string]TenantSecurityState

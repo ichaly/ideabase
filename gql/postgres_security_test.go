@@ -2,41 +2,17 @@ package gql
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm/logger"
 )
-
-type postgresSecuritySelectCounter struct {
-	logger.Interface
-	mu      sync.Mutex
-	selects int
-}
-
-func (counter *postgresSecuritySelectCounter) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
-	sql, _ := fc()
-	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "SELECT") {
-		counter.mu.Lock()
-		counter.selects++
-		counter.mu.Unlock()
-	}
-	counter.Interface.Trace(ctx, begin, fc, err)
-}
-
-func (counter *postgresSecuritySelectCounter) Count() int {
-	counter.mu.Lock()
-	defer counter.mu.Unlock()
-	return counter.selects
-}
 
 func TestPostgresSecurityStateIsSharedAcrossInstances(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, PostgresSecurityStateDDL)
 	one, err := NewPostgresSecurityStateProvider(db)
 	require.NoError(t, err)
 	two, err := NewPostgresSecurityStateProvider(db, WithPostgresSecurityMaxStaleness(time.Millisecond))
@@ -60,7 +36,7 @@ func TestPostgresSecurityStateIsSharedAcrossInstances(t *testing.T) {
 func TestPostgresSecurityStateUsesBoundedLocalSnapshot(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, PostgresSecurityStateDDL)
 	one, err := NewPostgresSecurityStateProvider(db, WithPostgresSecurityMaxStaleness(20*time.Millisecond))
 	require.NoError(t, err)
 	two, err := NewPostgresSecurityStateProvider(db, WithPostgresSecurityMaxStaleness(20*time.Millisecond))
@@ -82,7 +58,7 @@ func TestPostgresSecurityStateUsesBoundedLocalSnapshot(t *testing.T) {
 func TestPostgresSecurityStateRefreshesWithExactlyOneSelectPerWindow(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, PostgresSecurityStateDDL)
 	one, err := NewPostgresSecurityStateProvider(db, WithPostgresSecurityMaxStaleness(10*time.Millisecond))
 	require.NoError(t, err)
 	two, err := NewPostgresSecurityStateProvider(db, WithPostgresSecurityMaxStaleness(10*time.Millisecond))
@@ -90,18 +66,18 @@ func TestPostgresSecurityStateRefreshesWithExactlyOneSelectPerWindow(t *testing.
 	identity, err := NewIdentity(IdentityInput{Tenant: "acme", Subject: "user"})
 	require.NoError(t, err)
 	require.NoError(t, one.Replace(context.Background(), 1, map[string]TenantSecurityState{"acme": {}}))
-	counter := &postgresSecuritySelectCounter{Interface: db.Logger}
-	db.Logger = counter
 	time.Sleep(15 * time.Millisecond)
 	require.NoError(t, two.Check(context.Background(), identity, TenantRoute{Tenant: "acme"}))
+	refreshed := two.state.Load()
+	require.EqualValues(t, 1, refreshed.revision)
 	require.NoError(t, two.Check(context.Background(), identity, TenantRoute{Tenant: "acme"}))
-	require.Equal(t, 1, counter.Count(), "a stale snapshot refresh is one SELECT and subsequent checks are local")
+	require.Same(t, refreshed, two.state.Load(), "subsequent checks within the window are local")
 }
 
 func TestPostgresSecurityStateConcurrentChecksAndReplaceAreRaceFree(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db, WithPostgresSecurityMaxStaleness(time.Millisecond))
 	require.NoError(t, err)
 	identity, err := NewIdentity(IdentityInput{Tenant: "acme", Subject: "user"})
@@ -130,15 +106,13 @@ func TestPostgresSecurityStateConcurrentChecksAndReplaceAreRaceFree(t *testing.T
 func TestPostgresSecurityStateFailsClosedAfterSnapshotExpiresOnDatabaseFailure(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db, WithPostgresSecurityMaxStaleness(10*time.Millisecond))
 	require.NoError(t, err)
 	identity, err := NewIdentity(IdentityInput{Tenant: "acme", Subject: "user"})
 	require.NoError(t, err)
 	require.NoError(t, provider.Replace(context.Background(), 1, map[string]TenantSecurityState{"acme": {}}))
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	require.NoError(t, sqlDB.Close())
+	require.NoError(t, db.Pool().Close())
 	require.NoError(t, provider.Check(context.Background(), identity, TenantRoute{Tenant: "acme"}))
 	time.Sleep(20 * time.Millisecond)
 	require.ErrorContains(t, provider.Check(context.Background(), identity, TenantRoute{Tenant: "acme"}), "unavailable")
@@ -147,7 +121,7 @@ func TestPostgresSecurityStateFailsClosedAfterSnapshotExpiresOnDatabaseFailure(t
 func TestPostgresSecurityStateRejectsStaleAndConflictingRevision(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db)
 	require.NoError(t, err)
 	require.NoError(t, provider.Replace(context.Background(), 2, map[string]TenantSecurityState{"acme": {}}))
@@ -159,7 +133,7 @@ func TestPostgresSecurityStateRejectsStaleAndConflictingRevision(t *testing.T) {
 func TestPostgresSecurityStateFailsClosedWithoutMigration(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`DROP TABLE IF EXISTS gql_security_state, gql_security_revision`).Error)
+	testExec(t, db, `DROP TABLE IF EXISTS gql_security_state, gql_security_revision`)
 	_, err := NewPostgresSecurityStateProvider(db)
 	require.ErrorContains(t, err, "migration")
 }
@@ -167,9 +141,9 @@ func TestPostgresSecurityStateFailsClosedWithoutMigration(t *testing.T) {
 func TestPostgresSecurityStateFailsClosedWithoutSingleton(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`CREATE TABLE gql_security_state (
+	testExec(t, db, `CREATE TABLE gql_security_state (
 		singleton boolean PRIMARY KEY, revision bigint NOT NULL, tenants jsonb NOT NULL
-	)`).Error)
+	)`)
 	_, err := NewPostgresSecurityStateProvider(db)
 	require.ErrorContains(t, err, "migration")
 }
@@ -177,10 +151,10 @@ func TestPostgresSecurityStateFailsClosedWithoutSingleton(t *testing.T) {
 func TestPostgresSecurityStateFailsClosedAfterSingletonDeletion(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db, WithPostgresSecurityMaxStaleness(5*time.Millisecond))
 	require.NoError(t, err)
-	require.NoError(t, db.Exec(`DELETE FROM gql_security_state WHERE singleton`).Error)
+	testExec(t, db, `DELETE FROM gql_security_state WHERE singleton`)
 	time.Sleep(10 * time.Millisecond)
 	_, err = provider.Revision(context.Background())
 	require.Error(t, err)

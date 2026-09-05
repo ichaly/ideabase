@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -9,7 +10,6 @@ import (
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
-	"gorm.io/gorm"
 )
 
 type mutationCountDialect struct {
@@ -92,9 +92,9 @@ func TestMutationFailureRollsBackEarlierRootFields(t *testing.T) {
 
 	fail := NewResolver("Mutation", "failMutation", "测试事务回滚",
 		func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
-			if err := transactionFromContext(ctx).Exec(
-				"INSERT INTO users(name, email) VALUES(?, ?)", "Resolver", "resolver-rollback@x.com",
-			).Error; err != nil {
+			if _, err := transactionFromContext(ctx).ExecContext(ctx,
+				"INSERT INTO users(name, email) VALUES($1, $2)", "Resolver", "resolver-rollback@x.com",
+			); err != nil {
 				return false, err
 			}
 			return false, errors.New("stop mutation")
@@ -108,9 +108,8 @@ func TestMutationFailureRollsBackEarlierRootFields(t *testing.T) {
 
 	require.NotEmpty(t, reply.Errors)
 	var count int64
-	require.NoError(t, db.Table("users").Where("email IN ?", []string{
-		"rollback@x.com", "resolver-rollback@x.com",
-	}).Count(&count).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM users WHERE email IN ($1, $2)`,
+		"rollback@x.com", "resolver-rollback@x.com").Scan(&count))
 	require.Zero(t, count, "失败必须同时回滚默认CRUD和Resolver写入")
 }
 
@@ -118,10 +117,10 @@ func TestRootTransactionTreatsRollbackConnectionLossAsIndeterminate(t *testing.T
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 	sentinel := errors.New("mutation failed")
-	err, rolledBack := runRootTransaction(context.Background(), db, nil, func(tx *gorm.DB) error {
+	err, rolledBack := runRootTransaction(context.Background(), db, nil, func(tx *sql.Tx) error {
 		var pid int
-		require.NoError(t, tx.Raw(`SELECT pg_backend_pid()`).Scan(&pid).Error)
-		require.NoError(t, db.Exec(`SELECT pg_terminate_backend(?)`, pid).Error)
+		require.NoError(t, tx.QueryRowContext(context.Background(), `SELECT pg_backend_pid()`).Scan(&pid))
+		testExec(t, db, `SELECT pg_terminate_backend($1)`, pid)
 		return sentinel
 	})
 	require.Error(t, err)
@@ -138,9 +137,10 @@ func TestMutationResolverSharesTransactionWithDefaultFields(t *testing.T) {
 			if tx == nil {
 				return false, errors.New("mutation transaction missing")
 			}
-			return true, tx.Exec(
-				"INSERT INTO users(name, email) VALUES(?, ?)", "Resolver", "resolver-tx@x.com",
-			).Error
+			_, err := tx.ExecContext(ctx,
+				"INSERT INTO users(name, email) VALUES($1, $2)", "Resolver", "resolver-tx@x.com",
+			)
+			return err == nil, err
 		})
 	require.NoError(t, executor.register(seed))
 
@@ -242,7 +242,7 @@ func TestNestedMutationReusesOuterTransaction(t *testing.T) {
 	}`, nil, "")
 	require.NotEmpty(t, reply.Errors)
 	var count int64
-	require.NoError(t, db.Table("users").Where("email = ?", "nested@x.com").Count(&count).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM users WHERE email = $1`, "nested@x.com").Scan(&count))
 	require.Zero(t, count, "嵌套mutation必须随外层事务一起回滚")
 }
 
@@ -268,8 +268,8 @@ func TestCaughtNestedMutationFailureRollsBackOnlyItsSavepoint(t *testing.T) {
 	}`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	var inner, outer int64
-	require.NoError(t, db.Table("users").Where("email = ?", "inner-savepoint@x.com").Count(&inner).Error)
-	require.NoError(t, db.Table("users").Where("email = ?", "outer-savepoint@x.com").Count(&outer).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM users WHERE email = $1`, "inner-savepoint@x.com").Scan(&inner))
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM users WHERE email = $1`, "outer-savepoint@x.com").Scan(&outer))
 	require.Zero(t, inner)
 	require.EqualValues(t, 1, outer)
 }

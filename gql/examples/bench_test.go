@@ -11,24 +11,15 @@ import (
 
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/transport"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 // benchEngine 连demo库并装配引擎；库不可达则直接失败
 func benchEngine(b *testing.B) *gql.Engine {
-	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
+	db, err := openDemoDB()
 	if err != nil {
 		b.Fatalf("demo数据库不可用（先运行 docker compose up -d）: %v", err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		b.Fatalf("获取demo数据库连接失败: %v", err)
-	}
-	if err = sqlDB.Ping(); err != nil {
-		b.Fatalf("demo数据库无法连接（先运行 docker compose up -d）: %v", err)
-	}
-	b.Cleanup(func() { _ = sqlDB.Close() })
+	b.Cleanup(func() { _ = db.Pool().Close() })
 	executor, err := buildEngine(db)
 	if err != nil {
 		b.Fatalf("引擎装配失败: %v", err)

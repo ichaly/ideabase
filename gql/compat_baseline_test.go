@@ -139,7 +139,7 @@ func TestCompatCorpusKeepsDataAndErrorGoldens(t *testing.T) {
 	require.NoError(t, stdjson.Unmarshal(golden, &fixture))
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.NoError(t, db.Exec(`INSERT INTO users(name,email) VALUES ('Alice','alice@example.com')`).Error)
+	testExec(t, db, `INSERT INTO users(name,email) VALUES ('Alice','alice@example.com')`)
 	operation, err := os.ReadFile(filepath.Join("testdata", "compat", "operation.graphql"))
 	require.NoError(t, err)
 	valid, err := stdjson.Marshal(executor.run(context.Background(), string(operation), nil, ""))

@@ -140,7 +140,7 @@ func TestSubscriptionRetriesUntilDatabaseRecovers(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("missing initial database error")
 	}
-	require.NoError(t, db.Exec(`CREATE VIEW retry_users AS SELECT * FROM users`).Error)
+	testExec(t, db, `CREATE VIEW retry_users AS SELECT * FROM users`)
 	select {
 	case reply := <-events:
 		reply = decodeSubscriptionReply(t, reply)
@@ -267,7 +267,7 @@ func TestSubscribeShared(t *testing.T) {
 func TestSubscribeScope(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`ALTER TABLE users ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
+	testExec(t, db, `ALTER TABLE users ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
@@ -285,7 +285,7 @@ func TestSubscribeScope(t *testing.T) {
 	require.NoError(t, err)
 
 	// 租户2 预存数据——租户1 的订阅不应看到
-	require.NoError(t, db.Exec(`INSERT INTO users (name, email, tenant_id) VALUES ('t2', 't2@x.com', 2)`).Error)
+	testExec(t, db, `INSERT INTO users (name, email, tenant_id) VALUES ('t2', 't2@x.com', 2)`)
 
 	ctx, cancel := context.WithTimeout(WithScope(context.Background(), map[string]any{"tenant": 1}), 15*time.Second)
 	defer cancel()

@@ -32,6 +32,10 @@ Query、Mutation 和实体字段统一注册 `Resolver`。Mutation 业务代码�
 连接并继续传给 service/repository；捕获全局
 `*gorm.DB` 或在 service 内另开事务不会加入当前 GraphQL Mutation 的原子边界。
 
+引擎入口已改为 `*gql.Database`。纯 `database/sql` 应用直接包装现有 `*sql.DB`；GORM
+应用先调用 `gormDB.DB()` 取出同一个连接池，再传给 `gql.NewDatabase`。Resolver 内部使用
+`execution.RequireDB()` 返回的 `gql.DBTX`，从而自动复用当前 `*sql.Tx`。
+
 跨 namespace Mutation 没有分布式事务：字段按文档顺序执行，响应的 commit metadata
 报告已提交或状态未知的 namespace，引擎不会重放可能已经提交的操作。
 

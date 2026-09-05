@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
@@ -9,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
-	"gorm.io/gorm"
 )
 
 type invalidationRecorder struct {
@@ -27,7 +27,9 @@ func TestExecutionContextExposesTrustedRequestView(t *testing.T) {
 	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-a"})
 	require.NoError(t, err)
 	deadline := time.Now().Add(time.Minute)
-	base := &gorm.DB{Config: &gorm.Config{}, Statement: &gorm.Statement{Context: context.Background()}}
+	pool := &sql.DB{}
+	base, err := NewDatabase(pool, "postgres")
+	require.NoError(t, err)
 	selection := ast.SelectionSet{&ast.Field{Name: "users"}}
 	ctx, cancel := context.WithDeadline(WithIdentity(context.Background(), identity), deadline)
 	defer cancel()
@@ -41,10 +43,10 @@ func TestExecutionContextExposesTrustedRequestView(t *testing.T) {
 	gotDeadline, ok := execution.Deadline()
 	require.True(t, ok)
 	require.WithinDuration(t, deadline, gotDeadline, time.Millisecond)
-	require.Same(t, ctx, execution.DB().Statement.Context)
+	require.Same(t, pool, execution.DB())
 	database, err := execution.RequireDB()
 	require.NoError(t, err)
-	require.Same(t, ctx, database.Statement.Context)
+	require.Same(t, pool, database)
 }
 
 func TestExecutionContextSelectionIsDetachedFromCachedAST(t *testing.T) {
@@ -67,7 +69,9 @@ func TestExecutionContextSelectionIsDetachedFromCachedAST(t *testing.T) {
 }
 
 func TestExecutionContextDBPrefersTransaction(t *testing.T) {
-	base, tx := &gorm.DB{}, &gorm.DB{}
+	pool, tx := &sql.DB{}, &sql.Tx{}
+	base, err := NewDatabase(pool, "postgres")
+	require.NoError(t, err)
 	ctx := withExecutionContext(context.Background(), nil, "", base)
 	ctx = context.WithValue(ctx, transactionKey{}, tx)
 
@@ -145,7 +149,7 @@ func TestInvalidationPublishesOnlyAfterOwnedTransactionCommit(t *testing.T) {
 	recorder := &invalidationRecorder{}
 	ctx := withInvalidationState(context.Background())
 
-	err, rolledBack := runRootTransaction(ctx, db, recorder, func(tx *gorm.DB) error {
+	err, rolledBack := runRootTransaction(ctx, db, recorder, func(tx *sql.Tx) error {
 		execution := context.WithValue(ctx, transactionKey{}, tx)
 		execution = context.WithValue(execution, engineMutationTransactionKey{}, true)
 		view, _ := ExecutionContextFromContext(withExecutionContext(execution, nil, "fp", db))
@@ -157,7 +161,7 @@ func TestInvalidationPublishesOnlyAfterOwnedTransactionCommit(t *testing.T) {
 
 	recorder.tables = nil
 	ctx = withInvalidationState(context.Background())
-	err, rolledBack = runRootTransaction(ctx, db, recorder, func(tx *gorm.DB) error {
+	err, rolledBack = runRootTransaction(ctx, db, recorder, func(tx *sql.Tx) error {
 		execution := context.WithValue(ctx, transactionKey{}, tx)
 		execution = context.WithValue(execution, engineMutationTransactionKey{}, true)
 		view, _ := ExecutionContextFromContext(withExecutionContext(execution, nil, "fp", db))

@@ -35,12 +35,16 @@ GraphQL 请求
 
 ```go
 import (
-    _ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 空白导入自注册PostgreSQL方言
-    "github.com/ichaly/ideabase/gql/transport"
+	"database/sql"
+	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 空白导入自注册PostgreSQL方言
+	"github.com/ichaly/ideabase/gql/transport"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+pool, _ := sql.Open("pgx", dsn)
+db, _ := gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(dsn))
 k, _ := std.NewKonfig()         // 配置中为生产实体声明 permissions
-builder := gql.New(k, db)       // db: *gorm.DB，自动加载表结构与外键关系
+builder := gql.New(k, db)       // 复用 *sql.DB 连接池，自动加载表结构与外键关系
 builder.LoadDocuments("queries")
 engine, err := builder.Build()  // 构建一次 capability snapshot，随后冻结
 if err != nil { log.Fatal(err) }
@@ -273,8 +277,12 @@ Mutation 根 Resolver 会在引擎事务中执行；Resolver 统一先调用
 `execution, ok := gql.ExecutionContextFromContext(ctx)`，再通过 `execution.RequireDB()` 取得
 request-scoped 连接，它会优先返回当前事务。同一只读视图还提供 identity、selection、
 deadline、snapshot fingerprint、scope、route、policy decision、capability 和 coordinate。
-无数据库执行器时 `RequireDB` 返回明确错误。直接捕获全局 `*gorm.DB` 的旧写法无法
+无数据库执行器时 `RequireDB` 返回明确错误。直接捕获全局数据库句柄的旧写法无法
 自动加入引擎事务，需要把事务连接继续传给 service/repository。
+
+已有 GORM 应用无需创建第二个连接池：调用 `pool, err := gormDB.DB()` 取得底层
+`*sql.DB`，再用 `gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(dsn))` 构建边界即可。
+GQL 不依赖 GORM，连接池的生命周期仍由应用负责。
 自定义 Mutation 修改了 CDC 无法观察的外部状态时，调用
 `execution.Invalidate("table")` 登记刷新；引擎只在自有事务成功提交后去重发布，回滚和外部
 事务不会误唤醒。需要 SQL 与后处理 Resolver 共享一致读快照时，执行入口传

@@ -11,7 +11,6 @@ import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 // TestHostsNestedArrays 宿主拍平：连续两层数组段（一对多里嵌一对多）须收齐全部叶子宿主。
@@ -308,18 +307,20 @@ type signUpReq struct {
 
 // newSignUpResolver 编排型根Resolver：建号返回id，引擎按选择集回查补全；
 // 返回类型int64本推导为Int，Result选项覆盖为实体User触发回查
-func newSignUpResolver(db *gorm.DB) Resolver {
+func newSignUpResolver(db *Database) Resolver {
 	return NewResolver("Mutation", "signUp", "建号并回查主档", func(ctx context.Context, _ Root, req signUpReq) (int64, error) {
 		var id int64
-		err := db.WithContext(ctx).
-			Raw("INSERT INTO users(name, email) VALUES(?, ?) RETURNING id", req.Name, req.Email).
-			Scan(&id).Error
+		var database DBTX = db.Pool()
+		if execution, ok := ExecutionContextFromContext(ctx); ok && execution.DB() != nil {
+			database = execution.DB()
+		}
+		err := database.QueryRowContext(ctx, "INSERT INTO users(name, email) VALUES($1, $2) RETURNING id", req.Name, req.Email).Scan(&id)
 		return id, err
 	}, Result("User"))
 }
 
 // setupRootResolverExecutor 与setupTestExecutor同构，但透出db供Resolver闭包使用
-func setupRootResolverExecutor(t *testing.T) (*Engine, *gorm.DB, func()) {
+func setupRootResolverExecutor(t *testing.T) (*Engine, *Database, func()) {
 	return newTestExecutor(t, nil)
 }
 
@@ -373,21 +374,11 @@ func TestMixedQueryRootsBatchDefaultSQLOnce(t *testing.T) {
 	executor, _, cleanup := setupRootResolverExecutor(t)
 	defer cleanup()
 	var queries atomic.Int32
-	queryName := "test:mixed-root-query-count"
-	rawName := "test:mixed-root-raw-count"
-	rowName := "test:mixed-root-row-count"
-	require.NoError(t, executor.database.Callback().Raw().Before("gorm:raw").Register(rawName, func(*gorm.DB) {
-		queries.Add(1)
-	}))
-	defer executor.database.Callback().Raw().Remove(rawName)
-	require.NoError(t, executor.database.Callback().Row().Before("gorm:row").Register(rowName, func(*gorm.DB) {
-		queries.Add(1)
-	}))
-	defer executor.database.Callback().Row().Remove(rowName)
-	require.NoError(t, executor.database.Callback().Query().Before("gorm:query").Register(queryName, func(*gorm.DB) {
-		queries.Add(1)
-	}))
-	defer executor.database.Callback().Query().Remove(queryName)
+	executor.observer = testObserverFunc(func(_ context.Context, observation Observation) {
+		if observation.Phase == PhaseDatabase {
+			queries.Add(1)
+		}
+	})
 	require.NoError(t, executor.register(pingResolver()))
 	reply := executor.run(context.Background(), `query { ping(msg: "x") users { total } posts { total } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
@@ -512,18 +503,18 @@ type LookupRecord struct {
 func TestRootResolverEnrichesCompositeKeyEntity(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`CREATE TABLE memberships (
+	testExec(t, db, `CREATE TABLE memberships (
 		tenant_id text NOT NULL,
 		code text NOT NULL,
 		value text NOT NULL,
 		PRIMARY KEY (tenant_id, code)
-	)`).Error)
-	require.NoError(t, db.Exec(`CREATE TABLE lookup_records (
+	)`)
+	testExec(t, db, `CREATE TABLE lookup_records (
 		user_id bigint PRIMARY KEY,
 		value text NOT NULL
-	)`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO memberships VALUES ('acme', 'admin', 'resolved')`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO lookup_records VALUES (1, 'single-resolved')`).Error)
+	)`)
+	testExec(t, db, `INSERT INTO memberships VALUES ('acme', 'admin', 'resolved')`)
+	testExec(t, db, `INSERT INTO lookup_records VALUES (1, 'single-resolved')`)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err)

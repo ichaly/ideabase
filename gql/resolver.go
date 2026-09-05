@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
@@ -17,7 +18,6 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"golang.org/x/sync/errgroup"
-	"gorm.io/gorm"
 )
 
 var errRootTransactionRollback = errors.New("root resolver transaction rollback")
@@ -650,11 +650,11 @@ func (my *Engine) rebuild() error {
 
 type transactionKey struct{}
 
-func transactionFromContext(ctx context.Context) *gorm.DB {
+func transactionFromContext(ctx context.Context) *sql.Tx {
 	if ctx == nil {
 		return nil
 	}
-	tx, _ := ctx.Value(transactionKey{}).(*gorm.DB)
+	tx, _ := ctx.Value(transactionKey{}).(*sql.Tx)
 	return tx
 }
 
@@ -761,7 +761,7 @@ func (my *Engine) executeRootResolvers(ctx context.Context, entry *planEntry, va
 			}
 		})
 	} else if my.database != nil && transactionFromContext(ctx) == nil && (operation.Operation == ast.Mutation || my.rls || tenantRLSRequested(ctx)) {
-		err, rollbackConfirmed = runRootTransaction(ctx, my.database, my.cdc, func(tx *gorm.DB) error {
+		err, rollbackConfirmed = runRootTransaction(ctx, my.database, my.cdc, func(tx *sql.Tx) error {
 			if my.rls || tenantRLSRequested(ctx) {
 				if err := my.prepareRLS(ctx, tx); err != nil {
 					return err
@@ -839,7 +839,11 @@ func (my *Engine) executeDefaultRootFields(ctx context.Context, operation *ast.O
 			return nil, nil, err
 		}
 	}
+	done := my.startPhase(ctx, PhaseDatabase)
 	raw, err := my.fetch(ctx, plan, variables)
+	if done != nil {
+		done(observationErrorCode(err))
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -860,18 +864,18 @@ func (my *Engine) executeDefaultRootFields(ctx context.Context, operation *ast.O
 	return root, warnings, nil
 }
 
-func runRootTransaction(ctx context.Context, database *gorm.DB, publisher interface{ invalidate(...string) }, execute func(*gorm.DB) error) (error, bool) {
-	tx := database.WithContext(ctx).Begin()
-	if tx.Error != nil {
-		return tx.Error, false
+func runRootTransaction(ctx context.Context, database *Database, publisher interface{ invalidate(...string) }, execute func(*sql.Tx) error) (error, bool) {
+	tx, err := database.Pool().BeginTx(ctx, nil)
+	if err != nil {
+		return err, false
 	}
 	if err := execute(tx); err != nil {
-		if rollbackErr := tx.Rollback().Error; rollbackErr != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			return errors.Join(err, fmt.Errorf("mutation rollback failed: %w", rollbackErr)), false
 		}
 		return err, true
 	}
-	if err := tx.Commit().Error; err != nil {
+	if err := tx.Commit(); err != nil {
 		return err, false
 	}
 	if publisher != nil {
@@ -883,22 +887,22 @@ func runRootTransaction(ctx context.Context, database *gorm.DB, publisher interf
 // runMutationSavepoint makes a nested mutation atomic without taking ownership
 // of the caller's transaction. PostgreSQL permits nested savepoints with the
 // same name; RELEASE/ROLLBACK always address the innermost one.
-func runMutationSavepoint(ctx context.Context, tx *gorm.DB, execute func() error) (error, bool) {
-	tx = tx.WithContext(ctx)
+func runMutationSavepoint(ctx context.Context, tx *sql.Tx, execute func() error) (error, bool) {
 	const name = "gql_mutation"
-	if err := tx.SavePoint(name).Error; err != nil {
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT "+name); err != nil {
 		return err, false
 	}
 	if err := execute(); err != nil {
-		if rollbackErr := tx.RollbackTo(name).Error; rollbackErr != nil {
+		if _, rollbackErr := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+name); rollbackErr != nil {
 			return errors.Join(err, fmt.Errorf("mutation savepoint rollback failed: %w", rollbackErr)), false
 		}
-		if releaseErr := tx.Exec("RELEASE SAVEPOINT " + name).Error; releaseErr != nil {
+		if _, releaseErr := tx.ExecContext(ctx, "RELEASE SAVEPOINT "+name); releaseErr != nil {
 			return errors.Join(err, releaseErr), true
 		}
 		return err, true
 	}
-	return tx.Exec("RELEASE SAVEPOINT " + name).Error, false
+	_, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT "+name)
+	return err, false
 }
 
 func markTransactionRolledBack(errors gqlerror.List) {

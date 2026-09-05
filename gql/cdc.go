@@ -17,8 +17,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog/log"
-	gormpg "gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 // notifier 订阅唤醒源接口：按表变更唤醒watcher
@@ -46,11 +44,11 @@ const (
 	cdcStateConnected
 )
 
-// notifiers 唤醒源工厂注册表（key=gorm驱动名），在各实现文件的init中登记
-var notifiers = map[string]func(db *gorm.DB, cfg internal.SubscriptionConfig) (notifier, error){}
+// notifiers 唤醒源工厂注册表（key=数据库驱动名），在各实现文件的init中登记
+var notifiers = map[string]func(db *Database, cfg internal.SubscriptionConfig) (notifier, error){}
 
 // registerNotifier 注册唤醒源工厂
-func registerNotifier(driver string, factory func(db *gorm.DB, cfg internal.SubscriptionConfig) (notifier, error)) {
+func registerNotifier(driver string, factory func(db *Database, cfg internal.SubscriptionConfig) (notifier, error)) {
 	notifiers[driver] = factory
 }
 
@@ -59,13 +57,11 @@ func init() {
 	registerNotifier("postgres", newPostgresNotifier)
 }
 
-// newPostgresNotifier 构造PG唤醒源：DSN取subscription.dsn配置，缺省从gorm连接提取
-func newPostgresNotifier(db *gorm.DB, cfg internal.SubscriptionConfig) (notifier, error) {
+// newPostgresNotifier 构造PG唤醒源：DSN取subscription.dsn配置，缺省从数据库连接配置读取
+func newPostgresNotifier(db *Database, cfg internal.SubscriptionConfig) (notifier, error) {
 	dsn := strings.TrimSpace(cfg.DSN)
 	if dsn == "" {
-		if dialector, ok := db.Dialector.(*gormpg.Dialector); ok {
-			dsn = dialector.Config.DSN
-		}
+		dsn = db.DSN()
 	}
 	if dsn == "" {
 		return nil, fmt.Errorf("无法获取数据库DSN，请配置 subscription.dsn")

@@ -14,7 +14,7 @@
 
 ```bash
 go get github.com/ichaly/ideabase/gql
-go get gorm.io/driver/postgres gorm.io/gorm
+go get github.com/jackc/pgx/v5
 ```
 
 ## 2. 连接数据库并构建
@@ -23,16 +23,23 @@ go get gorm.io/driver/postgres gorm.io/gorm
 package main
 
 import (
+	"database/sql"
     "log"
     "github.com/ichaly/ideabase/gql"
+	_ "github.com/ichaly/ideabase/gql/compiler/pgsql"
     "github.com/ichaly/ideabase/std"
-    "gorm.io/driver/postgres"
-    "gorm.io/gorm"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {
-    db, err := gorm.Open(postgres.Open("host=localhost user=app dbname=app sslmode=disable"), &gorm.Config{})
+	dsn := "host=localhost user=app dbname=app sslmode=disable"
+	pool, err := sql.Open("pgx", dsn)
     if err != nil { log.Fatal(err) }
+	defer pool.Close()
+	if err = pool.Ping(); err != nil { log.Fatal(err) }
+
+	db, err := gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(dsn))
+	if err != nil { log.Fatal(err) }
 
     config, err := std.NewKonfig()
     if err != nil { log.Fatal(err) }
@@ -46,6 +53,9 @@ func main() {
 ```
 
 `Build` 会读取数据库元数据、生成 Schema、冻结 capability、创建编译器和执行器。任何元数据、策略、安全或迁移错误都会让 Build 失败，不会返回半可用实例。
+
+`Database` 直接持有传入的 `*sql.DB`，所以 GQL 与应用共享同一个连接池。已有 GORM
+应用可以将 `gormDB.DB()` 返回的 `*sql.DB` 传给 `NewDatabase`，无需建立第二个连接池。
 
 ## 3. 暴露 HTTP
 

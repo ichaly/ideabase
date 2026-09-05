@@ -2,18 +2,18 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
-	"gorm.io/gorm"
 )
 
 // Builder is the sole assembly path for one immutable Engine.
 type Builder struct {
 	k         *std.Konfig
-	database  *gorm.DB
+	database  *Database
 	metadata  []MetadataOption
 	items     []any
 	replaces  []Resolver
@@ -62,7 +62,7 @@ type resolverWrap struct {
 }
 
 // New creates the minimal database-to-GraphQL builder.
-func New(k *std.Konfig, database *gorm.DB, options ...MetadataOption) *Builder {
+func New(k *std.Konfig, database *Database, options ...MetadataOption) *Builder {
 	return &Builder{k: k, database: database, metadata: options}
 }
 
@@ -147,7 +147,7 @@ func (my *Builder) Build() (*Engine, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("Engine policy provider or metadata permissions is required")
 	}
-	if my.security == nil && my.database != nil && my.database.Name() == "postgres" && metadata.cfg != nil && !metadata.cfg.IsDebug() {
+	if my.security == nil && my.database != nil && my.database.Driver() == "postgres" && metadata.cfg != nil && !metadata.cfg.IsDebug() {
 		return nil, fmt.Errorf("production Engine requires an explicit SecurityStateProvider")
 	}
 	if err := validateProductionMigrations(metadata, my.database); err != nil {
@@ -217,8 +217,8 @@ func (my *Builder) Build() (*Engine, error) {
 	return executor, nil
 }
 
-func validateProductionMigrations(metadata *Metadata, database *gorm.DB) error {
-	if metadata == nil || metadata.cfg == nil || metadata.cfg.IsDebug() || database == nil || database.Name() != "postgres" {
+func validateProductionMigrations(metadata *Metadata, database *Database) error {
+	if metadata == nil || metadata.cfg == nil || metadata.cfg.IsDebug() || database == nil || database.Driver() != "postgres" {
 		return nil
 	}
 	requiresAudit := false
@@ -231,10 +231,11 @@ func validateProductionMigrations(metadata *Metadata, database *gorm.DB) error {
 	if !requiresAudit {
 		return nil
 	}
-	return postgresPreflight(context.Background(), database, "gql_audit_outbox", func(tx *gorm.DB) error {
-		return tx.Exec(`INSERT INTO gql_audit_outbox
+	return postgresPreflight(context.Background(), database, "gql_audit_outbox", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(), `INSERT INTO gql_audit_outbox
   (event_key, tenant, actor, action, resource, request_id, snapshot, policy_revision, affected_count)
 VALUES ('gql-preflight-' || pg_backend_pid()::text || '-' || clock_timestamp()::text,
-  'preflight', 'preflight', 'purge', 'preflight', 'preflight', 'preflight', 0, 0)`).Error
+	  'preflight', 'preflight', 'purge', 'preflight', 'preflight', 'preflight', 0, 0)`)
+		return err
 	})
 }

@@ -9,16 +9,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"gorm.io/gorm"
 )
 
 const startupProbeTimeout = 5 * time.Second
 
-// searchDetectors 搜索能力探测器注册表（key=gorm驱动名），返回(模式,分词配置)
-var searchDetectors = map[string]func(db *gorm.DB) (string, string, error){}
+// searchDetectors 搜索能力探测器注册表（key=数据库驱动名），返回(模式,分词配置)
+var searchDetectors = map[string]func(db *Database) (string, string, error){}
 
 // registerSearchDetector 注册搜索能力探测器
-func registerSearchDetector(driver string, detect func(db *gorm.DB) (string, string, error)) {
+func registerSearchDetector(driver string, detect func(db *Database) (string, string, error)) {
 	searchDetectors[driver] = detect
 }
 
@@ -33,17 +32,16 @@ func startupProbeContext(parent context.Context) (context.Context, context.Cance
 	return context.WithTimeout(parent, startupProbeTimeout)
 }
 
-func detectPostgresSearch(db *gorm.DB) (string, string, error) {
+func detectPostgresSearch(db *Database) (string, string, error) {
 	if db == nil {
 		return "", "", fmt.Errorf("database is required for search capability detection")
 	}
 	ctx, cancel := startupProbeContext(context.Background())
 	defer cancel()
-	db = db.WithContext(ctx)
 	var config string
-	if err := db.Raw(`SELECT c.cfgname FROM pg_ts_config c
+	if err := db.Pool().QueryRowContext(ctx, `SELECT COALESCE((SELECT c.cfgname FROM pg_ts_config c
 		JOIN pg_ts_parser p ON c.cfgparser = p.oid
-		WHERE p.prsname IN ('jieba', 'zhparser') LIMIT 1`).Scan(&config).Error; err != nil {
+		WHERE p.prsname IN ('jieba', 'zhparser') LIMIT 1), '')`).Scan(&config); err != nil {
 		return "", "", fmt.Errorf("detect text search configuration: %w", err)
 	} else if config != "" {
 		return "tsvector", config, nil
@@ -52,7 +50,7 @@ func detectPostgresSearch(db *gorm.DB) (string, string, error) {
 	// 先探测已安装（常态），缺失才尝试创建（权限不足时静默降级）
 	probe := func() (bool, error) {
 		var trigram int
-		err := db.Raw(`SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'`).Scan(&trigram).Error
+		err := db.Pool().QueryRowContext(ctx, `SELECT COALESCE((SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'), 0)`).Scan(&trigram)
 		return trigram == 1, err
 	}
 	if installed, err := probe(); err != nil {
@@ -60,7 +58,7 @@ func detectPostgresSearch(db *gorm.DB) (string, string, error) {
 	} else if installed {
 		return "trigram", "", nil
 	}
-	if err := db.Exec(`CREATE EXTENSION IF NOT EXISTS pg_trgm`).Error; err != nil && !isPermissionDenied(err) {
+	if _, err := db.Pool().ExecContext(ctx, `CREATE EXTENSION IF NOT EXISTS pg_trgm`); err != nil && !isPermissionDenied(err) {
 		return "", "", fmt.Errorf("create pg_trgm extension: %w", err)
 	}
 	if installed, err := probe(); err != nil {

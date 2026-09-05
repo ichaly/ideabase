@@ -131,9 +131,7 @@ func TestExecutorHealthReportsDatabaseFailure(t *testing.T) {
 	executor.cdc = nil
 	_, err := executor.Snapshot()
 	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	require.NoError(t, sqlDB.Close())
+	require.NoError(t, db.Pool().Close())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

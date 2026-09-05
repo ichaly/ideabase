@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
-
-	"gorm.io/gorm"
 )
 
 func TestEngineIsTheOnlyRuntimeAndCannotMutateAfterBuild(t *testing.T) {
@@ -34,7 +32,7 @@ func (my *Builder) testAllowAllPolicy() *Builder {
 	return my
 }
 
-func newEngineForTest(d *gorm.DB, renderer *Renderer, metadata *Metadata, compiler *Compiler) (*Engine, error) {
+func newEngineForTest(d *Database, renderer *Renderer, metadata *Metadata, compiler *Compiler) (*Engine, error) {
 	if metadata == nil || renderer == nil {
 		return nil, fmt.Errorf("缺少Metadata或Renderer")
 	}

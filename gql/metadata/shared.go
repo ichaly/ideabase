@@ -42,20 +42,20 @@ func (my *NullableType) UnmarshalJSON(data []byte) error {
 // 供所有Loader和dbLoader共用
 type tableInfo struct {
 	Schema           string `json:"schema"`
-	TableName        string `json:"table_name" gorm:"column:table_name"`
-	TableDescription string `json:"table_description" gorm:"column:table_description"`
+	TableName        string `json:"table_name"`
+	TableDescription string `json:"table_description"`
 	TableKind        string `json:"table_kind"`
 }
 
 type columnInfo struct {
-	TableName            string       `json:"table_name" gorm:"column:table_name"`
-	ColumnName           string       `json:"column_name" gorm:"column:column_name"`
-	DataType             string       `json:"data_type" gorm:"column:data_type"`
-	IsNullable           NullableType `json:"is_nullable" gorm:"column:is_nullable"`
-	CharMaxLength        *int64       `json:"character_maximum_length" gorm:"column:character_maximum_length"`
-	NumericPrecision     *int64       `json:"numeric_precision" gorm:"column:numeric_precision"`
-	NumericScale         *int64       `json:"numeric_scale" gorm:"column:numeric_scale"`
-	ColumnDescription    string       `json:"column_description" gorm:"column:column_description"`
+	TableName            string       `json:"table_name"`
+	ColumnName           string       `json:"column_name"`
+	DataType             string       `json:"data_type"`
+	IsNullable           NullableType `json:"is_nullable"`
+	CharMaxLength        *int64       `json:"character_maximum_length"`
+	NumericPrecision     *int64       `json:"numeric_precision"`
+	NumericScale         *int64       `json:"numeric_scale"`
+	ColumnDescription    string       `json:"column_description"`
 	Ordinal              int          `json:"ordinal"`
 	DefaultExpression    string       `json:"default_expression"`
 	GenerationKind       string       `json:"generation_kind"`
@@ -72,17 +72,17 @@ type columnInfo struct {
 }
 
 type primaryKeyInfo struct {
-	TableName  string `json:"table_name" gorm:"column:table_name"`
-	ColumnName string `json:"column_name" gorm:"column:column_name"`
+	TableName  string `json:"table_name"`
+	ColumnName string `json:"column_name"`
 }
 
 type foreignKeyInfo struct {
-	SourceTable    string `json:"source_table" gorm:"column:source_table"`
-	SourceColumn   string `json:"source_column" gorm:"column:source_column"`
-	TargetTable    string `json:"target_table" gorm:"column:target_table"`
-	TargetColumn   string `json:"target_column" gorm:"column:target_column"`
-	ConstraintName string `json:"constraint_name" gorm:"column:constraint_name"` // 约束名：复合外键多行同名，按此聚合为一条关系
-	Position       int    `json:"ordinal_position" gorm:"column:ordinal_position"`
+	SourceTable    string `json:"source_table"`
+	SourceColumn   string `json:"source_column"`
+	TargetTable    string `json:"target_table"`
+	TargetColumn   string `json:"target_column"`
+	ConstraintName string `json:"constraint_name"` // 约束名：复合外键多行同名，按此聚合为一条关系
+	Position       int    `json:"ordinal_position"`
 }
 
 type constraintInfo struct {

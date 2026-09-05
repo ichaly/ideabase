@@ -1,6 +1,8 @@
 package gql
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -15,12 +17,10 @@ import (
 
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 )
 
 var testPostgres struct {
@@ -112,39 +112,38 @@ COMMENT ON COLUMN post_tags.post_id IS '文章ID';
 COMMENT ON COLUMN post_tags.tag_id IS '标签ID';`
 
 // setupTestDatabase 初始化测试数据库
-func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
+func setupTestDatabase(t *testing.T) (*Database, func()) {
 	testPostgres.once.Do(startTestPostgres)
 	require.NoError(t, testPostgres.err)
 	host := "127.0.0.1"
 	adminDSN := fmt.Sprintf("host=%s port=%s user=test password=test dbname=test sslmode=disable", host, testPostgres.port)
-	admin, err := gorm.Open(postgres.Open(adminDSN), &gorm.Config{})
+	admin, err := sql.Open("pgx", adminDSN)
 	require.NoError(t, err, "连接 PostgreSQL 测试实例失败")
 	database := fmt.Sprintf("gql_test_%d", testPostgres.dbs.Add(1))
-	require.NoError(t, admin.Exec(`CREATE DATABASE "`+database+`"`).Error)
+	_, err = admin.ExecContext(context.Background(), `CREATE DATABASE "`+database+`"`)
+	require.NoError(t, err)
 	dsn := fmt.Sprintf("host=%s port=%s user=test password=test dbname=%s sslmode=disable", host, testPostgres.port, database)
 
 	// 连接数据库
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	pool, err := sql.Open("pgx", dsn)
 	require.NoError(t, err, "连接数据库失败")
+	db, err := NewDatabase(pool, "postgres", WithDatabaseDSN(dsn))
+	require.NoError(t, err)
 
 	// 创建测试表结构
-	require.NoError(t, db.Exec(testSchemaSQL).Error, "创建测试表结构失败")
+	_, err = pool.ExecContext(context.Background(), testSchemaSQL)
+	require.NoError(t, err, "创建测试表结构失败")
 
 	// 返回清理函数
 	cleanup := func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
-		quiet := admin.Session(&gorm.Session{Logger: gormlogger.Discard})
+		_ = pool.Close()
 		for deadline := time.Now().Add(time.Second); ; time.Sleep(10 * time.Millisecond) {
-			if quiet.Exec(`DROP DATABASE IF EXISTS "`+database+`" WITH (FORCE)`).Error == nil || time.Now().After(deadline) {
+			_, dropErr := admin.ExecContext(context.Background(), `DROP DATABASE IF EXISTS "`+database+`" WITH (FORCE)`)
+			if dropErr == nil || time.Now().After(deadline) {
 				break
 			}
 		}
-		if sqlDB, err = admin.DB(); err == nil {
-			_ = sqlDB.Close()
-		}
+		_ = admin.Close()
 	}
 
 	return db, cleanup
@@ -172,14 +171,12 @@ func startTestPostgres() {
 	dsn := fmt.Sprintf("host=127.0.0.1 port=%s user=test password=test dbname=test sslmode=disable", testPostgres.port)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		db, openErr := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: gormlogger.Discard})
+		db, openErr := sql.Open("pgx", dsn)
 		if openErr == nil {
-			if sqlDB, dbErr := db.DB(); dbErr == nil {
-				pingErr := sqlDB.Ping()
-				_ = sqlDB.Close()
-				if pingErr == nil {
-					return
-				}
+			pingErr := db.Ping()
+			_ = db.Close()
+			if pingErr == nil {
+				return
 			}
 		}
 		time.Sleep(250 * time.Millisecond)

@@ -15,8 +15,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 const (
@@ -33,7 +31,7 @@ func TestGAClusterChild(t *testing.T) {
 	if dsn == "" {
 		t.Fatal("missing GQL_GA_DSN")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := openTestDatabase(dsn)
 	require.NoError(t, err)
 
 	switch mode {
@@ -83,9 +81,9 @@ func TestGAClusterChild(t *testing.T) {
 func TestGAClusterReplayIsConsumedOnceAcrossProcesses(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := openTestDatabase(dsn)
 	require.NoError(t, err)
-	require.NoError(t, db.Exec(PostgresReplayDDL).Error)
+	testExec(t, db, PostgresReplayDDL)
 
 	outputs := make(chan string, 2)
 	for range 2 {
@@ -118,9 +116,9 @@ func TestGAClusterReplayIsConsumedOnceAcrossProcesses(t *testing.T) {
 func TestGAClusterSecurityRevocationIsObservedByAnotherProcess(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := openTestDatabase(dsn)
 	require.NoError(t, err)
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db)
 	require.NoError(t, err)
 	require.NoError(t, provider.Replace(context.Background(), 1, map[string]TenantSecurityState{"ga-tenant": {}}))
@@ -136,9 +134,9 @@ func TestGAClusterSecurityRevocationIsObservedByAnotherProcess(t *testing.T) {
 func TestGAClusterRevocationPropagatesDuringActiveServing(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := openTestDatabase(dsn)
 	require.NoError(t, err)
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db)
 	require.NoError(t, err)
 	require.NoError(t, provider.Replace(context.Background(), 10, map[string]TenantSecurityState{"ga-tenant": {}}))
@@ -183,9 +181,9 @@ func TestGAClusterRevocationPropagatesDuringActiveServing(t *testing.T) {
 func TestGAClusterRevisionRejectsStalePublishAndKeepsFreshState(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := openTestDatabase(dsn)
 	require.NoError(t, err)
-	require.NoError(t, db.Exec(PostgresSecurityStateDDL).Error)
+	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db)
 	require.NoError(t, err)
 	require.NoError(t, provider.Replace(context.Background(), 20, map[string]TenantSecurityState{"ga-tenant": {}}))
@@ -214,6 +212,6 @@ func gaClusterDatabase(t *testing.T) (string, func()) {
 		return dsn, func() {}
 	}
 	db, cleanup := setupTestDatabase(t)
-	dsn := db.Dialector.(*postgres.Dialector).Config.DSN
+	dsn := db.DSN()
 	return dsn, cleanup
 }

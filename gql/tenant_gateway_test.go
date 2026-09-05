@@ -160,9 +160,7 @@ func TestTenantGatewayReportsChildSubscriptionCapability(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, executor.SubscriptionAvailable())
 	require.True(t, gateway.SubscriptionAvailable(), "dispatcher capability must match its public subscription schema")
-	sqlDB, err := executor.database.DB()
-	require.NoError(t, err)
-	require.NoError(t, sqlDB.Close())
+	require.NoError(t, executor.database.Pool().Close())
 	require.True(t, gateway.SubscriptionAvailable(), "capability discovery must not depend on database health")
 }
 
@@ -178,9 +176,7 @@ func TestTenantGatewayHealthChecksRoutedDatasource(t *testing.T) {
 	report, err := gateway.Health(context.Background())
 	require.NoError(t, err)
 	require.True(t, report.Ready)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	require.NoError(t, sqlDB.Close())
+	require.NoError(t, db.Pool().Close())
 	report, err = gateway.Health(context.Background())
 	require.Error(t, err)
 	require.False(t, report.Ready)
@@ -218,9 +214,7 @@ func TestTenantGatewayHealthDistinguishesAggregateDegradationFromRouteReadiness(
 	require.NoError(t, err)
 	gateway, err := NewTenantGateway(router, map[string]*Engine{"healthy": healthy, "broken": unhealthy}, testTenantSecurity(router))
 	require.NoError(t, err)
-	sqlDB, err := unhealthyDB.DB()
-	require.NoError(t, err)
-	require.NoError(t, sqlDB.Close())
+	require.NoError(t, unhealthyDB.Pool().Close())
 
 	report, err := gateway.Health(context.Background())
 	require.NoError(t, err)
@@ -244,8 +238,7 @@ func TestTenantGatewayHealthDistinguishesAggregateDegradationFromRouteReadiness(
 	require.False(t, report.Ready)
 	require.True(t, report.RouteScoped)
 
-	_, err = healthyDB.DB()
-	require.NoError(t, err)
+	require.NoError(t, healthyDB.Pool().Ping())
 }
 
 func TestTenantGatewaySharedTableRequiresTenantScopeOrExplicitGlobal(t *testing.T) {

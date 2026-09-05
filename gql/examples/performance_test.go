@@ -2,29 +2,23 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	"github.com/ichaly/ideabase/gql"
 )
 
 // demoSQLCounter records database round trips without changing the production
 // logger. It is used only by the real-PostgreSQL Demo performance gate.
 type demoSQLCounter struct{ count atomic.Int64 }
 
-func (c *demoSQLCounter) LogMode(logger.LogLevel) logger.Interface      { return c }
-func (c *demoSQLCounter) Info(context.Context, string, ...interface{})  {}
-func (c *demoSQLCounter) Warn(context.Context, string, ...interface{})  {}
-func (c *demoSQLCounter) Error(context.Context, string, ...interface{}) {}
-func (c *demoSQLCounter) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
-	fc()
-	c.count.Add(1)
+func (c *demoSQLCounter) Observe(_ context.Context, observation gql.Observation) {
+	if observation.Phase == gql.PhaseDatabase {
+		c.count.Add(1)
+	}
 }
 
 // TestDemoPerformanceGate is a repeatable, real-PostgreSQL regression gate.
@@ -36,19 +30,14 @@ func TestDemoPerformanceGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sqlDB.Close()
-	engine, err := buildEngine(db)
+	defer db.Pool().Close()
+	counter := &demoSQLCounter{}
+	engine, err := buildEngineConfigured(db, false, counter)
 	if err != nil {
 		t.Fatalf("装配Demo失败: %v", err)
 	}
 	defer engine.Close()
 
-	counter := &demoSQLCounter{}
-	db.Logger = counter
 	ctx := demoContext(context.Background(), 1)
 	query := `{ posts(limit: 20) { items { id title user { name } tags { name } } total } }`
 	warm, err := engine.Execute(ctx, query, nil)
@@ -110,20 +99,4 @@ func TestDemoPerformanceGate(t *testing.T) {
 	if percentile(99) > 500*time.Millisecond {
 		t.Fatalf("并发P99超过保守门槛: %s", percentile(99))
 	}
-}
-
-func openDemoDB() (*gorm.DB, error) {
-	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
-	if err != nil {
-		return nil, fmt.Errorf("demo数据库不可用（先运行 docker compose up -d）: %w", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("获取demo数据库连接失败: %w", err)
-	}
-	if err = sqlDB.Ping(); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("demo数据库无法连接（先运行 docker compose up -d）: %w", err)
-	}
-	return db, nil
 }

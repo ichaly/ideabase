@@ -110,7 +110,7 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 		enabled := make(map[string]struct{}, len(config.rls))
 		for source, target := range targets {
 			rls, configured := config.rls[source]
-			production := target.database != nil && target.database.Name() == "postgres" && target.metadata.cfg != nil && !target.metadata.cfg.IsDebug()
+			production := target.database != nil && target.database.Driver() == "postgres" && target.metadata.cfg != nil && !target.metadata.cfg.IsDebug()
 			if !configured && production {
 				var err error
 				rls, err = InspectRLS(target.database, target.metadata)

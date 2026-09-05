@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"gorm.io/gorm"
 )
 
 // RLSRole describes the database role used by shared-table execution.
@@ -32,15 +30,14 @@ type RLSConfig struct {
 // InspectRLS reads authoritative PostgreSQL role and table facts. Callers may
 // use an explicit RLSConfig in tests, but production startup should use this
 // catalog result rather than trusting configuration claims.
-func InspectRLS(db *gorm.DB, metadata *Metadata) (RLSConfig, error) {
-	if db == nil || metadata == nil || db.Name() != "postgres" {
+func InspectRLS(db *Database, metadata *Metadata) (RLSConfig, error) {
+	if db == nil || metadata == nil || db.Driver() != "postgres" {
 		return RLSConfig{}, fmt.Errorf("PostgreSQL database and metadata are required for RLS inspection")
 	}
 	ctx, cancel := startupProbeContext(context.Background())
 	defer cancel()
-	db = db.WithContext(ctx)
 	config := RLSConfig{}
-	if err := db.Raw(`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`).Row().Scan(&config.Role.Superuser, &config.Role.BypassRLS); err != nil {
+	if err := db.Pool().QueryRowContext(ctx, `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`).Scan(&config.Role.Superuser, &config.Role.BypassRLS); err != nil {
 		return RLSConfig{}, fmt.Errorf("inspect RLS role: %w", err)
 	}
 	type catalogRow struct {
@@ -48,24 +45,31 @@ func InspectRLS(db *gorm.DB, metadata *Metadata) (RLSConfig, error) {
 		Protected, HasPolicy, Force bool
 		Owned                       bool
 	}
-	var rows []catalogRow
-	err := db.Raw(`
+	rows, err := db.Pool().QueryContext(ctx, `
 SELECT c.relname AS name, owner.rolname = current_user AS owned,
        c.relrowsecurity AS protected, c.relforcerowsecurity AS force,
        EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid) AS has_policy
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_roles owner ON owner.oid = c.relowner
-WHERE n.nspname = ? AND c.relkind IN ('r', 'p')
-ORDER BY c.relname`, metadata.SchemaName()).Scan(&rows).Error
+WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')
+ORDER BY c.relname`, metadata.SchemaName())
 	if err != nil {
 		return RLSConfig{}, fmt.Errorf("inspect RLS tables: %w", err)
 	}
-	for _, row := range rows {
+	defer rows.Close()
+	for rows.Next() {
+		var row catalogRow
+		if err := rows.Scan(&row.Name, &row.Owned, &row.Protected, &row.Force, &row.HasPolicy); err != nil {
+			return RLSConfig{}, fmt.Errorf("inspect RLS tables: %w", err)
+		}
 		config.Tables = append(config.Tables, RLSTable{Name: row.Name, Protected: row.Protected, HasPolicy: row.HasPolicy, Force: row.Force})
 		if row.Owned {
 			config.Role.OwnerTables = append(config.Role.OwnerTables, row.Name)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return RLSConfig{}, fmt.Errorf("inspect RLS tables: %w", err)
 	}
 	return config, nil
 }
@@ -115,12 +119,12 @@ type RLSStatement struct {
 
 type rlsPreparedKey struct{}
 
-func rlsPrepared(ctx context.Context, tx *gorm.DB) bool {
-	prepared, _ := ctx.Value(rlsPreparedKey{}).(*gorm.DB)
+func rlsPrepared(ctx context.Context, tx DBTX) bool {
+	prepared, _ := ctx.Value(rlsPreparedKey{}).(DBTX)
 	return prepared != nil && prepared == tx
 }
 
-func markRLSPrepared(ctx context.Context, tx *gorm.DB) context.Context {
+func markRLSPrepared(ctx context.Context, tx DBTX) context.Context {
 	return context.WithValue(ctx, rlsPreparedKey{}, tx)
 }
 
@@ -134,7 +138,7 @@ func NewRLSIdentityStatement(identity Identity) (RLSStatement, error) {
 	}, nil
 }
 
-func (my *Engine) prepareRLS(ctx context.Context, tx *gorm.DB) error {
+func (my *Engine) prepareRLS(ctx context.Context, tx DBTX) error {
 	if rlsPrepared(ctx, tx) {
 		return nil
 	}
@@ -146,5 +150,6 @@ func (my *Engine) prepareRLS(ctx context.Context, tx *gorm.DB) error {
 	if err != nil {
 		return err
 	}
-	return tx.WithContext(ctx).Exec(statement.SQL, statement.Args...).Error
+	_, err = tx.ExecContext(ctx, statement.SQL, statement.Args...)
+	return err
 }

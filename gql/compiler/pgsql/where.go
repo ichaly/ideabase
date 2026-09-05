@@ -394,7 +394,7 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, lhs func(), opChild *ast
 	}
 
 	// jsonb函数式操作符：jsonb_contains(列, $n::jsonb) / jsonb_exists(列, $n)
-	// （gorm会劫持@>/<@/?符号形态，函数形式语义与索引利用一致）
+	// （部分SQL抽象层会劫持@>/<@/?符号形态，函数形式语义与索引利用一致）
 	if jsonbFunctions[opChild.Name] {
 		ctx.Write(op.Value, `(`)
 		lhs()

@@ -27,9 +27,10 @@ func TestGAPostgresLockTimeoutCancelsAndPoolRecovers(t *testing.T) {
 	engine, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 
-	lock := db.Begin()
-	require.NoError(t, lock.Error)
-	require.NoError(t, lock.Exec(`LOCK TABLE users IN ACCESS EXCLUSIVE MODE`).Error)
+	lock, err := db.Pool().BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = lock.ExecContext(context.Background(), `LOCK TABLE users IN ACCESS EXCLUSIVE MODE`)
+	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	started := time.Now()
@@ -37,7 +38,7 @@ func TestGAPostgresLockTimeoutCancelsAndPoolRecovers(t *testing.T) {
 	require.NoError(t, err)
 	require.Less(t, time.Since(started), time.Second)
 	require.Contains(t, string(body), `"code":"TIMEOUT"`)
-	require.NoError(t, lock.Rollback().Error)
+	require.NoError(t, lock.Rollback())
 
 	body, err = engine.Execute(context.Background(), `{ users { total } }`, nil)
 	require.NoError(t, err)
@@ -62,12 +63,12 @@ func TestGACDCReconnectConvergesAfterBackendTermination(t *testing.T) {
 
 	var pid int
 	require.Eventually(t, func() bool {
-		return db.Raw(`SELECT pid FROM pg_stat_replication LIMIT 1`).Scan(&pid).Error == nil && pid != 0
+		return testQueryRow(db, `SELECT pid FROM pg_stat_replication LIMIT 1`).Scan(&pid) == nil && pid != 0
 	}, 5*time.Second, 50*time.Millisecond)
-	require.NoError(t, db.Exec(`SELECT pg_terminate_backend(?)`, pid).Error)
+	testExec(t, db, `SELECT pg_terminate_backend($1)`, pid)
 	listener := engine.cdc.(*listener)
 	require.Eventually(t, func() bool { connected, _ := listener.status(); return !connected }, time.Second, 10*time.Millisecond)
-	require.NoError(t, db.Exec(`INSERT INTO users(name,email) VALUES ('Ada','ada@example.test')`).Error)
+	testExec(t, db, `INSERT INTO users(name,email) VALUES ('Ada','ada@example.test')`)
 
 	select {
 	case body := <-events:
@@ -86,8 +87,8 @@ func TestGACDCReconnectConvergesAfterBackendTermination(t *testing.T) {
 func TestGACDCRejectsNarrowPublicationInsteadOfServingStaleStreams(t *testing.T) {
 	engine, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.NoError(t, db.Exec(`DROP PUBLICATION ideabase_cdc`).Error)
-	require.NoError(t, db.Exec(`CREATE PUBLICATION ideabase_cdc FOR TABLE users`).Error)
+	testExec(t, db, `DROP PUBLICATION ideabase_cdc`)
+	testExec(t, db, `CREATE PUBLICATION ideabase_cdc FOR TABLE users`)
 	_, err := engine.subscribe(context.Background(), `subscription { users { total } }`, nil, "")
 	require.ErrorContains(t, err, "FOR ALL TABLES")
 }

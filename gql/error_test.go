@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
-	"gorm.io/gorm"
 )
 
 func TestPublicWireContractsUseLowerCamelJSON(t *testing.T) {
@@ -31,8 +30,6 @@ func TestGQLErrorsSanitizeDatabaseAndContextFailures(t *testing.T) {
 		{name: "serialization", code: "SERIALIZATION_FAILURE", err: &pgconn.PgError{Code: "40001"}},
 		{name: "deadlock", code: "DEADLOCK", err: &pgconn.PgError{Code: "40P01"}},
 		{name: "statement timeout", code: "TIMEOUT", err: &pgconn.PgError{Code: "57014"}},
-		{name: "gorm conflict", code: "CONFLICT", err: gorm.ErrDuplicatedKey},
-		{name: "gorm foreign key", code: "FOREIGN_KEY_VIOLATION", err: gorm.ErrForeignKeyViolated},
 		{name: "deadline", code: "TIMEOUT", err: context.DeadlineExceeded},
 		{name: "cancel", code: "CANCELLED", err: context.Canceled},
 	}

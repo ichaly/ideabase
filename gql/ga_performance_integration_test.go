@@ -11,28 +11,24 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm/logger"
 )
 
 type gaSQLCounter struct{ count atomic.Int64 }
 
-func (c *gaSQLCounter) LogMode(logger.LogLevel) logger.Interface      { return c }
-func (c *gaSQLCounter) Info(context.Context, string, ...interface{})  {}
-func (c *gaSQLCounter) Warn(context.Context, string, ...interface{})  {}
-func (c *gaSQLCounter) Error(context.Context, string, ...interface{}) {}
-func (c *gaSQLCounter) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
-	fc()
-	c.count.Add(1)
+func (c *gaSQLCounter) Observe(_ context.Context, observation Observation) {
+	if observation.Phase == PhaseDatabase {
+		c.count.Add(1)
+	}
 }
 
 func TestGAPerformanceRealPostgresMutationSQLGate(t *testing.T) {
 	if os.Getenv("GQL_RUN_CLUSTER_GA") != "1" {
 		t.Skip("set GQL_RUN_CLUSTER_GA=1 to run PostgreSQL performance GA")
 	}
-	executor, db, cleanup := newTestExecutor(t, nil)
+	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	counter := &gaSQLCounter{}
-	db.Logger = counter
+	executor.observer = counter
 	query := executor.run(context.Background(), `{ users { items { id posts { id } } total } }`, nil, "")
 	require.Empty(t, query.Errors, "%v", query.Errors)
 	require.EqualValues(t, 1, counter.count.Load(), "nested read must stay one SQL statement")
@@ -57,10 +53,10 @@ func TestGAPerformanceRealPostgresConcurrentWarmGate(t *testing.T) {
 	if os.Getenv("GQL_RUN_CLUSTER_GA") != "1" {
 		t.Skip("set GQL_RUN_CLUSTER_GA=1 to run PostgreSQL performance GA")
 	}
-	executor, db, cleanup := newTestExecutor(t, nil)
+	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	counter := &gaSQLCounter{}
-	db.Logger = counter
+	executor.observer = counter
 	const concurrency, rounds = 8, 8
 	query := `{ users { items { id posts { id } } total } }`
 	// Warm the compiler/metadata path before measuring the database workload.

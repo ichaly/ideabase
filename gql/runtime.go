@@ -203,10 +203,7 @@ func (my *Engine) Health(ctx context.Context) (HealthReport, error) {
 		report.Ready = !report.CDCConfigured || report.CDCState != CDCStateDisconnected
 		return report, nil
 	}
-	sqlDB, err := my.database.DB()
-	if err == nil {
-		err = sqlDB.PingContext(ctx)
-	}
+	err = my.database.Pool().PingContext(ctx)
 	if err != nil {
 		report.DatabaseError = fmt.Sprint(err)
 		return report, err

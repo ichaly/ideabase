@@ -1,9 +1,9 @@
 package metadata
 
 import (
+	sqldb "github.com/ichaly/ideabase/gql/database"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
-	"gorm.io/gorm"
 )
 
 // pgsqlMetaSQL reads one schema through pg_catalog so every supported relkind,
@@ -186,14 +186,14 @@ SELECT json_build_object(
 
 type PgsqlLoader struct{ *baseLoader }
 
-func NewPgsqlLoader(cfg *internal.Config, db *gorm.DB) *PgsqlLoader {
+func NewPgsqlLoader(cfg *internal.Config, db *sqldb.Connection) *PgsqlLoader {
 	return &PgsqlLoader{&baseLoader{db: db, cfg: cfg}}
 }
 
 func (my *PgsqlLoader) Name() string  { return LoaderPgsql }
 func (my *PgsqlLoader) Priority() int { return 60 }
 func (my *PgsqlLoader) Support() bool {
-	return my.cfg != nil && my.cfg.IsDebug() && my.db != nil && my.db.Dialector.Name() == "postgres"
+	return my.cfg != nil && my.cfg.IsDebug() && my.db != nil && my.db.Driver() == "postgres"
 }
 func (my *PgsqlLoader) Load(h protocol.Hoster) error {
 	return my.loadMeta(h, pgsqlMetaSQL, []interface{}{my.cfg.Schema.Schema})

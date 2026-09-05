@@ -24,13 +24,12 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	validatorrules "github.com/vektah/gqlparser/v2/validator/rules"
 	"golang.org/x/sync/singleflight"
-	"gorm.io/gorm"
 )
 
 // planCacheSize 执行计划LRU缓存容量（newEngine与启动期装配重建共用）
 const planCacheSize = 512
 
-func configureSearchMode(metadata *Metadata, database *gorm.DB) error {
+func configureSearchMode(metadata *Metadata, database *Database) error {
 	if metadata == nil || database == nil || metadata.cfg == nil {
 		return nil
 	}
@@ -38,7 +37,7 @@ func configureSearchMode(metadata *Metadata, database *gorm.DB) error {
 		metadata.SetSearchMode(mode, metadata.cfg.Search.Config)
 		return nil
 	}
-	if detect, ok := searchDetectors[database.Name()]; ok {
+	if detect, ok := searchDetectors[database.Driver()]; ok {
 		mode, config, err := detect(database)
 		if err != nil {
 			return err
@@ -128,7 +127,7 @@ func (my gqlReply) mutationCommit(ctx context.Context, state string) gqlReply {
 type Engine struct {
 	intro             *intro.Handler               // 自省处理器，处理__schema和__type查询
 	schema            *ast.Schema                  // GraphQL模式定义
-	database          *gorm.DB                     // 数据库连接，用于执行生成的SQL
+	database          *Database                    // 数据库连接，用于执行生成的SQL
 	metadata          *Metadata                    // 元数据信息，包含表结构、关系等
 	compiler          *Compiler                    // 编译器，将GraphQL查询编译为SQL
 	cache             *planCache                   // 执行计划缓存，命中路径零解析零编译
@@ -280,7 +279,7 @@ func (my *Engine) Snapshot() (*Snapshot, error) {
 
 // 构造函数和初始化方法只由 Builder 调用。
 
-func newEngine(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Engine, error) {
+func newEngine(d *Database, m *Metadata, c *Compiler, data string) (*Engine, error) {
 	executor := &Engine{
 		database:       d,
 		metadata:       m,
@@ -317,10 +316,10 @@ func newEngine(d *gorm.DB, m *Metadata, c *Compiler, data string) (*Engine, erro
 
 	if d != nil {
 		// 订阅唤醒源：按驱动名从注册表选取CDC实现（复制连接延迟到首个订阅时建立）
-		if factory, ok := notifiers[d.Name()]; ok {
+		if factory, ok := notifiers[d.Driver()]; ok {
 			source, err := factory(d, m.cfg.Subscription)
 			if err != nil {
-				return nil, fmt.Errorf("CDC唤醒源初始化失败（%s）: %w", d.Name(), err)
+				return nil, fmt.Errorf("CDC唤醒源初始化失败（%s）: %w", d.Driver(), err)
 			}
 			executor.cdc = source
 		}
@@ -473,12 +472,14 @@ func (my *Engine) executeBytes(ctx context.Context, query string, variables map[
 	done := my.startPhase(ctx, PhaseExecute)
 	var reply gqlReply
 	if readSnapshotRequested(ctx) && transactionFromContext(ctx) == nil && my.database != nil {
-		err := my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		tx, beginErr := my.database.Pool().BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		if beginErr != nil {
+			reply = gqlReply{Errors: GraphQLErrors(beginErr)}
+		} else {
 			reply = my.execute(context.WithValue(ctx, transactionKey{}, tx), query, variables, operationName)
-			return nil
-		}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
-		if err != nil {
-			reply = gqlReply{Errors: GraphQLErrors(err)}
+			if err := tx.Commit(); err != nil {
+				reply = gqlReply{Errors: GraphQLErrors(err)}
+			}
 		}
 	} else {
 		reply = my.execute(ctx, query, variables, operationName)
@@ -721,21 +722,28 @@ func (my *Engine) fetch(ctx context.Context, plan *Plan, variables map[string]in
 	if err != nil {
 		return nil, err
 	}
-	database := my.database
+	var database DBTX = my.database.Pool()
 	if tx := transactionFromContext(ctx); tx != nil {
 		database = tx
 	}
 	var data []byte
-	run := func(tx *gorm.DB) error {
+	run := func(tx DBTX) error {
 		if (my.rls || tenantRLSRequested(ctx)) && !rlsPrepared(ctx, tx) {
 			if err := my.prepareRLS(ctx, tx); err != nil {
 				return err
 			}
 		}
-		return tx.WithContext(ctx).Raw(plan.SQL, args...).Row().Scan(&data)
+		return tx.QueryRowContext(ctx, plan.SQL, args...).Scan(&data)
 	}
 	if (my.rls || tenantRLSRequested(ctx)) && transactionFromContext(ctx) == nil {
-		err = database.WithContext(ctx).Transaction(run)
+		tx, beginErr := my.database.Pool().BeginTx(ctx, nil)
+		if beginErr != nil {
+			err = beginErr
+		} else if err = run(tx); err != nil {
+			_ = tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
 	} else {
 		err = run(database)
 	}
@@ -765,13 +773,22 @@ func (my *Engine) unpack(ctx context.Context, plan *Plan, data []byte, variables
 		return err
 	}
 	if (my.rls || tenantRLSRequested(ctx)) && my.database != nil && transactionFromContext(ctx) == nil {
-		err = my.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		tx, beginErr := my.database.Pool().BeginTx(ctx, nil)
+		if beginErr != nil {
+			err = beginErr
+		} else {
 			if err := my.prepareRLS(ctx, tx); err != nil {
-				return err
+				_ = tx.Rollback()
+				return result, warnings, err
 			}
 			prepared := markRLSPrepared(ctx, tx)
-			return resolve(context.WithValue(prepared, transactionKey{}, tx))
-		})
+			err = resolve(context.WithValue(prepared, transactionKey{}, tx))
+			if err != nil {
+				_ = tx.Rollback()
+			} else {
+				err = tx.Commit()
+			}
+		}
 	} else {
 		err = resolve(ctx)
 	}

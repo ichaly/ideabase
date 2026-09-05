@@ -13,12 +13,11 @@ import (
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/gqlerror"
-	"gorm.io/gorm"
 )
 
 // newTestExecutor 基于真实PostgreSQL构建完整执行器（各测试的唯一构造入口）；
 // tweak 在元数据构建前调整配置，opts 传递元数据选项（如WithCodecs）
-func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOption) (*Engine, *gorm.DB, func()) {
+func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOption) (*Engine, *Database, func()) {
 	db, cleanup := setupTestDatabase(t)
 
 	k, err := std.NewKonfig()
@@ -98,7 +97,7 @@ func TestOffsetPageBeyondEndKeepsFilteredTotal(t *testing.T) {
 func TestNestedCreatePreservesDefaultsAcrossRowShapes(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.NoError(t, db.Exec(`ALTER TABLE posts ALTER COLUMN content SET DEFAULT 'db-default'`).Error)
+	testExec(t, db, `ALTER TABLE posts ALTER COLUMN content SET DEFAULT 'db-default'`)
 
 	reply := executor.run(context.Background(), `mutation {
 		createUser(input: { name: "shape", email: "shape@x.com", posts: { create: [
@@ -109,7 +108,15 @@ func TestNestedCreatePreservesDefaultsAcrossRowShapes(t *testing.T) {
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 
 	var posts []struct{ Title, Content string }
-	require.NoError(t, db.Table("posts").Where("title IN ?", []string{"defaulted", "explicit"}).Order("title").Find(&posts).Error)
+	rows, err := db.Pool().QueryContext(context.Background(), `SELECT title, content FROM posts WHERE title IN ($1, $2) ORDER BY title`, "defaulted", "explicit")
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var post struct{ Title, Content string }
+		require.NoError(t, rows.Scan(&post.Title, &post.Content))
+		posts = append(posts, post)
+	}
+	require.NoError(t, rows.Err())
 	require.Equal(t, []struct{ Title, Content string }{{"defaulted", "db-default"}, {"explicit", "value"}}, posts)
 }
 
@@ -727,7 +734,7 @@ func TestExecutorScope(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	require.NoError(t, db.Exec(`ALTER TABLE users ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
+	testExec(t, db, `ALTER TABLE users ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
@@ -744,8 +751,8 @@ func TestExecutorScope(t *testing.T) {
 	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 
-	require.NoError(t, db.Exec(`INSERT INTO users (name, email, tenant_id) VALUES
-		('t1a','t1a@x.com',1), ('t1b','t1b@x.com',1), ('t2a','t2a@x.com',2)`).Error)
+	testExec(t, db, `INSERT INTO users (name, email, tenant_id) VALUES
+		('t1a','t1a@x.com',1), ('t1b','t1b@x.com',1), ('t2a','t2a@x.com',2)`)
 
 	// 租户1上下文：只看到自己的2条
 	ctx := WithScope(context.Background(), map[string]any{"tenant": 1})
@@ -775,7 +782,7 @@ func TestExecutorScope(t *testing.T) {
 	require.Empty(t, reply.Errors, "租户1创建失败: %v", reply.Errors)
 	newID := reply.Data["createUser"].(map[string]interface{})["id"]
 	var tid int
-	require.NoError(t, db.Raw(`SELECT tenant_id FROM users WHERE id = ?`, newID).Scan(&tid).Error)
+	require.NoError(t, testQueryRow(db, `SELECT tenant_id FROM users WHERE id = $1`, newID).Scan(&tid))
 	require.Equal(t, 1, tid, "create 应自动填当前租户")
 
 	// 写隔离：update/delete 只能改本租户的行——租户2 改不到租户1 的 new1
@@ -784,7 +791,7 @@ func TestExecutorScope(t *testing.T) {
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	require.EqualValues(t, 0, reply.Data["updateUsers"].(map[string]any)["affectedCount"], "租户2 不应改到租户1 的行")
 	var name string
-	require.NoError(t, db.Raw(`SELECT name FROM users WHERE id = ?`, newID).Scan(&name).Error)
+	require.NoError(t, testQueryRow(db, `SELECT name FROM users WHERE id = $1`, newID).Scan(&name))
 	require.Equal(t, "new1", name, "租户1 的行未被租户2 篡改")
 
 	// 租户1 自己能改
@@ -799,7 +806,7 @@ func TestExecutorScope(t *testing.T) {
 		map[string]any{"i": map[string]any{"name": "z", "tenantId": 2}}, "")
 	require.NotEmpty(t, reply.Errors, "偷传作用域列应被拒绝")
 	require.Contains(t, reply.Errors[0].Message, "unknown field")
-	require.NoError(t, db.Raw(`SELECT name FROM users WHERE id = ?`, newID).Scan(&name).Error)
+	require.NoError(t, testQueryRow(db, `SELECT name FROM users WHERE id = $1`, newID).Scan(&name))
 	require.Equal(t, "own", name, "被拒绝后行未被篡改")
 
 	// 安全回归：全局唯一键不含 tenant_id，upsert 不得出现在作用域实体 schema 中，
@@ -808,7 +815,7 @@ func TestExecutorScope(t *testing.T) {
 	require.NotEmpty(t, reply.Errors)
 	require.Contains(t, reply.Errors[0].Message, `Cannot query field "upsertUsers"`)
 	var hijTenant int
-	require.NoError(t, db.Raw(`SELECT name, tenant_id FROM users WHERE email = 'new1@x.com'`).Row().Scan(&name, &hijTenant))
+	require.NoError(t, testQueryRow(db, `SELECT name, tenant_id FROM users WHERE email = 'new1@x.com'`).Scan(&name, &hijTenant))
 	require.Equal(t, "own", name, "租户2 不应劫持租户1 的行（DO UPDATE 被作用域 WHERE 阻止）")
 	require.Equal(t, 1, hijTenant, "租户1 行的 tenant_id 未被改写")
 
@@ -826,9 +833,9 @@ func TestExecutorScope(t *testing.T) {
 func TestExecutorScopeRelation(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`ALTER TABLE posts ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
-	require.NoError(t, db.Exec(`ALTER TABLE tags ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
-	require.NoError(t, db.Exec(`ALTER TABLE post_tags ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
+	testExec(t, db, `ALTER TABLE posts ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`)
+	testExec(t, db, `ALTER TABLE tags ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`)
+	testExec(t, db, `ALTER TABLE post_tags ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
@@ -848,14 +855,14 @@ func TestExecutorScopeRelation(t *testing.T) {
 	require.NoError(t, err)
 
 	// 租户1 的 post 与 tag1，租户2 的 tag2
-	require.NoError(t, db.Exec(`INSERT INTO users (id, name, email) VALUES (1, 'u', 'u@x.com')`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO posts (id, title, user_id, tenant_id) VALUES (1, 'p1', 1, 1)`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO tags (id, name, tenant_id) VALUES (1, 't1', 1), (2, 't2', 2)`).Error)
+	testExec(t, db, `INSERT INTO users (id, name, email) VALUES (1, 'u', 'u@x.com')`)
+	testExec(t, db, `INSERT INTO posts (id, title, user_id, tenant_id) VALUES (1, 'p1', 1, 1)`)
+	testExec(t, db, `INSERT INTO tags (id, name, tenant_id) VALUES (1, 't1', 1), (2, 't2', 2)`)
 
 	ctx1 := WithScope(context.Background(), map[string]any{"tenant": 1})
 	count := func(tagID int) int {
 		var c int
-		require.NoError(t, db.Raw(`SELECT COUNT(*) FROM post_tags WHERE post_id=1 AND tag_id=?`, tagID).Scan(&c).Error)
+		require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM post_tags WHERE post_id=1 AND tag_id=$1`, tagID).Scan(&c))
 		return c
 	}
 
@@ -869,11 +876,11 @@ func TestExecutorScopeRelation(t *testing.T) {
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	require.Equal(t, 1, count(1), "应能挂接本租户 tag")
 	var linkTenant int
-	require.NoError(t, db.Raw(`SELECT tenant_id FROM post_tags WHERE post_id=1 AND tag_id=1`).Scan(&linkTenant).Error)
+	require.NoError(t, testQueryRow(db, `SELECT tenant_id FROM post_tags WHERE post_id=1 AND tag_id=1`).Scan(&linkTenant))
 	require.Equal(t, 1, linkTenant, "through row must inherit tenant scope")
 
 	// 即使两端仍属于租户1，中间行的作用域不匹配也不能被删除。
-	require.NoError(t, db.Exec(`UPDATE post_tags SET tenant_id=2 WHERE post_id=1 AND tag_id=1`).Error)
+	testExec(t, db, `UPDATE post_tags SET tenant_id=2 WHERE post_id=1 AND tag_id=1`)
 	reply = executor.run(ctx1, `mutation { updatePost(input: { tags: { disconnect: [1] } }, id: 1) { id } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	require.Equal(t, 1, count(1), "through scope must protect relation deletion")
