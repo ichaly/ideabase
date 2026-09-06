@@ -62,6 +62,43 @@ func openTestDB(t testing.TB) *gorm.DB {
 	return db
 }
 
+func TestCacheDryRunBuildsSQLWithoutIO(t *testing.T) {
+	db := openTestDB(t)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+	// nil 缓存和已关闭的数据库确保 DryRun 只生成 SQL。
+	require.NoError(t, db.Use(NewGormCache(nil)))
+
+	var users []cacheUser
+	result := db.Session(&gorm.Session{DryRun: true}).Where("name = ?", "Tom").Find(&users)
+	require.NoError(t, result.Error)
+	require.Contains(t, result.Statement.SQL.String(), "SELECT")
+	require.Contains(t, result.Statement.SQL.String(), "WHERE name = ?")
+	require.Equal(t, []interface{}{"Tom"}, result.Statement.Vars)
+}
+
+func TestCacheExecBuildsSubquery(t *testing.T) {
+	db := openTestDB(t)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	require.NoError(t, db.AutoMigrate(&cacheUser{}))
+	require.NoError(t, db.Create(&[]cacheUser{{ID: 1, Name: "Tom"}, {ID: 2, Name: "Jerry"}}).Error)
+	require.NoError(t, db.Use(NewGormCache(nil)))
+
+	subquery := db.Model(&cacheUser{}).Scopes(func(tx *gorm.DB) *gorm.DB {
+		return tx.Where("name = ?", "Tom")
+	}).Select("id").Group("id")
+	result := db.Exec("UPDATE cache_users SET name = ? FROM (?) AS selected WHERE cache_users.id = selected.id", "Updated", subquery)
+	require.NoError(t, result.Error)
+	require.EqualValues(t, 1, result.RowsAffected)
+
+	var users []cacheUser
+	require.NoError(t, db.Raw("SELECT id, name FROM cache_users ORDER BY id").Scan(&users).Error)
+	require.Equal(t, []cacheUser{{ID: 1, Name: "Updated"}, {ID: 2, Name: "Jerry"}}, users)
+}
+
 func TestCacheSecondLoadShouldReturnData(t *testing.T) {
 	db := openTestDB(t)
 

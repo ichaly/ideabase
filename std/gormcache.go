@@ -122,10 +122,14 @@ func purgeTag(db *gorm.DB) string {
 }
 
 func (my *GormCache) query(db *gorm.DB) {
-	if db.DryRun || db.Error != nil {
+	if db.Error != nil {
 		return
 	}
 	callbacks.BuildQuerySQL(db)
+	// GORM 通过 DryRun 构建子查询，必须先生成 SQL，再跳过缓存和数据库访问。
+	if db.DryRun || db.Error != nil {
+		return
+	}
 	key := my.key(db)
 
 	if raw, err := my.store.Get(db.Statement.Context, key); err == nil {
