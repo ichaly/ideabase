@@ -64,7 +64,7 @@
 
 ## 验证
 
-Go 1.26.6，Apple M1 Max；使用独立模块 `GOWORK=off`。
+Go 1.26.8，Apple M1 Max；使用独立模块 `GOWORK=off`。
 
 - 全量 `go test ./...` 通过，包括真实 PostgreSQL 示例。
 - 最后修改后重新验证根包、SQL 编译器、transport 和内部缓存相关测试。

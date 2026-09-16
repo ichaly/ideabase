@@ -6,7 +6,7 @@ date: 2026-08-08
 deepened: 2026-08-08
 ---
 
-> **GA scope update (2026-08-14):** 发布基线是 Go 1.26.6+、当前引擎 operation/golden
+> **GA scope update (2026-08-14):** 发布基线是 Go 1.26.8+、当前引擎 operation/golden
 > corpus 与标准 `net/http` transport。fish-ai-api、旧 Fiber plugin 和 Go 1.25 兼容目标已被
 > 后续决策移出 GA；下文相关历史条目仅保留决策背景，不再是验收条件。
 
@@ -663,7 +663,7 @@ flowchart TB
 **Verification:** 所有 requirements 有自动化证据；文档、Schema、运行行为与性能报告一致；没有待办式生产阻断项或隐藏能力。
 
 **Completion evidence (2026-08-09):** `go test ./gql/...`、完整 `-race`、`go vet` 与
-`git diff --check` 通过；Go 1.25.0/1.26.3 均完成全模块编译；PostgreSQL 15 默认集成矩阵
+`git diff --check` 通过；Go 1.25.0/1.26.8 均完成全模块编译；PostgreSQL 15 默认集成矩阵
 通过，16/17/18 真实容器分别通过 catalog 加载；GraphQL-over-HTTP audit 61 项 0 failure
 （1 项旧草案状态码 warning，当前草案采用 422）；兼容基准 simple 22 alloc、1.88–1.93µs，
 nested 51 alloc、4.51–4.82µs，均在冻结预算内；Gateway warm query 约 7.9µs/75 alloc，

@@ -6,7 +6,7 @@
 
 ## 运行
 
-需要 Go 1.26.6、Docker。以下凭据仅用于本机一次性数据库。
+需要 Go 1.26.8、Docker。以下凭据仅用于本机一次性数据库。
 
 ```bash
 cd gql/examples/orders

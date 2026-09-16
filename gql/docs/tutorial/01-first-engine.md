@@ -1,6 +1,6 @@
 # 教程：创建第一个 Engine
 
-需要 Go 1.26.6、PostgreSQL 15–18。推荐从 [可运行的订单示例](../../examples/orders/README.md)
+需要 Go 1.26.8、PostgreSQL 15–18。推荐从 [可运行的订单示例](../../examples/orders/README.md)
 开始：它使用真实生产模式、受限数据库账号和签名身份，不需要先生成元数据文件。
 
 ## 最少需要理解的内容

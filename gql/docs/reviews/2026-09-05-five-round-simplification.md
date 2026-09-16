@@ -28,7 +28,7 @@
 - 每轮均通过核心包、compiler、metadata、protocol、transport、internal、database 测试，以及 `go vet ./...` 和 `git diff --check`。
 - 最终完整竞态测试：`go test -race . ./transport ./compiler/pgsql` 通过。
 - 使用独立 PostgreSQL 16 容器加载 examples/schema.sql，`go test ./examples` 通过；验证后已删除容器。
-- 基准从基线提交独立导出，与当前实现顺序运行同一组基准，各 10 次、每次 200ms；Go 1.26.6，Apple M1 Max。
+- 基准从基线提交独立导出，与当前实现顺序运行同一组基准，各 10 次、每次 200ms；Go 1.26.8，Apple M1 Max。
 - 现有 perfgate 的 10% 显著耗时退化门禁通过，简单/嵌套查询分配预算测试通过。
 
 | 基准 | 修改前 ns/op 中位数 | 修改后 ns/op 中位数 | 分配次数 前→后 | B/op 前→后 |

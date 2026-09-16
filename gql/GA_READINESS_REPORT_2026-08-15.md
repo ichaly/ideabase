@@ -54,7 +54,7 @@ flowchart LR
 
 ### 2.2 最终动态门禁
 
-环境：Go 1.26.6、darwin/arm64、真实 PostgreSQL 15 容器。
+环境：Go 1.26.8、darwin/arm64、真实 PostgreSQL 15 容器。
 
 | 门禁 | 最终结果 |
 |---|---|

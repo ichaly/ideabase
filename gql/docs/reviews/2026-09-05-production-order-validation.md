@@ -29,7 +29,7 @@
 
 | 验证 | 结果 |
 | --- | --- |
-| Go 1.26.6，`GOWORK=off go test -race ./... -count=1`，独立 PG16 原有示例库 | 全模块通过 |
+| Go 1.26.8，`GOWORK=off go test -race ./... -count=1`，独立 PG16 原有示例库 | 全模块通过 |
 | `go vet ./...`、tools 模块测试、`git diff --check` | 通过 |
 | PostgreSQL 15/17/18，核心包及订单完整测试 | 均通过；测试自动创建独立库 |
 | `GQL_RUN_CLUSTER_GA=1`，核心跨进程、HTTP Remote/Gateway、SQL 数量/并发门禁 | 通过 |

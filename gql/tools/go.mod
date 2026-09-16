@@ -1,6 +1,6 @@
 module github.com/ichaly/ideabase/gql/tools
 
-go 1.26.6
+go 1.26.8
 
 require golang.org/x/perf v0.0.0-20260709024250-82a0b07e230d
 
