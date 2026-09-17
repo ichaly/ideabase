@@ -3,7 +3,6 @@ package gql
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -13,11 +12,6 @@ import (
 	"github.com/ichaly/ideabase/std"
 	"github.com/vektah/gqlparser/v2/ast"
 )
-
-// ErrDatabaseUnavailable reports that a resolver was executed without a
-// database provider. Resolvers should return this error instead of silently
-// opening a second connection or bypassing the request transaction.
-var ErrDatabaseUnavailable = errors.New("gql: request database is unavailable")
 
 type executionContextKey struct{}
 type invalidationStateKey struct{}
@@ -31,8 +25,8 @@ type invalidationState struct {
 // ExecutionContext is the read-only request view exposed to custom resolvers.
 // Identity is copied only from the host-authenticated context; it is never an
 // input to WithExecutionContext and therefore cannot be supplied by GraphQL
-// variables. DB selects the transaction attached to the request when one is
-// active, falling back to the request's base database.
+// variables. Connection exposes the shared connection; Transaction exposes
+// the current request transaction, which SQL must use when present.
 type ExecutionContext struct {
 	ctx                 context.Context
 	identity            Identity
@@ -243,24 +237,15 @@ func (my ExecutionContext) PolicyDecision() (PolicyDecision, bool) {
 	return PolicyDecisionFromContext(my.ctx, my.coordinate)
 }
 
-// DB returns the request transaction when present, otherwise its base DB.
-func (my ExecutionContext) DB() std.DBTX {
-	if tx := transactionFromContext(my.ctx); tx != nil {
-		return tx
-	}
-	if my.database != nil {
-		return my.database.Pool()
-	}
-	return nil
+// Connection returns the application-owned shared connection, or nil when absent.
+// SQL executed through its pool does not participate in the request transaction.
+func (my ExecutionContext) Connection() *std.Connection {
+	return my.database
 }
 
-// RequireDB is the explicit form for resolvers that cannot proceed without
-// the engine-owned request database or transaction.
-func (my ExecutionContext) RequireDB() (std.DBTX, error) {
-	if database := my.DB(); database != nil {
-		return database, nil
-	}
-	return nil, ErrDatabaseUnavailable
+// Transaction returns the current request transaction, or nil when absent.
+// Use it for SQL when present, including queries under RLS or a read snapshot.
+// The engine owns its commit and rollback lifecycle.
+func (my ExecutionContext) Transaction() *sql.Tx {
+	return transactionFromContext(my.ctx)
 }
-
-var _ std.DBTX = (*sql.Tx)(nil)

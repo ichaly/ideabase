@@ -43,7 +43,7 @@ func placeOrder(ctx context.Context, _ gql.Root, args placeArgs) (OrderReceipt, 
 		ids[i], quantities[i] = item.ProductID, int32(item.Quantity)
 	}
 	execution, ok := gql.ExecutionContextFromContext(ctx)
-	if !ok || execution.DB() == nil {
+	if !ok || execution.Transaction() == nil {
 		return receipt, errors.New("order requires engine transaction")
 	}
 	tenant, actor := execution.Identity().Tenant(), execution.Identity().Actor()
@@ -54,7 +54,7 @@ func placeOrder(ctx context.Context, _ gql.Root, args placeArgs) (OrderReceipt, 
 	if err != nil {
 		return receipt, err
 	}
-	db := execution.DB()
+	db := execution.Transaction()
 	err = db.QueryRowContext(ctx, `INSERT INTO orders(tenant_id,customer_id,request_id,request_body,created_by,updated_by)
  VALUES ($1,$2,$3,$4::jsonb,$5,$5) ON CONFLICT (tenant_id,request_id) DO NOTHING RETURNING id,status`, tenant, args.CustomerID, args.RequestID, string(payload), actor).Scan(&receipt.ID, &receipt.Status)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -117,10 +117,10 @@ type cancelArgs struct {
 func cancelOrder(ctx context.Context, _ gql.Root, args cancelArgs) (OrderReceipt, error) {
 	var receipt OrderReceipt
 	execution, ok := gql.ExecutionContextFromContext(ctx)
-	if !ok || execution.DB() == nil {
+	if !ok || execution.Transaction() == nil {
 		return receipt, errors.New("order requires engine transaction")
 	}
-	db, tenant := execution.DB(), execution.Identity().Tenant()
+	db, tenant := execution.Transaction(), execution.Identity().Tenant()
 	err := db.QueryRowContext(ctx, `SELECT id,status FROM orders WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenant, args.ID).Scan(&receipt.ID, &receipt.Status)
 	if err != nil || receipt.Status == "cancelled" {
 		return receipt, err

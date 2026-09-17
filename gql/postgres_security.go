@@ -78,7 +78,7 @@ func (provider *PostgresSecurityStateProvider) Ready(ctx context.Context) error 
 	var loaded *postgresSecuritySnapshot
 	err := postgresPreflight(ctx, provider.db, "security state", func(tx *sql.Tx) error {
 		var err error
-		if loaded, err = loadSecuritySnapshot(ctx, tx); err != nil {
+		if loaded, err = scanSecuritySnapshot(tx.QueryRowContext(ctx, securitySnapshotQuery)); err != nil {
 			return err
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE gql_security_state SET revision=revision WHERE singleton`)
@@ -189,7 +189,7 @@ func (provider *PostgresSecurityStateProvider) snapshot(ctx context.Context) (*p
 	if current != nil && now.Sub(current.loadedAt) <= provider.maxStaleness {
 		return current, nil
 	}
-	next, err := loadSecuritySnapshot(ctx, provider.db.Pool())
+	next, err := scanSecuritySnapshot(provider.db.Pool().QueryRowContext(ctx, securitySnapshotQuery))
 	if err == nil {
 		provider.state.Store(next)
 		return next, nil
@@ -197,12 +197,14 @@ func (provider *PostgresSecurityStateProvider) snapshot(ctx context.Context) (*p
 	return nil, fmt.Errorf("security state unavailable: %w", err)
 }
 
-func loadSecuritySnapshot(ctx context.Context, db std.DBTX) (*postgresSecuritySnapshot, error) {
+const securitySnapshotQuery = `SELECT revision, tenants FROM gql_security_state WHERE singleton`
+
+func scanSecuritySnapshot(row *sql.Row) (*postgresSecuritySnapshot, error) {
 	var state struct {
 		Revision uint64
 		Tenants  []byte
 	}
-	if err := db.QueryRowContext(ctx, `SELECT revision, tenants FROM gql_security_state WHERE singleton`).Scan(&state.Revision, &state.Tenants); err != nil {
+	if err := row.Scan(&state.Revision, &state.Tenants); err != nil {
 		return nil, err
 	}
 	if len(state.Tenants) == 0 {

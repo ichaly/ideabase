@@ -316,11 +316,11 @@ type signUpReq struct {
 func newSignUpResolver(db *std.Connection) Resolver {
 	return NewResolver("Mutation", "signUp", "建号并回查主档", func(ctx context.Context, _ Root, req signUpReq) (int64, error) {
 		var id int64
-		var database std.DBTX = db.Pool()
-		if execution, ok := ExecutionContextFromContext(ctx); ok && execution.DB() != nil {
-			database = execution.DB()
+		query := db.Pool().QueryRowContext
+		if execution, ok := ExecutionContextFromContext(ctx); ok && execution.Transaction() != nil {
+			query = execution.Transaction().QueryRowContext
 		}
-		err := database.QueryRowContext(ctx, "INSERT INTO users(name, email) VALUES($1, $2) RETURNING id", req.Name, req.Email).Scan(&id)
+		err := query(ctx, "INSERT INTO users(name, email) VALUES($1, $2) RETURNING id", req.Name, req.Email).Scan(&id)
 		return id, err
 	}, Result("User"))
 }

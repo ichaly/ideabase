@@ -28,8 +28,8 @@ GOWORK=off go test ./internal/modules/gql/api ./internal/modules/bot/api
 ## 3. Resolver 复用请求事务
 
 Query、Mutation 和实体字段统一注册 `Resolver`。Mutation 业务代码必须通过
-`gql.ExecutionContextFromContext(ctx)` 取得唯一执行视图，再调用 `execution.RequireDB()` 获取
-连接并继续传给 service/repository；捕获全局
+`gql.ExecutionContextFromContext(ctx)` 取得唯一执行视图，再调用 `execution.Transaction()` 获取
+当前 `*sql.Tx` 并继续传给 service/repository；捕获全局
 `*gorm.DB` 或在 service 内另开事务不会加入当前 GraphQL Mutation 的原子边界。
 
 引擎入口直接使用 `*std.Connection`，已删除 `gql.Database`、`gql.DBTX` 和 `gql.NewDatabase` 薄封装。
@@ -44,8 +44,13 @@ IoC 已同步注册 `std.NewConnection` 和 `std.NewDatabase` 两个构造器。
 应用应导入 `std/postgres` 或 `std/mysql` 注册完整驱动，只导入底层 SQL 驱动不再足够。
 已移除 `OpenConnection`、`WrapConnection`、`WithDSN`、`WithDatabaseDSN` 和对应 Option 类型；
 `NewConnection` 统一保存 DSN 并设置连接池参数，GQL 不接收独立的 `*sql.DB`。
-CDC 默认复用连接的 DSN，独立复制账号仍可通过 `subscription.dsn` 配置。Resolver 内部使用
-`execution.RequireDB()` 返回的 `std.DBTX`，从而自动复用当前 `*sql.Tx`。
+CDC 默认复用连接的 DSN，独立复制账号仍可通过 `subscription.dsn` 配置。
+
+`std.DBTX`、`ExecutionContext.DB()`、`RequireDB()` 和 `ErrDatabaseUnavailable` 已移除。
+使用 `execution.Connection()` 获取共享 `*std.Connection`，使用 `execution.Transaction()`
+获取当前 `*sql.Tx`；缺失时分别返回 nil。`Connection` 只管理连接池、驱动名与 DSN，
+不包装事务，也不转发 SQL。Mutation 直接使用当前事务；普通查询仅在没有当前事务时使用连接池。
+RLS 和读快照查询同样必须优先使用当前事务，事务的提交与回滚由引擎负责。
 
 跨 namespace Mutation 没有分布式事务：字段按文档顺序执行，响应的 commit metadata
 报告已提交或状态未知的 namespace，引擎不会重放可能已经提交的操作。
@@ -100,7 +105,7 @@ Schema/拓扑刷新失败可继续服务已验证的旧 snapshot。
 
 GA 以单一路径替换预发布兼容入口：Resolver 只使用 `ExecutionContext`，不再暴露可伪造的
 `WithExecutionContext`/`WithExecutionCapability`，也不再提供独立的 `Tx`
-和包级 `Invalidate`。`DB()` 返回请求连接（可能为空），`RequireDB()` 在无连接时返回明确错误。协议内置表也不再以可变全局变量暴露：
+和包级 `Invalidate`。`Connection()` 与 `Transaction()` 分别提供共享连接和当前事务（缺失时为 nil）。协议内置表也不再以可变全局变量暴露：
 
 - `protocol.DataTypes` → `protocol.DefaultDataTypes()`；
 - `protocol.Operators` → `protocol.GetOperator(name)` / `protocol.OperatorsForScalar(type)`；

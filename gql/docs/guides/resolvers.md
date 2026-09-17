@@ -41,7 +41,7 @@ builder.Register(gql.NewLoader("User", "profile", "画像", "id",
 
 普通中间件使用 `NextResolver[Source, Args, Value]`；批量中间件使用 `NextResolver[[]Source, Args, []Value]`，next 一次处理整个批次。中间件保持字段声明、权限和批量能力。
 
-Mutation 业务通过 `ExecutionContextFromContext(ctx)` 的 `RequireDB()` 获取当前事务。远程调用的外部副作用不加入本地数据库事务。
+Mutation 业务通过 `ExecutionContextFromContext(ctx)` 的 `Transaction()` 获取当前 `*sql.Tx`，检查非 nil 后执行 SQL。Query 有当前事务时也必须使用它；只有没有事务时才使用 `Connection().Pool()`。事务由引擎提交或回滚。远程调用的外部副作用不加入本地数据库事务。
 
 ## Codec
 

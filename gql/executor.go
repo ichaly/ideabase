@@ -695,20 +695,21 @@ func (my *Engine) fetch(ctx context.Context, plan *Plan, variables map[string]in
 	if err != nil {
 		return nil, err
 	}
-	var database std.DBTX = my.database.Pool()
-	if tx := transactionFromContext(ctx); tx != nil {
-		database = tx
-	}
+	tx := transactionFromContext(ctx)
 	var data []byte
-	run := func(tx std.DBTX) error {
+	run := func(tx *sql.Tx) error {
 		if (my.rls || tenantRLSRequested(ctx)) && !rlsPrepared(ctx, tx) {
 			if err := my.prepareRLS(ctx, tx); err != nil {
 				return err
 			}
 		}
-		return tx.QueryRowContext(ctx, plan.SQL, args...).Scan(&data)
+		query := my.database.Pool().QueryRowContext
+		if tx != nil {
+			query = tx.QueryRowContext
+		}
+		return query(ctx, plan.SQL, args...).Scan(&data)
 	}
-	if (my.rls || tenantRLSRequested(ctx)) && transactionFromContext(ctx) == nil {
+	if (my.rls || tenantRLSRequested(ctx)) && tx == nil {
 		tx, beginErr := my.database.Pool().BeginTx(ctx, nil)
 		if beginErr != nil {
 			err = beginErr
@@ -718,7 +719,7 @@ func (my *Engine) fetch(ctx context.Context, plan *Plan, variables map[string]in
 			err = tx.Commit()
 		}
 	} else {
-		err = run(database)
+		err = run(tx)
 	}
 	if err == nil {
 		data = encodeBytes(data, plan.paths) // 空路径树零成本短路

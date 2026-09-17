@@ -2,10 +2,12 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 )
 
@@ -116,13 +118,15 @@ func TestHandlerExecutionContextContainsTrustedRequestView(t *testing.T) {
 	require.NoError(t, err)
 	var view ExecutionContext
 	var found bool
-	var executionDB, executionTx any
+	var executionDB *std.Connection
+	var executionTx *sql.Tx
 	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Mutation", "inspectExecution", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) {
 		view, found = ExecutionContextFromContext(ctx)
-		executionDB, executionTx = view.DB(), transactionFromContext(ctx)
-		if !found || view.Identity().Subject() != "user-a" || view.SnapshotFingerprint() == "" || executionDB == nil || executionDB != executionTx {
+		executionDB, executionTx = view.Connection(), view.Transaction()
+		if !found || view.Identity().Subject() != "user-a" || view.SnapshotFingerprint() == "" || executionDB == nil || executionTx == nil {
 			return "invalid", nil
 		}
+		require.Same(t, transactionFromContext(ctx), executionTx)
 		return "ok", nil
 	}, Result("String"))))
 
@@ -132,9 +136,9 @@ func TestHandlerExecutionContextContainsTrustedRequestView(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, identity, view.Identity())
 	require.Equal(t, executor.mustSnapshotFingerprint(t), view.SnapshotFingerprint())
-	require.Same(t, executionDB, executionTx)
-	require.Same(t, executionDB, view.DB())
-	require.NotSame(t, db, executionDB)
+	require.Same(t, db, executionDB)
+	require.Same(t, executionDB, view.Connection())
+	require.Same(t, executionTx, view.Transaction())
 }
 
 func (my *Engine) mustSnapshotFingerprint(t *testing.T) string {

@@ -1,19 +1,11 @@
 package std
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"strings"
 	"time"
 )
-
-// DBTX is the transaction-aware SQL execution boundary shared by sql.DB and sql.Tx.
-type DBTX interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
 
 // Connection holds an application-owned pool, its dialect and connection string.
 type Connection struct {

@@ -11,7 +11,16 @@ func TestReadSnapshotSharesRepeatableReadTransactionWithResolvers(t *testing.T) 
 	executor, _, cleanup := setupRootResolverExecutor(t)
 	defer cleanup()
 	require.NoError(t, executor.register(NewResolver[Root, struct{}, bool]("Query", "hasSnapshotTx", "", func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
-		return transactionFromContext(ctx) != nil, nil
+		execution, ok := ExecutionContextFromContext(ctx)
+		require.True(t, ok)
+		require.Same(t, executor.database, execution.Connection())
+		tx := execution.Transaction()
+		require.NotNil(t, tx)
+		require.Same(t, transactionFromContext(ctx), tx)
+		var isolation string
+		require.NoError(t, tx.QueryRowContext(ctx, `SHOW transaction_isolation`).Scan(&isolation))
+		require.Equal(t, "repeatable read", isolation)
+		return true, nil
 	})))
 	reply := executor.run(WithReadSnapshot(context.Background()), `{ users { total } hasSnapshotTx }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)

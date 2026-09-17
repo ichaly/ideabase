@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -121,12 +122,12 @@ type RLSStatement struct {
 
 type rlsPreparedKey struct{}
 
-func rlsPrepared(ctx context.Context, tx std.DBTX) bool {
-	prepared, _ := ctx.Value(rlsPreparedKey{}).(std.DBTX)
+func rlsPrepared(ctx context.Context, tx *sql.Tx) bool {
+	prepared, _ := ctx.Value(rlsPreparedKey{}).(*sql.Tx)
 	return prepared != nil && prepared == tx
 }
 
-func markRLSPrepared(ctx context.Context, tx std.DBTX) context.Context {
+func markRLSPrepared(ctx context.Context, tx *sql.Tx) context.Context {
 	return context.WithValue(ctx, rlsPreparedKey{}, tx)
 }
 
@@ -140,7 +141,7 @@ func NewRLSIdentityStatement(identity Identity) (RLSStatement, error) {
 	}, nil
 }
 
-func (my *Engine) prepareRLS(ctx context.Context, tx std.DBTX) error {
+func (my *Engine) prepareRLS(ctx context.Context, tx *sql.Tx) error {
 	if rlsPrepared(ctx, tx) {
 		return nil
 	}

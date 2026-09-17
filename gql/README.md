@@ -275,12 +275,14 @@ builder.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
 `engine.OperationCost(query, operationName, variables)` 使用与真实执行相同的验证、
 coercion、directive 和选择集合并路径，但不受当前预算上限影响。
 
-Mutation 根 Resolver 会在引擎事务中执行；Resolver 统一先调用
-`execution, ok := gql.ExecutionContextFromContext(ctx)`，再通过 `execution.RequireDB()` 取得
-request-scoped 连接，它会优先返回当前事务。同一只读视图还提供 identity、selection、
-deadline、snapshot fingerprint、scope、route、policy decision、capability 和 coordinate。
-无数据库执行器时 `RequireDB` 返回明确错误。直接捕获全局数据库句柄的旧写法无法
-自动加入引擎事务，需要把事务连接继续传给 service/repository。
+Mutation 根 Resolver 会在引擎事务中执行；Resolver 先调用
+`execution, ok := gql.ExecutionContextFromContext(ctx)`，再通过 `execution.Transaction()`
+取得当前 `*sql.Tx`，并继续传给 service/repository。事务由引擎提交或回滚，业务代码不接管其生命周期。
+`execution.Connection()` 返回应用共享的 `*std.Connection`，不包含事务状态。
+普通查询没有事务时使用 `Connection().Pool()`；有事务时必须使用 `Transaction()`，
+包括开启 RLS 或读快照的 Query。两者缺失时分别返回 nil，Resolver 应按自己的依赖检查。
+同一只读视图还提供 identity、selection、deadline、snapshot fingerprint、scope、route、
+policy decision、capability 和 coordinate。直接使用共享连接池不会自动加入请求事务。
 
 在应用初始化处用 `std.NewConnection(config)` 创建统一数据库对象，连接串配置在 `config.Database` 中。
 连接类型及实现位于 `std/connection.go`，GORM 装配位于 `std/database.go`。

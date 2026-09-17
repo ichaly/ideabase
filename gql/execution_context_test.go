@@ -46,10 +46,8 @@ func TestExecutionContextExposesTrustedRequestView(t *testing.T) {
 	gotDeadline, ok := execution.Deadline()
 	require.True(t, ok)
 	require.WithinDuration(t, deadline, gotDeadline, time.Millisecond)
-	require.Same(t, base.Pool(), execution.DB())
-	database, err := execution.RequireDB()
-	require.NoError(t, err)
-	require.Same(t, base.Pool(), database)
+	require.Same(t, base, execution.Connection())
+	require.Nil(t, execution.Transaction())
 }
 
 func TestExecutionContextSelectionIsDetachedFromCachedAST(t *testing.T) {
@@ -71,23 +69,20 @@ func TestExecutionContextSelectionIsDetachedFromCachedAST(t *testing.T) {
 	require.Equal(t, "name", field.SelectionSet[0].(*ast.Field).Name)
 }
 
-func TestExecutionContextDBPrefersTransaction(t *testing.T) {
-	tx := &sql.Tx{}
+func TestExecutionContextSeparatesConnectionAndTransaction(t *testing.T) {
 	config := &std.Config{}
 	config.Database = "postgres://localhost/test"
 	base, err := std.NewConnection(config)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = base.Close() })
+	tx := &sql.Tx{}
 	ctx := withExecutionContext(context.Background(), nil, "", base)
 	ctx = context.WithValue(ctx, transactionKey{}, tx)
 
 	execution, ok := ExecutionContextFromContext(ctx)
 	require.True(t, ok)
-	require.Same(t, tx, execution.DB())
-	database, err := execution.RequireDB()
-	require.NoError(t, err)
-	require.Same(t, tx, database)
-	require.Same(t, tx, transactionFromContext(ctx))
+	require.Same(t, base, execution.Connection())
+	require.Same(t, tx, execution.Transaction())
 }
 
 func TestExecutionContextDoesNotInventIdentityOrDatabase(t *testing.T) {
@@ -96,9 +91,10 @@ func TestExecutionContextDoesNotInventIdentityOrDatabase(t *testing.T) {
 	require.True(t, ok)
 	_, hasIdentity := execution.IdentityValue()
 	require.False(t, hasIdentity)
-	require.Nil(t, execution.DB())
-	_, err := execution.RequireDB()
-	require.ErrorIs(t, err, ErrDatabaseUnavailable)
+	require.Nil(t, execution.Connection())
+	require.Nil(t, execution.Transaction())
+	require.Nil(t, (ExecutionContext{}).Connection())
+	require.Nil(t, (ExecutionContext{}).Transaction())
 
 	_, ok = ExecutionContextFromContext(context.Background())
 	require.False(t, ok)
