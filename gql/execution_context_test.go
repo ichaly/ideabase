@@ -28,9 +28,11 @@ func TestExecutionContextExposesTrustedRequestView(t *testing.T) {
 	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-a"})
 	require.NoError(t, err)
 	deadline := time.Now().Add(time.Minute)
-	pool := &sql.DB{}
-	base, err := std.WrapConnection(pool, "postgres")
+	config := &std.Config{}
+	config.Database = "postgres://localhost/test"
+	base, err := std.NewConnection(config)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = base.Close() })
 	selection := ast.SelectionSet{&ast.Field{Name: "users"}}
 	ctx, cancel := context.WithDeadline(WithIdentity(context.Background(), identity), deadline)
 	defer cancel()
@@ -44,10 +46,10 @@ func TestExecutionContextExposesTrustedRequestView(t *testing.T) {
 	gotDeadline, ok := execution.Deadline()
 	require.True(t, ok)
 	require.WithinDuration(t, deadline, gotDeadline, time.Millisecond)
-	require.Same(t, pool, execution.DB())
+	require.Same(t, base.Pool(), execution.DB())
 	database, err := execution.RequireDB()
 	require.NoError(t, err)
-	require.Same(t, pool, database)
+	require.Same(t, base.Pool(), database)
 }
 
 func TestExecutionContextSelectionIsDetachedFromCachedAST(t *testing.T) {
@@ -70,9 +72,12 @@ func TestExecutionContextSelectionIsDetachedFromCachedAST(t *testing.T) {
 }
 
 func TestExecutionContextDBPrefersTransaction(t *testing.T) {
-	pool, tx := &sql.DB{}, &sql.Tx{}
-	base, err := std.WrapConnection(pool, "postgres")
+	tx := &sql.Tx{}
+	config := &std.Config{}
+	config.Database = "postgres://localhost/test"
+	base, err := std.NewConnection(config)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = base.Close() })
 	ctx := withExecutionContext(context.Background(), nil, "", base)
 	ctx = context.WithValue(ctx, transactionKey{}, tx)
 

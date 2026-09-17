@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"github.com/ichaly/ideabase/std"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/ichaly/ideabase/gql"
 	_ "github.com/ichaly/ideabase/gql/compiler/pgsql"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,14 +34,17 @@ func TestMain(m *testing.M) {
 			return 1
 		}
 		port := strings.TrimSpace(strings.Split(string(out), ":")[1])
-		adminDSN = "host=127.0.0.1 port=" + port + " user=postgres password=fixture dbname=postgres sslmode=disable"
-		appDSN = "host=127.0.0.1 port=" + port + " user=orders_app password=fixture dbname=postgres sslmode=disable"
-		cdcDSN = "host=127.0.0.1 port=" + port + " user=orders_cdc password=fixture dbname=postgres sslmode=disable"
-		pool, err := sql.Open("pgx", adminDSN)
+		adminDSN = "postgres://postgres:fixture@127.0.0.1:" + port + "/postgres?sslmode=disable"
+		appDSN = "postgres://orders_app:fixture@127.0.0.1:" + port + "/postgres?sslmode=disable"
+		cdcDSN = "postgres://orders_cdc:fixture@127.0.0.1:" + port + "/postgres?sslmode=disable"
+		config := &std.Config{}
+		config.Database = adminDSN
+		db, err := std.NewConnection(config)
 		if err != nil {
 			return 1
 		}
-		defer pool.Close()
+		defer db.Close()
+		pool := db.Pool()
 		deadline := time.Now().Add(20 * time.Second)
 		for pool.Ping() != nil {
 			if time.Now().After(deadline) {
@@ -79,20 +80,21 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func testEndpoint(t *testing.T) (*gql.TenantGateway, *sql.DB) {
+func testEndpoint(t *testing.T) (*gql.TenantGateway, *std.Connection) {
 	t.Helper()
-	admin, err := sql.Open("pgx", adminDSN)
+	config := &std.Config{}
+	config.Database = adminDSN
+	admin, err := std.NewConnection(config)
 	require.NoError(t, err)
 	t.Cleanup(func() { admin.Close() })
-	_, err = admin.Exec(`TRUNCATE order_items, orders, products, customers RESTART IDENTITY CASCADE;
+	_, err = admin.Pool().Exec(`TRUNCATE order_items, orders, products, customers RESTART IDENTITY CASCADE;
  INSERT INTO customers(tenant_id,name) VALUES ('a','Alice'),('b','Bob');
  INSERT INTO products(tenant_id,name,price_cents,stock) VALUES ('a','Tea',100,10),('a','Coffee',200,2),('b','Tea',150,10);`)
 	require.NoError(t, err)
-	pool, err := sql.Open("pgx", appDSN)
+	config.Database = appDSN
+	db, err := std.NewConnection(config)
 	require.NoError(t, err)
-	t.Cleanup(func() { pool.Close() })
-	db, err := std.WrapConnection(pool, "postgres")
-	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 	engine, gateway, err := buildEndpoint(db, cdcDSN, []string{"a", "b"}, nil)
 	require.NoError(t, err)
 	t.Cleanup(engine.Close)
@@ -118,7 +120,7 @@ func TestOrderLifecycle(t *testing.T) {
 	reply := execute(t, e, "a", `mutation { placeOrder(requestId:"first",customerId:1,items:[{productId:1,quantity:2}]) { id status } }`)
 	require.Empty(t, reply["errors"], "%v", reply)
 	var stock int
-	require.NoError(t, db.QueryRow(`SELECT stock FROM products WHERE id=1`).Scan(&stock))
+	require.NoError(t, db.Pool().QueryRow(`SELECT stock FROM products WHERE id=1`).Scan(&stock))
 	require.Equal(t, 8, stock)
 	id := reply["data"].(map[string]any)["placeOrder"].(map[string]any)["id"].(string)
 	for range 2 {
@@ -126,7 +128,7 @@ func TestOrderLifecycle(t *testing.T) {
 		require.Empty(t, cancelled["errors"], "%v", cancelled)
 		require.Equal(t, "cancelled", cancelled["data"].(map[string]any)["cancelOrder"].(map[string]any)["status"])
 	}
-	require.NoError(t, db.QueryRow(`SELECT stock FROM products WHERE id=1`).Scan(&stock))
+	require.NoError(t, db.Pool().QueryRow(`SELECT stock FROM products WHERE id=1`).Scan(&stock))
 	require.Equal(t, 10, stock)
 }
 
@@ -148,9 +150,9 @@ func TestOrderRetryAndRollback(t *testing.T) {
 		require.NotEmpty(t, execute(t, e, "a", query)["errors"], query)
 	}
 	var orders, stock int
-	require.NoError(t, db.QueryRow(`SELECT count(*) FROM orders`).Scan(&orders))
+	require.NoError(t, db.Pool().QueryRow(`SELECT count(*) FROM orders`).Scan(&orders))
 	require.Equal(t, 1, orders)
-	require.NoError(t, db.QueryRow(`SELECT stock FROM products WHERE id=1`).Scan(&stock))
+	require.NoError(t, db.Pool().QueryRow(`SELECT stock FROM products WHERE id=1`).Scan(&stock))
 	require.Equal(t, 8, stock)
 	id := first["data"].(map[string]any)["placeOrder"].(map[string]any)["id"].(string)
 	require.NotEmpty(t, execute(t, e, "b", fmt.Sprintf(`mutation { cancelOrder(id:%q) { id } }`, id))["errors"])
@@ -172,11 +174,11 @@ func TestOrderReadOnlyRoleCannotWrite(t *testing.T) {
 
 func TestOrderReplicasCannotOversell(t *testing.T) {
 	first, db := testEndpoint(t)
-	pool, err := sql.Open("pgx", appDSN)
+	config := &std.Config{}
+	config.Database = appDSN
+	replicaDB, err := std.NewConnection(config)
 	require.NoError(t, err)
-	defer pool.Close()
-	replicaDB, err := std.WrapConnection(pool, "postgres")
-	require.NoError(t, err)
+	defer replicaDB.Close()
 	engine, second, err := buildEndpoint(replicaDB, cdcDSN, []string{"a", "b"}, nil)
 	require.NoError(t, err)
 	defer engine.Close()
@@ -199,9 +201,9 @@ func TestOrderReplicasCannotOversell(t *testing.T) {
 	}
 	require.Equal(t, 10, successes)
 	var stock, count int
-	require.NoError(t, db.QueryRow(`SELECT stock FROM products WHERE id=1`).Scan(&stock))
+	require.NoError(t, db.Pool().QueryRow(`SELECT stock FROM products WHERE id=1`).Scan(&stock))
 	require.Zero(t, stock)
-	require.NoError(t, db.QueryRow(`SELECT count(*) FROM orders`).Scan(&count))
+	require.NoError(t, db.Pool().QueryRow(`SELECT count(*) FROM orders`).Scan(&count))
 	require.Equal(t, 10, count)
 }
 
@@ -224,9 +226,9 @@ func TestOrderConcurrentRetryCreatesOnce(t *testing.T) {
 		require.Equal(t, first, <-results)
 	}
 	var stock, count int
-	require.NoError(t, db.QueryRow(`SELECT stock FROM products WHERE id=1`).Scan(&stock))
+	require.NoError(t, db.Pool().QueryRow(`SELECT stock FROM products WHERE id=1`).Scan(&stock))
 	require.Equal(t, 8, stock)
-	require.NoError(t, db.QueryRow(`SELECT count(*) FROM orders`).Scan(&count))
+	require.NoError(t, db.Pool().QueryRow(`SELECT count(*) FROM orders`).Scan(&count))
 	require.Equal(t, 1, count)
 }
 
@@ -273,13 +275,13 @@ func TestOrderGeneratedCustomerManagement(t *testing.T) {
 }
 
 func TestOrderAssemblyBoundsConnectionPool(t *testing.T) {
-	pool, err := sql.Open("pgx", appDSN)
+	config := &std.Config{}
+	config.Database = appDSN
+	db, err := std.NewConnection(config)
 	require.NoError(t, err)
-	defer pool.Close()
-	db, err := std.WrapConnection(pool, "postgres")
-	require.NoError(t, err)
+	defer db.Close()
 	engine, _, err := buildEndpoint(db, cdcDSN, []string{"a", "b"}, nil)
 	require.NoError(t, err)
 	defer engine.Close()
-	require.Equal(t, 16, pool.Stats().MaxOpenConnections, "tests and executable must share pool configuration")
+	require.Equal(t, 16, db.Pool().Stats().MaxOpenConnections, "tests and executable must share pool configuration")
 }

@@ -252,7 +252,9 @@ func main() {
 }
 
 func openDemoDB() (*std.Connection, error) {
-	db, err := std.OpenConnection(demoDSN())
+	config := &std.Config{}
+	config.Database = demoDSN()
+	db, err := std.NewConnection(config)
 	if err != nil {
 		return nil, fmt.Errorf("demo数据库不可用（先运行 docker compose up -d）: %w", err)
 	}

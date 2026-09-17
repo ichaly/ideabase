@@ -56,7 +56,9 @@ func run() error {
 	if dsn == "" {
 		return errors.New("DATABASE_URL is required")
 	}
-	db, err := std.OpenConnection(dsn)
+	config := &std.Config{}
+	config.Database = dsn
+	db, err := std.NewConnection(config)
 	if err != nil {
 		return err
 	}

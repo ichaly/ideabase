@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/ichaly/ideabase/std"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -64,9 +63,7 @@ func TestOrderHTTPAuthentication(t *testing.T) {
 }
 
 func TestOrderRemoteComposition(t *testing.T) {
-	e, pool := testEndpoint(t)
-	db, err := std.WrapConnection(pool, "postgres")
-	require.NoError(t, err)
+	e, db := testEndpoint(t)
 	replay, err := gql.NewPostgresReplayStore(db)
 	require.NoError(t, err)
 	codec, err := gql.NewDelegationCodec(gql.DelegationConfig{Issuer: "admin", Audience: "orders", Key: testSecret, Replay: replay})

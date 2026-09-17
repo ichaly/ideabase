@@ -32,7 +32,9 @@ func TestGAClusterChild(t *testing.T) {
 	if dsn == "" {
 		t.Fatal("missing GQL_GA_DSN")
 	}
-	db, err := std.OpenConnection(dsn)
+	config := &std.Config{}
+	config.Database = dsn
+	db, err := std.NewConnection(config)
 	require.NoError(t, err)
 
 	switch mode {
@@ -82,7 +84,9 @@ func TestGAClusterChild(t *testing.T) {
 func TestGAClusterReplayIsConsumedOnceAcrossProcesses(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := std.OpenConnection(dsn)
+	config := &std.Config{}
+	config.Database = dsn
+	db, err := std.NewConnection(config)
 	require.NoError(t, err)
 	testExec(t, db, PostgresReplayDDL)
 
@@ -117,7 +121,9 @@ func TestGAClusterReplayIsConsumedOnceAcrossProcesses(t *testing.T) {
 func TestGAClusterSecurityRevocationIsObservedByAnotherProcess(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := std.OpenConnection(dsn)
+	config := &std.Config{}
+	config.Database = dsn
+	db, err := std.NewConnection(config)
 	require.NoError(t, err)
 	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db)
@@ -135,7 +141,9 @@ func TestGAClusterSecurityRevocationIsObservedByAnotherProcess(t *testing.T) {
 func TestGAClusterRevocationPropagatesDuringActiveServing(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := std.OpenConnection(dsn)
+	config := &std.Config{}
+	config.Database = dsn
+	db, err := std.NewConnection(config)
 	require.NoError(t, err)
 	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db)
@@ -182,7 +190,9 @@ func TestGAClusterRevocationPropagatesDuringActiveServing(t *testing.T) {
 func TestGAClusterRevisionRejectsStalePublishAndKeepsFreshState(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := std.OpenConnection(dsn)
+	config := &std.Config{}
+	config.Database = dsn
+	db, err := std.NewConnection(config)
 	require.NoError(t, err)
 	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db)

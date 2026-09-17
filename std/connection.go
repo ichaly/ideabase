@@ -22,22 +22,10 @@ type Connection struct {
 	dsn    string
 }
 
-// WrapConnection binds an application-owned pool to a SQL dialect.
-func WrapConnection(pool *sql.DB, driver string) (*Connection, error) {
-	driver = strings.TrimSpace(driver)
-	if pool == nil {
-		return nil, fmt.Errorf("database connection pool is required")
-	}
-	if driver == "" {
-		return nil, fmt.Errorf("database driver is required")
-	}
-	return &Connection{pool: pool, driver: driver}, nil
-}
-
-// OpenConnection opens a pool without pinging it. Import the corresponding
-// std driver package to register URL parsing and SQL/GORM drivers.
-func OpenConnection(rawDSN string) (*Connection, error) {
-	rawDSN = strings.TrimSpace(rawDSN)
+// NewConnection creates a shared pool from application settings without pinging it.
+// Import the corresponding std driver package to register URL parsing and SQL/GORM drivers.
+func NewConnection(c *Config) (*Connection, error) {
+	rawDSN := strings.TrimSpace(c.Database)
 	if rawDSN == "" {
 		return nil, fmt.Errorf("database DSN is required")
 	}
@@ -53,6 +41,9 @@ func OpenConnection(rawDSN string) (*Connection, error) {
 	if err != nil {
 		return nil, err
 	}
+	pool.SetMaxIdleConns(5)
+	pool.SetMaxOpenConns(90)
+	pool.SetConnMaxLifetime(5 * time.Minute)
 	return &Connection{pool: pool, driver: d.name, dsn: dsn}, nil
 }
 
@@ -82,16 +73,4 @@ func (c *Connection) Close() error {
 		return nil
 	}
 	return c.pool.Close()
-}
-
-// NewConnection creates a shared connection configured from application settings.
-func NewConnection(c *Config) (*Connection, error) {
-	db, err := OpenConnection(c.Database)
-	if err != nil {
-		return nil, err
-	}
-	db.Pool().SetMaxIdleConns(5)
-	db.Pool().SetMaxOpenConns(90)
-	db.Pool().SetConnMaxLifetime(5 * time.Minute)
-	return db, nil
 }

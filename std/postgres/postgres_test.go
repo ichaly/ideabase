@@ -7,12 +7,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestOpenConnectionPostgresURLs(t *testing.T) {
+func TestNewConnectionPostgresURLs(t *testing.T) {
 	for _, test := range []struct{ input, want string }{
 		{"POSTGRES://demo:pass%40word@localhost/app", "postgres://demo:pass%40word@localhost/app"},
 		{"postgres://demo:pass%40word@localhost/app", "postgres://demo:pass%40word@localhost/app"},
 	} {
-		connection, err := std.OpenConnection(test.input)
+		settings := &std.Config{}
+		settings.Database = test.input
+		connection, err := std.NewConnection(settings)
 		if err != nil {
 			t.Fatal(err)
 		}

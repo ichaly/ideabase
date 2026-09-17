@@ -14,7 +14,9 @@ import (
 )
 
 func TestCDCUsesConnectionDSN(t *testing.T) {
-	connection, err := std.OpenConnection("postgres://localhost/demo?sslmode=disable")
+	config := &std.Config{}
+	config.Database = "postgres://localhost/demo?sslmode=disable"
+	connection, err := std.NewConnection(config)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 	// Invalid publication stops validation before network access. Reaching this

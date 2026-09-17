@@ -34,7 +34,7 @@ Query、Mutation 和实体字段统一注册 `Resolver`。Mutation 业务代码�
 
 引擎入口直接使用 `*std.Connection`，已删除 `gql.Database`、`gql.DBTX` 和 `gql.NewDatabase` 薄封装。
 原 `gql/database` 的连接封装已合并至 `std/connection.go`，不再提供独立子包。
-推荐用 `std.OpenConnection(dsn)`，或 `std.NewConnection(config)`，创建一次公共连接对象；
+统一用 `std.NewConnection(config)` 创建一次公共连接对象，连接串写入 `config.Database`；
 GORM 使用其 `Pool()`，GQL 直接使用该对象，CDC 使用其 `DSN()`。
 GORM 装配入口 `std.NewDatabase(entities, plugins, config, db)` 新增公共连接参数；
 IoC 已同步注册 `std.NewConnection` 和 `std.NewDatabase` 两个构造器。
@@ -42,9 +42,9 @@ IoC 已同步注册 `std.NewConnection` 和 `std.NewDatabase` 两个构造器。
 `Open` 返回底层池和实际 DSN，`Gorm` 接收 `*std.Connection` 创建共享池上的 GORM 方言。
 具体 SQL 驱动名和连接串解析由驱动包内部处理。
 应用应导入 `std/postgres` 或 `std/mysql` 注册完整驱动，只导入底层 SQL 驱动不再足够。
-已移除 `WithDSN`、`WithDatabaseDSN` 和对应 Option 类型；DSN 只在 `OpenConnection(dsn)` 内保存。
-已有 `*sql.DB` 仍可用 `std.WrapConnection(pool, driver)` 包装，但不保存 DSN，
-使用 CDC 时需另配 `subscription.dsn`。Resolver 内部使用
+已移除 `OpenConnection`、`WrapConnection`、`WithDSN`、`WithDatabaseDSN` 和对应 Option 类型；
+`NewConnection` 统一保存 DSN 并设置连接池参数，GQL 不接收独立的 `*sql.DB`。
+CDC 默认复用连接的 DSN，独立复制账号仍可通过 `subscription.dsn` 配置。Resolver 内部使用
 `execution.RequireDB()` 返回的 `std.DBTX`，从而自动复用当前 `*sql.Tx`。
 
 跨 namespace Mutation 没有分布式事务：字段按文档顺序执行，响应的 commit metadata

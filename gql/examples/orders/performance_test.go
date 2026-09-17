@@ -23,7 +23,7 @@ import (
 // Set ORDERS_SOAK_SECONDS=300 for the release soak; ordinary tests run for 3s.
 func TestOrderPopulatedHTTPWorkload(t *testing.T) {
 	e, db := testEndpoint(t)
-	_, err := db.Exec(`UPDATE products SET stock=10000;
+	_, err := db.Pool().Exec(`UPDATE products SET stock=10000;
  INSERT INTO orders(tenant_id,customer_id,request_id,request_body,created_by,updated_by)
  SELECT CASE WHEN n%2=0 THEN 'a' ELSE 'b' END, CASE WHEN n%2=0 THEN 1 ELSE 2 END,
  'seed-'||n,'{}','seed','seed' FROM generate_series(1,100000) n;
@@ -119,8 +119,8 @@ func TestOrderPopulatedHTTPWorkload(t *testing.T) {
 	require.Less(t, p(99), time.Second, "mixed workload latency budget")
 	require.Greater(t, float64(len(durations))/elapsed.Seconds(), 20.0, "conservative shared CI throughput floor")
 	var stock, unfinished int
-	require.NoError(t, db.QueryRow(`SELECT sum(stock) FROM products`).Scan(&stock))
+	require.NoError(t, db.Pool().QueryRow(`SELECT sum(stock) FROM products`).Scan(&stock))
 	require.Equal(t, 30000, stock, "all load orders must restore stock")
-	require.NoError(t, db.QueryRow(`SELECT count(*) FROM orders WHERE request_id LIKE 'load-%' AND status<>'cancelled'`).Scan(&unfinished))
+	require.NoError(t, db.Pool().QueryRow(`SELECT count(*) FROM orders WHERE request_id LIKE 'load-%' AND status<>'cancelled'`).Scan(&unfinished))
 	require.Zero(t, unfinished)
 }

@@ -41,11 +41,13 @@ import (
 	_ "github.com/ichaly/ideabase/std/postgres"
 )
 
-db, err := std.OpenConnection(dsn)
+config := &std.Config{}
+config.Database = dsn
+db, err := std.NewConnection(config)
 if err != nil { log.Fatal(err) }
 defer db.Close()                // 应用退出时关闭共享池
 k, _ := std.NewKonfig()         // 配置中为生产实体声明 permissions
-builder := gql.New(k, db)       // 复用 *sql.DB 连接池，自动加载表结构与外键关系
+builder := gql.New(k, db)       // 接收 Connection，自动加载表结构与外键关系
 builder.LoadDocuments("queries")
 engine, err := builder.Build()  // 构建一次 capability snapshot，随后冻结
 if err != nil { log.Fatal(err) }
@@ -280,18 +282,18 @@ deadline、snapshot fingerprint、scope、route、policy decision、capability �
 无数据库执行器时 `RequireDB` 返回明确错误。直接捕获全局数据库句柄的旧写法无法
 自动加入引擎事务，需要把事务连接继续传给 service/repository。
 
-推荐在应用初始化处用 `std.OpenConnection(dsn)` 创建统一数据库对象，DSN 只传一次。
+在应用初始化处用 `std.NewConnection(config)` 创建统一数据库对象，连接串配置在 `config.Database` 中。
 连接类型及实现位于 `std/connection.go`，GORM 装配位于 `std/database.go`。
 连接实现不调用 GORM，但二者同属已有 GORM 依赖的 `std` 包。
-导入 `_ "github.com/ichaly/ideabase/std/postgres"` 后支持 `postgres://` 和 `postgresql://` URL，
+导入 `_ "github.com/ichaly/ideabase/std/postgres"` 后支持 `postgres://` URL，
 自动使用 `pgx` SQL 驱动与 GQL 的 `postgres` 方言；导入 `std/mysql` 后支持 `mysql://` URL。
 每个驱动包负责 URL 转换、默认连接参数、SQL 建连和 GORM 方言，公共连接层管理返回的共享池。
-只导入底层 SQL 驱动不足以启用 `OpenConnection`；未注册的 URL 协议会明确报错。
+只导入底层 SQL 驱动不足以启用 `NewConnection`；未注册的 URL 协议会明确报错。
 例如 `postgres://user:pass%40word@localhost:5432/demo?sslmode=disable`，
 密码中的 `@` 等 URL 特殊字符应使用百分号编码。无类型标识的原生 DSN 和不支持的数据库类型
-会明确报错；已有池仍可通过下面的 `std.WrapConnection` 接入。
+会明确报错。
 返回对象可直接传给 `gql.New(k, db)`；`db.Pool()` 返回同一个 `*sql.DB`，
-`db.DSN()` 为 CDC 提供复制连接配置。`OpenConnection` 与 `sql.Open` 一样不主动 Ping，
+`db.DSN()` 为 CDC 提供复制连接配置。`NewConnection` 不主动 Ping，
 需要立即检查数据库连通性时调用 `db.Pool().PingContext(ctx)`。
 
 GORM 在应用侧使用这个共享池即可（以下需要应用导入 GORM 及其 PostgreSQL 驱动）：
@@ -310,9 +312,9 @@ orm, err := gorm.Open(postgres.New(postgres.Config{
 GORM 和 GQL 的业务 SQL 共用连接池；WAL CDC 仍单独建立一条复制连接，不创建第二个池。
 应用负责共享池生命周期：先关闭引擎、停止其他数据库使用方，再调用 `db.Close()`。
 `engine.Close()` 不会关闭共享池。池参数可直接通过 `db.Pool().SetMaxOpenConns(...)` 等设置。
-如已由其他组件创建连接池，可以用 `std.WrapConnection(pool, "postgres")` 包装，
-但它不保存 DSN，也无法从原生 `*sql.DB` 反查 DSN；CDC 需要显式配置 `subscription.dsn`。
-需要自动复用 DSN 时，统一通过 `std.OpenConnection(dsn)` 或 `std.NewConnection(config)` 初始化。
+连接统一由 `std.NewConnection(config)` 创建，不再提供已有池包装入口。
+默认池参数为最多 5 个空闲连接、90 个打开连接、连接最长存活 5 分钟。
+CDC 默认复用 `db.DSN()`；使用独立复制账号时，可显式配置 `subscription.dsn`。
 
 自定义 Mutation 修改了 CDC 无法观察的外部状态时，调用
 `execution.Invalidate("table")` 登记刷新；引擎只在自有事务成功提交后去重发布，回滚和外部

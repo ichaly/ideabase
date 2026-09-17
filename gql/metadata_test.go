@@ -130,15 +130,19 @@ func setupTestDatabase(t *testing.T) (*std.Connection, func()) {
 	require.NoError(t, testPostgres.err)
 	host := "127.0.0.1"
 	adminDSN := fmt.Sprintf("postgres://test:test@%s:%s/test?sslmode=disable", host, testPostgres.port)
-	admin, err := sql.Open("pgx", adminDSN)
+	adminConfig := &std.Config{}
+	adminConfig.Database = adminDSN
+	admin, err := std.NewConnection(adminConfig)
 	require.NoError(t, err, "连接 PostgreSQL 测试实例失败")
 	database := fmt.Sprintf("gql_test_%d", testPostgres.dbs.Add(1))
-	_, err = admin.ExecContext(context.Background(), `CREATE DATABASE "`+database+`"`)
+	_, err = admin.Pool().ExecContext(context.Background(), `CREATE DATABASE "`+database+`"`)
 	require.NoError(t, err)
 	dsn := fmt.Sprintf("postgres://test:test@%s:%s/%s?sslmode=disable", host, testPostgres.port, database)
 
 	// 连接数据库
-	db, err := std.OpenConnection(dsn)
+	config := &std.Config{}
+	config.Database = dsn
+	db, err := std.NewConnection(config)
 	require.NoError(t, err)
 	pool := db.Pool()
 
@@ -148,9 +152,9 @@ func setupTestDatabase(t *testing.T) (*std.Connection, func()) {
 
 	// 返回清理函数
 	cleanup := func() {
-		_ = pool.Close()
+		_ = db.Close()
 		for deadline := time.Now().Add(time.Second); ; time.Sleep(10 * time.Millisecond) {
-			_, dropErr := admin.ExecContext(context.Background(), `DROP DATABASE IF EXISTS "`+database+`" WITH (FORCE)`)
+			_, dropErr := admin.Pool().ExecContext(context.Background(), `DROP DATABASE IF EXISTS "`+database+`" WITH (FORCE)`)
 			if dropErr == nil || time.Now().After(deadline) {
 				break
 			}
@@ -180,12 +184,14 @@ func startTestPostgres() {
 		return
 	}
 	_, testPostgres.port, _ = strings.Cut(strings.TrimSpace(string(output)), ":")
-	dsn := fmt.Sprintf("host=127.0.0.1 port=%s user=test password=test dbname=test sslmode=disable", testPostgres.port)
+	dsn := fmt.Sprintf("postgres://test:test@127.0.0.1:%s/test?sslmode=disable", testPostgres.port)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		db, openErr := sql.Open("pgx", dsn)
+		config := &std.Config{}
+		config.Database = dsn
+		db, openErr := std.NewConnection(config)
 		if openErr == nil {
-			pingErr := db.Ping()
+			pingErr := db.Pool().Ping()
 			_ = db.Close()
 			if pingErr == nil {
 				return

@@ -64,7 +64,9 @@ func TestRLSActuallyIsolatesRowsForNonBypassRole(t *testing.T) {
 	require.NoError(t, err)
 	dsnURL.User = url.UserPassword("gql_rls", "gql_rls_test")
 	dsn := dsnURL.String()
-	restricted, err := std.OpenConnection(dsn)
+	config := &std.Config{}
+	config.Database = dsn
+	restricted, err := std.NewConnection(config)
 	require.NoError(t, err)
 	defer func() {
 		_ = restricted.Pool().Close()

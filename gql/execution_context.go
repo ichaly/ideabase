@@ -263,5 +263,4 @@ func (my ExecutionContext) RequireDB() (std.DBTX, error) {
 	return nil, ErrDatabaseUnavailable
 }
 
-var _ std.DBTX = (*sql.DB)(nil)
 var _ std.DBTX = (*sql.Tx)(nil)

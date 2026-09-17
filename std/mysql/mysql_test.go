@@ -8,8 +8,10 @@ import (
 	"github.com/ichaly/ideabase/std"
 )
 
-func TestOpenConnectionMySQLURL(t *testing.T) {
-	connection, err := std.OpenConnection("mysql://demo:pass%40word@localhost:3306/demo%2Fapp?charset=latin1&parseTime=true")
+func TestNewConnectionMySQLURL(t *testing.T) {
+	config := &std.Config{}
+	config.Database = "mysql://demo:pass%40word@localhost:3306/demo%2Fapp?charset=latin1&parseTime=true"
+	connection, err := std.NewConnection(config)
 	if err != nil {
 		t.Fatal(err)
 	}
