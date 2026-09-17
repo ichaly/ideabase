@@ -285,7 +285,7 @@ deadline、snapshot fingerprint、scope、route、policy decision、capability �
 连接实现不调用 GORM，但二者同属已有 GORM 依赖的 `std` 包。
 导入 `_ "github.com/ichaly/ideabase/std/postgres"` 后支持 `postgres://` 和 `postgresql://` URL，
 自动使用 `pgx` SQL 驱动与 GQL 的 `postgres` 方言；导入 `std/mysql` 后支持 `mysql://` URL。
-每个驱动包负责 URL 转换、默认参数和 GORM 方言，公共连接层只按注册信息创建共享池。
+每个驱动包负责 URL 转换、默认连接参数、SQL 建连和 GORM 方言，公共连接层管理返回的共享池。
 只导入底层 SQL 驱动不足以启用 `OpenConnection`；未注册的 URL 协议会明确报错。
 例如 `postgres://user:pass%40word@localhost:5432/demo?sslmode=disable`，
 密码中的 `@` 等 URL 特殊字符应使用百分号编码。无类型标识的原生 DSN 和不支持的数据库类型

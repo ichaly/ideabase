@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -13,14 +14,24 @@ import (
 // 使用: import _ "github.com/ichaly/ideabase/std/postgres"
 // URL: postgres://user:pass@host:5432/dbname?sslmode=disable
 func init() {
-	std.RegisterDatabase(std.DatabaseDriver{
-		Dialect:   "postgres",
-		SQLDriver: "pgx",
-		ParseDSN:  normalizeDSN,
-		Dialector: func(connection *std.Connection) gorm.Dialector {
+	std.RegisterDatabase("postgres", std.Dialector{
+		Open: openConnection,
+		Gorm: func(connection *std.Connection) gorm.Dialector {
 			return pgdriver.New(pgdriver.Config{Conn: connection.Pool(), DSN: connection.DSN()})
 		},
 	}, "postgresql")
+}
+
+func openConnection(rawDSN string) (*sql.DB, string, error) {
+	dsn, err := normalizeDSN(rawDSN)
+	if err != nil {
+		return nil, "", err
+	}
+	pool, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, "", err
+	}
+	return pool, dsn, nil
 }
 
 func normalizeDSN(rawDSN string) (string, error) {

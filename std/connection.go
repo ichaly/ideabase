@@ -45,19 +45,15 @@ func OpenConnection(rawDSN string) (*Connection, error) {
 	if !hasScheme {
 		return nil, fmt.Errorf("database DSN must include a supported URL scheme")
 	}
-	driver, ok := databaseDrivers[strings.ToLower(scheme)]
+	d, ok := dialectors[strings.ToLower(scheme)]
 	if !ok {
 		return nil, fmt.Errorf("database URL scheme is not registered; import its std driver package")
 	}
-	dsn, err := driver.ParseDSN(rawDSN)
+	pool, dsn, err := d.Open(rawDSN)
 	if err != nil {
 		return nil, err
 	}
-	pool, err := sql.Open(driver.SQLDriver, dsn)
-	if err != nil {
-		return nil, err
-	}
-	return &Connection{pool: pool, driver: driver.Dialect, dsn: dsn}, nil
+	return &Connection{pool: pool, driver: d.name, dsn: dsn}, nil
 }
 
 func (c *Connection) Pool() *sql.DB {

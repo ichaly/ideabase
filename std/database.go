@@ -1,6 +1,7 @@
 package std
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -8,37 +9,32 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// Dialector 数据库方言工厂函数
-type Dialector func(connection *Connection) gorm.Dialector
-
-// DatabaseDriver 将连接串解析和 GORM 装配留在对应驱动包中。
-type DatabaseDriver struct {
-	Dialect     string
-	SQLDriver   string
-	ParseDSN    func(string) (string, error)
-	Dialector   Dialector
-	PrepareStmt bool
+// Dialector 负责打开底层连接，以及在共享池上创建 GORM 方言。
+type Dialector struct {
+	Open func(string) (*sql.DB, string, error)
+	Gorm func(*Connection) gorm.Dialector
+	name string
 }
 
-var databaseDrivers = map[string]DatabaseDriver{}
+var dialectors = map[string]Dialector{}
 
 // RegisterDatabase 在启动时注册驱动及 URL 协议别名。
-func RegisterDatabase(driver DatabaseDriver, aliases ...string) {
-	driver.Dialect = strings.ToLower(driver.Dialect)
-	databaseDrivers[driver.Dialect] = driver
+func RegisterDatabase(name string, d Dialector, aliases ...string) {
+	d.name = strings.ToLower(name)
+	dialectors[d.name] = d
 	for _, alias := range aliases {
-		databaseDrivers[strings.ToLower(alias)] = driver
+		dialectors[strings.ToLower(alias)] = d
 	}
 }
 
 // NewDatabase 在共享池上装配 GORM，不创建或接管连接池。
-func NewDatabase(e []interface{}, p []gorm.Plugin, c *Config, connection *Connection) (*gorm.DB, error) {
-	driver, ok := databaseDrivers[connection.Driver()]
+func NewDatabase(e []any, p []gorm.Plugin, c *Config, connection *Connection) (*gorm.DB, error) {
+	d, ok := dialectors[connection.Driver()]
 	if !ok {
 		return nil, fmt.Errorf("database driver '%s' not registered", connection.Driver())
 	}
-	db, err := gorm.Open(driver.Dialector(connection), &gorm.Config{
-		PrepareStmt: driver.PrepareStmt || !c.IsDebug(),
+	db, err := gorm.Open(d.Gorm(connection), &gorm.Config{
+		PrepareStmt: connection.Driver() == "mysql" || !c.IsDebug(),
 		Logger:      logger.Default.LogMode(logger.Info),
 	})
 	if err != nil {

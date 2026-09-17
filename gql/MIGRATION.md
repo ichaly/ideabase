@@ -38,8 +38,9 @@ Query、Mutation 和实体字段统一注册 `Resolver`。Mutation 业务代码�
 GORM 使用其 `Pool()`，GQL 直接使用该对象，CDC 使用其 `DSN()`。
 GORM 装配入口 `std.NewDatabase(entities, plugins, config, db)` 新增公共连接参数；
 IoC 已同步注册 `std.NewConnection` 和 `std.NewDatabase` 两个构造器。
-自定义驱动通过 `std.RegisterDatabase(std.DatabaseDriver{...}, aliases...)` 一次注册
-SQL 驱动名、连接串解析、GORM 方言和预编译默认值；方言工厂接收 `*std.Connection` 复用池。
+自定义驱动通过 `std.RegisterDatabase(name, std.Dialector{Open: ..., Gorm: ...}, aliases...)` 注册。
+`Open` 返回底层池和实际 DSN，`Gorm` 接收 `*std.Connection` 创建共享池上的 GORM 方言。
+具体 SQL 驱动名和连接串解析由驱动包内部处理。
 应用应导入 `std/postgres` 或 `std/mysql` 注册完整驱动，只导入底层 SQL 驱动不再足够。
 已移除 `WithDSN`、`WithDatabaseDSN` 和对应 Option 类型；DSN 只在 `OpenConnection(dsn)` 内保存。
 已有 `*sql.DB` 仍可用 `std.WrapConnection(pool, driver)` 包装，但不保存 DSN，

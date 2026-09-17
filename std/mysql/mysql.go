@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"database/sql"
 	"fmt"
 	"net/url"
 	"strings"
@@ -14,15 +15,24 @@ import (
 // 使用: import _ "github.com/ichaly/ideabase/std/mysql"
 // URL: mysql://user:pass@host:3306/dbname?charset=utf8mb4&parseTime=True
 func init() {
-	std.RegisterDatabase(std.DatabaseDriver{
-		Dialect:     "mysql",
-		SQLDriver:   "mysql",
-		ParseDSN:    toDSN,
-		PrepareStmt: true,
-		Dialector: func(connection *std.Connection) gorm.Dialector {
+	std.RegisterDatabase("mysql", std.Dialector{
+		Open: openConnection,
+		Gorm: func(connection *std.Connection) gorm.Dialector {
 			return mydriver.New(mydriver.Config{Conn: connection.Pool(), DSN: connection.DSN()})
 		},
 	})
+}
+
+func openConnection(rawURL string) (*sql.DB, string, error) {
+	dsn, err := toDSN(rawURL)
+	if err != nil {
+		return nil, "", err
+	}
+	pool, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, "", err
+	}
+	return pool, dsn, nil
 }
 
 // toDSN 将 mysql://user:pass@host:port/db?params 转为 MySQL DSN 格式。
