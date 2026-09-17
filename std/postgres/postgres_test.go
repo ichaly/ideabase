@@ -10,7 +10,7 @@ import (
 func TestOpenConnectionPostgresURLs(t *testing.T) {
 	for _, test := range []struct{ input, want string }{
 		{"POSTGRES://demo:pass%40word@localhost/app", "postgres://demo:pass%40word@localhost/app"},
-		{"PostgreSQL://demo:pass%40word@localhost/app", "postgresql://demo:pass%40word@localhost/app"},
+		{"postgres://demo:pass%40word@localhost/app", "postgres://demo:pass%40word@localhost/app"},
 	} {
 		connection, err := std.OpenConnection(test.input)
 		if err != nil {

@@ -51,7 +51,7 @@ func TestNewDatabaseUsesSharedPool(t *testing.T) {
 
 func TestNewConnectionUsesConfiguredURL(t *testing.T) {
 	config := &std.Config{}
-	config.Database = "postgresql://localhost/example?sslmode=disable"
+	config.Database = "postgres://localhost/example?sslmode=disable"
 	connection, err := std.NewConnection(config)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = connection.Close() })

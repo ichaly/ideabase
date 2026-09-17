@@ -19,7 +19,7 @@ func init() {
 		Gorm: func(connection *std.Connection) gorm.Dialector {
 			return pgdriver.New(pgdriver.Config{Conn: connection.Pool(), DSN: connection.DSN()})
 		},
-	}, "postgresql")
+	})
 }
 
 func openConnection(rawDSN string) (*sql.DB, string, error) {
@@ -36,7 +36,7 @@ func openConnection(rawDSN string) (*sql.DB, string, error) {
 
 func normalizeDSN(rawDSN string) (string, error) {
 	scheme, rest, ok := strings.Cut(rawDSN, "://")
-	if !ok || (!strings.EqualFold(scheme, "postgres") && !strings.EqualFold(scheme, "postgresql")) {
+	if !ok || !strings.EqualFold(scheme, "postgres") {
 		return "", fmt.Errorf("invalid postgres database DSN")
 	}
 	return strings.ToLower(scheme) + "://" + rest, nil
