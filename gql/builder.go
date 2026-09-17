@@ -13,7 +13,7 @@ import (
 // Builder is the sole assembly path for one immutable Engine.
 type Builder struct {
 	k         *std.Konfig
-	database  *Database
+	database  *std.Connection
 	metadata  []MetadataOption
 	items     []Resolver
 	replaces  []Resolver
@@ -62,7 +62,7 @@ type resolverWrap struct {
 }
 
 // New creates the minimal database-to-GraphQL builder.
-func New(k *std.Konfig, database *Database, options ...MetadataOption) *Builder {
+func New(k *std.Konfig, database *std.Connection, options ...MetadataOption) *Builder {
 	return &Builder{k: k, database: database, metadata: options}
 }
 
@@ -212,7 +212,7 @@ func (my *Builder) Build() (*Engine, error) {
 	return executor, nil
 }
 
-func validateProductionMigrations(metadata *Metadata, database *Database) error {
+func validateProductionMigrations(metadata *Metadata, database *std.Connection) error {
 	if metadata == nil || metadata.cfg == nil || metadata.cfg.IsDebug() || database == nil || database.Driver() != "postgres" {
 		return nil
 	}

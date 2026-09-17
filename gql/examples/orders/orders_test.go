@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/ichaly/ideabase/std"
 	"os"
 	"os/exec"
 	"strings"
@@ -90,7 +91,7 @@ func testEndpoint(t *testing.T) (*gql.TenantGateway, *sql.DB) {
 	pool, err := sql.Open("pgx", appDSN)
 	require.NoError(t, err)
 	t.Cleanup(func() { pool.Close() })
-	db, err := gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(appDSN))
+	db, err := std.WrapConnection(pool, "postgres")
 	require.NoError(t, err)
 	engine, gateway, err := buildEndpoint(db, cdcDSN, []string{"a", "b"}, nil)
 	require.NoError(t, err)
@@ -174,7 +175,7 @@ func TestOrderReplicasCannotOversell(t *testing.T) {
 	pool, err := sql.Open("pgx", appDSN)
 	require.NoError(t, err)
 	defer pool.Close()
-	replicaDB, err := gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(appDSN))
+	replicaDB, err := std.WrapConnection(pool, "postgres")
 	require.NoError(t, err)
 	engine, second, err := buildEndpoint(replicaDB, cdcDSN, []string{"a", "b"}, nil)
 	require.NoError(t, err)
@@ -275,7 +276,7 @@ func TestOrderAssemblyBoundsConnectionPool(t *testing.T) {
 	pool, err := sql.Open("pgx", appDSN)
 	require.NoError(t, err)
 	defer pool.Close()
-	db, err := gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(appDSN))
+	db, err := std.WrapConnection(pool, "postgres")
 	require.NoError(t, err)
 	engine, _, err := buildEndpoint(db, cdcDSN, []string{"a", "b"}, nil)
 	require.NoError(t, err)

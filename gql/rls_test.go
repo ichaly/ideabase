@@ -4,7 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
+	"github.com/ichaly/ideabase/std"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -59,9 +60,11 @@ func TestRLSActuallyIsolatesRowsForNonBypassRole(t *testing.T) {
 	testExec(t, admin, `GRANT USAGE ON SCHEMA public TO gql_rls`)
 	testExec(t, admin, `GRANT SELECT ON users TO gql_rls`)
 
-	dsn := admin.DSN()
-	dsn = strings.Replace(strings.Replace(dsn, "user=test", "user=gql_rls", 1), "password=test", "password=gql_rls_test", 1)
-	restricted, err := openTestDatabase(dsn)
+	dsnURL, err := url.Parse(admin.DSN())
+	require.NoError(t, err)
+	dsnURL.User = url.UserPassword("gql_rls", "gql_rls_test")
+	dsn := dsnURL.String()
+	restricted, err := std.OpenConnection(dsn)
 	require.NoError(t, err)
 	defer func() {
 		_ = restricted.Pool().Close()

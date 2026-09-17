@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/ichaly/ideabase/std"
 	"os"
 	"os/exec"
 	"strings"
@@ -31,7 +32,7 @@ func TestGAClusterChild(t *testing.T) {
 	if dsn == "" {
 		t.Fatal("missing GQL_GA_DSN")
 	}
-	db, err := openTestDatabase(dsn)
+	db, err := std.OpenConnection(dsn)
 	require.NoError(t, err)
 
 	switch mode {
@@ -81,7 +82,7 @@ func TestGAClusterChild(t *testing.T) {
 func TestGAClusterReplayIsConsumedOnceAcrossProcesses(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := openTestDatabase(dsn)
+	db, err := std.OpenConnection(dsn)
 	require.NoError(t, err)
 	testExec(t, db, PostgresReplayDDL)
 
@@ -116,7 +117,7 @@ func TestGAClusterReplayIsConsumedOnceAcrossProcesses(t *testing.T) {
 func TestGAClusterSecurityRevocationIsObservedByAnotherProcess(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := openTestDatabase(dsn)
+	db, err := std.OpenConnection(dsn)
 	require.NoError(t, err)
 	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db)
@@ -134,7 +135,7 @@ func TestGAClusterSecurityRevocationIsObservedByAnotherProcess(t *testing.T) {
 func TestGAClusterRevocationPropagatesDuringActiveServing(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := openTestDatabase(dsn)
+	db, err := std.OpenConnection(dsn)
 	require.NoError(t, err)
 	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db)
@@ -181,7 +182,7 @@ func TestGAClusterRevocationPropagatesDuringActiveServing(t *testing.T) {
 func TestGAClusterRevisionRejectsStalePublishAndKeepsFreshState(t *testing.T) {
 	dsn, cleanup := gaClusterDatabase(t)
 	defer cleanup()
-	db, err := openTestDatabase(dsn)
+	db, err := std.OpenConnection(dsn)
 	require.NoError(t, err)
 	testExec(t, db, PostgresSecurityStateDDL)
 	provider, err := NewPostgresSecurityStateProvider(db)

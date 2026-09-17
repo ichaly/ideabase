@@ -3,6 +3,7 @@ package gql
 import (
 	"context"
 	"fmt"
+	"github.com/ichaly/ideabase/std"
 	"reflect"
 	"testing"
 )
@@ -32,7 +33,7 @@ func (my *Builder) testAllowAllPolicy() *Builder {
 	return my
 }
 
-func newEngineForTest(d *Database, renderer *Renderer, metadata *Metadata, compiler *Compiler) (*Engine, error) {
+func newEngineForTest(d *std.Connection, renderer *Renderer, metadata *Metadata, compiler *Compiler) (*Engine, error) {
 	if metadata == nil || renderer == nil {
 		return nil, fmt.Errorf("缺少Metadata或Renderer")
 	}

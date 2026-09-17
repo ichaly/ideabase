@@ -18,7 +18,7 @@ import (
 
 // newTestExecutor 基于真实PostgreSQL构建完整执行器（各测试的唯一构造入口）；
 // tweak 在元数据构建前调整配置，opts 传递元数据选项（如WithCodecs）
-func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOption) (*Engine, *Database, func()) {
+func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOption) (*Engine, *std.Connection, func()) {
 	db, cleanup := setupTestDatabase(t)
 
 	k, err := std.NewKonfig()

@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	_ "embed"
 	"errors"
 	"flag"
@@ -19,7 +18,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/transport"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/ichaly/ideabase/std"
+	_ "github.com/ichaly/ideabase/std/postgres"
 )
 
 //go:embed schema.sql
@@ -56,17 +56,14 @@ func run() error {
 	if dsn == "" {
 		return errors.New("DATABASE_URL is required")
 	}
-	pool, err := sql.Open("pgx", dsn)
+	db, err := std.OpenConnection(dsn)
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
+	defer db.Close()
+	pool := db.Pool()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	db, err := gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(dsn))
-	if err != nil {
-		return err
-	}
 	tenants := strings.Split(os.Getenv("ORDER_TENANTS"), ",")
 	for i, t := range tenants {
 		tenants[i] = strings.TrimSpace(t)

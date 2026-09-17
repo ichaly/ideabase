@@ -5,7 +5,6 @@ package main
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -18,7 +17,7 @@ import (
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/gql/transport"
 	"github.com/ichaly/ideabase/std"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/ichaly/ideabase/std/postgres"
 )
 
 // UpperCodec 展示业务自定义标量、Matcher主动认领字段和Baser复用String过滤器。
@@ -129,20 +128,20 @@ func signResolver() gql.Resolver {
 
 // demoDSN demo数据库连接串（docker compose暴露5433），可用DEMO_DSN覆盖
 func demoDSN() string {
-	return cmp.Or(os.Getenv("DEMO_DSN"), "host=localhost port=5678 user=postgres password=postgres dbname=demo sslmode=disable")
+	return cmp.Or(os.Getenv("DEMO_DSN"), "postgres://postgres:postgres@localhost:5678/demo?sslmode=disable")
 }
 
 // buildEngine 用统一入口装配完整引擎；Builder 是元数据、编译器与运行时的唯一组装点。
 // main与性能测试共用，保证基准跑的就是demo实际装配
-func buildEngine(db *gql.Database) (*gql.Engine, error) {
+func buildEngine(db *std.Connection) (*gql.Engine, error) {
 	return buildEngineConfigured(db, false, nil)
 }
 
-func buildEngineMode(db *gql.Database, production bool) (*gql.Engine, error) {
+func buildEngineMode(db *std.Connection, production bool) (*gql.Engine, error) {
 	return buildEngineConfigured(db, production, nil)
 }
 
-func buildEngineConfigured(db *gql.Database, production bool, observer gql.Observer) (*gql.Engine, error) {
+func buildEngineConfigured(db *std.Connection, production bool, observer gql.Observer) (*gql.Engine, error) {
 	// 配置：数据侧声明（搜索列等）——生产中可放config.yml，键名一致；
 	// resolver等行为侧声明走注册（NewResolver/NewBatch），不进配置
 	k, err := std.NewKonfig()
@@ -242,7 +241,7 @@ func main() {
 	// 1. 数据库连接 + 引擎装配
 	db, err := openDemoDB()
 	die(err)
-	defer db.Pool().Close()
+	defer db.Close()
 	engine, err := buildEngine(db)
 	die(err)
 
@@ -252,19 +251,14 @@ func main() {
 	die(http.ListenAndServe(addr, newDemoHandler(engine)))
 }
 
-func openDemoDB() (*gql.Database, error) {
-	pool, err := sql.Open("pgx", demoDSN())
+func openDemoDB() (*std.Connection, error) {
+	db, err := std.OpenConnection(demoDSN())
 	if err != nil {
 		return nil, fmt.Errorf("demo数据库不可用（先运行 docker compose up -d）: %w", err)
 	}
-	if err = pool.Ping(); err != nil {
-		_ = pool.Close()
+	if err = db.Pool().Ping(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("demo数据库无法连接（先运行 docker compose up -d）: %w", err)
-	}
-	db, err := gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(demoDSN()))
-	if err != nil {
-		_ = pool.Close()
-		return nil, err
 	}
 	return db, nil
 }

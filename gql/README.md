@@ -35,19 +35,21 @@ GraphQL 请求
 
 ```go
 import (
-	"database/sql"
 	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 空白导入自注册PostgreSQL方言
+	"github.com/ichaly/ideabase/std"
 	"github.com/ichaly/ideabase/gql/transport"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/ichaly/ideabase/std/postgres"
 )
 
-pool, _ := sql.Open("pgx", dsn)
-db, _ := gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(dsn))
+db, err := std.OpenConnection(dsn)
+if err != nil { log.Fatal(err) }
+defer db.Close()                // 应用退出时关闭共享池
 k, _ := std.NewKonfig()         // 配置中为生产实体声明 permissions
 builder := gql.New(k, db)       // 复用 *sql.DB 连接池，自动加载表结构与外键关系
 builder.LoadDocuments("queries")
 engine, err := builder.Build()  // 构建一次 capability snapshot，随后冻结
 if err != nil { log.Fatal(err) }
+defer engine.Close()           // 先停止引擎及 CDC，再关闭共享池
 
 http.Handle("/graphql", transport.NewHandler(engine, transport.Options{}))
 
@@ -278,9 +280,40 @@ deadline、snapshot fingerprint、scope、route、policy decision、capability �
 无数据库执行器时 `RequireDB` 返回明确错误。直接捕获全局数据库句柄的旧写法无法
 自动加入引擎事务，需要把事务连接继续传给 service/repository。
 
-已有 GORM 应用无需创建第二个连接池：调用 `pool, err := gormDB.DB()` 取得底层
-`*sql.DB`，再用 `gql.NewDatabase(pool, "postgres", gql.WithDatabaseDSN(dsn))` 构建边界即可。
-GQL 不依赖 GORM，连接池的生命周期仍由应用负责。
+推荐在应用初始化处用 `std.OpenConnection(dsn)` 创建统一数据库对象，DSN 只传一次。
+连接类型及实现位于 `std/connection.go`，GORM 装配位于 `std/database.go`。
+连接实现不调用 GORM，但二者同属已有 GORM 依赖的 `std` 包。
+导入 `_ "github.com/ichaly/ideabase/std/postgres"` 后支持 `postgres://` 和 `postgresql://` URL，
+自动使用 `pgx` SQL 驱动与 GQL 的 `postgres` 方言；导入 `std/mysql` 后支持 `mysql://` URL。
+每个驱动包负责 URL 转换、默认参数和 GORM 方言，公共连接层只按注册信息创建共享池。
+只导入底层 SQL 驱动不足以启用 `OpenConnection`；未注册的 URL 协议会明确报错。
+例如 `postgres://user:pass%40word@localhost:5432/demo?sslmode=disable`，
+密码中的 `@` 等 URL 特殊字符应使用百分号编码。无类型标识的原生 DSN 和不支持的数据库类型
+会明确报错；已有池仍可通过下面的 `std.WrapConnection` 接入。
+返回对象可直接传给 `gql.New(k, db)`；`db.Pool()` 返回同一个 `*sql.DB`，
+`db.DSN()` 为 CDC 提供复制连接配置。`OpenConnection` 与 `sql.Open` 一样不主动 Ping，
+需要立即检查数据库连通性时调用 `db.Pool().PingContext(ctx)`。
+
+GORM 在应用侧使用这个共享池即可（以下需要应用导入 GORM 及其 PostgreSQL 驱动）：
+
+```go
+orm, err := gorm.Open(postgres.New(postgres.Config{
+    Conn: db.Pool(),
+}), &gorm.Config{})
+```
+
+使用 IdeaBase 标准装配时，`std.NewConnection(config)` 创建同一种公共连接对象并设置池参数，
+`std.NewDatabase(entities, plugins, config, db)` 复用它并保留插件、迁移、日志和预编译设置。
+`std/postgres` 或 `std/mysql` 同时注册连接解析与 GORM 方言。IoC 会注入同一个
+`*std.Connection` 和基于它的 `*gorm.DB`，停止时关闭共享池；GQL 直接接收公共连接对象。
+
+GORM 和 GQL 的业务 SQL 共用连接池；WAL CDC 仍单独建立一条复制连接，不创建第二个池。
+应用负责共享池生命周期：先关闭引擎、停止其他数据库使用方，再调用 `db.Close()`。
+`engine.Close()` 不会关闭共享池。池参数可直接通过 `db.Pool().SetMaxOpenConns(...)` 等设置。
+如已由其他组件创建连接池，可以用 `std.WrapConnection(pool, "postgres")` 包装，
+但它不保存 DSN，也无法从原生 `*sql.DB` 反查 DSN；CDC 需要显式配置 `subscription.dsn`。
+需要自动复用 DSN 时，统一通过 `std.OpenConnection(dsn)` 或 `std.NewConnection(config)` 初始化。
+
 自定义 Mutation 修改了 CDC 无法观察的外部状态时，调用
 `execution.Invalidate("table")` 登记刷新；引擎只在自有事务成功提交后去重发布，回滚和外部
 事务不会误唤醒。需要 SQL 与后处理 Resolver 共享一致读快照时，执行入口传
@@ -603,7 +636,7 @@ fail closed，不会以部分元数据启动。
 ./scripts/test-all.sh
 ```
 
-可通过 `GQL_TEST_KEEP_DB=1` 保留数据库用于失败排查；`DEMO_DSN` 仍可覆盖测试连接串。
+可通过 `GQL_TEST_KEEP_DB=1` 保留数据库用于失败排查；`DEMO_DSN` 可用 PostgreSQL URL 覆盖示例连接串。
 真实 Demo、HTTP、多实例和性能门禁使用 `./examples/scripts/test-demo.sh`。
 
 - 任意深度嵌套 = 单条 SQL，无 N+1

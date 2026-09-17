@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/std"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
@@ -41,7 +42,7 @@ const (
 )
 
 // newPostgresNotifier 构造PG唤醒源：DSN取subscription.dsn配置，缺省从数据库连接配置读取
-func newPostgresNotifier(db *Database, cfg internal.SubscriptionConfig) (notifier, error) {
+func newPostgresNotifier(db *std.Connection, cfg internal.SubscriptionConfig) (notifier, error) {
 	dsn := strings.TrimSpace(cfg.DSN)
 	if dsn == "" {
 		dsn = db.DSN()

@@ -17,7 +17,7 @@ import (
 
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/ichaly/ideabase/std/postgres"
 	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,6 +29,19 @@ var testPostgres struct {
 	port string
 	err  error
 	dbs  atomic.Uint64
+}
+
+func testExec(t testing.TB, db *std.Connection, query string, args ...any) sql.Result {
+	t.Helper()
+	result, err := db.Pool().ExecContext(context.Background(), query, args...)
+	if err != nil {
+		t.Fatalf("execute SQL: %v", err)
+	}
+	return result
+}
+
+func testQueryRow(db *std.Connection, query string, args ...any) *sql.Row {
+	return db.Pool().QueryRowContext(context.Background(), query, args...)
 }
 
 func TestMain(m *testing.M) {
@@ -112,23 +125,22 @@ COMMENT ON COLUMN post_tags.post_id IS '文章ID';
 COMMENT ON COLUMN post_tags.tag_id IS '标签ID';`
 
 // setupTestDatabase 初始化测试数据库
-func setupTestDatabase(t *testing.T) (*Database, func()) {
+func setupTestDatabase(t *testing.T) (*std.Connection, func()) {
 	testPostgres.once.Do(startTestPostgres)
 	require.NoError(t, testPostgres.err)
 	host := "127.0.0.1"
-	adminDSN := fmt.Sprintf("host=%s port=%s user=test password=test dbname=test sslmode=disable", host, testPostgres.port)
+	adminDSN := fmt.Sprintf("postgres://test:test@%s:%s/test?sslmode=disable", host, testPostgres.port)
 	admin, err := sql.Open("pgx", adminDSN)
 	require.NoError(t, err, "连接 PostgreSQL 测试实例失败")
 	database := fmt.Sprintf("gql_test_%d", testPostgres.dbs.Add(1))
 	_, err = admin.ExecContext(context.Background(), `CREATE DATABASE "`+database+`"`)
 	require.NoError(t, err)
-	dsn := fmt.Sprintf("host=%s port=%s user=test password=test dbname=%s sslmode=disable", host, testPostgres.port, database)
+	dsn := fmt.Sprintf("postgres://test:test@%s:%s/%s?sslmode=disable", host, testPostgres.port, database)
 
 	// 连接数据库
-	pool, err := sql.Open("pgx", dsn)
-	require.NoError(t, err, "连接数据库失败")
-	db, err := NewDatabase(pool, "postgres", WithDatabaseDSN(dsn))
+	db, err := std.OpenConnection(dsn)
 	require.NoError(t, err)
+	pool := db.Pool()
 
 	// 创建测试表结构
 	_, err = pool.ExecContext(context.Background(), testSchemaSQL)

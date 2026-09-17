@@ -7,9 +7,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCDCUsesConnectionDSN(t *testing.T) {
+	connection, err := std.OpenConnection("postgres://localhost/demo?sslmode=disable")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+	// Invalid publication stops validation before network access. Reaching this
+	// error proves CDC obtained the saved DSN instead of rejecting it as missing.
+	_, err = newPostgresNotifier(connection, internal.SubscriptionConfig{Publication: "invalid-name"})
+	require.ErrorContains(t, err, "publication名称不安全")
+}
 
 func TestListenerCloseWaitsForRunAndIsIdempotent(t *testing.T) {
 	l := newListener("", "")

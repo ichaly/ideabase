@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/ichaly/ideabase/std"
 )
 
 const postgresPreflightTimeout = 5 * time.Second
 
-func postgresPreflight(ctx context.Context, db *Database, name string, verify func(*sql.Tx) error) error {
+func postgresPreflight(ctx context.Context, db *std.Connection, name string, verify func(*sql.Tx) error) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}

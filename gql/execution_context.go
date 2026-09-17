@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ichaly/ideabase/std"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -38,7 +39,7 @@ type ExecutionContext struct {
 	hasIdentity         bool
 	selection           ast.SelectionSet
 	snapshotFingerprint string
-	database            *Database
+	database            *std.Connection
 	invalidation        *invalidationState
 	coordinate          string
 	capability          Capability
@@ -89,7 +90,7 @@ func invalidationTables(ctx context.Context) []string {
 // withExecutionContext attaches the engine-owned execution view to ctx. The
 // identity is inherited from WithIdentity (or an existing execution view),
 // while selection, snapshot and database are supplied by the engine.
-func withExecutionContext(ctx context.Context, selection ast.SelectionSet, snapshotFingerprint string, database *Database, selected ...Capability) context.Context {
+func withExecutionContext(ctx context.Context, selection ast.SelectionSet, snapshotFingerprint string, database *std.Connection, selected ...Capability) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -243,7 +244,7 @@ func (my ExecutionContext) PolicyDecision() (PolicyDecision, bool) {
 }
 
 // DB returns the request transaction when present, otherwise its base DB.
-func (my ExecutionContext) DB() DBTX {
+func (my ExecutionContext) DB() std.DBTX {
 	if tx := transactionFromContext(my.ctx); tx != nil {
 		return tx
 	}
@@ -255,12 +256,12 @@ func (my ExecutionContext) DB() DBTX {
 
 // RequireDB is the explicit form for resolvers that cannot proceed without
 // the engine-owned request database or transaction.
-func (my ExecutionContext) RequireDB() (DBTX, error) {
+func (my ExecutionContext) RequireDB() (std.DBTX, error) {
 	if database := my.DB(); database != nil {
 		return database, nil
 	}
 	return nil, ErrDatabaseUnavailable
 }
 
-var _ DBTX = (*sql.DB)(nil)
-var _ DBTX = (*sql.Tx)(nil)
+var _ std.DBTX = (*sql.DB)(nil)
+var _ std.DBTX = (*sql.Tx)(nil)

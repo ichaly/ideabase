@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/ichaly/ideabase/std"
 	"sync"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func TestExecutionContextExposesTrustedRequestView(t *testing.T) {
 	require.NoError(t, err)
 	deadline := time.Now().Add(time.Minute)
 	pool := &sql.DB{}
-	base, err := NewDatabase(pool, "postgres")
+	base, err := std.WrapConnection(pool, "postgres")
 	require.NoError(t, err)
 	selection := ast.SelectionSet{&ast.Field{Name: "users"}}
 	ctx, cancel := context.WithDeadline(WithIdentity(context.Background(), identity), deadline)
@@ -70,7 +71,7 @@ func TestExecutionContextSelectionIsDetachedFromCachedAST(t *testing.T) {
 
 func TestExecutionContextDBPrefersTransaction(t *testing.T) {
 	pool, tx := &sql.DB{}, &sql.Tx{}
-	base, err := NewDatabase(pool, "postgres")
+	base, err := std.WrapConnection(pool, "postgres")
 	require.NoError(t, err)
 	ctx := withExecutionContext(context.Background(), nil, "", base)
 	ctx = context.WithValue(ctx, transactionKey{}, tx)

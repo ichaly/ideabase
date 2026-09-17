@@ -1,9 +1,9 @@
 package metadata
 
 import (
-	sqldb "github.com/ichaly/ideabase/gql/database"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/std"
 )
 
 // pgsqlMetaSQL reads one schema through pg_catalog so every supported relkind,
@@ -186,7 +186,7 @@ SELECT json_build_object(
 
 type PgsqlLoader struct{ *baseLoader }
 
-func NewPgsqlLoader(cfg *internal.Config, db *sqldb.Connection) *PgsqlLoader {
+func NewPgsqlLoader(cfg *internal.Config, db *std.Connection) *PgsqlLoader {
 	return &PgsqlLoader{&baseLoader{db: db, cfg: cfg}}
 }
 

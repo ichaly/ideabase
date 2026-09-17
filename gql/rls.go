@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/ichaly/ideabase/std"
 )
 
 // RLSRole describes the database role used by shared-table execution.
@@ -30,7 +32,7 @@ type RLSConfig struct {
 // InspectRLS reads authoritative PostgreSQL role and table facts. Callers may
 // use an explicit RLSConfig in tests, but production startup should use this
 // catalog result rather than trusting configuration claims.
-func InspectRLS(db *Database, metadata *Metadata) (RLSConfig, error) {
+func InspectRLS(db *std.Connection, metadata *Metadata) (RLSConfig, error) {
 	if db == nil || metadata == nil || db.Driver() != "postgres" {
 		return RLSConfig{}, fmt.Errorf("PostgreSQL database and metadata are required for RLS inspection")
 	}
@@ -119,12 +121,12 @@ type RLSStatement struct {
 
 type rlsPreparedKey struct{}
 
-func rlsPrepared(ctx context.Context, tx DBTX) bool {
-	prepared, _ := ctx.Value(rlsPreparedKey{}).(DBTX)
+func rlsPrepared(ctx context.Context, tx std.DBTX) bool {
+	prepared, _ := ctx.Value(rlsPreparedKey{}).(std.DBTX)
 	return prepared != nil && prepared == tx
 }
 
-func markRLSPrepared(ctx context.Context, tx DBTX) context.Context {
+func markRLSPrepared(ctx context.Context, tx std.DBTX) context.Context {
 	return context.WithValue(ctx, rlsPreparedKey{}, tx)
 }
 
@@ -138,7 +140,7 @@ func NewRLSIdentityStatement(identity Identity) (RLSStatement, error) {
 	}, nil
 }
 
-func (my *Engine) prepareRLS(ctx context.Context, tx DBTX) error {
+func (my *Engine) prepareRLS(ctx context.Context, tx std.DBTX) error {
 	if rlsPrepared(ctx, tx) {
 		return nil
 	}

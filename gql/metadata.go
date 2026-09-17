@@ -38,7 +38,7 @@ func queryField(className string) string {
 // Metadata 表示GraphQL元数据
 type Metadata struct {
 	k   *std.Konfig
-	db  *Database
+	db  *std.Connection
 	cfg *internal.Config
 
 	// 统一索引: 支持类名、表名、原始表名查找
@@ -159,7 +159,7 @@ func WithoutLoader(names ...string) MetadataOption {
 }
 
 // NewMetadata 策略模式重构，支持Loader注册与优先级排序
-func NewMetadata(k *std.Konfig, d *Database, opts ...MetadataOption) (*Metadata, error) {
+func NewMetadata(k *std.Konfig, d *std.Connection, opts ...MetadataOption) (*Metadata, error) {
 	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: protocol.DefaultDataTypes()}}
 	fileConfigured := k.IsSet("metadata.file")
 

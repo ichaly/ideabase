@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ichaly/ideabase/std"
 )
 
 // PostgresSecurityStateDDL creates the single shared revocation snapshot used
@@ -45,13 +47,13 @@ type postgresSecuritySnapshot struct {
 }
 
 type PostgresSecurityStateProvider struct {
-	db           *Database
+	db           *std.Connection
 	maxStaleness time.Duration
 	state        atomic.Pointer[postgresSecuritySnapshot]
 	refreshMu    sync.Mutex
 }
 
-func NewPostgresSecurityStateProvider(db *Database, options ...PostgresSecurityStateOption) (*PostgresSecurityStateProvider, error) {
+func NewPostgresSecurityStateProvider(db *std.Connection, options ...PostgresSecurityStateOption) (*PostgresSecurityStateProvider, error) {
 	if db == nil {
 		return nil, fmt.Errorf("postgres security state requires a database")
 	}
@@ -195,7 +197,7 @@ func (provider *PostgresSecurityStateProvider) snapshot(ctx context.Context) (*p
 	return nil, fmt.Errorf("security state unavailable: %w", err)
 }
 
-func loadSecuritySnapshot(ctx context.Context, db DBTX) (*postgresSecuritySnapshot, error) {
+func loadSecuritySnapshot(ctx context.Context, db std.DBTX) (*postgresSecuritySnapshot, error) {
 	var state struct {
 		Revision uint64
 		Tenants  []byte

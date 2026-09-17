@@ -17,6 +17,7 @@ import (
 	"github.com/ichaly/ideabase/gql/internal/lru"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
+	"github.com/ichaly/ideabase/std"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -878,7 +879,7 @@ func (my *Engine) executeDefaultRootFields(ctx context.Context, operation *ast.O
 	return root, warnings, nil
 }
 
-func runRootTransaction(ctx context.Context, database *Database, publisher interface{ invalidate(...string) }, execute func(*sql.Tx) error) (error, bool) {
+func runRootTransaction(ctx context.Context, database *std.Connection, publisher interface{ invalidate(...string) }, execute func(*sql.Tx) error) (error, bool) {
 	tx, err := database.Pool().BeginTx(ctx, nil)
 	if err != nil {
 		return err, false

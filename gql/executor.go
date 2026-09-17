@@ -20,6 +20,7 @@ import (
 	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
+	"github.com/ichaly/ideabase/std"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -30,7 +31,7 @@ import (
 // planCacheSize 执行计划LRU缓存容量（newEngine与启动期装配重建共用）
 const planCacheSize = 512
 
-func configureSearchMode(metadata *Metadata, database *Database) error {
+func configureSearchMode(metadata *Metadata, database *std.Connection) error {
 	if metadata == nil || database == nil || metadata.cfg == nil {
 		return nil
 	}
@@ -115,7 +116,7 @@ func (my gqlReply) mutationCommit(ctx context.Context, state string) gqlReply {
 type Engine struct {
 	intro             *intro.Handler                  // 自省处理器，处理__schema和__type查询
 	schema            *ast.Schema                     // GraphQL模式定义
-	database          *Database                       // 数据库连接，用于执行生成的SQL
+	database          *std.Connection                 // 数据库连接，用于执行生成的SQL
 	metadata          *Metadata                       // 元数据信息，包含表结构、关系等
 	compiler          *Compiler                       // 编译器，将GraphQL查询编译为SQL
 	cache             *lru.Cache[planKey, *planEntry] // 执行计划缓存，命中路径零解析零编译
@@ -255,7 +256,7 @@ func (my *Engine) Snapshot() (*Snapshot, error) {
 
 // 构造函数和初始化方法只由 Builder 调用。
 
-func newEngine(d *Database, m *Metadata, c *Compiler, data string) (*Engine, error) {
+func newEngine(d *std.Connection, m *Metadata, c *Compiler, data string) (*Engine, error) {
 	executor := &Engine{
 		database:       d,
 		metadata:       m,
@@ -694,12 +695,12 @@ func (my *Engine) fetch(ctx context.Context, plan *Plan, variables map[string]in
 	if err != nil {
 		return nil, err
 	}
-	var database DBTX = my.database.Pool()
+	var database std.DBTX = my.database.Pool()
 	if tx := transactionFromContext(ctx); tx != nil {
 		database = tx
 	}
 	var data []byte
-	run := func(tx DBTX) error {
+	run := func(tx std.DBTX) error {
 		if (my.rls || tenantRLSRequested(ctx)) && !rlsPrepared(ctx, tx) {
 			if err := my.prepareRLS(ctx, tx); err != nil {
 				return err

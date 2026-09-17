@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/ichaly/ideabase/std"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -64,7 +65,7 @@ func TestOrderHTTPAuthentication(t *testing.T) {
 
 func TestOrderRemoteComposition(t *testing.T) {
 	e, pool := testEndpoint(t)
-	db, err := gql.NewDatabase(pool, "postgres")
+	db, err := std.WrapConnection(pool, "postgres")
 	require.NoError(t, err)
 	replay, err := gql.NewPostgresReplayStore(db)
 	require.NoError(t, err)

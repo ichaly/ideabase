@@ -1,9 +1,9 @@
 package metadata
 
 import (
-	sqldb "github.com/ichaly/ideabase/gql/database"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/std"
 )
 
 // MysqlLoader MySQL元数据加载器，实现Loader接口
@@ -107,7 +107,7 @@ SELECT
 `
 
 // NewMysqlLoader 创建MySQL加载器
-func NewMysqlLoader(cfg *internal.Config, db *sqldb.Connection) *MysqlLoader {
+func NewMysqlLoader(cfg *internal.Config, db *std.Connection) *MysqlLoader {
 	return &MysqlLoader{
 		&baseLoader{db: db, cfg: cfg},
 	}

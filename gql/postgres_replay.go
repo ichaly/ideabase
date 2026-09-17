@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync/atomic"
 	"time"
+
+	"github.com/ichaly/ideabase/std"
 )
 
 const replayPruneBatch = 256
@@ -23,13 +25,13 @@ CREATE INDEX IF NOT EXISTS gql_delegation_replay_expiry
   ON gql_delegation_replay (expires_at);`
 
 type postgresReplayStore struct {
-	db        *Database
+	db        *std.Connection
 	nextPrune atomic.Int64
 }
 
 // NewPostgresReplayStore returns the production shared ReplayStore. It never
 // creates schema at runtime; apply PostgresReplayDDL during deployment.
-func NewPostgresReplayStore(db *Database) (ReplayStore, error) {
+func NewPostgresReplayStore(db *std.Connection) (ReplayStore, error) {
 	if db == nil {
 		return nil, fmt.Errorf("postgres replay store requires a database")
 	}

@@ -36,7 +36,7 @@ func (orderPolicy) PolicyCacheIdentity(_ context.Context, id gql.Identity, _ gql
 }
 
 // Same assembly for the executable, integration tests, composed gateways and replicas.
-func buildEndpoint(db *gql.Database, cdcDSN string, tenants []string, observer gql.Observer) (*gql.Engine, *gql.TenantGateway, error) {
+func buildEndpoint(db *std.Connection, cdcDSN string, tenants []string, observer gql.Observer) (*gql.Engine, *gql.TenantGateway, error) {
 	db.Pool().SetMaxOpenConns(16)
 	db.Pool().SetMaxIdleConns(16)
 	db.Pool().SetConnMaxLifetime(30 * time.Minute)

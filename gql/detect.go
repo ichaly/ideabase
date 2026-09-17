@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ichaly/ideabase/std"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -19,7 +20,7 @@ func startupProbeContext(parent context.Context) (context.Context, context.Cance
 	return context.WithTimeout(parent, startupProbeTimeout)
 }
 
-func detectPostgresSearch(db *Database) (string, string, error) {
+func detectPostgresSearch(db *std.Connection) (string, string, error) {
 	if db == nil {
 		return "", "", fmt.Errorf("database is required for search capability detection")
 	}

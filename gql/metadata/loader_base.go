@@ -8,10 +8,10 @@ import (
 	"slices"
 	"time"
 
-	sqldb "github.com/ichaly/ideabase/gql/database"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
+	"github.com/ichaly/ideabase/std"
 	"github.com/samber/lo"
 )
 
@@ -20,7 +20,7 @@ const defaultCatalogTimeout = 30 * time.Second
 // baseLoader 只在包内复用，封装数据库元数据加载的主流程
 // 不对外暴露
 type baseLoader struct {
-	db  *sqldb.Connection
+	db  *std.Connection
 	cfg *internal.Config
 }
 

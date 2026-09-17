@@ -124,6 +124,11 @@ func Out(tags ...string) BindOption {
 	}
 }
 
+// OnStop 为构造器绑定停止回调，参数可引用构造器的依赖及返回值。
+func OnStop(hook any) BindOption {
+	return With(fx.OnStop(hook))
+}
+
 // With 附加自定义 fx.Annotation，例如 fx.As / fx.Name。
 func With(anns ...Annotation) BindOption {
 	return func(o *bindOption) {

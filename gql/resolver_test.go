@@ -13,6 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type testObserverFunc func(context.Context, Observation)
+
+func (observe testObserverFunc) Observe(ctx context.Context, observation Observation) {
+	observe(ctx, observation)
+}
+
 // TestHostsNestedArrays 宿主拍平：连续两层数组段（一对多里嵌一对多）须收齐全部叶子宿主。
 // 回归——单元素cur首段侥幸安全，多元素cur上原地复用底层数组会覆写未读元素
 func TestHostsNestedArrays(t *testing.T) {
@@ -307,10 +313,10 @@ type signUpReq struct {
 
 // newSignUpResolver 编排型根Resolver：建号返回id，引擎按选择集回查补全；
 // 返回类型int64本推导为Int，Result选项覆盖为实体User触发回查
-func newSignUpResolver(db *Database) Resolver {
+func newSignUpResolver(db *std.Connection) Resolver {
 	return NewResolver("Mutation", "signUp", "建号并回查主档", func(ctx context.Context, _ Root, req signUpReq) (int64, error) {
 		var id int64
-		var database DBTX = db.Pool()
+		var database std.DBTX = db.Pool()
 		if execution, ok := ExecutionContextFromContext(ctx); ok && execution.DB() != nil {
 			database = execution.DB()
 		}
@@ -320,7 +326,7 @@ func newSignUpResolver(db *Database) Resolver {
 }
 
 // setupRootResolverExecutor 与setupTestExecutor同构，但透出db供Resolver闭包使用
-func setupRootResolverExecutor(t *testing.T) (*Engine, *Database, func()) {
+func setupRootResolverExecutor(t *testing.T) (*Engine, *std.Connection, func()) {
 	return newTestExecutor(t, nil)
 }
 

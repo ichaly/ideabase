@@ -2,35 +2,43 @@ package std
 
 import (
 	"fmt"
-	"net/url"
-	"time"
+	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
 // Dialector 数据库方言工厂函数
-type Dialector func(url string) gorm.Dialector
+type Dialector func(connection *Connection) gorm.Dialector
 
-var dialectors = map[string]Dialector{}
-
-// RegisterDatabase 注册数据库方言（由 std/postgres、std/mysql 等子包在 init() 中调用）
-func RegisterDatabase(scheme string, d Dialector) {
-	dialectors[scheme] = d
+// DatabaseDriver 将连接串解析和 GORM 装配留在对应驱动包中。
+type DatabaseDriver struct {
+	Dialect     string
+	SQLDriver   string
+	ParseDSN    func(string) (string, error)
+	Dialector   Dialector
+	PrepareStmt bool
 }
 
-// NewDatabase 根据 Config URL 创建数据库连接
-func NewDatabase(e []interface{}, p []gorm.Plugin, c *Config) (*gorm.DB, error) {
-	u, err := url.Parse(c.Database)
-	if err != nil {
-		return nil, fmt.Errorf("database: invalid url: %w", err)
+var databaseDrivers = map[string]DatabaseDriver{}
+
+// RegisterDatabase 在启动时注册驱动及 URL 协议别名。
+func RegisterDatabase(driver DatabaseDriver, aliases ...string) {
+	driver.Dialect = strings.ToLower(driver.Dialect)
+	databaseDrivers[driver.Dialect] = driver
+	for _, alias := range aliases {
+		databaseDrivers[strings.ToLower(alias)] = driver
 	}
-	d, ok := dialectors[u.Scheme]
+}
+
+// NewDatabase 在共享池上装配 GORM，不创建或接管连接池。
+func NewDatabase(e []interface{}, p []gorm.Plugin, c *Config, connection *Connection) (*gorm.DB, error) {
+	driver, ok := databaseDrivers[connection.Driver()]
 	if !ok {
-		return nil, fmt.Errorf("database driver '%s' not registered", u.Scheme)
+		return nil, fmt.Errorf("database driver '%s' not registered", connection.Driver())
 	}
-	db, err := gorm.Open(d(c.Database), &gorm.Config{
-		PrepareStmt: u.Scheme == "mysql" || !c.IsDebug(),
+	db, err := gorm.Open(driver.Dialector(connection), &gorm.Config{
+		PrepareStmt: driver.PrepareStmt || !c.IsDebug(),
 		Logger:      logger.Default.LogMode(logger.Info),
 	})
 	if err != nil {
@@ -59,12 +67,5 @@ func NewDatabase(e []interface{}, p []gorm.Plugin, c *Config) (*gorm.DB, error) 
 			}
 		}
 	}
-	sqlDb, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("database: failed to get sql.DB: %w", err)
-	}
-	sqlDb.SetMaxIdleConns(5)
-	sqlDb.SetMaxOpenConns(90)
-	sqlDb.SetConnMaxLifetime(5 * time.Minute)
 	return db, nil
 }
