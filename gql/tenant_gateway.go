@@ -14,12 +14,12 @@ import (
 // CDC and transaction boundary; the gateway routes before parsing or calling
 // any handler. All sources must expose the same GraphQL contract.
 type tenantGatewayConfig struct {
-	revocation SecurityStateProvider
+	revocation SecurityProvider
 	rls        map[string]RLSConfig
 }
 type TenantGatewayOption func(*tenantGatewayConfig)
 
-func WithSecurityState(provider SecurityStateProvider) TenantGatewayOption {
+func WithSecurityState(provider SecurityProvider) TenantGatewayOption {
 	return func(config *tenantGatewayConfig) { config.revocation = provider }
 }
 
@@ -35,7 +35,7 @@ type TenantGateway struct {
 	router     *TenantRouter
 	sources    map[string]*Engine
 	snapshot   *Snapshot
-	revocation SecurityStateProvider
+	revocation SecurityProvider
 	rls        map[string]struct{}
 }
 
@@ -104,7 +104,7 @@ func NewTenantGateway(router *TenantRouter, sources map[string]*Engine, options 
 		}
 	}
 	if config.revocation == nil {
-		return nil, fmt.Errorf("tenant SecurityStateProvider is required")
+		return nil, fmt.Errorf("tenant SecurityProvider is required")
 	}
 	if router.mode == TenantModeSharedTable {
 		enabled := make(map[string]struct{}, len(config.rls))

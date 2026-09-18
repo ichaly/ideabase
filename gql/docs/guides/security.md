@@ -66,7 +66,7 @@ PolicyProvider 是唯一外部策略入口。它可以返回字段集合、操�
 
 ## Delegation 和多实例
 
-多实例需要共享 ReplayStore、SecurityStateProvider、路由控制状态和审计 outbox。delegation token 绑定租户、Subject、Roles、权限版本和路由版本；子节点验证后才执行。
+多实例需要共享 ReplayStore、SecurityProvider、路由控制状态和审计 outbox。delegation token 绑定租户、Subject、Roles、权限版本和路由版本；子节点验证后才执行。
 
 ---
 

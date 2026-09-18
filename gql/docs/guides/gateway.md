@@ -42,7 +42,7 @@ Gateway 不能只使用静态 Manifest 生成身份相关 Schema；需要 Effect
 
 ## 多副本共享状态
 
-以下状态不能使用进程内实现：ReplayStore（token replay）、SecurityStateProvider（撤权）、路由控制状态和审计 outbox。子节点验证签名 delegation 后，才允许执行或订阅。
+以下状态不能使用进程内实现：ReplayStore（token replay）、SecurityProvider（撤权）、路由控制状态和审计 outbox。子节点验证签名 delegation 后，才允许执行或订阅。
 
 ---
 

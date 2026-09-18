@@ -10,7 +10,7 @@ import (
 const defaultSubscriptionLeaseInterval = time.Minute
 
 type subscriptionLease struct {
-	Barrier         SecurityStateProvider
+	Barrier         SecurityProvider
 	Identity        Identity
 	Route           TenantRoute
 	Interval        time.Duration

@@ -14,7 +14,7 @@ subscription:
 
 完整可运行装配见 [订单示例](../../examples/orders/README.md)。若要限制为预登记操作，再启用 persisted-only 并加载相应文档。
 
-生产 PostgreSQL Engine 必须显式安装 SecurityStateProvider；Build 时会检查 metadata、权限、搜索能力和必需迁移。
+生产 PostgreSQL Engine 必须显式安装 SecurityProvider；Build 时会检查 metadata、权限、搜索能力和必需迁移。
 
 ## 启动和 readiness
 

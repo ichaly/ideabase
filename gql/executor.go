@@ -133,7 +133,7 @@ type Engine struct {
 	snapshotErr       error
 	baseView          *effectiveView
 	validation        *validatorrules.Rules // 快照自有验证规则，不修改gqlparser全局状态
-	revocation        SecurityStateProvider
+	revocation        SecurityProvider
 	policy            PolicyProvider
 	policyBuiltin     bool
 	rls               bool

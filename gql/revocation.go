@@ -7,9 +7,9 @@ import (
 	"sync/atomic"
 )
 
-// SecurityStateProvider is the single request and subscription revocation
+// SecurityProvider is the single request and subscription revocation
 // boundary. Cluster deployments inject a shared, fail-closed implementation.
-type SecurityStateProvider interface {
+type SecurityProvider interface {
 	Check(context.Context, Identity, TenantRoute) error
 }
 

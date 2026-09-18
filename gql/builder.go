@@ -21,7 +21,7 @@ type Builder struct {
 	documents []string
 	observer  Observer
 	policy    PolicyProvider
-	security  SecurityStateProvider
+	security  SecurityProvider
 	lease     time.Duration
 	built     bool
 }
@@ -36,12 +36,12 @@ func (my *Builder) SubscriptionLease(interval time.Duration) error {
 }
 
 // Security installs the shared revocation boundary before Build.
-func (my *Builder) Security(provider SecurityStateProvider) error {
+func (my *Builder) Security(provider SecurityProvider) error {
 	if my.built {
 		return fmt.Errorf("builder已冻结：Security仅限Build前调用")
 	}
 	if provider == nil || my.security != nil {
-		return fmt.Errorf("SecurityStateProvider必须且只能设置一次")
+		return fmt.Errorf("SecurityProvider必须且只能设置一次")
 	}
 	my.security = provider
 	return nil
@@ -143,7 +143,7 @@ func (my *Builder) Build() (*Engine, error) {
 		return nil, fmt.Errorf("Engine policy provider or metadata permissions is required")
 	}
 	if my.security == nil && my.database != nil && my.database.Driver() == "postgres" && metadata.cfg != nil && !metadata.cfg.IsDebug() {
-		return nil, fmt.Errorf("production Engine requires an explicit SecurityStateProvider")
+		return nil, fmt.Errorf("production Engine requires an explicit SecurityProvider")
 	}
 	if err := validateProductionMigrations(metadata, my.database); err != nil {
 		return nil, err

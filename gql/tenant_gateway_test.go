@@ -59,7 +59,7 @@ func TestTenantGatewayRoutesBeforeHandlerAndCache(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	_, err = NewTenantGateway(router, map[string]*Engine{"a": a, "b": b})
-	require.ErrorContains(t, err, "SecurityStateProvider")
+	require.ErrorContains(t, err, "SecurityProvider")
 	gateway, err := NewTenantGateway(router, map[string]*Engine{"a": a, "b": b}, testTenantSecurity(router))
 	require.NoError(t, err)
 

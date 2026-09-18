@@ -196,7 +196,7 @@ CI 已覆盖 PostgreSQL 15/16/17/18 correctness matrix、race、fuzz、govulnche
 ### 8.2 强制生产前提
 
 1. 所有副本应用 `PostgresReplayDDL`、`PostgresSecurityStateDDL` 和 purge audit outbox DDL；readiness preflight 必须通过。
-2. 多副本使用共享 ReplayStore/SecurityStateProvider，不得使用进程内 store 作为安全事实源。
+2. 多副本使用共享 ReplayStore/SecurityProvider，不得使用进程内 store 作为安全事实源。
 3. metadata artifact、policy revision、route revision、Gateway revision 和 delegation key epoch 由控制面一致发布。
 4. PostgreSQL 开启 `wal_level=logical`；publication 覆盖所需表；复制账号使用最小权限。
 5. shared-table 模式账号必须 NOBYPASSRLS，且不是绕过策略的 superuser/owner，或显式 FORCE RLS。
