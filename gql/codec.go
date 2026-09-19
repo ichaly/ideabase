@@ -50,7 +50,7 @@ type idCodec struct {
 	count  atomic.Int64
 }
 
-// NewIdCodec 内置ID codec：需要ID加解密时经WithCodecs注册，不注册则ID保持数字；
+// NewIdCodec 内置ID codec：需要短码时经WithCodecs注册，默认ID输出十进制字符串；
 // 注册同名codec即可替换为自定义实现
 func NewIdCodec() Codec { return &idCodec{} }
 
@@ -101,5 +101,5 @@ func (*idCodec) Decode(value any) any {
 // Match 认领审计列等无外键约束的ID语义列（主外键已由结构推导映射ID，无需认领）；
 // 以整型原生类型收窄，避免误伤同名后缀的非ID列
 func (*idCodec) Match(_ *protocol.Class, field *protocol.Field) bool {
-	return field.Type == protocol.SCALAR_INT && strings.HasSuffix(field.Column, "_by")
+	return (field.Type == protocol.SCALAR_INT || field.Type == protocol.SCALAR_BIG_INT) && strings.HasSuffix(field.Column, "_by")
 }

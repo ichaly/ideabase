@@ -200,6 +200,7 @@ func NewMetadata(k *std.Konfig, d *std.Connection, opts ...MetadataOption) (*Met
 	pgsql, mysql := metadata.NewPgsqlLoader(cfg, d), metadata.NewMysqlLoader(cfg, d)
 	defaultLoaders := []protocol.Loader{pgsql, mysql, metadata.NewFileLoader(cfg), metadata.NewConfigLoader(cfg)}
 	options := &metadataOptions{
+		codecs:          []Codec{numericCodec(protocol.SCALAR_ID), numericCodec(protocol.SCALAR_BIG_INT), numericCodec(protocol.SCALAR_DECIMAL)},
 		loaders:         defaultLoaders,
 		optionalLoaders: make(map[string]bool),
 		generators: map[string]protocol.IDGenerator{

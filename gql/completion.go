@@ -186,6 +186,9 @@ func coerceCompletedScalar(schema *ast.Schema, typ *ast.Type, value any) (any, b
 		return value, true
 	}
 	switch typ.NamedType {
+	case "BigInt", "Decimal":
+		text, err := exactNumber(typ.NamedType, value)
+		return text, err == nil
 	case "String":
 		_, ok := value.(string)
 		return value, ok

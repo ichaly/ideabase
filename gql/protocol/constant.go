@@ -125,6 +125,8 @@ const (
 const (
 	SCALAR_ID        = "ID"
 	SCALAR_INT       = "Int"
+	SCALAR_BIG_INT   = "BigInt"
+	SCALAR_DECIMAL   = "Decimal"
 	SCALAR_JSON      = "Json"
 	SCALAR_FLOAT     = "Float"
 	SCALAR_STRING    = "String"
@@ -192,13 +194,13 @@ var dataTypes = map[string]string{
 	"int":                         SCALAR_INT,
 	"int2":                        SCALAR_INT,
 	"int4":                        SCALAR_INT,
-	"int8":                        SCALAR_INT,
-	"bigint":                      SCALAR_INT,
+	"int8":                        SCALAR_BIG_INT,
+	"bigint":                      SCALAR_BIG_INT,
 	"smallserial":                 SCALAR_INT,
 	"serial":                      SCALAR_INT,
-	"bigserial":                   SCALAR_INT,
-	"decimal":                     SCALAR_FLOAT,
-	"numeric":                     SCALAR_FLOAT,
+	"bigserial":                   SCALAR_BIG_INT,
+	"decimal":                     SCALAR_DECIMAL,
+	"numeric":                     SCALAR_DECIMAL,
 	"real":                        SCALAR_FLOAT,
 	"float":                       SCALAR_FLOAT,
 	"float4":                      SCALAR_FLOAT,
@@ -269,6 +271,8 @@ func pick(names ...string) []*Operator {
 var grouping = map[string][]*Operator{
 	SCALAR_ID:        pick(EQ, IN, GT, GE, LT, LE),
 	SCALAR_INT:       pick(IS, EQ, IN, GT, GE, LT, LE, NE),
+	SCALAR_BIG_INT:   pick(IS, EQ, IN, GT, GE, LT, LE, NE),
+	SCALAR_DECIMAL:   pick(IS, EQ, IN, GT, GE, LT, LE, NE),
 	SCALAR_FLOAT:     pick(IS, EQ, IN, GT, GE, LT, LE, NE),
 	SCALAR_DATE_TIME: pick(IS, EQ, IN, GT, GE, LT, LE, NE),
 	SCALAR_STRING:    pick(IS, EQ, IN, GT, GE, LT, LE, NE, LIKE, I_LIKE, REGEX, I_REGEX),

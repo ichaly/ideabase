@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -46,7 +47,9 @@ func TestRemoteJoin(t *testing.T) {
 			createUser(input: { name: $n, email: $e }) { id }
 		}`, map[string]interface{}{"n": name, "e": name + "@x.com"}, "")
 		require.Empty(t, reply.Errors)
-		ids = append(ids, reply.Data["createUser"].(map[string]interface{})["id"].(int64))
+		id, err := strconv.ParseInt(reply.Data["createUser"].(map[string]interface{})["id"].(string), 10, 64)
+		require.NoError(t, err)
+		ids = append(ids, id)
 	}
 	data[ids[0]] = Profile{Level: "gold"} // u2故意缺失验证键未命中置null
 

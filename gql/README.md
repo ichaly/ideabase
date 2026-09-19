@@ -337,6 +337,34 @@ CDC 默认复用 `db.DSN()`；使用独立复制账号时，可显式配置 `sub
 
 ## 标量编解码器（Codec）
 
+### 默认精确数值
+
+`gql.New(k, connection).Build()` 默认启用精确数值处理，无需业务注册 Codec：
+
+| 来源 | GraphQL 类型 | JSON 输出 |
+|---|---|---|
+| 数据库 `bigint/int8/bigserial` | `BigInt` | 十进制字符串 |
+| 数据库 `numeric/decimal` | `Decimal` | 十进制字符串 |
+| 数字主键、外键 | `ID` | 十进制字符串 |
+| Resolver 的 Go `int64/uint64` | `BigInt` | 十进制字符串 |
+| 数据库普通整数、浮点数 | `Int`、`Float` | 数字，保持原规则 |
+
+数据库数组元素及 domain 基础类型使用相同映射。`BigInt/Decimal` 支持数值过滤、排序及聚合；
+`sum/avg/min/max` 使用 `DecimalStats` 返回字符串，避免 bigint 求和超出 64 位或平均值产生小数。
+`count/countDistinct` 仍为 `Int`；任意 `Json` 内容与聚合 `key: Json` 不做类型猜测。
+
+输入推荐使用十进制字符串（包括变量、过滤器和 mutation input），例如 `"9007199254740993"`、
+`"1.2300"`。JSON number 与 GraphQL 数字字面量也保留原文；直接调用 Go API 时使用字符串、
+`json.Number` 或整数，不接受 `float32/float64` 作为精确数值输入，以免接收已经舍入的值。
+`BigInt` 仅接受整数字面形式；`Decimal` 支持小数及指数。拒绝布尔值、对象、NaN、Infinity 等输入，
+具体位数、范围和小数位约束仍由数据库列或 Resolver 的目标 Go 类型检查。
+
+兼容性：数据库大整数/小数字段的 GraphQL 类型和数字 ID 的 JSON 类型已变化；客户端需更新
+变量声明及生成类型。显式字段类型配置、`schema.mapping` 和 `WithCodecs` 同名覆盖仍可用。
+Go `int` 仍按原规则映射为 `Int`，需要 64 位范围的 Resolver 应明确使用 `int64/uint64`。
+
+### 自定义编解码器
+
 为一个 GraphQL 标量类型声明请求边界的双向转换（ID 加解密、手机号脱敏等）。
 数据库任何场景（含 jsonb）永远存原始值，转换只发生在出入参：出参在取数出口对
 数据库直通字节做**单遍流式改写**（编译期从选择集算出路径树随计划缓存，无命中
@@ -357,10 +385,10 @@ type Codec interface {
 - `Baser`——`Base() string` 声明过滤器操作符集的借用来源，缺省借用 String
 
 主键与外键实列经元数据定型期的结构推导恒定映射为 ID 标量（零声明、与 codec 无关）。
-所有 codec 统一经 `WithCodecs` 注册（认领需改写字段类型，须在元数据构建期传入）：
+额外的 codec 经 `WithCodecs` 注册（认领需改写字段类型，须在元数据构建期传入）：
 
 ```go
-// 需要ID加解密就注册内置 NewIdCodec()，不注册则ID保持数字；业务codec同列追加
+// 需要短码就注册 NewIdCodec()，不注册则 ID 输出十进制字符串；业务 codec 同列追加
 meta, _ := gql.NewMetadata(k, db, gql.WithCodecs(gql.NewIdCodec(), PhoneCodec{}))
 ```
 

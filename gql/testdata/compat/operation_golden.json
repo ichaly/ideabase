@@ -1,6 +1,6 @@
 {
   "valid": {
-    "data": {"users": {"items": [{"id": 1, "name": "Alice", "email": "alice@example.com"}]}}
+    "data": {"users": {"items": [{"id": "1", "name": "Alice", "email": "alice@example.com"}]}}
   },
   "invalid": {
     "errors": [{

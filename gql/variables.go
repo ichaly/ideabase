@@ -177,6 +177,13 @@ func coerceVariableValue(schema *ast.Schema, typ *ast.Type, value any, path ast.
 }
 
 func coerceScalar(name string, value any, path ast.Path) (any, *gqlerror.Error) {
+	if name == "BigInt" || name == "Decimal" {
+		text, err := exactNumber(name, value)
+		if err != nil {
+			return nil, gqlerror.WrapPath(path, err)
+		}
+		return text, nil
+	}
 	if name == "Int" {
 		if n, ok := value.(stdjson.Number); ok {
 			i, err := strconv.ParseInt(string(n), 10, 32)

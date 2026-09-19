@@ -66,6 +66,9 @@ func loadQuery(schema *ast.Schema, source string, maxTokens int, rules *validato
 	if errs := gqlvalidator.ValidateWithRules(schema, doc, rules); len(errs) > 0 {
 		return nil, errs
 	}
+	if errs := normalizeExactLiterals(schema, doc); len(errs) > 0 {
+		return nil, errs
+	}
 	return doc, nil
 }
 

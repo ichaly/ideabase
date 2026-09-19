@@ -91,7 +91,7 @@ func MaxBatch(size int) Option { return func(my *Define) { my.MaxBatch = size } 
 // decode 入参json往返解码进强类型struct并校验validate标签
 func decode[I any](args map[string]interface{}) (I, error) {
 	var in I
-	data, err := json.Marshal(args)
+	data, err := json.Marshal(resolverNumericInput(reflect.TypeFor[I](), args))
 	if err == nil {
 		err = json.Unmarshal(data, &in)
 	}
@@ -262,7 +262,7 @@ func plain(v any) any {
 		return v
 	}
 	var out any
-	if json.Unmarshal(data, &out) != nil {
+	if jsonNumeric.Unmarshal(data, &out) != nil {
 		return v
 	}
 	return out
@@ -345,8 +345,10 @@ func deriveType(t reflect.Type, input bool) string {
 		return "String"
 	case reflect.Bool:
 		return "Boolean"
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	case reflect.Int64, reflect.Uint64:
+		return protocol.SCALAR_BIG_INT
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
 		return "Int"
 	case reflect.Float32, reflect.Float64:
 		return "Float"

@@ -312,7 +312,7 @@ type signUpReq struct {
 }
 
 // newSignUpResolver 编排型根Resolver：建号返回id，引擎按选择集回查补全；
-// 返回类型int64本推导为Int，Result选项覆盖为实体User触发回查
+// 返回类型int64本推导为BigInt，Result选项覆盖为实体User触发回查
 func newSignUpResolver(db *std.Connection) Resolver {
 	return NewResolver("Mutation", "signUp", "建号并回查主档", func(ctx context.Context, _ Root, req signUpReq) (int64, error) {
 		var id int64

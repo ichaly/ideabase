@@ -91,6 +91,8 @@ func (my *Renderer) renderScalars() {
 	my.writeLine("scalar ", protocol.SCALAR_JSON)
 	my.writeLine("scalar ", protocol.SCALAR_CURSOR)
 	my.writeLine("scalar ", protocol.SCALAR_DATE_TIME)
+	my.writeLine("scalar ", protocol.SCALAR_BIG_INT)
+	my.writeLine("scalar ", protocol.SCALAR_DECIMAL)
 	my.eachCodecScalar(func(name, _ string) {
 		my.writeLine("scalar ", name)
 	})
@@ -893,6 +895,8 @@ var statsSpecs = []struct {
 }{
 	{"数值", protocol.TYPE_NUMBER_STATS, protocol.TYPE_NUMBER_HAVING, protocol.SCALAR_FLOAT,
 		[]string{protocol.FUNCTION_SUM, protocol.FUNCTION_AVG, protocol.FUNCTION_MIN, protocol.FUNCTION_MAX}},
+	{"精确数值", "DecimalStats", "DecimalHavingInput", protocol.SCALAR_DECIMAL,
+		[]string{protocol.FUNCTION_SUM, protocol.FUNCTION_AVG, protocol.FUNCTION_MIN, protocol.FUNCTION_MAX}},
 	{"字符串", protocol.TYPE_STRING_STATS, protocol.TYPE_STRING_HAVING, protocol.SCALAR_STRING,
 		[]string{protocol.FUNCTION_MIN, protocol.FUNCTION_MAX}},
 	{"日期", protocol.TYPE_DATE_TIME_STATS, protocol.TYPE_DATE_TIME_HAVING, protocol.SCALAR_DATE_TIME,
@@ -906,6 +910,7 @@ var statsTypes = func() map[string][2]string {
 		m[s.scalar] = [2]string{s.stats, s.having}
 	}
 	m[protocol.SCALAR_INT] = m[protocol.SCALAR_FLOAT]
+	m[protocol.SCALAR_BIG_INT] = m[protocol.SCALAR_DECIMAL]
 	return m
 }()
 
