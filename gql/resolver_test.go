@@ -317,7 +317,7 @@ func newSignUpResolver(db *std.Connection) Resolver {
 	return NewResolver("Mutation", "signUp", "建号并回查主档", func(ctx context.Context, _ Root, req signUpReq) (int64, error) {
 		var id int64
 		query := db.Pool().QueryRowContext
-		if execution, ok := ExecutionContextFromContext(ctx); ok && execution.Transaction() != nil {
+		if execution, ok := ExecutionFrom(ctx); ok && execution.Transaction() != nil {
 			query = execution.Transaction().QueryRowContext
 		}
 		err := query(ctx, "INSERT INTO users(name, email) VALUES($1, $2) RETURNING id", req.Name, req.Email).Scan(&id)

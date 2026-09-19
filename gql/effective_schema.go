@@ -120,7 +120,7 @@ func enforceExecutionPin(ctx context.Context, artifact SchemaArtifact) error {
 }
 
 func finalizeSchemaArtifactForContext(ctx context.Context, artifact SchemaArtifact) SchemaArtifact {
-	if identity, ok := IdentityFromContext(ctx); ok {
+	if identity, ok := IdentityFrom(ctx); ok {
 		artifact.Identity = IdentityDescriptorFromIdentity(identity)
 	}
 	return FinalizeSchemaArtifact(artifact)
@@ -195,7 +195,7 @@ func ValidateSchemaArtifact(artifact SchemaArtifact) error {
 // A nil context identity requires a nil descriptor; this prevents a cached
 // privileged schema from crossing an anonymous request boundary.
 func ValidateArtifactIdentity(ctx context.Context, artifact SchemaArtifact) error {
-	identity, ok := IdentityFromContext(ctx)
+	identity, ok := IdentityFrom(ctx)
 	if !ok {
 		if artifact.Identity != nil {
 			return fmt.Errorf("effective artifact identity mismatch")
@@ -790,7 +790,7 @@ func intersectFieldNames(a, b []string) []string {
 
 func (my *Engine) effectivePolicy(ctx context.Context) (PolicyProvider, Identity, bool, error) {
 	if my.policy != nil {
-		identity, ok := IdentityFromContext(ctx)
+		identity, ok := IdentityFrom(ctx)
 		if !ok {
 			return nil, Identity{}, false, fmt.Errorf("verified identity is required for effective schema")
 		}

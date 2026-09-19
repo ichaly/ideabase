@@ -18,7 +18,8 @@ func WithIdentity(ctx context.Context, identity Identity) context.Context {
 	return context.WithValue(ctx, identityKey{}, identity)
 }
 
-func IdentityFromContext(ctx context.Context) (Identity, bool) {
+// IdentityFrom 返回请求中已验证的身份；未注入身份时返回 false。
+func IdentityFrom(ctx context.Context) (Identity, bool) {
 	identity, ok := ctx.Value(identityKey{}).(Identity)
 	return identity, ok
 }
@@ -45,7 +46,7 @@ func Scope(ctx context.Context) map[string]any {
 // scopeValues 取出请求上下文中的作用域值表（无则nil，作用域参数解析为nil=匹配不到行）
 func scopeValues(ctx context.Context) map[string]any {
 	values, _ := ctx.Value(scopeKey{}).(map[string]any)
-	identity, ok := IdentityFromContext(ctx)
+	identity, ok := IdentityFrom(ctx)
 	if !ok {
 		return values
 	}
@@ -70,7 +71,7 @@ func scopeWithCursor(ctx context.Context, scope map[string]any) map[string]any {
 	}
 	tenant, route := "default", "local"
 	var revision uint64
-	if identity, ok := IdentityFromContext(ctx); ok {
+	if identity, ok := IdentityFrom(ctx); ok {
 		tenant, revision = identity.Tenant(), identity.PolicyRevision()
 	}
 	if pinned, ok := PinnedRoute(ctx); ok {
@@ -89,7 +90,7 @@ func scopeWithAudit(ctx context.Context, scope map[string]any, snapshot string) 
 	}
 	values["snapshot"] = snapshot
 	var revision uint64
-	if identity, ok := IdentityFromContext(ctx); ok {
+	if identity, ok := IdentityFrom(ctx); ok {
 		revision = identity.PolicyRevision()
 	}
 	values["policyRevision"] = revision

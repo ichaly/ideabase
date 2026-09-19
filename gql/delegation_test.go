@@ -78,7 +78,7 @@ func TestDelegationCodecAuthenticatesBoundIdentityOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, delegatedExecution(WithIdentity(context.Background(), identity)))
 	require.True(t, delegatedExecution(verified))
-	got, ok := IdentityFromContext(verified)
+	got, ok := IdentityFrom(verified)
 	require.True(t, ok)
 	require.Equal(t, identity.Tenant(), got.Tenant())
 	require.Equal(t, identity.Subject(), got.Subject())

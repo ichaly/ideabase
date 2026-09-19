@@ -26,7 +26,7 @@ func newBuildLimiter(global, tenant int) *buildLimiter {
 
 func (limiter *buildLimiter) acquire(ctx context.Context) (func(), error) {
 	tenant := ""
-	if identity, ok := IdentityFromContext(ctx); ok {
+	if identity, ok := IdentityFrom(ctx); ok {
 		tenant = identity.Tenant()
 	}
 	local := limiter.tenants[tenantRefreshSlot(tenant)]

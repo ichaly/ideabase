@@ -34,7 +34,7 @@ func (my *Engine) authorizeProvider(ctx context.Context, operation *ast.Operatio
 	if my.policy == nil || operation == nil {
 		return ctx, nil
 	}
-	identity, ok := IdentityFromContext(ctx)
+	identity, ok := IdentityFrom(ctx)
 	if !ok {
 		return ctx, publicPolicyFailure("IDENTITY_REQUIRED", "verified identity is required for policy")
 	}

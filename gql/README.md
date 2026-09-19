@@ -277,7 +277,7 @@ builder.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
 coercion、directive 和选择集合并路径，但不受当前预算上限影响。
 
 Mutation 根 Resolver 会在引擎事务中执行；Resolver 先调用
-`execution, ok := gql.ExecutionContextFromContext(ctx)`，再通过 `execution.Transaction()`
+`execution, ok := gql.ExecutionFrom(ctx)`，再通过 `execution.Transaction()`
 取得当前 `*sql.Tx`，并继续传给 service/repository。事务由引擎提交或回滚，业务代码不接管其生命周期。
 `execution.Connection()` 返回应用共享的 `*std.Connection`，不包含事务状态。
 普通查询没有事务时使用 `Connection().Pool()`；有事务时必须使用 `Transaction()`，

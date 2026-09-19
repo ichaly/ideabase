@@ -205,7 +205,7 @@ func (my *gatewayState) effective(ctx context.Context) (state *gatewayState, err
 	}
 	cacheKey := ""
 	if cacheable {
-		identity, _ := IdentityFromContext(ctx)
+		identity, _ := IdentityFrom(ctx)
 		route, _ := PinnedRoute(ctx)
 		contract, _ := stdjson.Marshal(struct {
 			Snapshot                        string
@@ -663,7 +663,7 @@ func gatewaySchemaArtifact(ctx context.Context, state *gatewayState) (SchemaArti
 			PermissionSignature: state.snapshot.Fingerprint(), Capabilities: state.snapshot.Capabilities()}
 	}
 	artifact.Schema, artifact.Fingerprint = schema, digest(schema)
-	if identity, ok := IdentityFromContext(ctx); ok {
+	if identity, ok := IdentityFrom(ctx); ok {
 		artifact.Identity = IdentityDescriptorFromIdentity(identity)
 	}
 	return FinalizeSchemaArtifact(artifact), nil

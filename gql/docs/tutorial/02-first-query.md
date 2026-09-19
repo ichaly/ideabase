@@ -53,7 +53,7 @@ curl http://127.0.0.1:8080/graphql -H "Authorization: Bearer $TOKEN" \
 
 ## 事务和订阅
 
-单个 Engine 的 Mutation 顶层字段按顺序执行，共享请求事务；业务 Resolver 从 `ExecutionContextFromContext(ctx)` 取得执行视图，再用 `Transaction()` 获取当前事务；普通查询仅在没有事务时使用 `Connection().Pool()`。跨 namespace 的 Mutation 不提供分布式事务。
+单个 Engine 的 Mutation 顶层字段按顺序执行，共享请求事务；业务 Resolver 从 `ExecutionFrom(ctx)` 取得执行视图，再用 `Transaction()` 获取当前事务；普通查询仅在没有事务时使用 `Connection().Pool()`。跨 namespace 的 Mutation 不提供分布式事务。
 
 订阅同样 POST 到 `/graphql`，增加 `Accept: text/event-stream`；完整命令见[订单 README](../../examples/orders/README.md)。它推送最新查询状态，JWT 到期时连接结束，不提供历史事件重放。
 

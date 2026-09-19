@@ -15,7 +15,7 @@ func TestRemoteHandlerReceivesRequestedSelection(t *testing.T) {
 	require.NoError(t, executor.register(NewLoader(
 		"User", "selectedProfile", "", "id",
 		func(ctx context.Context, keys []any) (map[any]Profile, error) {
-			view, ok := ExecutionContextFromContext(ctx)
+			view, ok := ExecutionFrom(ctx)
 			if ok {
 				selection = view.Selection()
 			}

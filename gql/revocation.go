@@ -82,7 +82,7 @@ func (my *Engine) checkSecurity(ctx context.Context) error {
 	if my == nil || my.revocation == nil {
 		return nil
 	}
-	identity, ok := IdentityFromContext(ctx)
+	identity, ok := IdentityFrom(ctx)
 	if !ok {
 		return &publicFailure{"verified identity is required", "IDENTITY_REQUIRED"}
 	}

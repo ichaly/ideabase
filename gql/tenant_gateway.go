@@ -146,7 +146,7 @@ func (my *TenantGateway) route(ctx context.Context) (*Engine, context.Context, T
 	if my == nil || my.router == nil {
 		return nil, ctx, TenantRoute{}, fmt.Errorf("tenant gateway is unavailable")
 	}
-	identity, ok := IdentityFromContext(ctx)
+	identity, ok := IdentityFrom(ctx)
 	if !ok {
 		return nil, ctx, TenantRoute{}, &publicFailure{"verified identity is required for tenant gateway", "IDENTITY_REQUIRED"}
 	}
@@ -202,7 +202,7 @@ func (my *TenantGateway) Health(ctx context.Context) (HealthReport, error) {
 	if my == nil || len(my.sources) == 0 {
 		return HealthReport{}, fmt.Errorf("tenant gateway is unavailable")
 	}
-	if _, ok := IdentityFromContext(ctx); ok {
+	if _, ok := IdentityFrom(ctx); ok {
 		target, routed, route, err := my.route(ctx)
 		if err != nil {
 			return HealthReport{RouteScoped: true, RouteRevision: my.router.revision}, err

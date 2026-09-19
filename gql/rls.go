@@ -145,7 +145,7 @@ func (my *Engine) prepareRLS(ctx context.Context, tx *sql.Tx) error {
 	if rlsPrepared(ctx, tx) {
 		return nil
 	}
-	identity, ok := IdentityFromContext(ctx)
+	identity, ok := IdentityFrom(ctx)
 	if !ok {
 		return &publicFailure{"verified identity is required for RLS", "IDENTITY_REQUIRED"}
 	}

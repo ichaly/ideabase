@@ -38,7 +38,7 @@ func TestExecutionContextExposesTrustedRequestView(t *testing.T) {
 	defer cancel()
 	ctx = withExecutionContext(ctx, selection, "snapshot-1", base)
 
-	execution, ok := ExecutionContextFromContext(ctx)
+	execution, ok := ExecutionFrom(ctx)
 	require.True(t, ok)
 	require.Equal(t, identity, execution.Identity())
 	require.Equal(t, "users", execution.Selection()[0].(*ast.Field).Name)
@@ -56,7 +56,7 @@ func TestExecutionContextSelectionIsDetachedFromCachedAST(t *testing.T) {
 		Arguments:    ast.ArgumentList{&ast.Argument{Name: "id", Value: &ast.Value{Raw: "1"}}},
 		SelectionSet: ast.SelectionSet{&ast.Field{Name: "name"}},
 	}}
-	view, ok := ExecutionContextFromContext(withExecutionContext(context.Background(), original, "fp", nil))
+	view, ok := ExecutionFrom(withExecutionContext(context.Background(), original, "fp", nil))
 	require.True(t, ok)
 	selected := view.Selection()[0].(*ast.Field)
 	selected.Name = "mutated"
@@ -79,7 +79,7 @@ func TestExecutionContextSeparatesConnectionAndTransaction(t *testing.T) {
 	ctx := withExecutionContext(context.Background(), nil, "", base)
 	ctx = context.WithValue(ctx, transactionKey{}, tx)
 
-	execution, ok := ExecutionContextFromContext(ctx)
+	execution, ok := ExecutionFrom(ctx)
 	require.True(t, ok)
 	require.Same(t, base, execution.Connection())
 	require.Same(t, tx, execution.Transaction())
@@ -87,7 +87,7 @@ func TestExecutionContextSeparatesConnectionAndTransaction(t *testing.T) {
 
 func TestExecutionContextDoesNotInventIdentityOrDatabase(t *testing.T) {
 	ctx := withExecutionContext(context.Background(), nil, "", nil)
-	execution, ok := ExecutionContextFromContext(ctx)
+	execution, ok := ExecutionFrom(ctx)
 	require.True(t, ok)
 	_, hasIdentity := execution.IdentityValue()
 	require.False(t, hasIdentity)
@@ -96,7 +96,7 @@ func TestExecutionContextDoesNotInventIdentityOrDatabase(t *testing.T) {
 	require.Nil(t, (ExecutionContext{}).Connection())
 	require.Nil(t, (ExecutionContext{}).Transaction())
 
-	_, ok = ExecutionContextFromContext(context.Background())
+	_, ok = ExecutionFrom(context.Background())
 	require.False(t, ok)
 }
 
@@ -105,7 +105,7 @@ func TestExecutionContextExposesGovernanceViewDefensively(t *testing.T) {
 	ctx := context.WithValue(context.Background(), policyDecisionsKey{}, map[string]PolicyDecision{"Query.user": decision})
 	ctx = WithScope(ctx, map[string]any{"tenant": "t1"})
 	ctx = withExecutionContext(ctx, nil, "fp", nil, Capability{Coordinate: "Query.user", Actions: []string{"select"}})
-	execution, ok := ExecutionContextFromContext(ctx)
+	execution, ok := ExecutionFrom(ctx)
 	require.True(t, ok)
 	require.Equal(t, "Query.user", mustCoordinate(t, execution))
 	got, ok := execution.PolicyDecision()
@@ -121,7 +121,7 @@ func TestExecutionContextExposesGovernanceViewDefensively(t *testing.T) {
 func TestEngineExecutionContextBindsSelectedCapability(t *testing.T) {
 	capability := Capability{Coordinate: "Query.user", SemanticKind: SemanticProjection}
 	engine := &Engine{snapshot: &Snapshot{fingerprint: "fp", index: map[string]Capability{"Query.user": capability}}}
-	view, ok := ExecutionContextFromContext(engine.executionContextFor(context.Background(), nil, "Query.user"))
+	view, ok := ExecutionFrom(engine.executionContextFor(context.Background(), nil, "Query.user"))
 	require.True(t, ok)
 	selected, ok := view.Capability()
 	require.True(t, ok)
@@ -140,7 +140,7 @@ func TestInvalidateRequiresEngineTransactionAndDeduplicates(t *testing.T) {
 	ctx := withInvalidationState(context.Background())
 	ctx = context.WithValue(ctx, engineMutationTransactionKey{}, true)
 	ctx = withExecutionContext(ctx, nil, "fp", nil)
-	execution, _ := ExecutionContextFromContext(ctx)
+	execution, _ := ExecutionFrom(ctx)
 	require.NoError(t, execution.Invalidate("users", "users", "posts"))
 	require.Equal(t, []string{"posts", "users"}, invalidationTables(ctx))
 }
@@ -154,7 +154,7 @@ func TestInvalidationPublishesOnlyAfterOwnedTransactionCommit(t *testing.T) {
 	err, rolledBack := runRootTransaction(ctx, db, recorder, func(tx *sql.Tx) error {
 		execution := context.WithValue(ctx, transactionKey{}, tx)
 		execution = context.WithValue(execution, engineMutationTransactionKey{}, true)
-		view, _ := ExecutionContextFromContext(withExecutionContext(execution, nil, "fp", db))
+		view, _ := ExecutionFrom(withExecutionContext(execution, nil, "fp", db))
 		return view.Invalidate("users", "users", "posts")
 	})
 	require.NoError(t, err)
@@ -166,7 +166,7 @@ func TestInvalidationPublishesOnlyAfterOwnedTransactionCommit(t *testing.T) {
 	err, rolledBack = runRootTransaction(ctx, db, recorder, func(tx *sql.Tx) error {
 		execution := context.WithValue(ctx, transactionKey{}, tx)
 		execution = context.WithValue(execution, engineMutationTransactionKey{}, true)
-		view, _ := ExecutionContextFromContext(withExecutionContext(execution, nil, "fp", db))
+		view, _ := ExecutionFrom(withExecutionContext(execution, nil, "fp", db))
 		require.NoError(t, view.Invalidate("users"))
 		return errors.New("rollback")
 	})

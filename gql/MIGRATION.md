@@ -28,7 +28,7 @@ GOWORK=off go test ./internal/modules/gql/api ./internal/modules/bot/api
 ## 3. Resolver 复用请求事务
 
 Query、Mutation 和实体字段统一注册 `Resolver`。Mutation 业务代码必须通过
-`gql.ExecutionContextFromContext(ctx)` 取得唯一执行视图，再调用 `execution.Transaction()` 获取
+`gql.ExecutionFrom(ctx)` 取得唯一执行视图，再调用 `execution.Transaction()` 获取
 当前 `*sql.Tx` 并继续传给 service/repository；捕获全局
 `*gorm.DB` 或在 service 内另开事务不会加入当前 GraphQL Mutation 的原子边界。
 

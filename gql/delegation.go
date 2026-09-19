@@ -92,7 +92,7 @@ func NewDelegationCodec(config DelegationConfig) (*DelegationCodec, error) {
 
 // Sign binds the verified context identity to one exact operation digest.
 func (my *DelegationCodec) Sign(ctx context.Context, operation string) (string, error) {
-	identity, ok := IdentityFromContext(ctx)
+	identity, ok := IdentityFrom(ctx)
 	if !ok {
 		return "", fmt.Errorf("delegation requires a verified identity")
 	}

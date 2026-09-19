@@ -42,7 +42,7 @@ func placeOrder(ctx context.Context, _ gql.Root, args placeArgs) (OrderReceipt, 
 		}
 		ids[i], quantities[i] = item.ProductID, int32(item.Quantity)
 	}
-	execution, ok := gql.ExecutionContextFromContext(ctx)
+	execution, ok := gql.ExecutionFrom(ctx)
 	if !ok || execution.Transaction() == nil {
 		return receipt, errors.New("order requires engine transaction")
 	}
@@ -116,7 +116,7 @@ type cancelArgs struct {
 
 func cancelOrder(ctx context.Context, _ gql.Root, args cancelArgs) (OrderReceipt, error) {
 	var receipt OrderReceipt
-	execution, ok := gql.ExecutionContextFromContext(ctx)
+	execution, ok := gql.ExecutionFrom(ctx)
 	if !ok || execution.Transaction() == nil {
 		return receipt, errors.New("order requires engine transaction")
 	}

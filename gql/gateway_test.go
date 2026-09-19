@@ -972,7 +972,7 @@ func TestGatewayDoesNotCacheIdentityEffectiveSchemaWithoutCacheIdentity(t *testi
 	var calls atomic.Int32
 	endpoint := &gatewayEffectiveEndpoint{gatewayEndpoint: child, effectiveFn: func(ctx context.Context) (SchemaArtifact, error) {
 		calls.Add(1)
-		identity, ok := IdentityFromContext(ctx)
+		identity, ok := IdentityFrom(ctx)
 		if !ok {
 			return SchemaArtifact{}, fmt.Errorf("identity required")
 		}

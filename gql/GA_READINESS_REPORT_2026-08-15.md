@@ -138,7 +138,7 @@ CI 已覆盖 PostgreSQL 15/16/17/18 correctness matrix、race、fuzz、govulnche
 ### 4.3 Resolver 与扩展
 
 - `Query`、`Mutation`、`Field` 只是同一 Resolver 定义模型的意图明确入口，没有 Action 第二概念。
-- Resolver 从 `ExecutionContextFromContext` 获得身份、scope、route、policy decision、capability、snapshot、事务 DB 和提交后 invalidation。
+- Resolver 从 `ExecutionFrom` 获得身份、scope、route、policy decision、capability、snapshot、事务 DB 和提交后 invalidation。
 - Selection 返回完全脱离缓存 AST 的副本，业务代码误修改不会污染计划或制造竞态。
 - 默认 Query 根字段保持合并 SQL；Resolver 字段独立执行；Mutation 顶层按 GraphQL 顺序执行并共享事务。
 - Batch Resolver 和 Remote Handler 避免结果树 N+1。

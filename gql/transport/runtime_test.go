@@ -69,7 +69,7 @@ func (e *runtimeEndpoint) EffectiveSchema(ctx context.Context) (core.SchemaArtif
 	} else {
 		artifact = core.SchemaArtifact{Schema: e.snapshot.Schema(), Fingerprint: schemaDigest(e.snapshot.Schema()), StructuralFingerprint: e.snapshot.Fingerprint(), Capabilities: e.snapshot.Capabilities()}
 	}
-	if identity, ok := core.IdentityFromContext(ctx); ok {
+	if identity, ok := core.IdentityFrom(ctx); ok {
 		artifact.Identity = core.IdentityDescriptorFromIdentity(identity)
 	}
 	return core.FinalizeSchemaArtifact(artifact), nil
@@ -228,13 +228,13 @@ func (f healthProbeFunc) Health(ctx context.Context) (core.HealthReport, error) 
 
 func (my *subscriptionRuntime) SubscriptionAvailable() bool { return true }
 func (my *subscriptionRuntime) Subscribe(ctx context.Context, _ string, _ map[string]any, _ string) (<-chan []byte, error) {
-	my.identity, _ = core.IdentityFromContext(ctx)
+	my.identity, _ = core.IdentityFrom(ctx)
 	return my.events, nil
 }
 
 func (my *runtimeEndpoint) Snapshot() (*core.Snapshot, error) { return my.snapshot, nil }
 func (my *runtimeEndpoint) Execute(ctx context.Context, _ string, _ map[string]any) ([]byte, error) {
-	my.identity, _ = core.IdentityFromContext(ctx)
+	my.identity, _ = core.IdentityFrom(ctx)
 	my.commitMetadata = core.MutationCommitMetadataRequested(ctx)
 	if my.body != nil {
 		return my.body, nil

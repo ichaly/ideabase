@@ -88,7 +88,7 @@ func subscriptionRetryDelay(attempt int) time.Duration {
 
 func (my *Engine) acquireRefresh(ctx context.Context) (func(), bool) {
 	tenant := ""
-	if identity, ok := IdentityFromContext(ctx); ok {
+	if identity, ok := IdentityFrom(ctx); ok {
 		tenant = identity.Tenant()
 	} else if route, ok := PinnedRoute(ctx); ok && route.Tenant != "" {
 		tenant = route.Tenant
@@ -168,7 +168,7 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 	if lease.Barrier == nil {
 		lease.Barrier = my.revocation
 	}
-	if identity, ok := IdentityFromContext(ctx); ok {
+	if identity, ok := IdentityFrom(ctx); ok {
 		lease.Identity = identity
 		if lease.Interval <= 0 {
 			lease.Interval = configuredSubscriptionLease(my)
@@ -185,7 +185,7 @@ func (my *Engine) subscribe(ctx context.Context, query string, variables map[str
 
 	// 键在plan之后计算：codec入参已还原，等价请求（如shortId与数字ID）归并到同一feed
 	scope := scopeValues(ctx)
-	identity, _ := IdentityFromContext(ctx)
+	identity, _ := IdentityFrom(ctx)
 	route, _ := PinnedRoute(ctx)
 	key := subscriptionFeedKey(query, operationName, variables, scope, identity, route, lease.PolicySignature)
 	events := make(chan gqlReply, 1)

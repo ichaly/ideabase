@@ -88,9 +88,9 @@ func withExecutionContext(ctx context.Context, selection ast.SelectionSet, snaps
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	identity, ok := IdentityFromContext(ctx)
+	identity, ok := IdentityFrom(ctx)
 	if !ok {
-		if previous, exists := ExecutionContextFromContext(ctx); exists {
+		if previous, exists := ExecutionFrom(ctx); exists {
 			identity, ok = previous.identity, previous.hasIdentity
 		}
 	}
@@ -109,9 +109,9 @@ func withExecutionContext(ctx context.Context, selection ast.SelectionSet, snaps
 	return context.WithValue(ctx, executionContextKey{}, view)
 }
 
-// ExecutionContextFromContext returns the request execution view, if the
+// ExecutionFrom returns the request execution view, if the
 // current resolver call is running under an engine execution.
-func ExecutionContextFromContext(ctx context.Context) (ExecutionContext, bool) {
+func ExecutionFrom(ctx context.Context) (ExecutionContext, bool) {
 	if ctx == nil {
 		return ExecutionContext{}, false
 	}

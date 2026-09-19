@@ -445,7 +445,7 @@ func (my *RemoteEndpoint) cachedEffectiveSchema(key string) (core.SchemaArtifact
 }
 
 func (my *RemoteEndpoint) effectiveSchemaRequestKey(ctx context.Context, structural string) (string, bool) {
-	identity, ok := core.IdentityFromContext(ctx)
+	identity, ok := core.IdentityFrom(ctx)
 	if !ok {
 		return "", false
 	}
@@ -657,7 +657,7 @@ func (my *RemoteEndpoint) Refresh(ctx context.Context) error {
 		req.Header.Set("If-None-Match", fmt.Sprintf(`"%d:%s"`, current.revision, current.snapshot.Fingerprint()))
 	}
 	if my.signer != nil {
-		if _, ok := core.IdentityFromContext(ctx); ok {
+		if _, ok := core.IdentityFrom(ctx); ok {
 			token, signErr := my.signer.Sign(ctx, operationDigest(request{}, "manifest", ""))
 			if signErr != nil {
 				return signErr
