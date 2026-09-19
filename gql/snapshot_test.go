@@ -61,6 +61,7 @@ func snapshotKonfig(t *testing.T) *std.Konfig {
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
 	k.Set("mode", "dev")
+	k.Set("schema.introspection", true)
 	k.Set("app.root", t.TempDir())
 	return k
 }

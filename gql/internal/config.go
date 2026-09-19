@@ -52,7 +52,7 @@ type SchemaConfig struct {
 	MaxTokens int    `mapstructure:"max-tokens"`
 	MaxCost   uint64 `mapstructure:"max-cost"`
 
-	// 是否允许自省查询（生产对外暴露时可关闭）
+	// 是否允许完整 Schema 自省；默认关闭，与运行模式无关，不改变执行权限。
 	Introspection bool `mapstructure:"introspection"`
 
 	// HTTP边界只接受持久化操作（operationName查已注册文档），拒绝原始查询文本

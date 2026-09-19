@@ -26,5 +26,5 @@ func (my *Engine) runOperation(ctx context.Context, operationName string, variab
 }
 
 func (my *Engine) plan(query, operationName string, variables map[string]interface{}) (*Plan, error) {
-	return my.planWithView(&effectiveView{schema: my.schema, intro: my.intro}, query, operationName, variables)
+	return my.planWithView(&effectiveView{schema: my.schema}, query, operationName, variables)
 }

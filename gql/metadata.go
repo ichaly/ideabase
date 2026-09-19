@@ -170,7 +170,7 @@ func NewMetadata(k *std.Konfig, d *std.Connection, opts ...MetadataOption) (*Met
 	k.SetDefault("schema.max-depth", 20)
 	k.SetDefault("schema.max-tokens", 15000)
 	k.SetDefault("schema.max-cost", uint64(100_000))
-	k.SetDefault("schema.introspection", true)
+	k.SetDefault("schema.introspection", false)
 	k.SetDefault("schema.table-prefix", []string{})
 	k.SetDefault("schema.exclude-tables", []string{})
 	k.SetDefault("schema.exclude-fields", []string{})

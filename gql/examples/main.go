@@ -149,6 +149,7 @@ func buildEngineConfigured(db *std.Connection, production bool, observer gql.Obs
 		return nil, err
 	}
 	k.Set("mode", "dev")
+	k.Set("schema.introspection", true)
 	k.Set("app.root", ".") // schema.graphql与元数据缓存输出到 ./cfg
 	if production {
 		k.Set("schema.introspection", false)

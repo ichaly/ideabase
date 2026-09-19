@@ -24,6 +24,7 @@ func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOpti
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
+	k.Set("schema.introspection", true)
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	if tweak != nil {

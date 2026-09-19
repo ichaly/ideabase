@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/iancoleman/strcase"
-	"github.com/ichaly/ideabase/gql/internal/intro"
 	"github.com/ichaly/ideabase/gql/internal/lru"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/vektah/gqlparser/v2"
@@ -428,7 +427,6 @@ func defaultValueChanged(before, after *ast.Value) bool {
 type effectiveView struct {
 	artifact SchemaArtifact
 	schema   *ast.Schema
-	intro    *intro.Handler
 }
 
 var allFieldUses = []FieldUse{
@@ -466,14 +464,6 @@ func (my *Engine) EffectiveSchemaCacheIdentity(ctx context.Context) (string, boo
 	}
 	key, ok := effectiveProviderCacheIdentity(ctx, provider, identity)
 	return key, ok && strings.TrimSpace(key) != ""
-}
-
-func (my *Engine) effectiveIntrospection(ctx context.Context) (*intro.Handler, error) {
-	view, err := my.effectiveSchema(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return view.intro, nil
 }
 
 func (my *Engine) effectiveSchema(ctx context.Context) (view *effectiveView, err error) {
@@ -698,7 +688,7 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 		PermissionSignature: permission, PolicyRevision: identity.PolicyRevision(), RouteRevision: route.Revision,
 		Capabilities: schemaCapabilities(schema, my.snapshot.Capabilities()), ExecutionMode: my.executionMode(),
 		PersistedOperations: my.persistedOperationCatalog(schema),
-	}, schema: schema, intro: intro.New(schema)}
+	}, schema: schema}
 	view.artifact.Identity = IdentityDescriptorFromIdentity(identity)
 	if cacheable && len(cacheIdentity) > 0 {
 		view.artifact.CacheIdentity = cacheIdentity[0]

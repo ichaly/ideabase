@@ -156,7 +156,7 @@ type persistedDocument struct {
 // options 读取schema级选项（元数据未配置时为零值安全默认）
 func (my *Engine) options() internal.SchemaConfig {
 	if my.metadata == nil || my.metadata.cfg == nil {
-		return internal.SchemaConfig{Introspection: true}
+		return internal.SchemaConfig{}
 	}
 	return my.metadata.cfg.Schema
 }
@@ -247,7 +247,7 @@ func (my *Engine) Snapshot() (*Snapshot, error) {
 			fingerprint := my.snapshot.Fingerprint()
 			my.baseView = &effectiveView{
 				artifact: SchemaArtifact{Schema: my.snapshot.Schema(), Fingerprint: digest(my.snapshot.Schema()), StructuralFingerprint: fingerprint, Capabilities: my.snapshot.Capabilities(), ExecutionMode: my.executionMode(), PersistedOperations: my.persistedOperationCatalog(my.schema)},
-				schema:   my.schema, intro: my.intro,
+				schema:   my.schema,
 			}
 		}
 	})
@@ -540,7 +540,7 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 	}
 	if err != nil {
 		if introErr, ok := err.(*introQuery); ok {
-			data, ierr := view.intro.Introspect(introErr.operation, variables)
+			data, ierr := my.intro.Introspect(introErr.operation, variables)
 			if ierr != nil {
 				r.Errors = GraphQLErrors(ierr)
 			} else {
@@ -571,7 +571,7 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 				done(observationReplyCode(r, nil))
 			}
 			if rootErr.entry.intro != nil && r.Data != nil {
-				if ierr := my.mergeIntrospection(ctx, r.Data, rootErr.entry.intro, variables); ierr != nil {
+				if ierr := my.mergeIntrospection(r.Data, rootErr.entry.intro, variables); ierr != nil {
 					r.Errors = append(r.Errors, GraphQLErrors(ierr)...)
 				}
 			}
@@ -643,7 +643,7 @@ func (my *Engine) execute(ctx context.Context, query string, variables map[strin
 		return r
 	}
 	if plan.intro != nil {
-		if err = my.mergeIntrospection(ctx, result, plan.intro, variables); err != nil {
+		if err = my.mergeIntrospection(result, plan.intro, variables); err != nil {
 			r.Errors = GraphQLErrors(err)
 			return r
 		}
@@ -1065,7 +1065,7 @@ func (my *Engine) miss(view *effectiveView, key planKey, query string, operation
 
 // parse 解析校验查询并选定操作，fragment就地展开为纯字段选择集
 func (my *Engine) parse(query, operationName string, variables map[string]interface{}) (*ast.OperationDefinition, error) {
-	return my.parseWithView(&effectiveView{schema: my.schema, intro: my.intro}, query, operationName, variables)
+	return my.parseWithView(&effectiveView{schema: my.schema}, query, operationName, variables)
 }
 
 func (my *Engine) parseWithView(view *effectiveView, query, operationName string, variables map[string]interface{}) (*ast.OperationDefinition, error) {
@@ -1204,12 +1204,8 @@ func splitIntrospection(operation *ast.OperationDefinition) (*ast.OperationDefin
 	return &dataOperation, &introOperation
 }
 
-func (my *Engine) mergeIntrospection(ctx context.Context, data map[string]interface{}, operation *ast.OperationDefinition, variables map[string]interface{}) error {
-	handler, err := my.effectiveIntrospection(ctx)
-	if err != nil {
-		return err
-	}
-	projected, err := handler.Introspect(operation, variables)
+func (my *Engine) mergeIntrospection(data map[string]interface{}, operation *ast.OperationDefinition, variables map[string]interface{}) error {
+	projected, err := my.intro.Introspect(operation, variables)
 	if err != nil {
 		return err
 	}

@@ -546,7 +546,7 @@ func TestPolicyPlanCacheIsPartitionedByTenantRoute(t *testing.T) {
 	require.Equal(t, 2, executor.policyCache.Len())
 }
 
-func TestPolicyProviderFiltersIntrospectionAndSchemaArtifact(t *testing.T) {
+func TestPolicyProviderFiltersArtifactButNotIntrospection(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
@@ -567,13 +567,15 @@ func TestPolicyProviderFiltersIntrospectionAndSchemaArtifact(t *testing.T) {
 	reply := executor.run(ctx, `{ __type(name: "User") { fields { name } inputFields { name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	typeInfo := reply.Data["__type"].(map[string]any)
-	require.Equal(t, []any{map[string]any{"name": "id"}}, typeInfo["fields"])
+	require.Contains(t, typeInfo["fields"], map[string]any{"name": "id"})
+	require.Contains(t, typeInfo["fields"], map[string]any{"name": "name"})
 	reply = executor.run(ctx, `{ __type(name: "UserStats") { fields { name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.Equal(t, []any{map[string]any{"name": "key"}, map[string]any{"name": "count"}}, reply.Data["__type"].(map[string]any)["fields"])
+	require.Contains(t, reply.Data["__type"].(map[string]any)["fields"], map[string]any{"name": "count"})
+	require.Greater(t, len(reply.Data["__type"].(map[string]any)["fields"].([]any)), 2)
 	reply = executor.run(ctx, `{ __type(name: "UserDistinctField") { enumValues { name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.Equal(t, []any{map[string]any{"name": "id"}}, reply.Data["__type"].(map[string]any)["enumValues"])
+	require.Contains(t, reply.Data["__type"].(map[string]any)["enumValues"], map[string]any{"name": "name"})
 	artifact, err := executor.EffectiveSchema(ctx)
 	require.NoError(t, err)
 	require.NotEmpty(t, artifact.PermissionSignature)
@@ -614,7 +616,7 @@ func TestPolicyProviderEnforcesImplicitListLimitWhenDefaultIsUnset(t *testing.T)
 	require.Contains(t, string(body), "limit 20 exceeds 1")
 }
 
-func TestBuiltinPermissionsFilterEffectiveIntrospection(t *testing.T) {
+func TestBuiltinPermissionsFilterArtifactButNotIntrospection(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	user, ok := executor.metadata.GetNode("User")
@@ -628,10 +630,11 @@ func TestBuiltinPermissionsFilterEffectiveIntrospection(t *testing.T) {
 	reply := executor.run(ctx, `{ __type(name: "User") { fields { name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	fields := reply.Data["__type"].(map[string]any)["fields"]
-	require.Equal(t, []any{map[string]any{"name": "id"}}, fields)
+	require.Contains(t, fields, map[string]any{"name": "id"})
+	require.Contains(t, fields, map[string]any{"name": "name"})
 	reply = executor.run(ctx, `{ __type(name: "UserCreateInput") { name } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.Nil(t, reply.Data["__type"])
+	require.Equal(t, map[string]any{"name": "UserCreateInput"}, reply.Data["__type"])
 	artifact, err := executor.EffectiveSchema(ctx)
 	require.NoError(t, err)
 	_, err = gqlparser.LoadSchema(&ast.Source{Name: "reader.graphql", Input: artifact.Schema})

@@ -9,9 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Validation and introspection must consume the same effective schema. A field
-// hidden from the identity-specific schema is an unknown GraphQL coordinate,
-// not a later policy execution error.
+// 执行仍以身份对应的 Effective Schema 校验；完整自省中可见的字段不会因此获得调用权限。
 func TestExecutionValidatesAgainstEffectiveSchema(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()

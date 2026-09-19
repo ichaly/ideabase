@@ -65,8 +65,9 @@ fmt.Println(snapshot.Fingerprint(), snapshot.Capabilities())
 Builder 是唯一装配入口。每个 Engine 必须通过 `Builder.Policy` 或 metadata
 `permissions` 获得唯一 PolicyProvider；两者冲突或两者都缺失时 Build 失败并保持
 fail-closed。Build 后 Engine 只提供执行、快照、健康检查和订阅接口。
-每个请求先生成与可信 Identity/租户路由一致的 Effective Schema；校验、普通执行、订阅、
-自省和 Gateway 组合共用该不可变 artifact。artifact 同时包含过滤后的 capability 目录，
+每个请求先生成与可信 Identity/租户路由一致的 Effective Schema；校验、普通执行、订阅
+和 Gateway 组合共用该不可变 artifact。Engine 自省展示启动时构建的完整 Schema，
+文档可见不代表有权执行；artifact 仍包含按身份过滤后的 capability 目录，
 其 schema 指纹、结构指纹、权限签名与 policy/route revision 是独立字段，不混用缓存身份。
 内置角色策略和显式实现 `PolicyCacheIdentity` 的自定义 provider 使用有界 LRU +
 singleflight；依赖请求临时状态的 provider 不声明缓存身份，引擎就不冒险复用 Schema。
@@ -640,7 +641,7 @@ fail closed，不会以部分元数据启动。
 
 ## 生产安全开关
 
-- `schema.introspection: false` 关闭自省（`__schema/__type` 拒绝，常规查询不受影响）
+- `schema.introspection` 是唯一自省开关：默认 `false`，与 `mode` 无关；开发配置显式设置 `schema.introspection: true`，线上保持关闭。开启时 Engine 的 `__schema/__type` 返回完整的已注册 Schema（仍受 metadata 表/字段白名单约束），不按角色裁剪文档；关闭时拒绝自省，常规查询和 `__typename` 不受影响。执行鉴权、数据隔离与 `EffectiveSchema` 能力描述保持不变。
 - `schema.persisted-only: true` 所有 `ExecuteOperation` 入口只接受已注册操作；原始查询
   返回标准 GraphQL `errors` 响应，所有适配器共用一套分支语义
 - `Register`/`LoadDocuments` 仅限启动期：首次执行后注册表冻结，运行期调用明确报错
