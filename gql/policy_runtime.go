@@ -69,7 +69,7 @@ func (my *Engine) authorizeProvider(ctx context.Context, operation *ast.Operatio
 		if err := my.validatePolicyBudget(target, decision, operation, variables); err != nil {
 			return ctx, fmt.Errorf("%w: %s: %v", publicPolicyFailure(policyBudgetCode(err), "policy budget exceeded"), coordinate, err)
 		}
-		if capability.Handler != HandlerSQL && hasRowPolicy(decision) && !capability.PolicyAware {
+		if capability.Handler != HandlerSQL && my.native[coordinate] == nil && hasRowPolicy(decision) && !capability.PolicyAware {
 			return ctx, fmt.Errorf("%w: %s", publicPolicyFailure("POLICY_HANDLER_REQUIRED", "policy requires a policy-aware handler"), coordinate)
 		}
 		if target.class != nil {

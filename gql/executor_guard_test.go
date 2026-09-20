@@ -13,7 +13,7 @@ import (
 func TestResponseLimitStopsResolverReplyAtExecutionBoundary(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Query", "largeReply", "", func(context.Context, Root, struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Root[struct{}, string], struct{}, string]("Query", "largeReply", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
 		return strings.Repeat("x", 1024), nil
 	})))
 	body, err := executor.Execute(WithResponseLimit(context.Background(), 128), `{ largeReply }`, nil)

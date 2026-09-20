@@ -66,7 +66,7 @@ func TestHTTPVariablesPreserveJSONNumberKind(t *testing.T) {
 	type args struct {
 		N int `json:"n"`
 	}
-	require.NoError(t, executor.register(NewResolver[Root, args, int]("Query", "echoHTTP", "", func(_ context.Context, _ Root, in args) (int, error) {
+	require.NoError(t, executor.register(NewResolver[Root[args, int], args, int]("Query", "echoHTTP", "", func(_ context.Context, _ Root[args, int], in args) (int, error) {
 		return in.N, nil
 	})))
 	body, err := executor.Execute(context.Background(), `query($n: Int!) { echoHTTP(n: $n) }`, map[string]any{"n": 1})
@@ -113,7 +113,7 @@ func TestVariableValidationRunsBeforeCachedResolver(t *testing.T) {
 		N int `json:"n"`
 	}
 	calls := 0
-	require.NoError(t, executor.register(NewResolver[Root, args, int]("Query", "echo", "", func(_ context.Context, _ Root, in args) (int, error) {
+	require.NoError(t, executor.register(NewResolver[Root[args, int], args, int]("Query", "echo", "", func(_ context.Context, _ Root[args, int], in args) (int, error) {
 		calls++
 		return in.N, nil
 	})))
@@ -134,7 +134,7 @@ func TestColdFlightDoesNotPropagateAnotherRequestsVariableError(t *testing.T) {
 	type args struct {
 		N int `json:"n"`
 	}
-	require.NoError(t, executor.register(NewResolver[Root, args, int]("Query", "echoFlight", "", func(_ context.Context, _ Root, in args) (int, error) {
+	require.NoError(t, executor.register(NewResolver[Root[args, int], args, int]("Query", "echoFlight", "", func(_ context.Context, _ Root[args, int], in args) (int, error) {
 		return in.N, nil
 	})))
 	query := `query Echo($n: Int!) { echoFlight(n: $n) }`

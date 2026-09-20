@@ -235,50 +235,53 @@ metadata:
     User:  { table: users, id-generator: database }
 ```
 
-## 原生变更扩展
+## 新增、覆盖和扩展
 
-普通校验不需要新增 save Resolver 或替换 create/update。用强类型输入给原生 mutation
-绑定 `validate` / `label` 标签，原生 schema、SQL、权限、事务和返回投影保持由引擎负责：
+统一使用 `Register(NewResolver(...))`。不存在的字段从函数签名生成 schema；已有原生字段保留
+原来的 schema 契约，并在 Build 检查绑定类型。注册仅影响指定坐标，不自动传播到同实体的其他 CRUD。
+同一坐标重复注册用户 Resolver 会报错。
 
 ```go
 type ProductInput struct {
-    Name  string `validate:"required,max=100" label:"名称"`
-    Price int64  `validate:"min=0,max=1000000" label:"价格"`
+    Name string `validate:"required,max=100" label:"名称"`
 }
-err := builder.Mutations(gql.NewMutation[ProductInput]("Product", nil))
+type ProductArgs struct { Input ProductInput }
+type ProductResult struct { ID string `json:"id"` }
+
+save := func(ctx context.Context, root gql.Root[ProductArgs, *ProductResult], args ProductArgs) (*ProductResult, error) {
+    result, err := root.Next(args)
+    if err != nil || result == nil { return result, err }
+    // 这里可以通过 ExecutionFrom(ctx).Transaction() 写审计，失败返回 error，整次事务回滚。
+    return result, nil
+}
+err := builder.Register(
+    gql.NewResolver("Mutation", "createProduct", "", save),
+    gql.NewResolver("Mutation", "updateProduct", "", save),
+)
 ```
 
-- 输入字段按 `json` 标签或小驼峰匹配现有实体列，Build 检查字段和标量类型兼容性，不从 Go 类型重建 schema。
-  可以只绑定需要处理的列，其他输入继续由原生引擎处理。嵌入字段和关系对象不支持类型化绑定。
-- create/upsert 校验全部绑定字段；update 只校验实际提交的字段，因此 `required` 在 PATCH 中表示
-  “可以不提交，提交则不能为空”。这不是 `omitempty`：显式零值仍被校验和写入。
-  未提交字段不写回，保留数据库默认值；必填且允许零值的创建字段可用 `*int64` + `required` 表达。
-  显式 null 仅能绑定到可空列的指针字段；普通值字段拒绝 null，避免静默转换为零值。
-- 如需规范化，`NewMutation[I](class, func(ctx context.Context, change *gql.Change[I]) error)`
-  接收类型解码后的输入。修改 `change.Input` 中已提交的字段会写回；为省略字段赋默认值后须调用
-  `change.Include("fieldName")`。`change.Has("fieldName")` 检查字段存在性；`Arguments` 提供不含 input 的 id、where 等根参数副本，修改副本不改变 SQL 目标。
-  成功返回后引擎自动继续，错误或 panic 回滚；批量创建逐行处理，批量更新处理一次共享 patch。
-- 使用 `builder.Validator(v)` 接入应用配置的 `*std.Validator`，在 Build 前注册自定义标签和结构体级规则。
-  原生 mutation 与自定义 Resolver 共用此实例并传递请求 context；不要在请求期间注册规则。
-  标签校验失败返回 `VALIDATION_ERROR` 及 `extensions.fields` 中的中文字段提示。
-  跨字段/结构体级规则在 PATCH 中看到的是部分输入，不是数据库旧值；涉及旧状态的判断仍须显式读取并加锁。
-- 审计等附属写入可设置 `mutation.Returning = []string{"id"}` 与
-  `mutation.After = func(ctx context.Context, request gql.MutationRequest, rows []map[string]any) error { ... }`。
-  After 每个根字段执行一次，拿到全部实际返回行，与输入行不保证一一对应；使用 `ExecutionFrom(ctx).Transaction()`。
-- 顺序为权限检查 → 同一事务内强类型解码/输入处理/标签校验 → 重新检查输入和返回字段权限 → 原生 SQL → After → 提交。
-  旧值读取和行锁通过 `ExecutionFrom(ctx).Transaction()` 执行。移除旧 `Validate` map、`Before` 和 `MutationAfter` 闭包入口；
-  校验统一放在输入类型上，后置处理统一使用 After。仅需审计时也可直接声明带 After 的 `Mutation`。
-- 字段索引、Go 字段名和标量转换方式在构建期准备。普通标量直接转换，自定义 JSON 标量保留编解码契约；
-  整数解析检查目标 Go 类型的位宽，不经过浮点数。没有 After 时不追加内部返回字段或收集返回行。
-- 可选 `Arguments: map[string]string{"token": "String"}` 给原生根变更增加可选标量参数，
-  只交给钩子、不映射 SQL 列，也不增加查询字段。凭证等私有数据可在 After 内使用相同事务写入。
-- `Returning` 是后置处理需要的实体标量字段；由引擎补充并剥离，与客户端选择、别名无关，仍须具备读取权限。
-  单条、批量和 upsert 均提供实际返回行；声明 Returning 后会拒绝只有计数的删除入口，请使用按主键或批量返回行的删除。
-  后置处理应写审计等附属数据，
-  如修改本次返回中可见的实体字段，应注意返回投影已在它之前完成。
-- 扩展只作用于原生根变更。对受保护实体或中间表的 GraphQL 嵌套写入会报错，须拆成同一 mutation 的多个根字段；
-  多个根字段和自定义 Resolver 共用事务。数据库触发器、级联及引擎外的 SQL 不属于此钩子的执行入口。
-- 钩子报错或 panic 回滚本次事务；不要在其中执行无法回滚的外部副作用。没有涉及扩展的原生单根变更保持单 SQL 快路径。
+- 根字段统一使用 `Root[I, O]`，I 是完整 GraphQL 参数，O 是返回值。原生实现存在时由引擎绑定
+  `root.Next(args)`；不调用 Next 就覆盖字段实现。新字段调用 Next、重复调用或在回调结束后调用
+  都返回明确错误。吞掉 Next 错误仍会使本次操作失败；Next 固定沿用当前请求上下文和事务。
+- 输入字段按 `json` 标签或小驼峰绑定。可以仅声明关心的参数和输入列，其余原始参数保留。
+  原生字段未声明的顶层标量参数可由结构体补充，例如 `Token string`；扩展只作用于当前注册字段。
+  普通新增 Resolver 在调用前校验，原生 Resolver 在 Next 执行前校验处理后的输入；覆盖而不调用 Next 时仍校验输入。
+- `root.Has("input.name")` 区分省略与显式 null/零值；给省略字段赋值后须使用
+  `root.Include("input.enabled")` 加入写入集，批量路径使用 `input[0].name`。未提交字段不覆盖数据库默认值。
+  create/upsert 校验完整参数，update 只校验已提交或 Include 的字段；切片元素沿用 validator 的 `validate:"dive"`。
+  列表按原始行位置保留未绑定字段和提交状态，处理参数时不能增删或重排行；可空列表支持显式设为 nil。
+- `builder.Validator(v)` 接入应用的共享验证器，自定义标签在 Build 前注册。标签和结构体规则使用请求 context，
+  错误保留 `VALIDATION_ERROR` 与中文字段提示。依赖旧状态的判断仍在 Resolver 中显式读取、加锁。
+- 返回结构体可以只声明后处理所需字段，如 ID；引擎在同一次 SQL 中补投影，并剥除内部别名。
+  客户端选择的其他字段继续保留，不额外回查数据库。对可能返回 null 的单条结果使用指针返回类型。
+  Query、批量结果和计数结果需绑定与原生结果对应的结构；强类型投影必须是有限结构，不支持递归 Go 类型。
+- 顺序为权限检查 → 事务内解码和用户处理 → Next 校验与重新授权 → 原生 SQL → 用户后处理 → 提交。
+  返回依赖也受读取权限约束。覆盖实现不能绕过权限；有行策略但不调用 Next 时，需用 `ConsumePolicy()`
+  声明并实际执行策略。原生 Resolver 的资源与动作始终来自原生操作目录。
+- 嵌套关系写入没有独立的根 Resolver 边界；会绕过已注册 create/update 扩展的对应关系写入被拒绝。
+  直接调用其他未注册的 CRUD 不自动执行当前扩展，须分别授权、注册。没有扩展的原生操作保留 SQL 快路径。
+- 删除 `Mutation`、`NewMutation`、`Builder.Mutations`、`Replace`、`Wrap` 和专用中间件 API，不保留兼容入口。
+  共享逻辑直接复用 Go 函数和输入结构体；实体字段继续使用 `Source`、`NewBatch`、`NewLoader`。
 
 ## 自定义 Resolver
 
@@ -311,7 +314,7 @@ builder.Register(gql.NewBatch("User", "level", "等级",
 
 ```go
 builder.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
-    func(ctx context.Context, _ gql.Root, req CreateReq) (*ent.Profile, error) {
+    func(ctx context.Context, _ gql.Root[CreateReq, *ent.Profile], req CreateReq) (*ent.Profile, error) {
         return svc.Create(ctx, req)
     }, gql.Result("BotProfile"), gql.Cost(8)))
 ```

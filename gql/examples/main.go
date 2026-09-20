@@ -87,14 +87,16 @@ func greetingResolver() gql.Resolver {
 
 func serverInfoResolver() gql.Resolver {
 	return gql.NewResolver("Query", "serverInfo", "服务信息",
-		func(context.Context, gql.Root, struct{}) (ServerInfo, error) {
+		func(context.Context, gql.Root[struct{}, ServerInfo], struct{}) (ServerInfo, error) {
 			return ServerInfo{Name: "gql-complete-demo", Version: "1.0"}, nil
 		}, gql.Extra("type ServerInfo { name: String! version: String! }"), gql.Access("system", "read"))
 }
 
 func echoResolver() gql.Resolver {
 	return gql.NewResolver("Mutation", "echo", "自定义突变",
-		func(_ context.Context, _ gql.Root, args echoArgs) (string, error) { return args.Message, nil }, gql.Access("system", "write"))
+		func(_ context.Context, _ gql.Root[echoArgs, string], args echoArgs) (string, error) {
+			return args.Message, nil
+		}, gql.Access("system", "write"))
 }
 
 func reputationResolver() gql.Resolver {
@@ -202,16 +204,6 @@ func buildEngineConfigured(db *std.Connection, production bool, observer gql.Obs
 	}
 	// 普通/批量/根字段Resolver与远程关系使用同一个注册入口。
 	if err = builder.Register(signResolver(), greetingResolver(), serverInfoResolver(), echoResolver(), reputationResolver()); err != nil {
-		return nil, err
-	}
-	// 中间件按坐标增强已注册Resolver，不重写业务函数。
-	if err = builder.Wrap("User.greeting", gql.NewResolverMiddleware(
-		func(ctx context.Context, source gql.Source, args helloArgs,
-			next gql.NextResolver[gql.Source, helloArgs, string],
-		) (string, error) {
-			value, err := next(ctx, source, args)
-			return "[wrapped] " + value, err
-		})); err != nil {
 		return nil, err
 	}
 	documentDirs := []string{"./queries", "./operations/public"}

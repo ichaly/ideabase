@@ -16,10 +16,7 @@ type Builder struct {
 	database  *std.Connection
 	metadata  []MetadataOption
 	items     []Resolver
-	mutations []Mutation
 	validator *std.Validator
-	replaces  []Resolver
-	wraps     []resolverWrap
 	documents []string
 	observer  Observer
 	policy    PolicyProvider
@@ -68,11 +65,6 @@ func (my *Builder) Observe(observer Observer) error {
 	return nil
 }
 
-type resolverWrap struct {
-	coordinate string
-	middleware ResolverMiddleware
-}
-
 // New creates the minimal database-to-GraphQL builder.
 func New(k *std.Konfig, database *std.Connection, options ...MetadataOption) *Builder {
 	return &Builder{k: k, database: database, metadata: options}
@@ -100,24 +92,6 @@ func (my *Builder) Register(items ...Resolver) error {
 		return fmt.Errorf("builder已冻结：Register仅限Build前调用")
 	}
 	my.items = append(my.items, items...)
-	return nil
-}
-
-// Replace overrides generated SQL fields with explicit Resolver handlers.
-func (my *Builder) Replace(resolvers ...Resolver) error {
-	if my.built {
-		return fmt.Errorf("builder已冻结：Replace仅限Build前调用")
-	}
-	my.replaces = append(my.replaces, resolvers...)
-	return nil
-}
-
-// Wrap decorates a registered or replaced Resolver before the Engine freezes.
-func (my *Builder) Wrap(coordinate string, middleware ResolverMiddleware) error {
-	if my.built {
-		return fmt.Errorf("builder已冻结：Wrap仅限Build前调用")
-	}
-	my.wraps = append(my.wraps, resolverWrap{coordinate: coordinate, middleware: middleware})
 	return nil
 }
 
@@ -185,10 +159,6 @@ func (my *Builder) Build() (*Engine, error) {
 	executor.revocation = my.security
 	executor.subscriptionLease = my.lease
 	executor.validator = my.validator
-	if err := executor.installMutations(my.mutations); err != nil {
-		executor.Close()
-		return nil, err
-	}
 	ready := false
 	defer func() {
 		if !ready {
@@ -197,22 +167,6 @@ func (my *Builder) Build() (*Engine, error) {
 	}()
 	if len(my.items) > 0 {
 		if err := executor.register(my.items...); err != nil {
-			return nil, err
-		}
-	}
-	for _, resolver := range my.replaces {
-		if resolver == nil {
-			return nil, fmt.Errorf("replace不接受nil Resolver")
-		}
-		if err := executor.replace(resolver); err != nil {
-			return nil, err
-		}
-	}
-	for _, wrap := range my.wraps {
-		if wrap.middleware == nil {
-			return nil, fmt.Errorf("wrap不接受nil Middleware: %s", wrap.coordinate)
-		}
-		if err := executor.wrap(wrap.coordinate, wrap.middleware); err != nil {
 			return nil, err
 		}
 	}

@@ -38,7 +38,7 @@ func TestCustomHandlerSemanticKindIsDiscoverable(t *testing.T) {
 	require.Equal(t, SemanticWorkflow, deriveSemanticKind(define))
 	executor, _, cleanup := setupRootResolverExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Query", "workflow", "", func(context.Context, Root, struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Root[struct{}, string], struct{}, string]("Query", "workflow", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
 		return "ok", nil
 	}, Semantic(SemanticWorkflow))))
 	snapshot, err := executor.Snapshot()
@@ -49,7 +49,7 @@ func TestCustomHandlerSemanticKindIsDiscoverable(t *testing.T) {
 }
 
 func TestCustomHandlerRejectsUnknownSemanticKind(t *testing.T) {
-	resolver := NewResolver("Query", "badSemantic", "", func(context.Context, Root, struct{}) (string, error) {
+	resolver := NewResolver("Query", "badSemantic", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
 		return "", nil
 	}, Semantic("unknown"), Access("test", "read"))
 	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()

@@ -32,7 +32,7 @@ func TestHandlerDerivesNestedInputAndOutputTypes(t *testing.T) {
 
 	require.NoError(t, executor.register(NewResolver(
 		"Query", "typedHandler", "typed handler",
-		func(_ context.Context, _ Root, input HandlerNestedArgs) (HandlerPayload, error) {
+		func(_ context.Context, _ Root[HandlerNestedArgs, HandlerPayload], input HandlerNestedArgs) (HandlerPayload, error) {
 			return HandlerPayload{
 				Address: input.Address,
 				Profile: &HandlerProfile{Label: input.Address.City},

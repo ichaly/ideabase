@@ -35,8 +35,8 @@ func (loader sharedTenantLoader) Load(host protocol.Hoster) error {
 
 func tenantTestEngine(t *testing.T, value string, calls *atomic.Int32) *Engine {
 	t.Helper()
-	resolver := NewResolver[Root, struct{}, string]("Query", "tenantName", "tenant source",
-		func(context.Context, Root, struct{}) (string, error) {
+	resolver := NewResolver[Root[struct{}, string], struct{}, string]("Query", "tenantName", "tenant source",
+		func(context.Context, Root[struct{}, string], struct{}) (string, error) {
 			calls.Add(1)
 			return value, nil
 		},
@@ -134,8 +134,8 @@ func TestTenantGatewayRejectsUnknownSourceAndSchemaDrift(t *testing.T) {
 func TestTenantGatewayRejectsCapabilityDriftWithSameSchema(t *testing.T) {
 	build := func(cost uint32) *Engine {
 		builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
-		require.NoError(t, builder.Register(NewResolver[Root, struct{}, string]("Query", "tenantName", "",
-			func(context.Context, Root, struct{}) (string, error) { return "tenant", nil }, Cost(cost), Access("test", "read"))))
+		require.NoError(t, builder.Register(NewResolver[Root[struct{}, string], struct{}, string]("Query", "tenantName", "",
+			func(context.Context, Root[struct{}, string], struct{}) (string, error) { return "tenant", nil }, Cost(cost), Access("test", "read"))))
 		engine, err := builder.Build()
 		require.NoError(t, err)
 		t.Cleanup(engine.Close)

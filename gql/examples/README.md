@@ -64,7 +64,6 @@ GQL '{"query":"mutation { echo(message: \"hello\") }"}'
 | 普通字段 Resolver | `greeting` | `main.go`, `ResolverAndRemote` |
 | Batch Resolver | `sign` | `main.go`, `ResolverAndRemote` |
 | Query/Mutation 根 Resolver | `serverInfo/echo` | `main.go`, `operations/public/extensions.graphql` |
-| Resolver middleware | `User.greeting` 的 `[wrapped]` 前缀 | `main.go` |
 | ID 与自定义 Codec、Matcher、Baser | `id`、所有 `name` 字段 | `UpperCodec`, `buildEngine` |
 | 自增、UUID、雪花、自定义主键 | `GeneratedPrimaryKeys` | `main.go`, `schema.sql` |
 | 按键批量 Resolver | `User.reputation` | `main.go`, `ResolverAndRemote` |
@@ -130,7 +129,7 @@ GQL '{"operationName":"GeneratedPrimaryKeys"}'
 - `NewResolver("User", ...)`：实体字段，强类型参数。
 - `NewBatch("User", ...)`：整个结果集一次调用，避免 N+1。
 - `NewResolver("Query"/"Mutation", ...)`：复杂根查询或突变。
-- `Wrap("User.greeting", ...)`：中间件增强已有 Resolver。
+- `Root[I, O].Next(args)`：在已注册原生根字段上继续执行引擎实现；不再提供 Wrap 中间件注册入口。
 - `NewLoader(...)`：按宿主键批量请求外部数据并回填。
 
 `NewIdCodec()` 同时演示 ID 入参还原与出参编码；`UpperCodec` 演示自定义标量、字段

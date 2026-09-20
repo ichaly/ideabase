@@ -50,7 +50,7 @@ func TestPolicyProviderRequiresExplicitRootResolverAccess(t *testing.T) {
 		return PolicyDecision{Allow: true}, nil
 	})
 	installTestPolicy(t, executor, provider)
-	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
 		return true, nil
 	})))
 	_, err = executor.Snapshot()
@@ -68,7 +68,7 @@ func TestPolicyProviderAcceptsDeclaredRootResolverAccess(t *testing.T) {
 		return PolicyDecision{Allow: true}, nil
 	})
 	installTestPolicy(t, executor, provider)
-	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
 		return true, nil
 	}, Access("system", "read"))))
 	snapshot, err := executor.Snapshot()
@@ -94,7 +94,7 @@ func TestPolicyProviderDeniesBeforeRootResolver(t *testing.T) {
 		return PolicyDecision{Allow: false}, nil
 	})
 	installTestPolicy(t, executor, provider)
-	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
 		handled = true
 		return true, nil
 	}, Access("system", "read"))))
@@ -125,7 +125,7 @@ func TestPolicyProviderRejectsStaleRevisionAndUnawareHandler(t *testing.T) {
 				return test.decision, nil
 			}))
 			handled := false
-			require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root, struct{}) (bool, error) {
+			require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
 				handled = true
 				return true, nil
 			}, Access("system", "read"))))
@@ -148,7 +148,7 @@ func TestPolicyAwareResolverReceivesDefensiveDecision(t *testing.T) {
 	installTestPolicy(t, executor, OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
 		return PolicyDecision{Allow: true, RowPredicates: []Predicate{{Column: "id", Operator: "eq", Value: 1}}}, nil
 	}))
-	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(ctx context.Context, _ Root[struct{}, bool], _ struct{}) (bool, error) {
 		decision, ok := PolicyDecisionFromContext(ctx, "Query.health")
 		if !ok {
 			return false, nil

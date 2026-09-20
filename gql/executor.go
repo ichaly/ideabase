@@ -115,8 +115,9 @@ func (my gqlReply) mutationCommit(ctx context.Context, state string) gqlReply {
 // 可作为Fiber插件集成到Web服务中，提供标准的GraphQL API
 type Engine struct {
 	validator         *std.Validator
-	mutations         map[string]Mutation
-	mutationRoots     map[string]bool
+	native            map[string]*nativeResolver
+	nativeRoots       map[string]bool
+	protectedWrites   map[string]map[string]bool
 	intro             *intro.Handler                  // 自省处理器，处理__schema和__type查询
 	schema            *ast.Schema                     // GraphQL模式定义
 	database          *std.Connection                 // 数据库连接，用于执行生成的SQL
@@ -199,47 +200,27 @@ func (my *Engine) register(items ...Resolver) error {
 			return fmt.Errorf("resolver已注册: %s", resolver.Name())
 		}
 		d := resolver.Define()
+		exists := false
 		if parent := my.schema.Types[d.Class]; parent != nil && parent.Fields.ForName(d.Name) != nil {
-			return fmt.Errorf("schema字段已存在: %s，请使用Replace", resolver.Name())
+			exists = true
+			if d.Class == "Query" || d.Class == "Mutation" {
+				if _, native := my.metadata.LookupOperation(resolver.Name()); !native {
+					return fmt.Errorf("字段没有原生实现: %s", resolver.Name())
+				}
+				if err := my.bindNative(d, parent.Fields.ForName(d.Name)); err != nil {
+					return fmt.Errorf("%s: %w", resolver.Name(), err)
+				}
+			}
 		}
-		if err := my.mount(resolver.Define(), false); err != nil {
+		if err := my.mount(resolver.Define(), exists); err != nil {
 			return err
 		}
 
 		my.resolvers[resolver.Name()] = resolver
 	}
+	my.source = formatSchema(my.schema)
+	my.indexNativeRelations()
 	return my.rebuild()
-}
-
-// replace 显式替换 schema 已有字段的默认实现。
-func (my *Engine) replace(resolver Resolver) error {
-	d := resolver.Define()
-	if err := validateHandler(resolver); err != nil {
-		return err
-	}
-	if d.Class == "Query" || d.Class == "Mutation" {
-		kind := my.schema.Types[d.Class]
-		if kind == nil || kind.Fields.ForName(d.Name) == nil {
-			return fmt.Errorf("schema字段不存在: %s.%s", d.Class, d.Name)
-		}
-	} else {
-		if err := my.mount(d, true); err != nil {
-			return err
-		}
-	}
-	my.resolvers[resolver.Name()] = resolver
-	return my.rebuild()
-}
-
-// wrap 用强类型中间件增强已注册 Resolver；仅限 Builder 启动期装配。
-func (my *Engine) wrap(coordinate string, middleware ResolverMiddleware) error {
-	resolver, ok := my.resolvers[coordinate]
-	if !ok {
-		return fmt.Errorf("resolver未注册: %s", coordinate)
-	}
-	my.resolvers[coordinate] = middleware(resolver)
-	my.cache = lru.New[planKey, *planEntry](planCacheSize)
-	return nil
 }
 
 // Snapshot 返回 Engine 实际使用的不可变 Schema/Handler 契约。

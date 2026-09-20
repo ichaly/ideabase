@@ -27,7 +27,7 @@ type OrderReceipt struct {
 }
 
 // The engine owns the transaction; retries use the same tenant-scoped requestId.
-func placeOrder(ctx context.Context, _ gql.Root, args placeArgs) (OrderReceipt, error) {
+func placeOrder(ctx context.Context, _ gql.Root[placeArgs, OrderReceipt], args placeArgs) (OrderReceipt, error) {
 	var receipt OrderReceipt
 	if strings.TrimSpace(args.RequestID) == "" || len(args.RequestID) > 128 || args.CustomerID <= 0 || len(args.Items) == 0 || len(args.Items) > 100 {
 		return receipt, errors.New("invalid order")
@@ -114,7 +114,7 @@ type cancelArgs struct {
 	ID string `json:"id"`
 }
 
-func cancelOrder(ctx context.Context, _ gql.Root, args cancelArgs) (OrderReceipt, error) {
+func cancelOrder(ctx context.Context, _ gql.Root[cancelArgs, OrderReceipt], args cancelArgs) (OrderReceipt, error) {
 	var receipt OrderReceipt
 	execution, ok := gql.ExecutionFrom(ctx)
 	if !ok || execution.Transaction() == nil {

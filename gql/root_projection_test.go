@@ -23,7 +23,7 @@ func TestRootResolverProjectsMapStructListAndTypename(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	require.NoError(t, executor.register(
-		NewResolver[Root, struct{}, map[string]any]("Query", "mapRoot", "", func(context.Context, Root, struct{}) (map[string]any, error) {
+		NewResolver[Root[struct{}, map[string]any], struct{}, map[string]any]("Query", "mapRoot", "", func(context.Context, Root[struct{}, map[string]any], struct{}) (map[string]any, error) {
 			return map[string]any{
 				"child":  map[string]any{"id": 1, "hidden": "secret"},
 				"hidden": "root-secret",
@@ -31,13 +31,13 @@ func TestRootResolverProjectsMapStructListAndTypename(t *testing.T) {
 		}, Result("ProjectionRoot"), Extra(`scalar JSON
 type ProjectionRoot { child: ProjectionChild, items: [ProjectionChild!], hidden: String }
 type ProjectionChild { id: Int, name: String, hidden: String }`)),
-		NewResolver[Root, struct{}, projectionRoot]("Query", "structRoot", "", func(context.Context, Root, struct{}) (projectionRoot, error) {
+		NewResolver[Root[struct{}, projectionRoot], struct{}, projectionRoot]("Query", "structRoot", "", func(context.Context, Root[struct{}, projectionRoot], struct{}) (projectionRoot, error) {
 			return projectionRoot{Child: projectionChild{ID: 2, Name: "struct", Hidden: "secret"}, Hidden: "root-secret"}, nil
 		}, Result("ProjectionRoot")),
-		NewResolver[Root, struct{}, []projectionChild]("Query", "listRoot", "", func(context.Context, Root, struct{}) ([]projectionChild, error) {
+		NewResolver[Root[struct{}, []projectionChild], struct{}, []projectionChild]("Query", "listRoot", "", func(context.Context, Root[struct{}, []projectionChild], struct{}) ([]projectionChild, error) {
 			return []projectionChild{{ID: 3, Name: "one", Hidden: "secret"}, {ID: 4, Name: "two", Hidden: "secret"}}, nil
 		}, Result("[ProjectionChild]")),
-		NewResolver[Root, struct{}, map[string]any]("Query", "rawRoot", "", func(context.Context, Root, struct{}) (map[string]any, error) {
+		NewResolver[Root[struct{}, map[string]any], struct{}, map[string]any]("Query", "rawRoot", "", func(context.Context, Root[struct{}, map[string]any], struct{}) (map[string]any, error) {
 			return map[string]any{"kept": "value", "extra": "preserved"}, nil
 		}, Result("JSON")),
 	))

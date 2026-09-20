@@ -531,7 +531,7 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 	var signatures []string
 	for _, capability := range my.snapshot.Capabilities() {
 		root := capability.Parent == "Query" || capability.Parent == "Mutation" || capability.Parent == "Subscription"
-		custom := capability.Handler == HandlerResolver
+		custom := capability.Handler == HandlerResolver && my.native[capability.Coordinate] == nil
 		if capability.Resource == "" || len(capability.Actions) == 0 || !root && !custom {
 			continue
 		}
@@ -571,10 +571,10 @@ func (my *Engine) effectiveSchemaBuild(ctx context.Context, provider PolicyProvi
 			denied[capability.Coordinate] = true
 			continue
 		}
-		if capability.Handler != HandlerSQL && hasRowPolicy(decision) && !capability.PolicyAware {
+		if capability.Handler != HandlerSQL && my.native[capability.Coordinate] == nil && hasRowPolicy(decision) && !capability.PolicyAware {
 			return nil, fmt.Errorf("%w: %s", publicPolicyFailure("POLICY_HANDLER_REQUIRED", "policy requires a policy-aware handler"), capability.Coordinate)
 		}
-		if governed && hasFieldShape && capability.Handler == HandlerSQL {
+		if governed && hasFieldShape && (capability.Handler == HandlerSQL || my.native[capability.Coordinate] != nil) {
 			if allowed[class.Name] == nil {
 				allowed[class.Name] = make(map[FieldUse][]string)
 			}

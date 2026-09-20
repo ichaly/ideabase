@@ -3,6 +3,7 @@ package gql
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -46,6 +47,17 @@ func handlerBatchLimit(handler Resolver) int {
 
 func validateHandler(handler Resolver) error {
 	d := handler.Define()
+	if d.sourceType != nil {
+		if root, ok := reflect.Zero(d.sourceType).Interface().(rootFactory); ok {
+			if d.sourceType.Kind() == reflect.Pointer {
+				return fmt.Errorf("resolver %s使用Root值参数，不接受指针", handler.Name())
+			}
+			i, o := root.rootTypes()
+			if i != d.inputType || o != d.outputType {
+				return fmt.Errorf("resolver %s的Root泛型必须与参数、返回值类型一致", handler.Name())
+			}
+		}
+	}
 	if d.Class == "" || d.Name == "" || d.Result == "" {
 		return fmt.Errorf("handler声明不完整: %s", handler.Name())
 	}

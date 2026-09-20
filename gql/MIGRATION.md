@@ -118,8 +118,8 @@ GA 以单一路径替换预发布兼容入口：Resolver 只使用 `ExecutionCon
 - `NewRemote` 改为 `NewLoader`，返回同一个 `Resolver`；删除 `Remote`、`RemoteRef` 和单独的 Remote 注册/执行路径。
 - `Builder.Register` 只接受 `Resolver`。普通、批量、按键加载均经此入口；策略只通过 `Builder.Policy` 配置。
 - `Handler` 声明接口并入 `Resolver`，不再额外实现。直接实现 Resolver 的实体字段也从 `Define` 挂载。
-- `Replace` 自身声明覆盖意图，删除 `Existing()` 和 `Define.Existing`；`Register` 仍拒绝覆盖已有字段。
-- 批量中间件的 source/result 类型使用切片，例如 `NextResolver[[]Source, Args, []Value]`，保持一次批量调用。
+- 删除 `Replace`、`Wrap`、`NewResolverMiddleware`、`NextResolver` 及实体级 Mutation 扩展 API；统一使用 `Register(NewResolver(...))`，同坐标重复用户注册报错。
+- 根 source 改为 `Root[I, O]`，输入是完整参数。`Next(args)` 继续当前字段的原生实现；不调用则覆盖。新字段没有原生实现，调用 Next 会明确失败。共享函数必须分别注册到 create/update 等坐标。
 - `NewSubscriptionHandler` 合并到 `NewHandler`。只挂载 `/graphql`；SSE 请求使用 POST JSON 和 `Accept: text/event-stream`。长连接与普通请求分别限流。
 - capability 的 `handler: remote` 统一为 `handler: resolver`。发布时重新获取 manifest/effective schema 和 snapshot pin；旧的结构指纹不能继续使用。
 - 示例只暴露带租户路由的 `/graphql`。Gateway 同样可挂载该路径，namespace 出现在 GraphQL Schema 中，而非要求另一个 URL。

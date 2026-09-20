@@ -21,7 +21,7 @@ func TestResolverExamples(t *testing.T) {
 		t.Fatalf("批量Resolver示例失败: values=%v err=%v", values, err)
 	}
 
-	root, err := serverInfoResolver().Resolve(context.Background(), gql.Root{}, nil)
+	root, err := serverInfoResolver().Resolve(context.Background(), nil, nil)
 	if err != nil || root.(ServerInfo).Name == "" {
 		t.Fatalf("根Resolver示例失败: value=%v err=%v", root, err)
 	}

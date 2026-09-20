@@ -43,7 +43,7 @@ func TestHandlerRejectsUnknownRequiresForEntityAndRoot(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "依赖未知列字段")
 
-	err = executor.register(NewResolver[Root, struct{}, string]("Query", "brokenRootDependency", "", func(context.Context, Root, struct{}) (string, error) {
+	err = executor.register(NewResolver[Root[struct{}, string], struct{}, string]("Query", "brokenRootDependency", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
 		return "", nil
 	}, Result("String"), Requires("id")))
 	require.Error(t, err)
@@ -54,11 +54,11 @@ func TestHandlerTimeoutReportsStableTimeoutCode(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	require.NoError(t, executor.register(
-		NewResolver[Root, struct{}, string]("Query", "cooperativeTimeout", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) {
+		NewResolver[Root[struct{}, string], struct{}, string]("Query", "cooperativeTimeout", "", func(ctx context.Context, _ Root[struct{}, string], _ struct{}) (string, error) {
 			<-ctx.Done()
 			return "", ctx.Err()
 		}, Result("String"), Timeout(20*time.Millisecond)),
-		NewResolver[Root, struct{}, string]("Query", "ignoredTimeout", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) {
+		NewResolver[Root[struct{}, string], struct{}, string]("Query", "ignoredTimeout", "", func(ctx context.Context, _ Root[struct{}, string], _ struct{}) (string, error) {
 			<-ctx.Done()
 			return "late", nil
 		}, Result("String"), Timeout(20*time.Millisecond)),
@@ -104,7 +104,7 @@ func TestHandlerBatchMaxBatchRejectsBeforeInvocation(t *testing.T) {
 func TestHandlerRetrySafeRequiresIdempotencyKey(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	err := executor.register(NewResolver[Root, struct{}, string]("Query", "unsafeRetry", "", func(context.Context, Root, struct{}) (string, error) {
+	err := executor.register(NewResolver[Root[struct{}, string], struct{}, string]("Query", "unsafeRetry", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
 		return "", nil
 	}, Result("String"), RetrySafe("")))
 	require.Error(t, err)
@@ -120,7 +120,7 @@ func TestHandlerExecutionContextContainsTrustedRequestView(t *testing.T) {
 	var found bool
 	var executionDB *std.Connection
 	var executionTx *sql.Tx
-	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Mutation", "inspectExecution", "", func(ctx context.Context, _ Root, _ struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Root[struct{}, string], struct{}, string]("Mutation", "inspectExecution", "", func(ctx context.Context, _ Root[struct{}, string], _ struct{}) (string, error) {
 		view, found = ExecutionFrom(ctx)
 		executionDB, executionTx = view.Connection(), view.Transaction()
 		if !found || view.Identity().Subject() != "user-a" || view.SnapshotFingerprint() == "" || executionDB == nil || executionTx == nil {

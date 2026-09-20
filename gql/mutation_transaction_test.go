@@ -91,7 +91,7 @@ func TestMutationFailureRollsBackEarlierRootFields(t *testing.T) {
 	defer cleanup()
 
 	fail := NewResolver("Mutation", "failMutation", "测试事务回滚",
-		func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
+		func(ctx context.Context, _ Root[struct{}, bool], _ struct{}) (bool, error) {
 			if _, err := transactionFromContext(ctx).ExecContext(ctx,
 				"INSERT INTO users(name, email) VALUES($1, $2)", "Resolver", "resolver-rollback@x.com",
 			); err != nil {
@@ -132,7 +132,7 @@ func TestMutationResolverSharesTransactionWithDefaultFields(t *testing.T) {
 	defer cleanup()
 
 	seed := NewResolver("Mutation", "seedUser", "测试Resolver事务连接",
-		func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
+		func(ctx context.Context, _ Root[struct{}, bool], _ struct{}) (bool, error) {
 			tx := transactionFromContext(ctx)
 			if tx == nil {
 				return false, errors.New("mutation transaction missing")
@@ -155,7 +155,7 @@ func TestMutationResolverSharesTransactionWithDefaultFields(t *testing.T) {
 
 func TestMutationResolverWithoutDatabase(t *testing.T) {
 	resolver := NewResolver("Mutation", "pingMutation", "纯计算mutation",
-		func(context.Context, Root, struct{}) (string, error) { return "pong", nil })
+		func(context.Context, Root[struct{}, string], struct{}) (string, error) { return "pong", nil })
 	executor := &Engine{resolvers: map[string]Resolver{resolver.Name(): resolver}}
 	operation := &ast.OperationDefinition{
 		Operation: ast.Mutation,
@@ -201,7 +201,7 @@ func TestPersistedRootPlanPrewarmKeepsGovernanceFlags(t *testing.T) {
 		"writer": {Insert: []string{"name", "email"}},
 	}
 	resolver := NewResolver("Mutation", "pingMutation", "测试持久化根计划治理标记",
-		func(context.Context, Root, struct{}) (string, error) { return "pong", nil })
+		func(context.Context, Root[struct{}, string], struct{}) (string, error) { return "pong", nil })
 	require.NoError(t, executor.register(resolver))
 
 	content := `mutation PersistedGoverned($email: String!) {
@@ -220,7 +220,7 @@ func TestNestedMutationReusesOuterTransaction(t *testing.T) {
 	defer cleanup()
 
 	nested := NewResolver("Mutation", "nestedMutation", "嵌套执行mutation",
-		func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
+		func(ctx context.Context, _ Root[struct{}, bool], _ struct{}) (bool, error) {
 			reply := executor.execute(ctx, `mutation {
 				createUser(input: { name: "Nested", email: "nested@x.com" }) { id }
 				updateUsers(input: { name: "Inner" }, where: { email: { eq: "nested@x.com" } }) { affectedCount }
@@ -231,7 +231,7 @@ func TestNestedMutationReusesOuterTransaction(t *testing.T) {
 			return true, nil
 		})
 	fail := NewResolver("Mutation", "failOuterMutation", "触发外层回滚",
-		func(context.Context, Root, struct{}) (bool, error) {
+		func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
 			return false, errors.New("rollback outer mutation")
 		})
 	require.NoError(t, executor.register(nested, fail))
@@ -250,10 +250,10 @@ func TestCaughtNestedMutationFailureRollsBackOnlyItsSavepoint(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 
-	fail := NewResolver("Mutation", "failNestedMutation", "", func(context.Context, Root, struct{}) (bool, error) {
+	fail := NewResolver("Mutation", "failNestedMutation", "", func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
 		return false, errors.New("nested secret failure")
 	})
-	catch := NewResolver("Mutation", "catchNestedMutation", "", func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
+	catch := NewResolver("Mutation", "catchNestedMutation", "", func(ctx context.Context, _ Root[struct{}, bool], _ struct{}) (bool, error) {
 		reply := executor.execute(ctx, `mutation {
 			createUser(input: { name: "Inner", email: "inner-savepoint@x.com" }) { id }
 			failNestedMutation

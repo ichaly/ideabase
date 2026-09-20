@@ -87,8 +87,8 @@ func TestBuilderRequiresPolicyOrMetadataPermissions(t *testing.T) {
 }
 
 func TestBuilderBuildsFrozenConformantSnapshot(t *testing.T) {
-	resolver := NewResolver[Root, struct{}, string]("Query", "greeting", "问候",
-		func(context.Context, Root, struct{}) (string, error) { return "hello", nil }, Access("test", "read"),
+	resolver := NewResolver[Root[struct{}, string], struct{}, string]("Query", "greeting", "问候",
+		func(context.Context, Root[struct{}, string], struct{}) (string, error) { return "hello", nil }, Access("test", "read"),
 	)
 	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 	require.NoError(t, builder.Register(resolver))
@@ -139,8 +139,8 @@ func TestSnapshotRejectsMetadataBindingWithoutImplementation(t *testing.T) {
 }
 
 func TestLegacyAndBuilderShareSnapshotFinalization(t *testing.T) {
-	resolver := NewResolver[Root, struct{}, string]("Query", "greeting", "问候",
-		func(context.Context, Root, struct{}) (string, error) { return "hello", nil }, Access("test", "read"),
+	resolver := NewResolver[Root[struct{}, string], struct{}, string]("Query", "greeting", "问候",
+		func(context.Context, Root[struct{}, string], struct{}) (string, error) { return "hello", nil }, Access("test", "read"),
 	)
 	meta, err := NewMetadata(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...)
 	require.NoError(t, err)
@@ -162,20 +162,15 @@ func TestLegacyAndBuilderShareSnapshotFinalization(t *testing.T) {
 	require.Equal(t, legacySnapshot.Fingerprint(), engineSnapshot.Fingerprint())
 }
 
-func TestBuilderSupportsReplaceAndWrapBeforeFreeze(t *testing.T) {
-	replacement := NewResolver[Root, struct{}, map[string]interface{}](
+func TestBuilderRegistersOriginalBeforeFreeze(t *testing.T) {
+	replacement := NewResolver[Root[struct{}, map[string]interface{}], struct{}, map[string]interface{}](
 		"Query", "users", "replace generated query",
-		func(context.Context, Root, struct{}) (map[string]interface{}, error) {
+		func(context.Context, Root[struct{}, map[string]interface{}], struct{}) (map[string]interface{}, error) {
 			return map[string]interface{}{"items": []interface{}{}, "total": 0}, nil
 		}, Result("UserResult!"), Access("test", "read"),
 	)
 	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
-	require.NoError(t, builder.Replace(replacement))
-	require.NoError(t, builder.Wrap("Query.users", NewResolverMiddleware[
-		Root, struct{}, map[string]interface{},
-	](func(ctx context.Context, source Root, input struct{}, next NextResolver[Root, struct{}, map[string]interface{}]) (map[string]interface{}, error) {
-		return next(ctx, source, input)
-	})))
+	require.NoError(t, builder.Register(replacement))
 
 	engine, err := builder.Build()
 	require.NoError(t, err)
@@ -189,15 +184,14 @@ func TestBuilderSupportsReplaceAndWrapBeforeFreeze(t *testing.T) {
 	unchanged, ok := snapshot.Capability("Query.users")
 	require.True(t, ok)
 	require.NotEqual(t, "mutated", unchanged.Arguments[0].Name)
-	require.ErrorContains(t, builder.Replace(replacement), "冻结")
-	require.ErrorContains(t, builder.Wrap("Query.users", nil), "冻结")
+	require.ErrorContains(t, builder.Register(replacement), "冻结")
 }
 
 func TestBuilderLoadsDocumentsBeforeFreeze(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "greeting.graphql"), []byte("query Greeting { greeting }"), 0o600))
-	resolver := NewResolver[Root, struct{}, string]("Query", "greeting", "问候",
-		func(context.Context, Root, struct{}) (string, error) { return "hello", nil }, Access("test", "read"),
+	resolver := NewResolver[Root[struct{}, string], struct{}, string]("Query", "greeting", "问候",
+		func(context.Context, Root[struct{}, string], struct{}) (string, error) { return "hello", nil }, Access("test", "read"),
 	)
 	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
 	require.NoError(t, builder.Register(resolver))
@@ -233,8 +227,8 @@ func TestBuilderRejectsExternalSchemaShapeDrift(t *testing.T) {
 
 func TestBuilderRejectsExecutableDirectiveWithoutRuntime(t *testing.T) {
 	builder := New(snapshotKonfig(t), nil, snapshotOptions(snapshotLoader{})...).testAllowAllPolicy()
-	require.NoError(t, builder.Register(NewResolver[Root, struct{}, string]("Query", "hello", "",
-		func(context.Context, Root, struct{}) (string, error) { return "hello", nil },
+	require.NoError(t, builder.Register(NewResolver[Root[struct{}, string], struct{}, string]("Query", "hello", "",
+		func(context.Context, Root[struct{}, string], struct{}) (string, error) { return "hello", nil },
 		Extra("directive @upper on FIELD"))))
 	_, err := builder.Build()
 	require.ErrorContains(t, err, "unsupported executable directive @upper")

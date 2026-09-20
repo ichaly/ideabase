@@ -172,7 +172,7 @@ func TestConditionalDirectivesSkipResolverAndFragments(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	calls := 0
-	resolver := NewResolver[Root, struct{}, string]("Query", "greeting", "问候", func(context.Context, Root, struct{}) (string, error) {
+	resolver := NewResolver[Root[struct{}, string], struct{}, string]("Query", "greeting", "问候", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
 		calls++
 		return "hello", nil
 	})

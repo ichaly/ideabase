@@ -38,7 +38,7 @@ func TestExactResolverNumbers(t *testing.T) {
 	engine, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	require.NoError(t, engine.register(NewResolver("Query", "exactEcho", "精确整数往返",
-		func(_ context.Context, _ Root, input exactResolverNumbers) (exactResolverNumbers, error) {
+		func(_ context.Context, _ Root[exactResolverNumbers, exactResolverNumbers], input exactResolverNumbers) (exactResolverNumbers, error) {
 			return input, nil
 		})))
 	for _, query := range []string{

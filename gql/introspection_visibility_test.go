@@ -16,8 +16,11 @@ func TestIntrospectionShowsFullSchemaWithoutGrantingExecution(t *testing.T) {
 	})))
 	calls := 0
 	require.NoError(t, builder.Register(
-		NewResolver("Query", "greeting", "", func(context.Context, Root, struct{}) (string, error) { return "hello", nil }, Access("test", "read")),
-		NewResolver("Mutation", "submitTransfer", "", func(context.Context, Root, struct{}) (string, error) { calls++; return "submitted", nil }, Access("test", "write")),
+		NewResolver("Query", "greeting", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) { return "hello", nil }, Access("test", "read")),
+		NewResolver("Mutation", "submitTransfer", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
+			calls++
+			return "submitted", nil
+		}, Access("test", "write")),
 	))
 	engine, err := builder.Build()
 	require.NoError(t, err)

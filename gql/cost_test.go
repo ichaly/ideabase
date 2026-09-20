@@ -102,10 +102,10 @@ func TestOperationCostUsesCoercedBoundsAndBulkInput(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	require.NoError(t, executor.register(
-		NewResolver[Root, costArgs, []costItem]("Query", "costly", "", func(context.Context, Root, costArgs) ([]costItem, error) {
+		NewResolver[Root[costArgs, []costItem], costArgs, []costItem]("Query", "costly", "", func(context.Context, Root[costArgs, []costItem], costArgs) ([]costItem, error) {
 			return nil, nil
 		}, Result("[CostItem!]!"), Extra(`type CostItem { value: String! }`), Cost(5)),
-		NewResolver[Root, bulkCostArgs, int]("Mutation", "bulkCost", "", func(context.Context, Root, bulkCostArgs) (int, error) {
+		NewResolver[Root[bulkCostArgs, int], bulkCostArgs, int]("Mutation", "bulkCost", "", func(context.Context, Root[bulkCostArgs, int], bulkCostArgs) (int, error) {
 			return 0, nil
 		}, Cost(7)),
 	))
@@ -135,7 +135,7 @@ func TestMaxCostRejectsBeforeResolverAndHonorsConditionalShape(t *testing.T) {
 	defer cleanup()
 	var calls atomic.Int32
 	require.NoError(t, executor.register(
-		NewResolver[Root, costArgs, []costItem]("Query", "costly", "", func(context.Context, Root, costArgs) ([]costItem, error) {
+		NewResolver[Root[costArgs, []costItem], costArgs, []costItem]("Query", "costly", "", func(context.Context, Root[costArgs, []costItem], costArgs) ([]costItem, error) {
 			calls.Add(1)
 			return []costItem{{Value: "ok"}}, nil
 		}, Result("[CostItem!]!"), Extra(`type CostItem { value: String! }`), Cost(5)),
@@ -162,7 +162,7 @@ func TestMaxCostRejectsBeforeResolverAndHonorsConditionalShape(t *testing.T) {
 func TestResolverCostIsPartOfSnapshotContract(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Query", "weighted", "", func(context.Context, Root, struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Root[struct{}, string], struct{}, string]("Query", "weighted", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
 		return "ok", nil
 	}, Cost(9))))
 

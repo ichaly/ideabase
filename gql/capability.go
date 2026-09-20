@@ -508,6 +508,12 @@ func (my *Engine) fieldCapability(parent *ast.Definition, field *ast.FieldDefini
 		capability.Resource = define.Resource
 		capability.Actions = append([]string(nil), define.Actions...)
 		capability.PolicyAware = define.PolicyAware
+		if my.native[coordinate] != nil {
+			operation := my.metadata.operations[coordinate]
+			capability.Resource, capability.Actions = operation.class.Name, slices.Clone(operation.actions)
+			capability.Planner = "sql"
+			capability.RefreshRequired = nestedRelationWrite(operation.class, operation.operation)
+		}
 		capability.SemanticKind = deriveSemanticKind(define)
 		if !validSemanticKind(capability.SemanticKind) {
 			return Capability{}, fmt.Errorf("resolver %s has invalid semantic kind %q", coordinate, capability.SemanticKind)

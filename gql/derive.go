@@ -113,15 +113,13 @@ func erase(out any) any {
 // Source 宿主行：SQL查出的已选字段（形状由客户端选择集决定，故保持map）
 type Source = map[string]interface{}
 
-// Root 是Query/Mutation根字段的零大小强类型source。
-type Root struct{}
-
 // NewResolver 为任意GraphQL字段创建同一种泛型Resolver。parent可为
 // Query、Mutation或实体类型；类型擦除仅发生在引擎注册边界，业务函数全程强类型。
 func NewResolver[S, I, O any](parent, name, doc string,
 	fn func(context.Context, S, I) (O, error), opts ...Option,
 ) Resolver {
 	define := defineField[I, O](parent, name, doc)
+	define.sourceType = reflect.TypeFor[S]()
 	for _, opt := range opts {
 		opt(&define)
 	}
@@ -137,17 +135,48 @@ func (my *fieldResolver[S, I, O]) Name() string   { return my.define.Class + "."
 func (my *fieldResolver[S, I, O]) Define() Define { return my.define }
 
 func (my *fieldResolver[S, I, O]) Resolve(ctx context.Context, source any, args map[string]interface{}) (interface{}, error) {
-	typed, ok := source.(S)
-	if !ok {
-		return nil, fmt.Errorf("resolver %s source类型不匹配: %T", my.Name(), source)
+	var typed S
+	call, root := source.(*rootCall)
+	if factory, ok := any(typed).(rootFactory); ok {
+		if !root {
+			call = &rootCall{coordinate: my.Name()}
+		}
+		typed = factory.withRoot(call).(S)
+	} else {
+		var ok bool
+		typed, ok = source.(S)
+		if !ok {
+			return nil, fmt.Errorf("resolver %s source类型不匹配: %T", my.Name(), source)
+		}
 	}
-	in, err := decode[I](ctx, args)
+	var in I
+	var err error
+	if root && call.native != nil {
+		err = call.native.input.decode(reflect.ValueOf(&in).Elem(), args, &call.input)
+	} else {
+		if call != nil && call.native == nil {
+			if call.present == nil {
+				call.present = make(map[string]bool)
+			}
+			argumentPaths(args, "", call.present)
+		}
+		in, err = decode[I](ctx, args)
+	}
 	if err != nil {
+		if root && call.native != nil {
+			return nil, &publicFailure{err.Error(), "VALIDATION_ERROR"}
+		}
 		return nil, err
 	}
 	out, err := my.resolveTyped(ctx, typed, in)
 	if err != nil {
 		return nil, err
+	}
+	if root && call.native != nil {
+		return call.finish(&in, out)
+	}
+	if call != nil && call.err != nil {
+		return nil, call.err
 	}
 	return erase(out), nil
 }

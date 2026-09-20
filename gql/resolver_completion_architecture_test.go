@@ -23,7 +23,7 @@ func TestNullableRootResolverCompletionErrorHasFullPath(t *testing.T) {
 	require.NoError(t, err)
 	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
 	require.NoError(t, err)
-	require.NoError(t, executor.register(NewResolver("Query", "badInt", "", func(context.Context, Root, struct{}) (any, error) {
+	require.NoError(t, executor.register(NewResolver("Query", "badInt", "", func(context.Context, Root[struct{}, any], struct{}) (any, error) {
 		return "not-an-int", nil
 	}, Result("Int"))))
 

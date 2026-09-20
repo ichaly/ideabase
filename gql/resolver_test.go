@@ -219,7 +219,7 @@ func TestFieldResolverRoots(t *testing.T) {
 		Message string `json:"message" validate:"required"`
 	}
 	ping := NewResolver("Query", "ping", "探活",
-		func(_ context.Context, _ Root, args pingArgs) (string, error) {
+		func(_ context.Context, _ Root[pingArgs, string], args pingArgs) (string, error) {
 			return "pong:" + args.Message, nil
 		})
 	require.NoError(t, executor.register(ping))
@@ -259,12 +259,11 @@ func TestFieldResolverReplaceGenerated(t *testing.T) {
 		Input map[string]any `json:"input"`
 	}
 	override := NewResolver("Mutation", "createUser", "",
-		func(_ context.Context, _ Root, input args) (map[string]any, error) {
+		func(_ context.Context, _ Root[args, map[string]any], input args) (map[string]any, error) {
 			return map[string]any{"id": int64(99), "name": "custom:" + input.Input["name"].(string)}, nil
 		})
 
-	require.Error(t, executor.register(override), "已有schema字段必须显式Replace")
-	require.NoError(t, executor.replace(override))
+	require.NoError(t, executor.register(override))
 
 	reply := executor.run(context.Background(), `mutation {
 		createUser(input: { name: "Alice", email: "alice@x.com" }) { id name }
@@ -273,34 +272,11 @@ func TestFieldResolverReplaceGenerated(t *testing.T) {
 	require.Equal(t, "custom:Alice", reply.Data["createUser"].(map[string]any)["name"])
 }
 
-func TestFieldResolverWrap(t *testing.T) {
-	executor, _, cleanup := newTestExecutor(t, nil)
-	defer cleanup()
-
-	type args struct {
-		Message string `json:"message"`
-	}
-	base := NewResolver("Query", "echo", "",
-		func(_ context.Context, _ Root, input args) (string, error) {
-			return input.Message, nil
-		})
-	require.NoError(t, executor.register(base))
-	require.NoError(t, executor.wrap("Query.echo",
-		NewResolverMiddleware(func(ctx context.Context, source Root, input args, next NextResolver[Root, args, string]) (string, error) {
-			input.Message = "wrapped:" + input.Message
-			return next(ctx, source, input)
-		})))
-
-	reply := executor.run(context.Background(), `{ echo(message: "ok") }`, nil, "")
-	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.Equal(t, "wrapped:ok", reply.Data["echo"])
-}
-
 func pingResolver() Resolver {
 	type args struct {
 		Msg string `json:"msg" validate:"required"`
 	}
-	return NewResolver("Query", "ping", "", func(_ context.Context, _ Root, input args) (string, error) {
+	return NewResolver("Query", "ping", "", func(_ context.Context, _ Root[args, string], input args) (string, error) {
 		return "pong:" + input.Msg, nil
 	})
 }
@@ -314,7 +290,7 @@ type signUpReq struct {
 // newSignUpResolver 编排型根Resolver：建号返回id，引擎按选择集回查补全；
 // 返回类型int64本推导为BigInt，Result选项覆盖为实体User触发回查
 func newSignUpResolver(db *std.Connection) Resolver {
-	return NewResolver("Mutation", "signUp", "建号并回查主档", func(ctx context.Context, _ Root, req signUpReq) (int64, error) {
+	return NewResolver("Mutation", "signUp", "建号并回查主档", func(ctx context.Context, _ Root[signUpReq, int64], req signUpReq) (int64, error) {
 		var id int64
 		query := db.Pool().QueryRowContext
 		if execution, ok := ExecutionFrom(ctx); ok && execution.Transaction() != nil {
@@ -397,7 +373,7 @@ func TestMixedQueryRootsBatchDefaultSQLOnce(t *testing.T) {
 func TestMixedQueryRootsPreserveAliasesAndResolverErrors(t *testing.T) {
 	executor, _, cleanup := setupRootResolverExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.register(pingResolver(), NewResolver[Root, struct{}, string]("Query", "broken", "", func(context.Context, Root, struct{}) (string, error) {
+	require.NoError(t, executor.register(pingResolver(), NewResolver[Root[struct{}, string], struct{}, string]("Query", "broken", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
 		return "", fmt.Errorf("resolver exploded")
 	})))
 	reply := executor.run(context.Background(), `query { p: ping(msg: "ok") broken users { total } }`, nil, "")
@@ -432,15 +408,15 @@ func TestRootResolverTypename(t *testing.T) {
 func TestRootResolverCompletesInlineFragments(t *testing.T) {
 	executor, _, cleanup := setupRootResolverExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.register(NewResolver[Root, struct{}, map[string]any](
-		"Query", "node", "", func(context.Context, Root, struct{}) (map[string]any, error) {
+	require.NoError(t, executor.register(NewResolver[Root[struct{}, map[string]any], struct{}, map[string]any](
+		"Query", "node", "", func(context.Context, Root[struct{}, map[string]any], struct{}) (map[string]any, error) {
 			return map[string]any{"__typename": "TestActor", "id": "7", "name": "Ada"}, nil
 		}, Result("Node"), Extra(`
 			interface Node { id: ID! }
 			type TestActor implements Node { id: ID! name: String! }
 		`),
-	), NewResolver[Root, struct{}, map[string]any](
-		"Query", "actor", "", func(context.Context, Root, struct{}) (map[string]any, error) {
+	), NewResolver[Root[struct{}, map[string]any], struct{}, map[string]any](
+		"Query", "actor", "", func(context.Context, Root[struct{}, map[string]any], struct{}) (map[string]any, error) {
 			return map[string]any{"id": "8", "name": "Grace"}, nil
 		}, Result("TestActor"),
 	)))
@@ -534,9 +510,9 @@ func TestRootResolverEnrichesCompositeKeyEntity(t *testing.T) {
 	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 	defer executor.Close()
-	require.NoError(t, executor.register(NewResolver("Query", "membershipLookup", "", func(context.Context, Root, struct{}) (Membership, error) {
+	require.NoError(t, executor.register(NewResolver("Query", "membershipLookup", "", func(context.Context, Root[struct{}, Membership], struct{}) (Membership, error) {
 		return Membership{TenantId: "acme", Code: "admin"}, nil
-	}, Result("Membership")), NewResolver("Query", "recordLookup", "", func(context.Context, Root, struct{}) (LookupRecord, error) {
+	}, Result("Membership")), NewResolver("Query", "recordLookup", "", func(context.Context, Root[struct{}, LookupRecord], struct{}) (LookupRecord, error) {
 		return LookupRecord{UserId: 1}, nil
 	}, Result("LookupRecord"))))
 

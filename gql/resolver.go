@@ -36,103 +36,6 @@ type Resolver interface {
 	Resolve(ctx context.Context, source any, args map[string]interface{}) (interface{}, error)
 }
 
-// NextResolver 是泛型Resolver中间件调用下游的强类型函数。
-type NextResolver[S, I, O any] func(context.Context, S, I) (O, error)
-
-// ResolverMiddleware 包装一个已注册Resolver；类型擦除只存在于注册表边界。
-type ResolverMiddleware func(Resolver) Resolver
-
-// NewResolverMiddleware 创建强类型Resolver中间件，可修改source/args并选择是否调用next。
-func NewResolverMiddleware[S, I, O any](
-	fn func(context.Context, S, I, NextResolver[S, I, O]) (O, error),
-) ResolverMiddleware {
-	return func(next Resolver) Resolver {
-		wrapped := &resolverMiddleware[S, I, O]{next: next, fn: fn}
-		if _, batch := next.(BatchResolver); batch {
-			return &batchMiddleware[S, I, O]{wrapped}
-		}
-		return wrapped
-	}
-}
-
-type batchMiddleware[S, I, O any] struct{ *resolverMiddleware[S, I, O] }
-
-func (my *batchMiddleware[S, I, O]) ResolveBatch(ctx context.Context, sources []Source, args map[string]any) ([]any, error) {
-	value, err := my.Resolve(ctx, sources, args)
-	if err != nil {
-		return nil, err
-	}
-	values := reflect.ValueOf(value)
-	if !values.IsValid() {
-		return nil, nil
-	}
-	if values.Kind() != reflect.Slice {
-		return nil, fmt.Errorf("batch middleware %s must return a slice", my.Name())
-	}
-	out := make([]any, values.Len())
-	for i := range out {
-		out[i] = erase(values.Index(i).Interface())
-	}
-	return out, nil
-}
-
-type resolverMiddleware[S, I, O any] struct {
-	next Resolver
-	fn   func(context.Context, S, I, NextResolver[S, I, O]) (O, error)
-}
-
-type typedResolver[S, I, O any] interface {
-	resolveTyped(context.Context, S, I) (O, error)
-}
-
-func (my *resolverMiddleware[S, I, O]) Name() string   { return my.next.Name() }
-func (my *resolverMiddleware[S, I, O]) Define() Define { return my.next.Define() }
-func (my *resolverMiddleware[S, I, O]) Resolve(ctx context.Context, raw any, args map[string]interface{}) (interface{}, error) {
-	source, ok := raw.(S)
-	if !ok {
-		return nil, fmt.Errorf("resolver %s source类型不匹配: %T", my.Name(), raw)
-	}
-	input, err := decode[I](ctx, args)
-	if err != nil {
-		return nil, err
-	}
-	out, err := my.resolveTyped(ctx, source, input)
-	if err != nil {
-		return nil, err
-	}
-	return erase(out), nil
-}
-
-func (my *resolverMiddleware[S, I, O]) resolveTyped(ctx context.Context, source S, input I) (O, error) {
-	next := func(ctx context.Context, source S, input I) (O, error) {
-		if typed, ok := my.next.(typedResolver[S, I, O]); ok {
-			return typed.resolveTyped(ctx, source, input)
-		}
-		var zero O
-		mapped, _ := plain(input).(map[string]interface{})
-		var value any
-		var err error
-		if sources, ok := any(source).([]Source); ok {
-			if batch, ok := my.next.(BatchResolver); ok {
-				value, err = batch.ResolveBatch(ctx, sources, mapped)
-			} else {
-				value, err = my.next.Resolve(ctx, source, mapped)
-			}
-		} else {
-			value, err = my.next.Resolve(ctx, source, mapped)
-		}
-		if err != nil || value == nil {
-			return zero, err
-		}
-		out, ok := value.(O)
-		if !ok {
-			return zero, fmt.Errorf("resolver %s 返回类型不匹配: %T", my.Name(), value)
-		}
-		return out, nil
-	}
-	return my.fn(ctx, source, input, next)
-}
-
 // BatchResolver 批量解析器：列表场景一次调用处理全部宿主对象，避免N+1
 // 返回值必须与sources等长且一一对应
 type BatchResolver interface {
@@ -557,6 +460,7 @@ type Define struct {
 	batchKey       string       // raw key used by the keyed batch adapter
 	inputType      reflect.Type // 仅供启动期生成强类型嵌套input，不进入运行期热路径
 	outputType     reflect.Type // 仅供启动期生成强类型output，不进入运行期热路径
+	sourceType     reflect.Type
 }
 
 // sdl 渲染声明为extend片段（文档用三引号块，内容含引号也合法；Extra由rebuild单独并入）
@@ -644,6 +548,9 @@ func (my *Engine) rebuild() error {
 			sb.WriteString("\n")
 			sb.WriteString(d.Extra)
 		}
+		if my.native[name] != nil {
+			continue
+		}
 		generated := generatedTypes(d, known)
 		if generated != "" {
 			sb.WriteString("\n")
@@ -695,7 +602,7 @@ func (my *Engine) needsRootExecution(operation *ast.OperationDefinition) bool {
 			return true
 		}
 		if operation.Operation == ast.Mutation {
-			if my.mutationRoots["Mutation."+f.Name] {
+			if my.nativeRoots["Mutation."+f.Name] {
 				return true
 			}
 			fields++
@@ -966,23 +873,44 @@ func rootFieldExecutionErrors(field *ast.Field, err error, code string, rolledBa
 
 func (my *Engine) resolveRootField(ctx context.Context, operation *ast.OperationDefinition, field *ast.Field, variables map[string]interface{}, parent string, plans *sync.Map) (interface{}, gqlerror.List, error) {
 	resolver := my.resolvers[parent+"."+field.Name]
-	if resolver == nil {
-		if operation.Operation == ast.Mutation && len(my.mutations) > 0 {
-			return my.executeMutation(ctx, operation, field, variables, plans)
+	if operation.Operation == ast.Mutation && my.nativeRoots["Mutation."+field.Name] {
+		spec, _ := my.metadata.LookupOperation("Mutation." + field.Name)
+		rows, err := mutationRows(field.ArgumentMap(variables))
+		if err != nil {
+			return nil, nil, err
 		}
+		if err = my.checkNativeRelations(spec.Class, rows); err != nil {
+			return nil, nil, err
+		}
+	}
+	if resolver == nil {
 		return my.executeDefaultRootField(ctx, operation, field, variables, plans)
 	}
 	var result interface{}
+	var warnings gqlerror.List
+	native := my.native[parent+"."+field.Name] != nil
 	err := safely(func() (err error) {
+		if native {
+			result, warnings, err = my.executeNativeResolver(ctx, operation, field, variables, resolver)
+			return err
+		}
 		hctx, cancel := handlerContext(my.executionContextFor(ctx, field.SelectionSet, parent+"."+field.Name), resolver)
 		defer cancel()
-		result, err = resolver.Resolve(hctx, Root{}, field.ArgumentMap(variables))
+		call := &rootCall{coordinate: parent + "." + field.Name}
+		defer func() { call.mu.Lock(); call.closed = true; call.mu.Unlock() }()
+		result, err = resolver.Resolve(hctx, call, field.ArgumentMap(variables))
+		if call.err != nil {
+			return call.err
+		}
 		return handlerResult(hctx, err)
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	result, warnings, projected, err := my.enrich(ctx, operation, field, variables, result)
+	projected := native
+	if !native {
+		result, warnings, projected, err = my.enrich(ctx, operation, field, variables, result)
+	}
 	if err != nil {
 		return nil, warnings, err
 	}

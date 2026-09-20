@@ -10,7 +10,7 @@ import (
 func TestReadSnapshotSharesRepeatableReadTransactionWithResolvers(t *testing.T) {
 	executor, _, cleanup := setupRootResolverExecutor(t)
 	defer cleanup()
-	require.NoError(t, executor.register(NewResolver[Root, struct{}, bool]("Query", "hasSnapshotTx", "", func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
+	require.NoError(t, executor.register(NewResolver[Root[struct{}, bool], struct{}, bool]("Query", "hasSnapshotTx", "", func(ctx context.Context, _ Root[struct{}, bool], _ struct{}) (bool, error) {
 		execution, ok := ExecutionFrom(ctx)
 		require.True(t, ok)
 		require.Same(t, executor.database, execution.Connection())

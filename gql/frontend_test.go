@@ -14,7 +14,7 @@ func TestMergedRootFieldExecutesOnce(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
 	var calls atomic.Int32
-	require.NoError(t, executor.register(NewResolver[Root, struct{}, string]("Query", "health", "", func(context.Context, Root, struct{}) (string, error) {
+	require.NoError(t, executor.register(NewResolver[Root[struct{}, string], struct{}, string]("Query", "health", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
 		calls.Add(1)
 		return "ok", nil
 	})))
