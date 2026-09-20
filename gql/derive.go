@@ -14,6 +14,7 @@ import (
 	"github.com/iancoleman/strcase"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 // Option 微调反射推导的声明
@@ -89,14 +90,14 @@ func RetrySafe(idempotencyKey string) Option {
 func MaxBatch(size int) Option { return func(my *Define) { my.MaxBatch = size } }
 
 // decode 入参json往返解码进强类型struct并校验validate标签
-func decode[I any](args map[string]interface{}) (I, error) {
+func decode[I any](ctx context.Context, args map[string]interface{}) (I, error) {
 	var in I
 	data, err := json.Marshal(resolverNumericInput(reflect.TypeFor[I](), args))
 	if err == nil {
 		err = json.Unmarshal(data, &in)
 	}
 	if err == nil {
-		err = check(&in)
+		err = check(ctx, &in)
 	}
 	return in, err
 }
@@ -140,7 +141,7 @@ func (my *fieldResolver[S, I, O]) Resolve(ctx context.Context, source any, args 
 	if !ok {
 		return nil, fmt.Errorf("resolver %s source类型不匹配: %T", my.Name(), source)
 	}
-	in, err := decode[I](args)
+	in, err := decode[I](ctx, args)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +189,7 @@ func (my *batch[I, O]) Resolve(context.Context, any, map[string]interface{}) (in
 }
 
 func (my *batch[I, O]) ResolveBatch(ctx context.Context, sources []map[string]interface{}, args map[string]interface{}) ([]interface{}, error) {
-	in, err := decode[I](args)
+	in, err := decode[I](ctx, args)
 	if err != nil {
 		return nil, err
 	}
@@ -294,12 +295,31 @@ func eachField(t reflect.Type, fn func(f reflect.StructField, name, doc string))
 // check validate标签校验：与REST绑定路径同款std.Validator（含去空格与中文翻译）
 var validator = sync.OnceValues(std.NewValidator)
 
-func check(v any) error {
-	c, err := validator()
+type inputValidatorKey struct{}
+
+func inputValidator(ctx context.Context) (*std.Validator, error) {
+	if value, ok := ctx.Value(inputValidatorKey{}).(*std.Validator); ok {
+		return value, nil
+	}
+	return validator()
+}
+
+func check(ctx context.Context, v any) error {
+	c, err := inputValidator(ctx)
 	if err != nil {
 		return err
 	}
-	return c.Struct(v)
+	return inputValidationError(c.StructCtx(ctx, v))
+}
+
+func inputValidationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if details, ok := err.(interface{ Extensions() std.Extension }); ok {
+		return &gqlerror.Error{Message: err.Error(), Extensions: map[string]any{"code": "VALIDATION_ERROR", "fields": details.Extensions()}}
+	}
+	return err
 }
 
 // deriveArgs 反射struct字段为GraphQL参数签名文本

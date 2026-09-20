@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
-	"strconv"
 	"sync"
 
 	"github.com/ichaly/ideabase/gql/protocol"
@@ -16,24 +16,20 @@ import (
 // Mutation 为一个实体的原生根变更注册校验和事务钩子，不替换 SQL 执行器。
 // 嵌套写入受保护实体会被拒绝，必须通过其根变更执行，避免绕过钩子。
 type Mutation struct {
-	Class     string
-	Validate  map[string]string // 字段 validate 标签；更新仅校验实际提交的字段。
-	Arguments map[string]string // 可选的标量参数，仅提供给钩子，不映射数据库列。
-	Returning []string          // 钩子必需的标量字段，仍受字段读取权限约束，不泄漏到响应。
-	Before    func(context.Context, MutationRequest) (MutationAfter, error)
-	fields    []string
-	types     map[string]string
+	Class       string
+	Arguments   map[string]string                                              // 可选的标量参数，仅提供给钩子，不映射数据库列。
+	Returning   []string                                                       // 钩子必需的标量字段，仍受字段读取权限约束，不泄漏到响应。
+	After       func(context.Context, MutationRequest, []map[string]any) error // 原生 SQL 后、提交前执行。
+	inputType   reflect.Type
+	inputFields *mutationInput
+	bind        func(context.Context, MutationRequest, []map[string]any, *mutationInput) error
 }
 
-// MutationRequest 的参数是请求私有副本，可以修改；修改后的输入重新经过权限检查。
+// MutationRequest 提供操作类型及请求参数；输入处理通过 Change.Input 写回。
 type MutationRequest struct {
 	Operation string
 	Arguments map[string]any
 }
-
-// MutationAfter 在 SQL 成功后、事务提交前执行；返回错误会回滚本次变更及钩子写入。
-// rows 仅包含 Returning 声明的字段，与客户端的选择、别名无关。
-type MutationAfter func(rows []map[string]any) error
 
 // Mutations 在 Build 前一次注册每个实体的扩展。
 func (my *Builder) Mutations(items ...Mutation) error {
@@ -47,38 +43,24 @@ func (my *Builder) Mutations(items ...Mutation) error {
 func (my *Engine) installMutations(items []Mutation) error {
 	my.mutations = make(map[string]Mutation, len(items))
 	my.mutationRoots = make(map[string]bool)
-	renderer := NewRenderer(my.metadata)
 	for _, item := range items {
 		class, ok := my.metadata.GetNode(item.Class)
 		if !ok || class == nil || class.Name != item.Class || my.schema.Mutation == nil || my.mutations[item.Class].Class != "" {
 			return fmt.Errorf("mutation实体不存在或重复: %s", item.Class)
 		}
-		for _, name := range append(slices.Collect(maps.Keys(item.Validate)), item.Returning...) {
+		for _, name := range item.Returning {
 			if field := class.Fields[name]; field == nil || field.Column == "" {
 				return fmt.Errorf("mutation字段不存在或不是标量: %s.%s", item.Class, name)
 			}
 		}
-		item.Validate, item.Arguments, item.Returning = maps.Clone(item.Validate), maps.Clone(item.Arguments), slices.Clone(item.Returning)
-		item.fields = slices.Sorted(maps.Keys(item.Validate))
-		item.types = make(map[string]string, len(item.fields))
-		v, err := validator()
+		item.Arguments, item.Returning = maps.Clone(item.Arguments), slices.Clone(item.Returning)
+		if item.After == nil {
+			item.Returning = nil
+		}
+		var err error
+		item.inputFields, err = my.mutationInputFields(item, class)
 		if err != nil {
 			return err
-		}
-		for _, name := range item.fields {
-			item.types[name] = renderer.getGraphQLType(class.Fields[name])
-			var sample any = ""
-			switch item.types[name] {
-			case "Int", "BigInt":
-				sample = int64(0)
-			case "Float":
-				sample = float64(0)
-			case "Boolean":
-				sample = false
-			}
-			if err := safely(func() error { _ = v.Var(sample, item.Validate[name]); return nil }); err != nil {
-				return fmt.Errorf("%s.%s校验规则无效: %w", item.Class, name, err)
-			}
 		}
 		my.mutations[item.Class] = item
 		for _, field := range my.schema.Mutation.Fields {
@@ -153,53 +135,9 @@ func (my *Engine) executeMutation(ctx context.Context, operation *ast.OperationD
 		return nil, nil, &publicFailure{fmt.Sprintf("%s的事务钩子需要返回行，请使用按主键或批量返回行的变更", hook.Class), "MUTATION_RETURNING_REQUIRED"}
 	}
 	ctx = my.executionContextFor(ctx, field.SelectionSet, "Mutation."+field.Name)
-	var after MutationAfter
-	if hook.Before != nil {
-		if err = safely(func() error {
-			var e error
-			after, e = hook.Before(ctx, MutationRequest{spec.Operation, args})
-			return e
-		}); err != nil {
+	if hook.bind != nil {
+		if err = safely(func() error { return hook.bind(ctx, MutationRequest{spec.Operation, args}, rows, hook.inputFields) }); err != nil {
 			return nil, nil, err
-		}
-	}
-	rows, err = mutationRows(args)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := my.checkMutationRelations(spec.Class, rows); err != nil {
-		return nil, nil, err
-	}
-	v, err := validator()
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, row := range rows {
-		for _, name := range hook.fields {
-			value, present := row[name]
-			if !present && spec.Operation == protocol.OP_UPDATE {
-				continue
-			}
-			// GraphQL 大整数通常以字符串传输，按 catalog 类型校验数值而非字符串长度。
-			switch hook.types[name] {
-			case "Int", "BigInt":
-				if value != nil {
-					value, err = strconv.ParseInt(fmt.Sprint(value), 10, 64)
-					if err != nil {
-						return nil, nil, &publicFailure{fmt.Sprintf("%s.%s整数无效", hook.Class, name), "VALIDATION_ERROR"}
-					}
-				}
-			case "Float":
-				if value != nil {
-					value, err = strconv.ParseFloat(fmt.Sprint(value), 64)
-					if err != nil {
-						return nil, nil, &publicFailure{fmt.Sprintf("%s.%s数值无效", hook.Class, name), "VALIDATION_ERROR"}
-					}
-				}
-			}
-			if err = v.Var(value, hook.Validate[name]); err != nil {
-				return nil, nil, &publicFailure{fmt.Sprintf("%s.%s: %v", hook.Class, name, err), "VALIDATION_ERROR"}
-			}
 		}
 	}
 	// 不修改共享 AST/变量/缓存；让原编译器处理变换后的输入和投影。
@@ -251,6 +189,9 @@ func (my *Engine) executeMutation(ctx context.Context, operation *ast.OperationD
 	if err != nil {
 		return nil, warnings, err
 	}
+	if hook.After == nil {
+		return result, warnings, nil
+	}
 	projected := result
 	if wrapper != "" {
 		object, _ := result.(map[string]any)
@@ -276,9 +217,7 @@ func (my *Engine) executeMutation(ctx context.Context, operation *ast.OperationD
 			}
 		}
 	}
-	if after != nil {
-		err = safely(func() error { return after(returned) })
-	}
+	err = safely(func() error { return hook.After(ctx, MutationRequest{spec.Operation, args}, returned) })
 	return result, warnings, err
 }
 

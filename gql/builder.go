@@ -17,6 +17,7 @@ type Builder struct {
 	metadata  []MetadataOption
 	items     []Resolver
 	mutations []Mutation
+	validator *std.Validator
 	replaces  []Resolver
 	wraps     []resolverWrap
 	documents []string
@@ -25,6 +26,16 @@ type Builder struct {
 	security  SecurityProvider
 	lease     time.Duration
 	built     bool
+}
+
+// Validator 使用应用配置的验证器；自定义规则须在 Build 前注册完成。
+// 原生 mutation 与自定义 resolver 共用此实例，请求执行期间不得继续注册规则。
+func (my *Builder) Validator(value *std.Validator) error {
+	if my.built || value == nil || my.validator != nil {
+		return fmt.Errorf("Validator必须在Build前设置一次非空实例")
+	}
+	my.validator = value
+	return nil
 }
 
 // SubscriptionLease sets the periodic authorization refresh before Build.
@@ -173,6 +184,7 @@ func (my *Builder) Build() (*Engine, error) {
 	executor.policyBuiltin = my.policy == nil
 	executor.revocation = my.security
 	executor.subscriptionLease = my.lease
+	executor.validator = my.validator
 	if err := executor.installMutations(my.mutations); err != nil {
 		executor.Close()
 		return nil, err

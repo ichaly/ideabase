@@ -13,23 +13,24 @@ func TestMutationHookTransactionAndProjection(t *testing.T) {
 	e, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	called := 0
-	require.NoError(t, e.installMutations([]Mutation{{
-		Class: "User", Returning: []string{"id"}, Validate: map[string]string{"name": "required,max=10"},
-		Before: func(ctx context.Context, request MutationRequest) (MutationAfter, error) {
-			x, ok := ExecutionFrom(ctx)
-			require.True(t, ok)
-			require.NotNil(t, x.Transaction())
-			return func(rows []map[string]any) error {
-				called++
-				require.Len(t, rows, 1)
-				require.NotNil(t, rows[0]["id"])
-				if request.Arguments["input"].(map[string]any)["name"] == "rollback" {
-					return fmt.Errorf("audit rejected")
-				}
-				return nil
-			}, nil
-		},
-	}}))
+	type Input struct {
+		Name string `validate:"required,max=10"`
+	}
+	m := NewMutation[Input]("User")
+	m.Returning = []string{"id"}
+	m.After = func(ctx context.Context, request MutationRequest, rows []map[string]any) error {
+		x, ok := ExecutionFrom(ctx)
+		require.True(t, ok)
+		require.NotNil(t, x.Transaction())
+		called++
+		require.Len(t, rows, 1)
+		require.NotNil(t, rows[0]["id"])
+		if request.Arguments["input"].(map[string]any)["name"] == "rollback" {
+			return fmt.Errorf("audit rejected")
+		}
+		return nil
+	}
+	require.NoError(t, e.installMutations([]Mutation{m}))
 	for _, name := range []string{"ok", "rollback", "too-long-name"} {
 		r := e.run(context.Background(), `mutation($name:String!){ saved:createUser(input:{name:$name,email:$name}){name} }`, map[string]any{"name": name}, "")
 		if name == "ok" {
@@ -53,11 +54,14 @@ func TestMutationHookReauthorizesChangedInput(t *testing.T) {
 	defer cleanup()
 	testExec(t, db, `INSERT INTO users(id,name,email) VALUES (1,'name','original')`)
 	called := false
-	require.NoError(t, e.installMutations([]Mutation{{Class: "User", Before: func(_ context.Context, r MutationRequest) (MutationAfter, error) {
+	type Input struct{ Name, Email string }
+	m := NewMutation[Input]("User", func(_ context.Context, change *Change[Input]) error {
 		called = true
-		r.Arguments["input"].(map[string]any)["email"] = "forbidden"
-		return nil, nil
-	}}}))
+		change.Input.Email = "forbidden"
+		change.Include("email")
+		return nil
+	})
+	require.NoError(t, e.installMutations([]Mutation{m}))
 	installTestPolicy(t, e, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
 		if request.Resource != "User" {
 			return PolicyDecision{}, nil
@@ -78,9 +82,19 @@ func TestMutationHookBulkAndNested(t *testing.T) {
 	e, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	var sizes []int
-	require.NoError(t, e.installMutations([]Mutation{{Class: "User", Returning: []string{"id"}, Validate: map[string]string{"name": "required,max=5"}, Before: func(context.Context, MutationRequest) (MutationAfter, error) {
-		return func(rows []map[string]any) error { sizes = append(sizes, len(rows)); return nil }, nil
-	}}, {Class: "Post", Validate: map[string]string{"title": "required"}}}))
+	type UserInput struct {
+		Name string `validate:"required,max=5"`
+	}
+	type PostInput struct {
+		Title string `validate:"required"`
+	}
+	m := NewMutation[UserInput]("User")
+	m.Returning = []string{"id"}
+	m.After = func(_ context.Context, _ MutationRequest, rows []map[string]any) error {
+		sizes = append(sizes, len(rows))
+		return nil
+	}
+	require.NoError(t, e.installMutations([]Mutation{m, NewMutation[PostInput]("Post")}))
 	for _, query := range []string{
 		`mutation{createUsers(input:[{name:"one",email:"one"},{name:"two",email:"two"}]){name}}`,
 		`mutation{updateUsers(where:{name:{eq:"one"}},input:{name:"three"}){affectedCount}}`,
@@ -108,11 +122,18 @@ func TestMutationHookBulkAndNested(t *testing.T) {
 func TestMutationHookTransformsPrivateInput(t *testing.T) {
 	e, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.NoError(t, e.installMutations([]Mutation{{Class: "User", Returning: []string{"id"}, Arguments: map[string]string{"prefix": "String"}, Before: func(_ context.Context, r MutationRequest) (MutationAfter, error) {
-		input := r.Arguments["input"].(map[string]any)
-		input["name"] = fmt.Sprint(r.Arguments["prefix"]) + fmt.Sprint(input["name"])
-		return nil, nil
-	}}}))
+	type Input struct{ Name string }
+	m := NewMutation[Input]("User", func(_ context.Context, change *Change[Input]) error {
+		change.Input.Name = fmt.Sprint(change.Arguments["prefix"]) + change.Input.Name
+		return nil
+	})
+	m.Arguments, m.Returning = map[string]string{"prefix": "String"}, []string{"id"}
+	m.After = func(_ context.Context, _ MutationRequest, rows []map[string]any) error {
+		require.Len(t, rows, 1)
+		require.NotNil(t, rows[0]["id"])
+		return nil
+	}
+	require.NoError(t, e.installMutations([]Mutation{m}))
 	variables := map[string]any{"input": map[string]any{"name": "name", "email": "private"}}
 	r := e.run(context.Background(), `mutation($input:UserCreateInput!){createUser(prefix:"prefix-",input:$input){name _mutation:name}}`, variables, "")
 	require.Empty(t, r.Errors)
@@ -132,17 +153,28 @@ func TestMutationHookKeepsUnrelatedFastPath(t *testing.T) {
 	require.Contains(t, r.Errors[0].Message, "Post")
 }
 
-func TestMutationHookRejectsInvalidRulesAtBuild(t *testing.T) {
-	e, _, cleanup := newTestExecutor(t, nil)
+func TestMutationHookRejectsInvalidRules(t *testing.T) {
+	e, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.Error(t, e.installMutations([]Mutation{{Class: "User", Validate: map[string]string{"name": "no_such_validation"}}}))
+	type Input struct {
+		Name string `validate:"no_such_validation"`
+	}
+	require.NoError(t, e.installMutations([]Mutation{NewMutation[Input]("User")}))
+	r := e.run(context.Background(), `mutation{createUser(input:{name:"one",email:"one"}){id}}`, nil, "")
+	require.NotEmpty(t, r.Errors)
+	var count int
+	require.NoError(t, testQueryRow(db, `SELECT count(*) FROM users`).Scan(&count))
+	require.Zero(t, count)
 }
 
 func TestMutationHookValidatesMappedNumbers(t *testing.T) {
 	e, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	testExec(t, db, `INSERT INTO users(id,name,email) VALUES (1,'one','one'),(2,'two','two')`)
-	require.NoError(t, e.installMutations([]Mutation{{Class: "Post", Validate: map[string]string{"userId": "min=1,max=1"}}}))
+	type Input struct {
+		UserID int64 `validate:"min=1,max=1"`
+	}
+	require.NoError(t, e.installMutations([]Mutation{NewMutation[Input]("Post")}))
 	for _, id := range []int{1, 2} {
 		r := e.run(context.Background(), fmt.Sprintf(`mutation{createPost(input:{title:"post",userId:%d}){id}}`, id), nil, "")
 		if id == 1 {

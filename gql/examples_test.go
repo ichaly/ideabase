@@ -71,12 +71,14 @@ func TestUsageDocumentationLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	links := regexp.MustCompile(`\]\(([^)]+)\)`)
+	// 代码里的 Go 泛型调用 T[I](...) 不是 Markdown 链接。
+	code := regexp.MustCompile("(?s)```.*?```|`[^`]*`")
 	for _, path := range paths {
 		content, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, match := range links.FindAllSubmatch(content, -1) {
+		for _, match := range links.FindAllSubmatch(code.ReplaceAll(content, nil), -1) {
 			target := string(match[1])
 			if strings.Contains(target, ":") || strings.HasPrefix(target, "#") {
 				continue

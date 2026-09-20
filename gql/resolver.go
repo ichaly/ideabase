@@ -92,7 +92,7 @@ func (my *resolverMiddleware[S, I, O]) Resolve(ctx context.Context, raw any, arg
 	if !ok {
 		return nil, fmt.Errorf("resolver %s source类型不匹配: %T", my.Name(), raw)
 	}
-	input, err := decode[I](args)
+	input, err := decode[I](ctx, args)
 	if err != nil {
 		return nil, err
 	}
