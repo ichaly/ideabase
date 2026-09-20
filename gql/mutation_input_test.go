@@ -146,12 +146,8 @@ func TestTypedMutationPreservesPatchAndNull(t *testing.T) {
 	})
 	require.NoError(t, e.installMutations([]Mutation{mutation}))
 	testExec(t, db, `INSERT INTO users(id,name,email) VALUES (1,'old','old@example.com')`)
-	for _, query := range []string{
-		`mutation { updateUser(id:1,input:{name:" next "}){name email} }`,
-	} {
-		r := e.run(context.Background(), query, nil, "")
-		require.Empty(t, r.Errors, "%v", r.Errors)
-	}
+	r := e.run(context.Background(), `mutation { updateUser(id:1,input:{name:" next "}){name email} }`, nil, "")
+	require.Empty(t, r.Errors, "%v", r.Errors)
 	var name string
 	require.NoError(t, testQueryRow(db, `SELECT name FROM users WHERE id=1`).Scan(&name))
 	require.Equal(t, "next", name)
@@ -159,9 +155,9 @@ func TestTypedMutationPreservesPatchAndNull(t *testing.T) {
 		r := e.run(context.Background(), `mutation { updateUser(id:1,input:`+input+`){id} }`, nil, "")
 		require.NotEmpty(t, r.Errors)
 	}
-	r := e.run(context.Background(), `mutation { createUser(input:{email:"new@example.com"}){id} }`, nil, "")
+	r = e.run(context.Background(), `mutation { createUser(input:{email:"new@example.com"}){id} }`, nil, "")
 	require.NotEmpty(t, r.Errors)
-	post := NewMutation[struct{ Content *string }]("Post")
+	post := NewMutation[struct{ Content *string }]("Post", nil)
 	require.NoError(t, e.installMutations([]Mutation{mutation, post}))
 	testExec(t, db, `INSERT INTO posts(id,title,content,user_id) VALUES (1,'post','old',1)`)
 	r = e.run(context.Background(), `mutation { updatePost(id:1,input:{content:null}){content} }`, nil, "")
@@ -179,7 +175,7 @@ func TestTypedMutationSharedValidatorAndBulkRollback(t *testing.T) {
 	type Input struct {
 		Name string `validate:"required,allowed_name" label:"姓名"`
 	}
-	mutation := NewMutation[Input]("User")
+	mutation := NewMutation[Input]("User", nil)
 	type requestKey struct{}
 	ctx := context.WithValue(context.Background(), requestKey{}, "request")
 	v.RegisterStructValidationCtx(func(callCtx context.Context, sl validation.StructLevel) {
@@ -220,9 +216,9 @@ func TestTypedMutationRejectsInvalidBinding(t *testing.T) {
 	e, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	for _, mutation := range []Mutation{
-		NewMutation[string]("User"),
-		NewMutation[struct{ Missing string }]("User"),
-		NewMutation[struct{ Name int }]("User"),
+		NewMutation[string]("User", nil),
+		NewMutation[struct{ Missing string }]("User", nil),
+		NewMutation[struct{ Name int }]("User", nil),
 	} {
 		require.Error(t, e.installMutations([]Mutation{mutation}))
 	}
@@ -233,7 +229,9 @@ func TestTypedMutationIncludeRechecksPermissions(t *testing.T) {
 	defer cleanup()
 	testExec(t, db, `INSERT INTO users(id,name,email) VALUES (1,'old','original')`)
 	type Input struct{ Name, Email string }
+	called := false
 	mutation := NewMutation[Input]("User", func(_ context.Context, change *Change[Input]) error {
+		called = true
 		change.Input.Email = "forbidden"
 		change.Include("email")
 		return nil
@@ -246,6 +244,7 @@ func TestTypedMutationIncludeRechecksPermissions(t *testing.T) {
 	require.NoError(t, err)
 	variables := map[string]any{"input": map[string]any{"name": "next"}}
 	r := e.run(WithIdentity(context.Background(), id), `mutation($input:UserUpdateInput!){updateUser(id:1,input:$input){name}}`, variables, "")
+	require.True(t, called, "%v", r.Errors)
 	require.NotEmpty(t, r.Errors)
 	require.Equal(t, map[string]any{"input": map[string]any{"name": "next"}}, variables)
 	var email string

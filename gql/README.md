@@ -245,7 +245,7 @@ type ProductInput struct {
     Name  string `validate:"required,max=100" label:"名称"`
     Price int64  `validate:"min=0,max=1000000" label:"价格"`
 }
-err := builder.Mutations(gql.NewMutation[ProductInput]("Product"))
+err := builder.Mutations(gql.NewMutation[ProductInput]("Product", nil))
 ```
 
 - 输入字段按 `json` 标签或小驼峰匹配现有实体列，Build 检查字段和标量类型兼容性，不从 Go 类型重建 schema。

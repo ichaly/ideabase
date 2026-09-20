@@ -21,10 +21,8 @@ func TestOutIgnoresTrailingError(t *testing.T) {
 		wantError error
 	}{
 		{"single", func() (string, error) { return "value", nil }, []string{"values"}, false, nil},
-		{"legacy single", func() (string, error) { return "value", nil }, []string{"values", ""}, false, nil},
 		{"multiple", func() (string, int, error) { return "value", 7, nil }, []string{"values", "numbers"}, true, nil},
 		{"untagged value", func() (int, string, error) { return 7, "value", nil }, []string{"", "values"}, false, nil},
-		{"legacy multiple", func() (string, int, error) { return "value", 7, nil }, []string{"values", "numbers", ""}, true, nil},
 		{"without error", func() string { return "value" }, []string{"values"}, false, nil},
 		{"constructor failure", func() (string, error) { return "", failure }, []string{"values"}, false, failure},
 	} {
@@ -60,6 +58,7 @@ func TestOutRejectsInvalidResultTags(t *testing.T) {
 		tags []string
 	}{
 		{"missing value tag", func() (string, int, error) { return "", 0, nil }, []string{"values"}},
+		{"error placeholder", func() (string, error) { return "", nil }, []string{"values", ""}},
 		{"extra tag", func() (string, error) { return "", nil }, []string{"values", "", ""}},
 		{"tag on error", func() (string, error) { return "", nil }, []string{"values", "errors"}},
 		{"no trailing error", func() string { return "" }, []string{"values", ""}},

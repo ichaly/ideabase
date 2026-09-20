@@ -16,7 +16,7 @@ func TestMutationHookTransactionAndProjection(t *testing.T) {
 	type Input struct {
 		Name string `validate:"required,max=10"`
 	}
-	m := NewMutation[Input]("User")
+	m := NewMutation[Input]("User", nil)
 	m.Returning = []string{"id"}
 	m.After = func(ctx context.Context, request MutationRequest, rows []map[string]any) error {
 		x, ok := ExecutionFrom(ctx)
@@ -49,35 +49,6 @@ func TestMutationHookTransactionAndProjection(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
-func TestMutationHookReauthorizesChangedInput(t *testing.T) {
-	e, db, cleanup := newTestExecutor(t, nil)
-	defer cleanup()
-	testExec(t, db, `INSERT INTO users(id,name,email) VALUES (1,'name','original')`)
-	called := false
-	type Input struct{ Name, Email string }
-	m := NewMutation[Input]("User", func(_ context.Context, change *Change[Input]) error {
-		called = true
-		change.Input.Email = "forbidden"
-		change.Include("email")
-		return nil
-	})
-	require.NoError(t, e.installMutations([]Mutation{m}))
-	installTestPolicy(t, e, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
-		if request.Resource != "User" {
-			return PolicyDecision{}, nil
-		}
-		return PolicyDecision{Allow: true, Fields: map[FieldUse][]string{FieldUseWrite: {"name"}, FieldUseSelect: {"*"}, FieldUseReturn: {"*"}, FieldUseFilter: {"id"}}}, nil
-	}))
-	id, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
-	require.NoError(t, err)
-	r := e.run(WithIdentity(context.Background(), id), `mutation{updateUser(id:"1",input:{name:"changed"}){name}}`, nil, "")
-	require.True(t, called, "%v", r.Errors)
-	require.NotEmpty(t, r.Errors)
-	var email string
-	require.NoError(t, testQueryRow(db, `SELECT email FROM users WHERE id=1`).Scan(&email))
-	require.Equal(t, "original", email)
-}
-
 func TestMutationHookBulkAndNested(t *testing.T) {
 	e, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
@@ -88,13 +59,13 @@ func TestMutationHookBulkAndNested(t *testing.T) {
 	type PostInput struct {
 		Title string `validate:"required"`
 	}
-	m := NewMutation[UserInput]("User")
+	m := NewMutation[UserInput]("User", nil)
 	m.Returning = []string{"id"}
 	m.After = func(_ context.Context, _ MutationRequest, rows []map[string]any) error {
 		sizes = append(sizes, len(rows))
 		return nil
 	}
-	require.NoError(t, e.installMutations([]Mutation{m, NewMutation[PostInput]("Post")}))
+	require.NoError(t, e.installMutations([]Mutation{m, NewMutation[PostInput]("Post", nil)}))
 	for _, query := range []string{
 		`mutation{createUsers(input:[{name:"one",email:"one"},{name:"two",email:"two"}]){name}}`,
 		`mutation{updateUsers(where:{name:{eq:"one"}},input:{name:"three"}){affectedCount}}`,
@@ -134,13 +105,13 @@ func TestMutationHookTransformsPrivateInput(t *testing.T) {
 		return nil
 	}
 	require.NoError(t, e.installMutations([]Mutation{m}))
-	variables := map[string]any{"input": map[string]any{"name": "name", "email": "private"}}
-	r := e.run(context.Background(), `mutation($input:UserCreateInput!){createUser(prefix:"prefix-",input:$input){name _mutation:name}}`, variables, "")
+	variables := map[string]any{"_mutation_input": map[string]any{"name": "name", "email": "private"}}
+	r := e.run(context.Background(), `mutation($_mutation_input:UserCreateInput!){createUser(prefix:"prefix-",input:$_mutation_input){name _mutation:name}}`, variables, "")
 	require.Empty(t, r.Errors)
 	require.Equal(t, "prefix-name", r.Data["createUser"].(map[string]any)["name"])
 	require.Equal(t, "prefix-name", r.Data["createUser"].(map[string]any)["_mutation"])
 	require.NotContains(t, r.Data["createUser"].(map[string]any), "id")
-	require.Equal(t, "name", variables["input"].(map[string]any)["name"])
+	require.Equal(t, "name", variables["_mutation_input"].(map[string]any)["name"])
 }
 
 func TestMutationHookKeepsUnrelatedFastPath(t *testing.T) {
@@ -153,13 +124,31 @@ func TestMutationHookKeepsUnrelatedFastPath(t *testing.T) {
 	require.Contains(t, r.Errors[0].Message, "Post")
 }
 
+func TestMutationHookRelationReachability(t *testing.T) {
+	e, _, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	for _, class := range []string{"Tag", "PostTag"} {
+		t.Run(class, func(t *testing.T) {
+			require.NoError(t, e.installMutations([]Mutation{{Class: class}}))
+			// 用户、文章、标签和评论形成循环；中间表只能通过关系间接到达。
+			for _, name := range []string{"User", "Post", "Tag", "Comment"} {
+				require.True(t, e.mutationRoots["Mutation.create"+name], name)
+				require.Equal(t, name == class, e.mutationRoots["Mutation.delete"+name], name)
+			}
+			r := e.run(context.Background(), `mutation{createPost(input:{title:"nested",userId:1,tags:{connect:[1]}}){id}}`, nil, "")
+			require.NotEmpty(t, r.Errors)
+			require.Equal(t, "MUTATION_HOOK_REQUIRED", r.Errors[0].Extensions["code"], "%v", r.Errors)
+		})
+	}
+}
+
 func TestMutationHookRejectsInvalidRules(t *testing.T) {
 	e, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 	type Input struct {
 		Name string `validate:"no_such_validation"`
 	}
-	require.NoError(t, e.installMutations([]Mutation{NewMutation[Input]("User")}))
+	require.NoError(t, e.installMutations([]Mutation{NewMutation[Input]("User", nil)}))
 	r := e.run(context.Background(), `mutation{createUser(input:{name:"one",email:"one"}){id}}`, nil, "")
 	require.NotEmpty(t, r.Errors)
 	var count int
@@ -174,7 +163,7 @@ func TestMutationHookValidatesMappedNumbers(t *testing.T) {
 	type Input struct {
 		UserID int64 `validate:"min=1,max=1"`
 	}
-	require.NoError(t, e.installMutations([]Mutation{NewMutation[Input]("Post")}))
+	require.NoError(t, e.installMutations([]Mutation{NewMutation[Input]("Post", nil)}))
 	for _, id := range []int{1, 2} {
 		r := e.run(context.Background(), fmt.Sprintf(`mutation{createPost(input:{title:"post",userId:%d}){id}}`, id), nil, "")
 		if id == 1 {

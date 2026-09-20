@@ -43,22 +43,15 @@ func (my *Change[I]) Include(names ...string) {
 }
 
 // NewMutation 为原生 create/update/upsert 绑定结构体，不重定义 schema 或 SQL。
-// 可选 prepare 在类型解码后、标签校验前执行，最多一个；返回成功后引擎自动继续。
+// prepare 在类型解码后、标签校验前执行；无需处理时传 nil，成功后引擎自动继续。
 // 创建/upsert 校验全部字段，update 只校验提交或 Include 的字段。
-func NewMutation[I any](class string, prepare ...func(context.Context, *Change[I]) error) Mutation {
-	if len(prepare) > 1 {
-		panic("NewMutation最多声明一个输入处理器")
-	}
-	var fn func(context.Context, *Change[I]) error
-	if len(prepare) == 1 {
-		fn = prepare[0]
-	}
+func NewMutation[I any](class string, prepare func(context.Context, *Change[I]) error) Mutation {
 	return Mutation{Class: class, inputType: reflect.TypeFor[I](), bind: func(ctx context.Context, request MutationRequest, rows []map[string]any, plan *mutationInput) error {
 		v, err := inputValidator(ctx)
 		if err != nil {
 			return err
 		}
-		if fn != nil {
+		if prepare != nil {
 			// 处理器只能通过 Input 修改写入内容，不能替换未经校验的 input 或修改 SQL 目标。
 			args := make(map[string]any, len(request.Arguments))
 			for name, value := range request.Arguments {
@@ -81,8 +74,8 @@ func NewMutation[I any](class string, prepare ...func(context.Context, *Change[I
 					return &publicFailure{fmt.Sprintf("%s.%s类型、空值或数值范围无效", class, field.name), "VALIDATION_ERROR"}
 				}
 			}
-			if fn != nil {
-				if err := fn(ctx, &change); err != nil {
+			if prepare != nil {
+				if err := prepare(ctx, &change); err != nil {
 					return err
 				}
 				if change.err != nil {

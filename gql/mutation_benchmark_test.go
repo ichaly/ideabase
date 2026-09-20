@@ -18,7 +18,7 @@ func BenchmarkMutationBinding(b *testing.B) {
 		Root   string
 		Extra  *string
 	}
-	m := NewMutation[Input]("Meter")
+	m := NewMutation[Input]("Meter", nil)
 	plan := &mutationInput{index: make(map[string]int)}
 	eachField(reflect.TypeFor[Input](), func(f reflect.StructField, name, _ string) {
 		plan.index[name] = len(plan.fields)

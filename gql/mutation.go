@@ -63,12 +63,13 @@ func (my *Engine) installMutations(items []Mutation) error {
 			return err
 		}
 		my.mutations[item.Class] = item
+		argumentNames := slices.Sorted(maps.Keys(item.Arguments))
 		for _, field := range my.schema.Mutation.Fields {
 			spec, ok := my.metadata.LookupOperation("Mutation." + field.Name)
 			if !ok || spec.Class.Name != item.Class {
 				continue
 			}
-			for _, name := range slices.Sorted(maps.Keys(item.Arguments)) {
+			for _, name := range argumentNames {
 				typeName := item.Arguments[name]
 				if kind := my.schema.Types[typeName]; kind == nil || kind.Kind != ast.Scalar || field.Arguments.ForName(name) != nil {
 					return fmt.Errorf("mutation扩展参数无效: %s.%s", field.Name, name)
@@ -78,27 +79,29 @@ func (my *Engine) installMutations(items []Mutation) error {
 		}
 	}
 	if len(items) > 0 {
-		// 启动期计算关系可达性；无关根变更仍走单 SQL 快路径。
-		affected := make(map[string]bool, len(items))
-		for name := range my.mutations {
-			affected[name] = true
-			class, _ := my.metadata.GetNode(name)
-			affected[class.Table] = true
-		}
-		for changed := true; changed; {
-			changed = false
-			for _, class := range my.metadata.Nodes {
-				if affected[class.Name] {
-					continue
-				}
-				for _, field := range class.Fields {
-					if r := field.Relation; r != nil && (affected[r.TargetClass] || r.Through != nil && affected[r.Through.TableName]) {
-						affected[class.Name], changed = true, true
-						affected[class.Table] = true
-						break
+		// 反向关系索引使每个实体只展开一次；无关根变更仍走单 SQL 快路径。
+		parents := make(map[string][]string)
+		for _, class := range my.metadata.Nodes {
+			for _, field := range class.Fields {
+				if r := field.Relation; r != nil {
+					parents[r.TargetClass] = append(parents[r.TargetClass], class.Name)
+					if r.Through != nil {
+						parents[r.Through.TableName] = append(parents[r.Through.TableName], class.Name)
 					}
 				}
 			}
+		}
+		affected := make(map[string]bool)
+		queue := slices.Collect(maps.Keys(my.mutations))
+		for i := 0; i < len(queue); i++ {
+			name := queue[i]
+			if affected[name] {
+				continue
+			}
+			affected[name] = true
+			class, _ := my.metadata.GetNode(name)
+			queue = append(queue, parents[name]...)
+			queue = append(queue, parents[class.Table]...)
 		}
 		for name := range my.metadata.operations {
 			spec, ok := my.metadata.LookupOperation(name)
@@ -142,13 +145,14 @@ func (my *Engine) executeMutation(ctx context.Context, operation *ast.OperationD
 	}
 	// 不修改共享 AST/变量/缓存；让原编译器处理变换后的输入和投影。
 	root, sub := *field, *operation
-	root.Arguments = nil
+	root.Arguments = make(ast.ArgumentList, 0, len(args))
 	values := make(map[string]any, len(variables)+len(args))
 	maps.Copy(values, variables)
-	for _, name := range slices.Sorted(maps.Keys(args)) {
-		definition := field.Definition.Arguments.ForName(name)
-		if definition == nil {
-			return nil, nil, fmt.Errorf("未知mutation参数: %s", name)
+	for _, definition := range field.Definition.Arguments {
+		name := definition.Name
+		value, exists := args[name]
+		if !exists {
+			continue
 		}
 		key := "_mutation_" + name
 		for {
@@ -157,7 +161,7 @@ func (my *Engine) executeMutation(ctx context.Context, operation *ast.OperationD
 			}
 			key += "_"
 		}
-		values[key] = args[name]
+		values[key] = value
 		root.Arguments = append(root.Arguments, &ast.Argument{Name: name, Value: &ast.Value{Kind: ast.Variable, Raw: key, ExpectedType: definition.Type}})
 	}
 	root.SelectionSet = slices.Clone(field.SelectionSet)
@@ -171,13 +175,11 @@ func (my *Engine) executeMutation(ctx context.Context, operation *ast.OperationD
 		selection = &returning.SelectionSet
 	}
 	aliases := make(map[string]string, len(hook.Returning))
-	if field.Definition.Type.Name() != "Int" {
-		for _, name := range hook.Returning {
-			alias := mutationAlias(*selection)
-			kind := my.schema.Types[hook.Class]
-			*selection = append(*selection, &ast.Field{Name: name, Alias: alias, Definition: kind.Fields.ForName(name), ObjectDefinition: kind})
-			aliases[alias] = name
-		}
+	kind := my.schema.Types[hook.Class]
+	for _, name := range hook.Returning {
+		alias := mutationAlias(*selection)
+		*selection = append(*selection, &ast.Field{Name: name, Alias: alias, Definition: kind.Fields.ForName(name), ObjectDefinition: kind})
+		aliases[alias] = name
 	}
 	sub.SelectionSet = ast.SelectionSet{&root}
 	if my.policy != nil {
@@ -266,17 +268,11 @@ func (my *Engine) checkMutationRelations(class *protocol.Class, rows []map[strin
 
 func mutationAlias(selection ast.SelectionSet) string {
 	alias := "_mutation"
-	for {
-		found := false
-		for _, item := range selection {
-			if field, ok := item.(*ast.Field); ok && field.Alias == alias {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return alias
-		}
+	for slices.ContainsFunc(selection, func(item ast.Selection) bool {
+		field, ok := item.(*ast.Field)
+		return ok && field.Alias == alias
+	}) {
 		alias += "_"
 	}
+	return alias
 }
