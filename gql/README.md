@@ -235,6 +235,45 @@ metadata:
     User:  { table: users, id-generator: database }
 ```
 
+## 原生变更扩展
+
+普通校验不需要替换 create/update Resolver。通过 `builder.Mutations(...)` 按实体注册一次，
+复用原生 SQL、权限、事务和返回投影：
+
+```go
+err := builder.Mutations(gql.Mutation{
+    Class: "Product",
+    Validate: map[string]string{"name": "required", "price": "min=0,max=1000000"},
+    Returning: []string{"id"},
+    Before: func(ctx context.Context, request gql.MutationRequest) (gql.MutationAfter, error) {
+        execution, _ := gql.ExecutionFrom(ctx)
+        return func(rows []map[string]any) error {
+            for _, row := range rows {
+                if _, err := execution.Transaction().ExecContext(ctx,
+                    "INSERT INTO audit(resource) VALUES ($1)", row["id"]); err != nil {
+                    return err
+                }
+            }
+            return nil
+        }, nil
+    },
+})
+```
+
+- 顺序为权限检查 → 同一事务内 Before → 标签校验 → 重新检查输入和返回字段权限 → 原生 SQL → 后置闭包 → 提交。
+  Before 接收请求独立的 `Arguments` 副本，可规范化 `input`；旧值读取和行锁通过 `ExecutionFrom(ctx).Transaction()` 执行。
+- `Validate` 复用 `std.Validator` 的字段标签。创建/upsert 校验所有声明字段，update 只校验提交字段，
+  省略和显式 null 不混淆。Int/BigInt 按 int64 精确校验，Float 按 float64 校验；标签在构建阶段检查。
+- 可选 `Arguments: map[string]string{"token": "String"}` 给原生根变更增加可选标量参数，
+  只交给钩子、不映射 SQL 列，也不增加查询字段。凭证等私有数据可在后置闭包内使用相同事务写入。
+- `Returning` 是后置处理需要的实体标量字段；由引擎补充并剥离，与客户端选择、别名无关，仍须具备读取权限。
+  单条、批量和 upsert 均提供实际返回行；声明 Returning 后会拒绝只有计数的删除入口，请使用按主键或批量返回行的删除。
+  后置处理应写审计等附属数据，
+  如修改本次返回中可见的实体字段，应注意返回投影已在它之前完成。
+- 扩展只作用于原生根变更。对受保护实体或中间表的 GraphQL 嵌套写入会报错，须拆成同一 mutation 的多个根字段；
+  多个根字段和自定义 Resolver 共用事务。数据库触发器、级联及引擎外的 SQL 不属于此钩子的执行入口。
+- 钩子报错或 panic 回滚本次事务；不要在其中执行无法回滚的外部副作用。没有涉及扩展的原生单根变更保持单 SQL 快路径。
+
 ## 自定义 Resolver
 
 SQL 表达不了的字段逻辑用 Resolver 处理。**注册即声明**：字段挂载进宿主实体、

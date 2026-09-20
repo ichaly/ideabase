@@ -114,6 +114,8 @@ func (my gqlReply) mutationCommit(ctx context.Context, state string) gqlReply {
 // 负责解析GraphQL查询、编译为SQL并执行查询，支持多种数据库方言
 // 可作为Fiber插件集成到Web服务中，提供标准的GraphQL API
 type Engine struct {
+	mutations         map[string]Mutation
+	mutationRoots     map[string]bool
 	intro             *intro.Handler                  // 自省处理器，处理__schema和__type查询
 	schema            *ast.Schema                     // GraphQL模式定义
 	database          *std.Connection                 // 数据库连接，用于执行生成的SQL

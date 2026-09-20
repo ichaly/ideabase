@@ -16,6 +16,7 @@ type Builder struct {
 	database  *std.Connection
 	metadata  []MetadataOption
 	items     []Resolver
+	mutations []Mutation
 	replaces  []Resolver
 	wraps     []resolverWrap
 	documents []string
@@ -172,6 +173,10 @@ func (my *Builder) Build() (*Engine, error) {
 	executor.policyBuiltin = my.policy == nil
 	executor.revocation = my.security
 	executor.subscriptionLease = my.lease
+	if err := executor.installMutations(my.mutations); err != nil {
+		executor.Close()
+		return nil, err
+	}
 	ready := false
 	defer func() {
 		if !ready {

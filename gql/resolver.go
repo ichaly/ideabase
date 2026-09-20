@@ -695,6 +695,9 @@ func (my *Engine) needsRootExecution(operation *ast.OperationDefinition) bool {
 			return true
 		}
 		if operation.Operation == ast.Mutation {
+			if my.mutationRoots["Mutation."+f.Name] {
+				return true
+			}
 			fields++
 			if fields > 1 {
 				return true
@@ -964,6 +967,9 @@ func rootFieldExecutionErrors(field *ast.Field, err error, code string, rolledBa
 func (my *Engine) resolveRootField(ctx context.Context, operation *ast.OperationDefinition, field *ast.Field, variables map[string]interface{}, parent string, plans *sync.Map) (interface{}, gqlerror.List, error) {
 	resolver := my.resolvers[parent+"."+field.Name]
 	if resolver == nil {
+		if operation.Operation == ast.Mutation && len(my.mutations) > 0 {
+			return my.executeMutation(ctx, operation, field, variables, plans)
+		}
 		return my.executeDefaultRootField(ctx, operation, field, variables, plans)
 	}
 	var result interface{}
