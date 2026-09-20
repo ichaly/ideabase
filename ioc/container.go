@@ -115,7 +115,8 @@ func In(tags ...string) BindOption {
 	}
 }
 
-// Out 配置结果 Tags。
+// Out 按顺序配置非 error 返回值的 Tags，末尾 error 无需占位。
+// 兼容末尾 error 对应空字符串的旧写法；中间未标注的返回值仍需用空字符串占位。
 func Out(tags ...string) BindOption {
 	return func(o *bindOption) {
 		for _, t := range tags {
@@ -176,10 +177,18 @@ func collectAnnotations(fnType reflect.Type, allowResult bool, name string, opts
 		anns = append(anns, fx.ParamTags(tags...))
 	}
 	if len(opt.resultTags) > 0 && allowResult {
-		if len(opt.resultTags) != fnType.NumOut() {
-			panic(fmt.Sprintf("ioc: %s Out() tags count %d mismatch %d results", name, len(opt.resultTags), fnType.NumOut()))
+		count := fnType.NumOut()
+		tags := opt.resultTags
+		if count > 0 && fnType.Out(count-1) == reflect.TypeFor[error]() {
+			count--
+			if len(tags) == count+1 && tags[count] == "" {
+				tags = tags[:count]
+			}
 		}
-		anns = append(anns, fx.ResultTags(opt.resultTags...))
+		if len(tags) != count {
+			panic(fmt.Sprintf("ioc: %s Out() tags count %d mismatch %d injectable results (trailing error excluded)", name, len(tags), count))
+		}
+		anns = append(anns, fx.ResultTags(tags...))
 	}
 	if len(opt.extra) > 0 {
 		anns = append(anns, opt.extra...)
