@@ -3,7 +3,7 @@ package metadata
 import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
-	"gorm.io/gorm"
+	"github.com/ichaly/ideabase/std"
 )
 
 // MysqlLoader MySQL元数据加载器，实现Loader接口
@@ -107,7 +107,7 @@ SELECT
 `
 
 // NewMysqlLoader 创建MySQL加载器
-func NewMysqlLoader(cfg *internal.Config, db *gorm.DB) *MysqlLoader {
+func NewMysqlLoader(cfg *internal.Config, db *std.Connection) *MysqlLoader {
 	return &MysqlLoader{
 		&baseLoader{db: db, cfg: cfg},
 	}
@@ -118,7 +118,7 @@ func (my *MysqlLoader) Priority() int { return 60 }
 
 // Support 判断是否为MySQL数据库
 func (my *MysqlLoader) Support() bool {
-	return my.cfg != nil && my.cfg.IsDebug() && my.db != nil && my.db.Dialector.Name() == "mysql"
+	return my.cfg != nil && my.db != nil && my.db.Driver() == "mysql"
 }
 
 // Load 从MySQL加载元数据

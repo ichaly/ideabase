@@ -2,19 +2,155 @@ package gql
 
 import (
 	"fmt"
-	"github.com/ichaly/ideabase/gql/internal"
-	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/ichaly/ideabase/gql/renderer"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
+
+func governanceSchema(t *testing.T, classes ...*protocol.Class) string {
+	t.Helper()
+	meta := createMockMetadata(t)
+	meta.Nodes = make(map[string]*protocol.Class, len(classes))
+	for _, class := range classes {
+		meta.Nodes[class.Name] = class
+	}
+	r := NewRenderer(meta)
+	schema, err := r.Render()
+	require.NoError(t, err)
+	_, err = gqlparser.LoadSchema(&ast.Source{Name: "governance.graphql", Input: schema})
+	require.NoError(t, err, "治理配置生成的 SDL 必须可被 GraphQL parser 加载")
+	return schema
+}
+
+func governanceClass(name string, operations ...string) *protocol.Class {
+	c := &protocol.Class{Name: name, Table: strings.ToLower(name), Operations: operations, PrimaryKeys: []string{"id"}, Fields: make(map[string]*protocol.Field)}
+	c.AddField(&protocol.Field{Name: "id", Column: "id", Type: "integer", IsPrimary: true})
+	c.AddField(&protocol.Field{Name: "title", Column: "title", Type: "text"})
+	c.AddField(&protocol.Field{Name: "readOnly", Column: "read_only", Type: "text", ReadOnly: true})
+	c.AddField(&protocol.Field{Name: "insertPreset", Column: "insert_preset", Type: "text", InsertPreset: &protocol.ValueSource{Context: "tenant"}})
+	c.AddField(&protocol.Field{Name: "updatePreset", Column: "update_preset", Type: "text", UpdatePreset: &protocol.ValueSource{Context: "user"}})
+	return c
+}
+
+func TestRenderer_GovernanceOperationGatingAndInputs(t *testing.T) {
+	c := governanceClass("Gated", "select", "aggregate", "update")
+	schema := governanceSchema(t, c)
+	assert.Contains(t, schema, "gateds(")
+	assert.Contains(t, schema, "gatedStats(")
+	assert.Contains(t, schema, "updateGated(id: ID!, input: GatedUpdateInput!): Gated")
+	assert.NotContains(t, schema, "createGated")
+	assert.NotContains(t, schema, "upsertGated")
+	assert.NotContains(t, schema, "deleteGated")
+	assert.NotContains(t, schema, "restoreGated")
+	updateStart := strings.Index(schema, "input GatedUpdateInput {")
+	updateEnd := strings.Index(schema[updateStart:], "}\n") + updateStart
+	update := schema[updateStart:updateEnd]
+	assert.NotContains(t, update, "readOnly:")
+	assert.NotContains(t, update, "updatePreset:")
+}
+
+func TestRendererRendersBatchUpdateWithoutPrimaryKey(t *testing.T) {
+	class := governanceClass("Keyless", protocol.OP_UPDATE)
+	class.PrimaryKeys = nil
+	class.Fields["id"].IsPrimary = false
+
+	schema := governanceSchema(t, class)
+
+	require.Contains(t, schema, "input KeylessUpdateRowInput {")
+	require.NotContains(t, schema, "input KeylessUpdateInput {")
+	require.Contains(t, schema, "updateKeylesses(where: KeylessWhereInput!, input: KeylessUpdateRowInput!): KeylessMutationResult!")
+	require.NotContains(t, schema, "updateKeyless(")
+}
+
+func TestRenderer_GovernanceUpsertRequiresGlobalInsertAndUpdate(t *testing.T) {
+	insertOnly := governanceClass("InsertOnly", protocol.OP_INSERT)
+	writable := governanceClass("Writable", protocol.OP_INSERT, protocol.OP_UPDATE)
+	schema := governanceSchema(t, insertOnly, writable)
+	assert.NotContains(t, schema, "upsertInsertOnlies")
+	assert.Contains(t, schema, "upsertWritables")
+}
+
+func TestRendererMutationInputsOnlyExposeExecutableRelationDepth(t *testing.T) {
+	user := governanceClass("User", protocol.OP_INSERT, protocol.OP_UPDATE)
+	post := governanceClass("Post", protocol.OP_INSERT, protocol.OP_UPDATE)
+	user.AddField(&protocol.Field{Name: "posts", Type: "Post", Virtual: true, IsList: true, Relation: &protocol.Relation{
+		Type: protocol.ONE_TO_MANY, SourceClass: "User", SourceField: "id", TargetClass: "Post", TargetField: "user_id",
+	}})
+	schema := governanceSchema(t, user, post)
+	require.Contains(t, schema, "createUsers(input: [UserCreateRowInput!]!): [User!]!")
+	require.Contains(t, schema, "upsertUsers(input: [UserUpsertRowInput!]!")
+	require.Contains(t, schema, "updateUsers(where: UserWhereInput!, input: UserUpdateRowInput!): UserMutationResult!")
+	require.Contains(t, schema, "posts: PostCreateRelationInput")
+	require.NotContains(t, schemaType(schema, "UserCreateRowInput"), "posts:")
+	require.NotContains(t, schemaType(schema, "UserUpdateRowInput"), "posts:")
+	require.NotContains(t, schemaType(schema, "PostCreateRelationInput"), "disconnect:")
+	require.NotContains(t, schemaType(schema, "PostCreateRelationInput"), "PostCreateInput")
+	require.Contains(t, schemaType(schema, "PostUpdateRelationInput"), "disconnect:")
+}
+
+func schemaType(schema, name string) string {
+	start := strings.Index(schema, "input "+name+" {")
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(schema[start:], "\n}")
+	if end < 0 {
+		return schema[start:]
+	}
+	return schema[start : start+end]
+}
+
+func TestRenderer_GovernanceExplicitMutationAndRestoreSDL(t *testing.T) {
+	c := governanceClass("Article", "insert", "update", "delete", "restore", "purge", "select", "aggregate")
+	c.SoftDelete = &protocol.SoftDelete{Column: "deleted_at"}
+	for _, column := range []string{"created_at", "created_by", "updated_at", "updated_by", "deleted_at", "deleted_by"} {
+		c.AddField(&protocol.Field{Name: column, Column: column, Type: "text"})
+	}
+	schema := governanceSchema(t, c)
+	assert.Equal(t, 1, strings.Count(schema, "enum DeletionMode"))
+	assert.Contains(t, schema, "articles(")
+	assert.Contains(t, schema, "deletion: DeletionMode = ACTIVE")
+	assert.Contains(t, schema, "distinct: [ArticleDistinctField!]")
+	assert.Contains(t, schema, "groupBy: [ArticleGroupField!]")
+	assert.Contains(t, schema, "updateArticle(id: ID!, input: ArticleUpdateInput!): Article")
+	assert.Contains(t, schema, "updateArticles(where: ArticleWhereInput!, input: ArticleUpdateRowInput!): ArticleMutationResult!")
+	assert.Contains(t, schema, "deleteArticleByPk(id: ID!): Article")
+	assert.Contains(t, schema, "deleteArticles(where: ArticleWhereInput!): ArticleMutationResult!")
+	assert.Contains(t, schema, "restoreArticleByPk(id: ID!): Article")
+	assert.Contains(t, schema, "restoreArticles(where: ArticleWhereInput!): ArticleMutationResult!")
+	assert.Contains(t, schema, "purgeArticleByPk(id: ID!): Article")
+	assert.Contains(t, schema, "purgeArticles(where: ArticleWhereInput!): ArticleMutationResult!")
+	assert.NotContains(t, schemaType(schema, "ArticleCreateInput"), "created_")
+	assert.NotContains(t, schemaType(schema, "ArticleUpdateInput"), "deleted_")
+	assert.Contains(t, schema, "type ArticleMutationResult {")
+	assert.Contains(t, schema, "affectedCount: Int!")
+	assert.Contains(t, schema, "returning: [Article!]!")
+}
+
+func TestRenderer_GovernanceLegacyEmptyOperationsAndUncountablePlural(t *testing.T) {
+	legacy := governanceClass("Legacy")
+	uncountable := governanceClass("News", "insert", "update", "delete", "restore")
+	uncountable.SoftDelete = &protocol.SoftDelete{Column: "deleted_at"}
+	schema := governanceSchema(t, legacy, uncountable)
+	assert.Contains(t, schema, "createLegacy")
+	assert.Contains(t, schema, "updateLegacy")
+	assert.Contains(t, schema, "deleteLegacy")
+	assert.NotContains(t, schema, "updateNewses")
+	assert.NotContains(t, schema, "deleteNewses")
+	assert.Contains(t, schema, "updateNews(id: ID!, input: NewsUpdateInput!): News")
+	assert.Contains(t, schema, "restoreNewsMany(where: NewsWhereInput!): NewsMutationResult!")
+	assert.NotContains(t, schema, "purgeNews")
+}
 
 // 尝试从测试数据库获取元数据
 func getTestMetadata(t *testing.T) (*Metadata, error) {
@@ -29,6 +165,7 @@ func getTestMetadata(t *testing.T) (*Metadata, error) {
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
+	k.Set("schema.introspection", true)
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.use-camel", true)
@@ -217,7 +354,7 @@ func TestRenderer_Generate(t *testing.T) {
 	renderer := NewRenderer(meta)
 
 	// 生成schema
-	schema, err := renderer.Generate()
+	schema, err := renderer.Render()
 
 	// 验证生成成功
 	assert.NoError(t, err)
@@ -263,9 +400,9 @@ func TestRenderer_WithMockData(t *testing.T) {
 	renderer.sb = schema
 
 	// 生成schema但不保存到文件
-	for _, fn := range []func() error{
+	require.NoError(t, renderer.renderEnums())
+	for _, fn := range []func(){
 		renderer.renderScalars,
-		renderer.renderEnums,
 		renderer.renderTypes,
 		renderer.renderPaging,
 		renderer.renderFilter,
@@ -275,8 +412,7 @@ func TestRenderer_WithMockData(t *testing.T) {
 		renderer.renderQuery,
 		renderer.renderMutation,
 	} {
-		err := fn()
-		assert.NoError(t, err, "渲染schema部分失败")
+		fn()
 	}
 
 	// 验证生成成功
@@ -318,8 +454,7 @@ func TestRenderer_RenderScalars(t *testing.T) {
 	renderer.sb = schema
 
 	// 只渲染标量类型
-	err := renderer.renderScalars()
-	assert.NoError(t, err, "渲染标量类型失败")
+	renderer.renderScalars()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -368,11 +503,9 @@ func TestRenderer_RenderPaging(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染实体类型和分页类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
-	err = renderer.renderPaging()
-	assert.NoError(t, err, "渲染分页类型失败")
+	renderer.renderPaging()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -398,8 +531,7 @@ func TestRenderer_RenderFilter(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染过滤器类型
-	err := renderer.renderFilter()
-	assert.NoError(t, err, "渲染过滤器类型失败")
+	renderer.renderFilter()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -423,11 +555,9 @@ func TestRenderer_RenderSort(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染类型和排序类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
-	err = renderer.renderSort()
-	assert.NoError(t, err, "渲染排序类型失败")
+	renderer.renderSort()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -450,14 +580,11 @@ func TestRenderer_RenderQuery(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染所需类型和查询类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
-	err = renderer.renderPaging()
-	assert.NoError(t, err, "渲染分页类型失败")
+	renderer.renderPaging()
 
-	err = renderer.renderQuery()
-	assert.NoError(t, err, "渲染查询类型失败")
+	renderer.renderQuery()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -485,14 +612,11 @@ func TestRenderer_RenderMutation(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染所需类型和变更类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
-	err = renderer.renderInput()
-	assert.NoError(t, err, "渲染输入类型失败")
+	renderer.renderInput()
 
-	err = renderer.renderMutation()
-	assert.NoError(t, err, "渲染变更类型失败")
+	renderer.renderMutation()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -505,7 +629,8 @@ func TestRenderer_RenderMutation(t *testing.T) {
 	assert.Contains(t, generatedSchema, "createPost(")
 
 	// 验证更新操作
-	assert.Contains(t, generatedSchema, "updateUser(")
+	assert.Contains(t, generatedSchema, "updateUser(id: ID!, input: UserUpdateInput!): User")
+	assert.NotContains(t, generatedSchema, "updateUserByPk")
 	assert.Contains(t, generatedSchema, "updatePost(")
 
 	// 验证删除操作
@@ -526,11 +651,9 @@ func TestRenderer_RenderInput(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染所需类型和输入类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
-	err = renderer.renderInput()
-	assert.NoError(t, err, "渲染输入类型失败")
+	renderer.renderInput()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -560,13 +683,12 @@ func TestRenderer_SaveToFile(t *testing.T) {
 	renderer.sb = schema
 
 	// 生成schema但不保存到文件
-	for _, fn := range []func() error{
+	require.NoError(t, renderer.renderEnums())
+	for _, fn := range []func(){
 		renderer.renderScalars,
-		renderer.renderEnums,
 		renderer.renderTypes,
 	} {
-		err := fn()
-		assert.NoError(t, err, "渲染schema部分失败")
+		fn()
 	}
 
 	// 验证生成成功
@@ -645,8 +767,7 @@ func TestRenderer_DataTypeMapping(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染类型
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染实体类型失败")
+	renderer.renderTypes()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -672,8 +793,7 @@ func TestRenderer_RenderRelation(t *testing.T) {
 	renderer.sb = schema
 
 	// 渲染类型时会自动调用renderRelation
-	err := renderer.renderTypes()
-	assert.NoError(t, err, "渲染类型失败")
+	renderer.renderTypes()
 
 	// 获取生成的schema文本
 	generatedSchema := schema.String()
@@ -749,22 +869,22 @@ func TestRenderer_WriteField(t *testing.T) {
 
 	// 测试用例：必填字段
 	buf.Reset()
-	r.writeField("id", "ID", renderer.NonNull())
+	r.writeField("id", "ID!", "")
 	require.Equal(t, "  id: ID!\n", buf.String())
 
 	// 测试用例：带描述的字段
 	buf.Reset()
-	r.writeField("name", "String", renderer.WithComment("用户名称"))
+	r.writeField("name", "String", "用户名称")
 	require.Equal(t, "  name: String  # 用户名称\n", buf.String())
 
 	// 测试用例：非必填字段
 	buf.Reset()
-	r.writeField("age", "Int", renderer.List())
+	r.writeField("age", "[Int]", "")
 	require.Equal(t, "  age: [Int]\n", buf.String())
 
 	// 测试用例：列表字段
 	buf.Reset()
-	r.writeField("tags", "String", renderer.ListNonNull(), renderer.NonNull())
+	r.writeField("tags", "[String!]!", "")
 	require.Equal(t, "  tags: [String!]!\n", buf.String())
 }
 
@@ -834,7 +954,7 @@ func TestRenderer_GenerateWithConfig(t *testing.T) {
 
 	// 3. 生成schema
 	renderer := NewRenderer(meta)
-	schema, err := renderer.Generate()
+	schema, err := renderer.Render()
 	assert.NoError(t, err)
 	assert.NotEmpty(t, schema)
 

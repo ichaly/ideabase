@@ -2,11 +2,11 @@ package metadata
 
 import (
 	"fmt"
-	"github.com/ichaly/ideabase/gql/internal"
 	"os"
 	"path/filepath"
 	"regexp"
 
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/utl"
@@ -99,8 +99,9 @@ func (my *FileLoader) Load(h protocol.Hoster) error {
 
 	// 3. 反序列化为临时结构体，包含所有类节点和版本号
 	var meta struct {
-		Nodes   map[string]*protocol.Class `json:"nodes"`
-		Version string                     `json:"version"`
+		Nodes    map[string]*protocol.Class   `json:"nodes"`
+		Routines map[string]*protocol.Routine `json:"routines"`
+		Version  string                       `json:"version"`
 	}
 
 	if err := utl.Unmarshal(data, &meta); err != nil {
@@ -113,11 +114,17 @@ func (my *FileLoader) Load(h protocol.Hoster) error {
 
 	// 4. 遍历所有主节点，处理字段名/列名索引和多key索引
 	for index, class := range meta.Nodes {
+		if class == nil {
+			return fmt.Errorf("元数据坐标 metadata.nodes.%s 为空", index)
+		}
 		// 只处理主类名（key与类名一致）
 		if index == class.Name {
 			// 初始化字段映射，支持字段名和列名双重索引
 			fields := make(map[string]*protocol.Field)
 			for fieldName, field := range class.Fields {
+				if field == nil {
+					return fmt.Errorf("元数据坐标 metadata.nodes.%s.fields.%s 为空", index, fieldName)
+				}
 				fields[fieldName] = field
 				// 如果列名与字段名不同，添加列名索引，便于通过列名查找字段
 				if field.Column != "" && field.Column != fieldName {
@@ -126,7 +133,16 @@ func (my *FileLoader) Load(h protocol.Hoster) error {
 			}
 			class.Fields = fields
 			// 添加类名索引
-			_ = h.PutNode(index, class)
+			if err := h.PutNode(index, class); err != nil {
+				return fmt.Errorf("注入Hoster失败: %w", err)
+			}
+		}
+	}
+	if rh, ok := h.(protocol.RoutineHoster); ok {
+		for key, routine := range meta.Routines {
+			if err := rh.PutRoutine(key, routine); err != nil {
+				return fmt.Errorf("注入Routine失败: %w", err)
+			}
 		}
 	}
 	log.Info().Int("classes", len(meta.Nodes)).Msg("从文件加载元数据完成")

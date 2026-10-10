@@ -2,7 +2,11 @@
 package pgsql
 
 import (
+	"cmp"
 	"fmt"
+	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/ichaly/ideabase/gql/compiler"
@@ -28,9 +32,16 @@ func (my scope) column(fieldName string) string {
 
 // buildWhere 构建WHERE子句；conjuncts为前置合取条件（关联/搜索/keyset），与用户条件AND组合
 func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.ArgumentList, conjuncts ...func() error) error {
-	conditions, err := my.collectConditions(args)
+	conditions, err := my.collectConditions(ctx, sc, args)
 	if err != nil {
 		return err
+	}
+	key, err := my.keyConjunct(ctx, sc, args.ForName(protocol.KEY))
+	if err != nil {
+		return err
+	}
+	if key != nil {
+		conjuncts = append([]func() error{key}, conjuncts...)
 	}
 	if len(conjuncts) == 0 && len(conditions) == 0 {
 		return nil
@@ -54,15 +65,95 @@ func (my *Dialect) buildWhere(ctx *compiler.Context, sc scope, args ast.Argument
 	return my.buildConditionList(ctx, sc, conditions, "AND", len(conditions) > 1)
 }
 
+// keyConjunct compiles a typed composite primary key. Whole-object variables
+// are volatile because compiler slots address top-level variables, not nested
+// members; recompiling preserves correct values without adding a second slot model.
+func (my *Dialect) keyConjunct(ctx *compiler.Context, sc scope, arg *ast.Argument) (func() error, error) {
+	if arg == nil || arg.Value == nil {
+		return nil, nil
+	}
+	if arg.Value.Kind == ast.NullValue {
+		return nil, fmt.Errorf("key不能为null")
+	}
+	if sc.class == nil || len(sc.class.PrimaryKeys) < 2 {
+		return nil, fmt.Errorf("key仅适用于复合主键实体")
+	}
+	fields := make([]*protocol.Field, len(sc.class.PrimaryKeys))
+	for i, name := range sc.class.PrimaryKeys {
+		field := sc.class.Fields[name]
+		if field == nil || field.Column == "" {
+			return nil, fmt.Errorf("复合主键字段不存在: %s.%s", sc.class.Name, name)
+		}
+		fields[i] = field
+	}
+
+	if arg.Value.Kind == ast.Variable {
+		raw, ok := ctx.Variable(arg.Value.Raw)
+		values, valid := raw.(map[string]interface{})
+		if !ok || !valid {
+			return nil, fmt.Errorf("key变量 %s 缺失或不是对象", arg.Value.Raw)
+		}
+		params := make([]interface{}, len(fields))
+		for i, field := range fields {
+			value, exists := values[field.Name]
+			if !exists || value == nil {
+				return nil, fmt.Errorf("key变量缺少字段: %s", field.Name)
+			}
+			params[i] = normalizeArg(value)
+		}
+		ctx.MarkVolatile()
+		return func() error {
+			return writeKeyEquals(ctx, sc, fields, func(i int) error {
+				ctx.Write(my.Placeholder(ctx.AddParam(params[i])))
+				return nil
+			})
+		}, nil
+	}
+
+	values := make(map[string]*ast.Value, len(arg.Value.Children))
+	for _, child := range arg.Value.Children {
+		if child != nil {
+			values[child.Name] = child.Value
+		}
+	}
+	for _, field := range fields {
+		if values[field.Name] == nil {
+			return nil, fmt.Errorf("key缺少字段: %s", field.Name)
+		}
+	}
+	return func() error {
+		return writeKeyEquals(ctx, sc, fields, func(i int) error { return my.buildParam(ctx, values[fields[i].Name]) })
+	}, nil
+}
+
+func writeKeyEquals(ctx *compiler.Context, sc scope, fields []*protocol.Field, value func(int) error) error {
+	ctx.Write("(")
+	for i, field := range fields {
+		if i > 0 {
+			ctx.Space("AND")
+		}
+		ctx.Column(sc.qualifier, field.Column).Write(" = ")
+		if err := value(i); err != nil {
+			return err
+		}
+	}
+	ctx.Write(")")
+	return nil
+}
+
 // collectConditions 收集可渲染的WHERE条件（id参数转换为主键等值条件；空对象剪枝）
-func (my *Dialect) collectConditions(args ast.ArgumentList) ([]*ast.Value, error) {
+func (my *Dialect) collectConditions(ctx *compiler.Context, sc scope, args ast.ArgumentList) ([]*ast.Value, error) {
 	var conditions []*ast.Value
 
 	if idArg := args.ForName(protocol.ID); idArg != nil && idArg.Value != nil {
+		keys := sc.class.PrimaryKeyFields()
+		if len(keys) != 1 {
+			return nil, fmt.Errorf("id参数要求单一主键")
+		}
 		conditions = append(conditions, &ast.Value{
 			Kind: ast.ObjectValue,
 			Children: []*ast.ChildValue{{
-				Name: protocol.ID,
+				Name: keys[0],
 				Value: &ast.Value{
 					Kind:     ast.ObjectValue,
 					Children: []*ast.ChildValue{{Name: protocol.EQ, Value: idArg.Value}},
@@ -73,7 +164,21 @@ func (my *Dialect) collectConditions(args ast.ArgumentList) ([]*ast.Value, error
 
 	if whereArg := args.ForName(protocol.WHERE); whereArg != nil && whereArg.Value != nil {
 		if whereArg.Value.Kind == ast.Variable {
-			return nil, fmt.Errorf("where暂不支持整体变量，请内联条件或使用字段级变量")
+			raw, ok := ctx.Variable(whereArg.Value.Raw)
+			if !ok || raw == nil {
+				return nil, fmt.Errorf("where变量 %s 缺失或为null", whereArg.Value.Raw)
+			}
+			value, ok := runtimeWhereValue(raw)
+			if !ok || value.Kind != ast.ObjectValue {
+				return nil, fmt.Errorf("where变量 %s 必须是对象", whereArg.Value.Raw)
+			}
+			// Object shape changes the emitted SQL, so this plan cannot be
+			// reused solely by query text.
+			ctx.MarkVolatile()
+			if renderable(value) {
+				conditions = append(conditions, value)
+			}
+			return conditions, nil
 		}
 		if renderable(whereArg.Value) {
 			conditions = append(conditions, whereArg.Value)
@@ -81,6 +186,62 @@ func (my *Dialect) collectConditions(args ast.ArgumentList) ([]*ast.Value, error
 	}
 
 	return conditions, nil
+}
+
+// runtimeWhereValue converts an already GraphQL-coerced input object back to
+// the small AST shape consumed by the single condition compiler. Keeping one
+// renderer means literal and whole-variable where inputs have identical SQL
+// semantics, including nested and/or/not operators.
+func runtimeWhereValue(raw any) (*ast.Value, bool) {
+	if raw == nil {
+		return &ast.Value{Kind: ast.NullValue, Raw: "null"}, true
+	}
+	rv := reflect.ValueOf(raw)
+	for rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return &ast.Value{Kind: ast.NullValue, Raw: "null"}, true
+		}
+		rv = rv.Elem()
+	}
+	switch rv.Kind() {
+	case reflect.Map:
+		if rv.Type().Key().Kind() != reflect.String {
+			return nil, false
+		}
+		keys := rv.MapKeys()
+		slices.SortFunc(keys, func(a, b reflect.Value) int { return cmp.Compare(a.String(), b.String()) })
+		value := &ast.Value{Kind: ast.ObjectValue, Children: make(ast.ChildValueList, 0, len(keys))}
+		for _, key := range keys {
+			child, ok := runtimeWhereValue(rv.MapIndex(key).Interface())
+			if !ok {
+				return nil, false
+			}
+			value.Children = append(value.Children, &ast.ChildValue{Name: key.String(), Value: child})
+		}
+		return value, true
+	case reflect.Slice, reflect.Array:
+		value := &ast.Value{Kind: ast.ListValue, Children: make(ast.ChildValueList, 0, rv.Len())}
+		for i := 0; i < rv.Len(); i++ {
+			child, ok := runtimeWhereValue(rv.Index(i).Interface())
+			if !ok {
+				return nil, false
+			}
+			value.Children = append(value.Children, &ast.ChildValue{Value: child})
+		}
+		return value, true
+	case reflect.Bool:
+		return &ast.Value{Kind: ast.BooleanValue, Raw: strconv.FormatBool(rv.Bool())}, true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return &ast.Value{Kind: ast.IntValue, Raw: strconv.FormatInt(rv.Int(), 10)}, true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return &ast.Value{Kind: ast.IntValue, Raw: strconv.FormatUint(rv.Uint(), 10)}, true
+	case reflect.Float32, reflect.Float64:
+		return &ast.Value{Kind: ast.FloatValue, Raw: strconv.FormatFloat(rv.Float(), 'g', -1, rv.Type().Bits())}, true
+	case reflect.String:
+		return &ast.Value{Kind: ast.StringValue, Raw: rv.String()}, true
+	default:
+		return nil, false
+	}
 }
 
 // renderable 条件值是否会产出SQL片段；空对象语义为无条件恒真，整体剪枝
@@ -234,7 +395,7 @@ func (my *Dialect) buildOperator(ctx *compiler.Context, lhs func(), opChild *ast
 	}
 
 	// jsonb函数式操作符：jsonb_contains(列, $n::jsonb) / jsonb_exists(列, $n)
-	// （gorm会劫持@>/<@/?符号形态，函数形式语义与索引利用一致）
+	// （部分SQL抽象层会劫持@>/<@/?符号形态，函数形式语义与索引利用一致）
 	if jsonbFunctions[opChild.Name] {
 		ctx.Write(op.Value, `(`)
 		lhs()
@@ -334,6 +495,117 @@ func (my *Dialect) scopeConjuncts(ctx *compiler.Context, qualifier string, class
 		}
 	}
 	return conjuncts
+}
+
+// predicateConjuncts renders metadata predicates as fixed SQL. Values are always
+// slots so the compiled statement shape does not depend on request data.
+func (my *Dialect) predicateConjuncts(ctx *compiler.Context, qualifier string, predicates []protocol.Predicate, skipColumn string) []func() error {
+	out := make([]func() error, 0, len(predicates))
+	for _, p := range predicates {
+		p := p
+		if p.Column == "" || (p.Column == skipColumn && p.Operator == "is-null") {
+			continue
+		}
+		out = append(out, func() error {
+			return my.writePredicate(ctx, qualifier, p)
+		})
+	}
+	return out
+}
+
+func (my *Dialect) writePredicate(ctx *compiler.Context, qualifier string, p protocol.Predicate) error {
+	ctx.Column(qualifier, p.Column)
+	return my.writePredicateRHS(ctx, p)
+}
+
+// fixedWhereConjuncts combines metadata row predicates and role policy. It is
+// deliberately role-independent: the Engine supplies policy roles at runtime.
+func (my *Dialect) fixedWhereConjuncts(ctx *compiler.Context, qualifier string, class *protocol.Class, operation string, skipColumn string) []func() error {
+	out := my.predicateConjuncts(ctx, qualifier, class.Where, skipColumn)
+	if class.Permissions == nil {
+		return out
+	}
+	roles := make([]string, 0, len(class.Permissions))
+	for role, perm := range class.Permissions {
+		allowed := false
+		switch operation {
+		case protocol.OP_SELECT:
+			allowed = perm != nil && len(perm.Select) > 0
+		case protocol.OP_AGGREGATE:
+			allowed = perm != nil && perm.Aggregate
+		case protocol.OP_UPDATE:
+			allowed = perm != nil && len(perm.Update) > 0
+		case protocol.OP_INSERT:
+			allowed = perm != nil && len(perm.Insert) > 0
+		case protocol.OP_DELETE:
+			allowed = perm != nil && perm.Delete
+		case protocol.OP_RESTORE:
+			allowed = perm != nil && perm.Restore
+		case protocol.OP_PURGE:
+			allowed = perm != nil && perm.Purge
+		}
+		if allowed {
+			roles = append(roles, role)
+		}
+	}
+	slices.Sort(roles)
+	out = append(out, func() error {
+		if len(roles) == 0 {
+			ctx.Write("FALSE")
+			return nil
+		}
+		ctx.Write("(")
+		for i, role := range roles {
+			if i > 0 {
+				ctx.Space("OR")
+			}
+			ctx.Write("(").Write(my.Placeholder(ctx.AddParam(role))).Write(" = ANY(").Write(my.Placeholder(ctx.AddContextListSlot(protocol.CONTEXT_ROLES))).Write(")")
+			perm := class.Permissions[role]
+			for _, p := range perm.Filter {
+				ctx.Space("AND")
+				if err := my.writePredicate(ctx, qualifier, p); err != nil {
+					return err
+				}
+			}
+			ctx.Write(")")
+		}
+		ctx.Write(")")
+		return nil
+	})
+	return out
+}
+
+// queryWhereConjuncts applies the soft-delete view selected by the public
+// deletion argument. Keeping the mode in one SQL slot preserves plan reuse for
+// variable-driven requests while the default ACTIVE path stays minimal.
+func (my *Dialect) queryWhereConjuncts(ctx *compiler.Context, qualifier string, class *protocol.Class, operation string, args ast.ArgumentList) []func() error {
+	if class.SoftDelete == nil {
+		return my.fixedWhereConjuncts(ctx, qualifier, class, operation, "")
+	}
+	arg := args.ForName(protocol.DELETION)
+	if arg == nil || arg.Value == nil {
+		return my.fixedWhereConjuncts(ctx, qualifier, class, operation, "")
+	}
+	column := class.SoftDelete.Column
+	out := my.fixedWhereConjuncts(ctx, qualifier, class, operation, column)
+	out = append(out, func() error {
+		var slot int
+		if arg.Value.Kind == ast.Variable {
+			slot = ctx.AddVariable(arg.Value.Raw)
+		} else {
+			value, err := arg.Value.Value(nil)
+			if err != nil {
+				return fmt.Errorf("解析deletion参数失败: %w", err)
+			}
+			slot = ctx.AddParam(value)
+		}
+		mode := my.Placeholder(slot) + "::text"
+		ctx.Write("(", mode, " = 'WITH_DELETED' OR (")
+		ctx.Write(mode, " = 'ACTIVE' AND ").Column(qualifier, column).Write(" IS NULL) OR (")
+		ctx.Write(mode, " = 'ONLY_DELETED' AND ").Column(qualifier, column).Write(" IS NOT NULL))")
+		return nil
+	})
+	return out
 }
 
 // appendScope 在已有WHERE后追加 AND 作用域条件（递归CTE层、关系操作目标行校验）

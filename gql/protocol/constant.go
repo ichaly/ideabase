@@ -1,6 +1,11 @@
 package protocol
 
-import "github.com/samber/lo"
+import (
+	"maps"
+	"slices"
+
+	"github.com/samber/lo"
+)
 
 // Operator 表示过滤操作符
 type Operator struct {
@@ -20,43 +25,74 @@ const (
 	TYPE_NUMBER_HAVING    = "NumberHaving"   // 数值聚合的having过滤（镜像NumberStats）
 	TYPE_STRING_HAVING    = "StringHaving"   // 字符串聚合的having过滤
 	TYPE_DATE_TIME_HAVING = "DateTimeHaving" // 日期聚合的having过滤
+	TYPE_DELETION_MODE    = "DeletionMode"
 
 	// GraphQL入参名称后缀
-	SUFFIX_STATS        = "Stats"
-	SUFFIX_RESULT       = "Result"
-	SUFFIX_SORT_INPUT   = "SortInput"
-	SUFFIX_WHERE_INPUT  = "WhereInput"
-	SUFFIX_HAVING_INPUT = "HavingInput" // 每实体的having入参类型后缀
-	SUFFIX_CREATE_INPUT = "CreateInput"
-	SUFFIX_UPDATE_INPUT = "UpdateInput"
+	SUFFIX_STATS                 = "Stats"
+	SUFFIX_RESULT                = "Result"
+	SUFFIX_SORT_INPUT            = "SortInput"
+	SUFFIX_WHERE_INPUT           = "WhereInput"
+	SUFFIX_HAVING_INPUT          = "HavingInput" // 每实体的having入参类型后缀
+	SUFFIX_CREATE_INPUT          = "CreateInput"
+	SUFFIX_CREATE_ROW_INPUT      = "CreateRowInput"
+	SUFFIX_UPSERT_ROW_INPUT      = "UpsertRowInput"
+	SUFFIX_UPDATE_INPUT          = "UpdateInput"
+	SUFFIX_UPDATE_ROW_INPUT      = "UpdateRowInput"
+	SUFFIX_CREATE_RELATION_INPUT = "CreateRelationInput"
+	SUFFIX_UPDATE_RELATION_INPUT = "UpdateRelationInput"
+	SUFFIX_DISTINCT_FIELD        = "DistinctField"
+	SUFFIX_GROUP_FIELD           = "GroupField"
+	SUFFIX_KEY_INPUT             = "KeyInput"
+	SUFFIX_MUTATION_RESULT       = "MutationResult"
+	SUFFIX_CONNECTION            = "Connection"
+	SUFFIX_EDGE                  = "Edge"
+	SUFFIX_BY_PK                 = "ByPk"
+	SUFFIX_MANY                  = "Many"
+)
+
+// Class operation names used by schema governance. An empty Operations list is legacy full access.
+const (
+	OP_SELECT    = "select"
+	OP_AGGREGATE = "aggregate"
+	OP_INSERT    = "insert"
+	OP_UPDATE    = "update"
+	OP_DELETE    = "delete"
+	OP_RESTORE   = "restore"
+	OP_PURGE     = "purge"
 )
 
 // 参数名称
 const (
-	ID         = "id"
-	INPUT      = "input"
-	DISTINCT   = "distinct"
-	LIMIT      = "limit"
-	OFFSET     = "offset"
-	FIRST      = "first"
-	LAST       = "last"
-	AFTER      = "after"
-	BEFORE     = "before"
-	SORT       = "sort"
-	WHERE      = "where"
-	CREATE     = "create"
-	UPSERT     = "upsert"
-	UPDATE     = "update"
-	DELETE     = "delete"
-	CONNECT    = "connect"
-	DISCONNECT = "disconnect"
-	GROUP_BY   = "groupBy"
-	HAVING     = "having"
-	SEARCH     = "search"
-	DEPTH      = "depth"
+	ID            = "id"
+	KEY           = "key"
+	INPUT         = "input"
+	DISTINCT      = "distinct"
+	LIMIT         = "limit"
+	OFFSET        = "offset"
+	FIRST         = "first"
+	LAST          = "last"
+	AFTER         = "after"
+	BEFORE        = "before"
+	SORT          = "sort"
+	WHERE         = "where"
+	CREATE        = "create"
+	UPSERT        = "upsert"
+	UPDATE        = "update"
+	DELETE        = "delete"
+	PURGE         = "purge"
+	CONNECT       = "connect"
+	DISCONNECT    = "disconnect"
+	GROUP_BY      = "groupBy"
+	HAVING        = "having"
+	SEARCH        = "search"
+	DELETION      = "deletion"
+	DEPTH         = "depth"
+	CONTEXT_ROLES = "__gql_roles"
 )
 
 const (
+	DEFAULT_PAGE_SIZE = 20
+
 	TOTAL     = "total"
 	ITEMS     = "items"
 	PAGE_INFO = "pageInfo"
@@ -89,6 +125,8 @@ const (
 const (
 	SCALAR_ID        = "ID"
 	SCALAR_INT       = "Int"
+	SCALAR_BIG_INT   = "BigInt"
+	SCALAR_DECIMAL   = "Decimal"
 	SCALAR_JSON      = "Json"
 	SCALAR_FLOAT     = "Float"
 	SCALAR_STRING    = "String"
@@ -142,7 +180,7 @@ const (
 )
 
 // DataTypes 内置的数据库到GraphQL的类型映射
-var DataTypes = map[string]string{
+var dataTypes = map[string]string{
 	// PostgreSQL 类型
 	"timestamp with time zone":    SCALAR_DATE_TIME,
 	"timestamp without time zone": SCALAR_DATE_TIME,
@@ -156,13 +194,13 @@ var DataTypes = map[string]string{
 	"int":                         SCALAR_INT,
 	"int2":                        SCALAR_INT,
 	"int4":                        SCALAR_INT,
-	"int8":                        SCALAR_INT,
-	"bigint":                      SCALAR_INT,
+	"int8":                        SCALAR_BIG_INT,
+	"bigint":                      SCALAR_BIG_INT,
 	"smallserial":                 SCALAR_INT,
 	"serial":                      SCALAR_INT,
-	"bigserial":                   SCALAR_INT,
-	"decimal":                     SCALAR_FLOAT,
-	"numeric":                     SCALAR_FLOAT,
+	"bigserial":                   SCALAR_BIG_INT,
+	"decimal":                     SCALAR_DECIMAL,
+	"numeric":                     SCALAR_DECIMAL,
 	"real":                        SCALAR_FLOAT,
 	"float":                       SCALAR_FLOAT,
 	"float4":                      SCALAR_FLOAT,
@@ -202,7 +240,7 @@ var DataTypes = map[string]string{
 
 // Operators 全部操作符；Value为最终SQL文本（编译期零转换）
 // jsonb系（contains/containedIn/hasKey）由方言渲染为函数形式，Value仅作标注
-var Operators = []*Operator{
+var operators = []*Operator{
 	{Name: IS, Value: "IS", Description: descIs},
 	{Name: EQ, Value: "=", Description: descEqual},
 	{Name: IN, Value: "IN", Description: descIn},
@@ -230,9 +268,11 @@ func pick(names ...string) []*Operator {
 }
 
 // Grouping 内置标量可用的操作符集合
-var Grouping = map[string][]*Operator{
+var grouping = map[string][]*Operator{
 	SCALAR_ID:        pick(EQ, IN, GT, GE, LT, LE),
 	SCALAR_INT:       pick(IS, EQ, IN, GT, GE, LT, LE, NE),
+	SCALAR_BIG_INT:   pick(IS, EQ, IN, GT, GE, LT, LE, NE),
+	SCALAR_DECIMAL:   pick(IS, EQ, IN, GT, GE, LT, LE, NE),
 	SCALAR_FLOAT:     pick(IS, EQ, IN, GT, GE, LT, LE, NE),
 	SCALAR_DATE_TIME: pick(IS, EQ, IN, GT, GE, LT, LE, NE),
 	SCALAR_STRING:    pick(IS, EQ, IN, GT, GE, LT, LE, NE, LIKE, I_LIKE, REGEX, I_REGEX),
@@ -241,12 +281,34 @@ var Grouping = map[string][]*Operator{
 }
 
 // 运算符按照名字索引字典
-var dictionary = lo.KeyBy(Operators, func(op *Operator) string {
+var dictionary = lo.KeyBy(operators, func(op *Operator) string {
 	return op.Name
 })
 
 // GetOperator 根据名称获取操作符信息
 func GetOperator(name string) (*Operator, bool) {
 	op, exists := dictionary[name]
-	return op, exists
+	if !exists {
+		return nil, false
+	}
+	copy := *op
+	return &copy, true
+}
+
+// DefaultDataTypes returns one mutable engine-local copy of the built-in
+// database-to-GraphQL mapping.
+func DefaultDataTypes() map[string]string { return maps.Clone(dataTypes) }
+
+func IsBuiltinScalar(name string) bool { _, ok := grouping[name]; return ok }
+
+func ScalarTypes() []string { return slices.Sorted(maps.Keys(grouping)) }
+
+func OperatorsForScalar(name string) []*Operator {
+	defaults := grouping[name]
+	result := make([]*Operator, len(defaults))
+	for index, op := range defaults {
+		copy := *op
+		result[index] = &copy
+	}
+	return result
 }

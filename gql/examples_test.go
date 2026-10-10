@@ -4,6 +4,8 @@ import (
 	stdjson "encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +49,44 @@ func TestExamplesCoverDocumentedCapabilities(t *testing.T) {
 	for _, id := range want {
 		if !covered[id] {
 			t.Errorf("README声明的能力未被示例覆盖: %s", id)
+		}
+	}
+}
+
+func TestUsageDocumentationLinks(t *testing.T) {
+	paths := []string{"README.md", "MIGRATION.md", "examples/README.md", "examples/orders/README.md"}
+	err := filepath.WalkDir("docs", func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && entry.Name() == "reviews" {
+			return filepath.SkipDir
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, ".md") {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := regexp.MustCompile(`\]\(([^)]+)\)`)
+	// 代码里的 Go 泛型调用 T[I](...) 不是 Markdown 链接。
+	code := regexp.MustCompile("(?s)```.*?```|`[^`]*`")
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, match := range links.FindAllSubmatch(code.ReplaceAll(content, nil), -1) {
+			target := string(match[1])
+			if strings.Contains(target, ":") || strings.HasPrefix(target, "#") {
+				continue
+			}
+			target, _, _ = strings.Cut(target, "#")
+			if _, err := os.Stat(filepath.Join(filepath.Dir(path), target)); err != nil {
+				t.Errorf("%s: broken local link %s: %v", path, target, err)
+			}
 		}
 	}
 }

@@ -4,12 +4,28 @@
 清单；根目录 `TestExamplesCoverDocumentedCapabilities` 保证每项能力都有实际代码、SQL、
 GraphQL 文档或测试作为证据，避免文档声称支持但示例缺失。
 
+## 从这里 review
+
+先读 [orders/README.md](orders/README.md) 的生产业务闭环，再读本目录的能力矩阵。两者均为 API 示例，没有后台 UI。
+
+| 阅读顺序 | 看什么 |
+| --- | --- |
+| [orders/schema.sql](orders/schema.sql) | 数据约束、索引、复合外键、RLS |
+| [orders/app.go](orders/app.go) | 唯一装配、权限、租户、两个业务 Resolver |
+| [orders/orders.go](orders/orders.go) | 幂等下单、锁序、事务、取消回补 |
+| [orders/http.go](orders/http.go)、[orders/main.go](orders/main.go) | 可信身份、统一 `/graphql`、启动和退出 |
+| [orders/orders_test.go](orders/orders_test.go)、[orders/http_test.go](orders/http_test.go) | 回滚、隔离、副本、远程组合、教程请求 |
+| [main.go](main.go)、[queries](queries)、[demo_test.go](demo_test.go) | 博客的更广能力及断言 |
+
+继续进入引擎时，按请求链阅读 [transport/http.go](../transport/http.go) → [tenant_gateway.go](../tenant_gateway.go) → [executor.go](../executor.go) → [compiler/pgsql](../compiler/pgsql)。自定义业务看 [resolver.go](../resolver.go) 和 [execution_context.go](../execution_context.go)，实例组合看 [gateway.go](../gateway.go)。
+
 ## 快速开始
 
 ```bash
 cd gql/examples
-docker compose up -d
-go run .
+docker compose up -d --wait
+go run .                         # 默认监听 :8080
+# 端口冲突时：DEMO_HTTP_ADDR=:18080 go run .
 ```
 
 服务地址为 `http://localhost:8080/graphql`。Demo 默认注入租户 `1`，可用
@@ -47,17 +63,25 @@ GQL '{"query":"mutation { echo(message: \"hello\") }"}'
 | variables、alias、fragment、typename | `FilterSortOffset/PostList` | `queries/*.graphql` |
 | 普通字段 Resolver | `greeting` | `main.go`, `ResolverAndRemote` |
 | Batch Resolver | `sign` | `main.go`, `ResolverAndRemote` |
-| Query/Mutation 根 Resolver | `serverInfo/echo` | `main.go`, `extensions.graphql` |
-| Resolver middleware | `User.greeting` 的 `[wrapped]` 前缀 | `main.go` |
-| ID 与自定义 Codec、Matcher、Baser | `id`、所有 `name` 字段 | `UpperCodec`, `buildExecutor` |
+| Query/Mutation 根 Resolver | `serverInfo/echo` | `main.go`, `operations/public/extensions.graphql` |
+| ID 与自定义 Codec、Matcher、Baser | `id`、所有 `name` 字段 | `UpperCodec`, `buildEngine` |
 | 自增、UUID、雪花、自定义主键 | `GeneratedPrimaryKeys` | `main.go`, `schema.sql` |
-| Remote Join | `User.reputation` | `main.go`, `ResolverAndRemote` |
+| 按键批量 Resolver | `User.reputation` | `main.go`, `ResolverAndRemote` |
 | 行级作用域 | `Post.tenant_id ↔ tenant` | `main.go`, `TenantScopedPosts` |
 | 持久化查询与缓存预热 | 所有命名 operation | `queries/*.graphql` |
-| CDC WebSocket 订阅 | `subscription { users { total } }` | `docker-compose.yml` |
-| 标准自省 | `StandardIntrospection` | `operations/extensions.graphql` |
+| CDC SSE 订阅 | `subscription { users { total } }` | `docker-compose.yml` |
+| 标准自省 | `StandardIntrospection` | `operations/dev/introspection.graphql` |
 | 安全开关 | introspection/persisted-only/max-depth | `config.production.yml` |
-| 字节响应快路径 | `Executor.Execute` | `demo_test.go` |
+| 字节响应快路径 | `Engine.Execute` | `demo_test.go` |
+| Gateway HTTP 组合 | 同一 `/graphql` 挂载组合后的服务 | `http_test.go` |
+| TenantGateway 路由 | `/graphql` 的租户 1/2 与未知租户拒绝 | `main.go`, `http_test.go` |
+| 控制面健康/Manifest | `/health`, `/manifest` 及未授权拒绝 | `main.go`, `http_test.go` |
+| Effective Schema | `/effective-schema` delegation 验证 | `main.go`, `http_test.go` |
+| Transport Descriptor | `/.well-known/gql-gateway` | `main.go`, `http_test.go` |
+| 权限拒绝 | `X-Demo-Deny` 真实错误响应 | `main.go`, `http_test.go` |
+| 多副本共享状态 | 两个 PostgreSQL provider/replay store 观察同一撤权与 replay 事实源 | `http_test.go`, `docker-compose.yml` |
+| Remote → Gateway HTTP | 独立 child 进程的 manifest/effective schema/执行/health/撤权链路 | `scripts/test-demo.sh` |
+| 性能基线与门禁 | 真实 PostgreSQL 嵌套单 SQL、8 并发、吞吐/P99 预算；另有 benchmark | `performance_test.go`, `bench_test.go` |
 
 JSON 形式的同一矩阵见 `coverage.json`，增加或删除 README 公开能力时应同步更新。
 
@@ -98,15 +122,15 @@ GQL '{"operationName":"GeneratedPrimaryKeys"}'
 `update/delete` 没有 `id` 或 `where` 会在编译期拒绝。嵌套写入使用同一条 SQL 原子提交；
 受 PostgreSQL 语句快照影响，关系变更请在后续查询确认。
 
-## Resolver、Remote 与 Codec
+## Resolver 与 Codec
 
 `main.go` 展示五种扩展方式：
 
 - `NewResolver("User", ...)`：实体字段，强类型参数。
 - `NewBatch("User", ...)`：整个结果集一次调用，避免 N+1。
 - `NewResolver("Query"/"Mutation", ...)`：复杂根查询或突变。
-- `Wrap("User.greeting", ...)`：中间件增强已有 Resolver。
-- `NewRemote(...)`：按宿主键批量请求外部数据并回填。
+- `Root[I, O].Next(args)`：在已注册原生根字段上继续执行引擎实现；不再提供 Wrap 中间件注册入口。
+- `NewLoader(...)`：按宿主键批量请求外部数据并回填。
 
 `NewIdCodec()` 同时演示 ID 入参还原与出参编码；`UpperCodec` 演示自定义标量、字段
 认领、过滤器复用和双向边界转换，数据库仍保存原始值。未选择 Resolver
@@ -132,11 +156,13 @@ curl -s http://localhost:8080/graphql -H 'Content-Type: application/json' \
 
 ## 订阅
 
-Docker 已设置 `wal_level=logical`。使用 `graphql-transport-ws`：
+Docker 已设置 `wal_level=logical`。向 `/graphql` POST 标准 GraphQL JSON，
+并以 `Accept: text/event-stream` 接收 SSE：
 
-```json
-{"type":"connection_init"}
-{"id":"1","type":"subscribe","payload":{"query":"subscription { users { total } }"}}
+```bash
+curl -N http://localhost:8080/graphql -H 'Accept: text/event-stream' \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"subscription { users { total } }"}'
 ```
 
 首次推送当前值；相关表发生变化后 CDC 唤醒并仅在结果变化时推送。共享同构订阅只执行
@@ -145,11 +171,30 @@ Docker 已设置 `wal_level=logical`。使用 `graphql-transport-ws`：
 ## 生产配置与验证
 
 `config.production.yml` 演示关闭自省、仅允许持久化操作、默认分页和深度限制；Demo 默认
-使用动态 schema，便于观察注册即声明的 Resolver/Remote 字段。
+使用动态 schema，便于观察注册即声明的 Resolver 字段。
 
 ```bash
-go test ./examples -count=1
-go test . -run TestExamplesCoverDocumentedCapabilities -count=1
-go test ./... -count=1
-go test ./examples -run '^$' -bench . -benchmem  # 数据库可用时
+docker compose down --volumes --remove-orphans
+docker compose up -d --wait
+go test -count=1                         # 必须连接真实 PostgreSQL，不可用时直接失败
+cd .. && go test . -run TestExamplesCoverDocumentedCapabilities -count=1
+cd examples && go test -run '^$' -bench . -benchmem
+./scripts/test-demo.sh                   # 重置数据库、全能力测试、真实HTTP启动访问
 ```
+
+`go test` 会执行 `queries/` 和 `operations/` 下的每一个持久化 operation，并通过真实 HTTP
+入口验证持久化查询和 SSE 首个事件。`test-demo.sh` 还会启动两个独立 test binary，连接同一
+PostgreSQL，验证 replay 一次消费、撤权传播、活动副本撤权和 revision 栅栏。数据库不可达、
+operation 未加载、GraphQL errors、HTTP 启动失败或多进程门禁失败都会使命令失败，不会以跳过
+方式报告成功。
+
+性能门禁在同一套 Demo PostgreSQL 上验证：嵌套关系查询必须保持单条 SQL；8 个并发 worker
+执行 64 个 warm 请求，错误率必须为零，吞吐至少 50 req/s，P99 不超过 500ms。详细的
+ns/op、allocs/op 和不同查询形状使用 `go test -bench=. -benchmem -run=^$` 获取。
+
+在 Apple M1 Max、本地 Docker PostgreSQL 16 的一次基线采样中：平铺查询约 4.36–4.49ms /
+请求、嵌套关系约 4.64–4.89ms / 请求、Batch Resolver 约 4.39–4.61ms / 请求；每请求约
+2.78–2.81MB、36K 次分配。该数据用于同机 base/head 回归比较，不作为生产硬件 SLO。
+
+默认 Demo 在一个 `/graphql` 入口执行查询、突变和 SSE 订阅，并统一经过租户路由。
+控制面路径用于实例组合与运维，不是额外业务 API。`NewLoader` 与 `NewBatch` 都返回 Resolver，没有独立 Remote 字段执行器。

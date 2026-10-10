@@ -44,24 +44,26 @@ func WithCodecs(codecs ...Codec) MetadataOption {
 }
 
 // idCodec 内置ID编解码器：出参编码为sqids shortId，入参还原为数字，
-// 与REST通道（fiberJSON）共用std.Id同一套配置
-type idCodec struct{}
+// 与其他 std.Id JSON 通道共用同一套配置。
+type idCodec struct {
+	tokens sync.Map // uint64 → []byte
+	count  atomic.Int64
+}
 
-// NewIdCodec 内置ID codec：需要ID加解密时经WithCodecs注册，不注册则ID保持数字；
+// NewIdCodec 内置ID codec：需要短码时经WithCodecs注册，默认ID输出十进制字符串；
 // 注册同名codec即可替换为自定义实现
-func NewIdCodec() Codec { return idCodec{} }
+func NewIdCodec() Codec { return &idCodec{} }
 
-func (idCodec) Name() string { return protocol.SCALAR_ID }
+func (*idCodec) Name() string { return protocol.SCALAR_ID }
 
 // idTokens ID→shortId令牌记忆化：sqids编码结果恒定但每次约30次分配（字母表复制/洗牌），
-// 热行跨请求重复出现，缓存后重复ID仅一次map读零分配；容量到界整体清空（雪花ID无界防泄漏）
-var idTokens sync.Map // uint64 → []byte（只读共享，patch仅拷贝不改写）
-var idTokenCount atomic.Int64
+// 热行跨请求重复出现，缓存后重复ID仅一次map读零分配；容量到界整体清空（雪花ID无界防泄漏）。
+// 缓存属于codec实例，避免不同引擎的生命周期和租户数据互相影响。
 
 const idTokenLimit = 1 << 17
 
 // Encode 数字token编码为带引号的shortId（~前缀+sqids字母数字，均无需JSON转义）
-func (idCodec) Encode(token []byte) []byte {
+func (my *idCodec) Encode(token []byte) []byte {
 	if len(token) == 0 {
 		return nil
 	}
@@ -70,23 +72,23 @@ func (idCodec) Encode(token []byte) []byte {
 	if err != nil || id == 0 {
 		return nil
 	}
-	if v, hit := idTokens.Load(id); hit {
+	if v, hit := my.tokens.Load(id); hit {
 		return v.([]byte)
 	}
 	short := std.Id(id).Encode()
 	out := make([]byte, 0, len(short)+2)
 	out = append(append(append(out, '"'), short...), '"')
-	if idTokenCount.Add(1) > idTokenLimit {
-		idTokens.Clear()
-		idTokenCount.Store(1)
+	if my.count.Add(1) > idTokenLimit {
+		my.tokens.Clear()
+		my.count.Store(1)
 	}
-	idTokens.Store(id, out)
+	my.tokens.Store(id, out)
 	return out
 }
 
 // Decode shortId或十进制字符串还原为数字（int64：驱动对数组元素按有符号整型编码，
 // 雪花ID恒小于2^63），数字入参原样兼容
-func (idCodec) Decode(value any) any {
+func (*idCodec) Decode(value any) any {
 	if s, ok := value.(string); ok {
 		var id std.Id
 		if err := id.Decode(s); err == nil && id != 0 {
@@ -98,6 +100,6 @@ func (idCodec) Decode(value any) any {
 
 // Match 认领审计列等无外键约束的ID语义列（主外键已由结构推导映射ID，无需认领）；
 // 以整型原生类型收窄，避免误伤同名后缀的非ID列
-func (idCodec) Match(_ *protocol.Class, field *protocol.Field) bool {
-	return field.Type == protocol.SCALAR_INT && strings.HasSuffix(field.Column, "_by")
+func (*idCodec) Match(_ *protocol.Class, field *protocol.Field) bool {
+	return (field.Type == protocol.SCALAR_INT || field.Type == protocol.SCALAR_BIG_INT) && strings.HasSuffix(field.Column, "_by")
 }

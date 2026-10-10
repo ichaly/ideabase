@@ -2,33 +2,23 @@ package gql
 
 import (
 	"context"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// 注册表(map)无锁,Register/rebuild与serving并发即数据竞争:
-// 首次执行后冻结,运行期注册须明确报错而非静默竞争
-func TestRegisterFrozenAfterServing(t *testing.T) {
-	executor, _, cleanup := newTestExecutor(t, nil)
+func TestResponseLimitStopsResolverReplyAtExecutionBoundary(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
 	defer cleanup()
-	ctx := context.Background()
-
-	require.NoError(t, executor.Register(NewResolver("User", "early", "启动期注册",
-		func(_ context.Context, _ Source, _ struct{}) (string, error) { return "ok", nil })))
-
-	reply := executor.run(ctx, `query { users { total } }`, nil, "")
-	require.Empty(t, reply.Errors)
-
-	err := executor.Register(NewResolver("User", "late", "运行期注册",
-		func(_ context.Context, _ Source, _ struct{}) (string, error) { return "", nil }))
-	require.Error(t, err, "首次执行后注册必须报错")
-	require.Contains(t, err.Error(), "冻结")
+	require.NoError(t, executor.register(NewResolver[Root[struct{}, string], struct{}, string]("Query", "largeReply", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
+		return strings.Repeat("x", 1024), nil
+	})))
+	body, err := executor.Execute(WithResponseLimit(context.Background(), 128), `{ largeReply }`, nil)
+	require.Nil(t, body)
+	require.ErrorContains(t, err, "response size limit")
 }
 
 // schema.introspection=false 时自省查询必须拒绝(生产对外暴露的安全开关)
@@ -51,16 +41,15 @@ func TestPersistedOnlyHTTP(t *testing.T) {
 	defer cleanup()
 	require.NoError(t, executor.loadDocument(`query UserTotal { users { total } }`))
 
-	app := fiber.New()
-	executor.Bind(app.Group(executor.Path()))
 	post := func(body string) string {
-		req := httptest.NewRequest("POST", executor.Path(), strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := app.Test(req)
+		var req struct {
+			Query         string `json:"query"`
+			OperationName string `json:"operationName"`
+		}
+		require.NoError(t, jsonNumeric.Unmarshal([]byte(body), &req))
+		out, err := executor.ExecuteOperation(context.Background(), req.Query, nil, req.OperationName)
 		require.NoError(t, err)
-		buf := make([]byte, 4096)
-		n, _ := resp.Body.Read(buf)
-		return string(buf[:n])
+		return string(out)
 	}
 
 	// 原始查询文本拒绝
@@ -70,4 +59,84 @@ func TestPersistedOnlyHTTP(t *testing.T) {
 	// 持久化操作名放行
 	persisted := post(`{"operationName":"UserTotal"}`)
 	assert.Contains(t, persisted, `"total"`, "持久化操作应放行: %s", persisted)
+}
+
+func TestPersistedOnlyEffectiveArtifactPublishesExecutableOperations(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	require.NoError(t, executor.loadDocument(`query UserByName($name: String!, $limit: Int = 10) {
+		users(where: { name: { eq: $name } }, limit: $limit) { items { id } total }
+	}`))
+
+	artifact, err := executor.EffectiveSchema(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, ExecutionModePersistedOnly, artifact.ExecutionMode)
+	require.Len(t, artifact.PersistedOperations, 1)
+	operation := artifact.PersistedOperations[0]
+	require.Equal(t, "UserByName", operation.Name)
+	require.Equal(t, "query", operation.Type)
+	require.NotEmpty(t, operation.Hash)
+	require.Equal(t, []PersistedVariable{
+		{Name: "name", Type: "String!"},
+		{Name: "limit", Type: "Int", Default: "10"},
+	}, operation.Variables)
+}
+
+func TestPersistedCatalogExcludesOperationsHiddenByEffectivePolicy(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	require.NoError(t, executor.loadDocument(`query UserTotal { users { total } }`))
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "User" {
+			return PolicyDecision{Allow: false}, nil
+		}
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant", Subject: "subject"})
+	require.NoError(t, err)
+	artifact, err := executor.EffectiveSchema(WithIdentity(context.Background(), identity))
+	require.NoError(t, err)
+	require.Empty(t, artifact.PersistedOperations)
+}
+
+func TestExecuteOperationIsThePersistedOperationBoundary(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	require.NoError(t, executor.loadDocument(`query UserTotal { users { total } }`))
+	body, err := executor.ExecuteOperation(context.Background(), "", nil, "UserTotal")
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"total"`)
+	body, err = executor.ExecuteOperation(context.Background(), `query { users { total } }`, nil, "")
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "持久化")
+}
+
+func TestPersistedOnlyRejectsDirectExecute(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	body, err := executor.Execute(context.Background(), `query { users { total } }`, nil)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "持久化")
+}
+
+func TestPersistedOnlyRejectsDirectSubscriptionDocument(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	_, err := executor.Subscribe(context.Background(), `subscription { users { total } }`, nil, "")
+	require.ErrorContains(t, err, "持久化")
+}
+
+func TestPersistedOnlyAcceptsGatewayAdmittedDocument(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, func(k *std.Konfig) { k.Set("schema.persisted-only", true) })
+	defer cleanup()
+	require.NoError(t, executor.loadDocument(`query GatewayAdmitted { users { total } }`))
+	artifact, err := executor.EffectiveSchema(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, schemaArtifactExecutionPin(artifact), artifact.ExecutionPin, "%#v", artifact)
+	require.NoError(t, ValidateSchemaArtifact(artifact))
+	gateway, err := NewGateway("root", Namespace{Name: "db", EndpointID: "db", Endpoint: executor})
+	require.NoError(t, err)
+	body, err := gateway.Execute(context.Background(), `{ db { users { total } } }`, nil)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"total":0`)
 }

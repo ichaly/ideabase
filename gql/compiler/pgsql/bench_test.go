@@ -18,7 +18,7 @@ func init() { zerolog.SetGlobalLevel(zerolog.Disabled) } // 基准跑期静音sc
 // CPU 与分配——每个计划缓存未命中的请求都走此路径，是引擎核心热路径。
 // 运行：go test -bench=BenchmarkCompile -benchmem ./compiler/pgsql/
 
-func benchCompiler(b *testing.B) (*gql.Compiler, *ast.Schema) {
+func benchCompiler(b testing.TB) (*gql.Compiler, *ast.Schema) {
 	k, err := std.NewKonfig()
 	if err != nil {
 		b.Fatal(err)
@@ -55,6 +55,13 @@ func benchCompiler(b *testing.B) (*gql.Compiler, *ast.Schema) {
 				"name": {Type: "String", Column: "name"},
 			},
 		},
+		"PostTag": {
+			Table: "sys_post_tag", PrimaryKeys: []string{"postId", "tagId"},
+			Fields: map[string]*internal.FieldConfig{
+				"postId": {Type: "ID", Column: "post_id", IsPrimary: true},
+				"tagId":  {Type: "ID", Column: "tag_id", IsPrimary: true},
+			},
+		},
 	})
 
 	meta, err := gql.NewMetadata(k, nil)
@@ -65,7 +72,7 @@ func benchCompiler(b *testing.B) (*gql.Compiler, *ast.Schema) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	schemaStr, err := gql.NewRenderer(meta).Generate()
+	schemaStr, err := gql.NewRenderer(meta).Render()
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -76,12 +83,34 @@ func benchCompiler(b *testing.B) (*gql.Compiler, *ast.Schema) {
 	return compile, schema
 }
 
-func benchOperation(b *testing.B, schema *ast.Schema, query string) *ast.OperationDefinition {
+func benchOperation(b testing.TB, schema *ast.Schema, query string) *ast.OperationDefinition {
 	doc, errs := gqlparser.LoadQuery(schema, query)
 	if len(errs) > 0 {
 		b.Fatal(errs)
 	}
 	return doc.Operations[0]
+}
+
+func TestGACompilerAllocationBudgets(t *testing.T) {
+	compile, schema := benchCompiler(t)
+	for name, budget := range map[string]struct {
+		query  string
+		allocs float64
+	}{
+		"simple": {`{ posts(limit: 10) { items { id title } total } }`, 22},
+		"nested": {`{ posts(limit: 10) { items { id title user { name } tags { name } } total } }`, 51},
+	} {
+		t.Run(name, func(t *testing.T) {
+			op := benchOperation(t, schema, budget.query)
+			if got := testing.AllocsPerRun(100, func() {
+				if _, _, err := compile.Build(op, nil); err != nil {
+					panic(err)
+				}
+			}); got > budget.allocs {
+				t.Fatalf("compiler allocations %.0f exceed budget %.0f", got, budget.allocs)
+			}
+		})
+	}
 }
 
 // BenchmarkCompileSimple 单表查询编译（无关系）
@@ -107,5 +136,26 @@ func BenchmarkCompileNested(b *testing.B) {
 		if _, _, err := compile.Build(op, nil); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// BenchmarkCompileMutation covers the shared relation writer and sorted variable inputs.
+func BenchmarkCompileMutation(b *testing.B) {
+	for name, query := range map[string]string{
+		"relation":  `mutation { updateUser(id: "1", input: {posts: {connect: ["2"], disconnect: ["3"]}}) { id } }`,
+		"variables": `mutation($input: UserUpdateInput!) { updateUser(id: "1", input: $input) { id name } }`,
+	} {
+		b.Run(name, func(b *testing.B) {
+			compile, schema := benchCompiler(b)
+			op := benchOperation(b, schema, query)
+			variables := map[string]any{"input": map[string]any{"name": "A"}}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, _, err := compile.Build(op, variables); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

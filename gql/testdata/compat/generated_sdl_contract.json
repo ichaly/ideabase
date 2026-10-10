@@ -1,0 +1,4 @@
+{
+  "sha256": "1df7707cbfc38c8012588423fd7abde092e617f528f7872108741d3055b85c50",
+  "classification": "breaking: built-in BigInt/Decimal scalars and exact aggregates; numeric ID responses are strings"
+}

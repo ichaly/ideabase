@@ -3,6 +3,7 @@ package gql
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/compiler"
@@ -10,8 +11,13 @@ import (
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
+
+type testObserverFunc func(context.Context, Observation)
+
+func (observe testObserverFunc) Observe(ctx context.Context, observation Observation) {
+	observe(ctx, observation)
+}
 
 // TestHostsNestedArrays 宿主拍平：连续两层数组段（一对多里嵌一对多）须收齐全部叶子宿主。
 // 回归——单元素cur首段侥幸安全，多元素cur上原地复用底层数组会覆写未读元素
@@ -80,11 +86,11 @@ func TestResolver(t *testing.T) {
 	compile, err := NewCompiler(meta, []compiler.Dialect{pgsql.NewDialect()})
 	require.NoError(t, err, "创建编译器失败")
 
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err, "创建执行器失败")
 
 	var calls int
-	require.NoError(t, executor.Register(greetResolver("User"), labelResolver(&calls)))
+	require.NoError(t, executor.register(greetResolver("User"), labelResolver(&calls)))
 
 	ctx := context.Background()
 
@@ -127,7 +133,8 @@ func TestResolver(t *testing.T) {
 	delete(executor.resolvers, "User.greeting")
 	reply = executor.run(ctx, `query { users { items { id greeting } } }`, nil, "")
 	require.NotEmpty(t, reply.Errors, "未注册resolver应报错")
-	require.Contains(t, reply.Errors[0].Message, "resolver未注册")
+	require.Equal(t, "internal execution error", reply.Errors[0].Message)
+	require.Equal(t, "EXECUTION_ERROR", reply.Errors[0].Extensions["code"])
 }
 
 // TestResolverArgs resolver字段参数（注册即声明新增能力）：
@@ -135,7 +142,7 @@ func TestResolver(t *testing.T) {
 func TestResolverArgs(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
-	require.NoError(t, executor.Register(NewResolver("User", "hello", "问候",
+	require.NoError(t, executor.register(NewResolver("User", "hello", "问候",
 		func(_ context.Context, source Source, args struct {
 			Lang string `json:"lang" validate:"omitempty,oneof=zh en"`
 		}) (string, error) {
@@ -179,7 +186,7 @@ func TestResolverResultSuffixClass(t *testing.T) {
 		})
 	})
 	defer cleanup()
-	require.NoError(t, executor.Register(greetResolver("ExamResult")))
+	require.NoError(t, executor.register(greetResolver("ExamResult")))
 	ctx := context.Background()
 
 	reply := executor.run(ctx, `mutation { createUser(input: { name: "E", email: "e@x.com" }) { id } }`, nil, "")
@@ -212,10 +219,10 @@ func TestFieldResolverRoots(t *testing.T) {
 		Message string `json:"message" validate:"required"`
 	}
 	ping := NewResolver("Query", "ping", "探活",
-		func(_ context.Context, _ Root, args pingArgs) (string, error) {
+		func(_ context.Context, _ Root[pingArgs, string], args pingArgs) (string, error) {
 			return "pong:" + args.Message, nil
 		})
-	require.NoError(t, executor.Register(ping))
+	require.NoError(t, executor.register(ping))
 
 	reply := executor.run(context.Background(), `query { ping(message: "hi") users { total } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
@@ -233,7 +240,7 @@ func TestFieldResolverEntity(t *testing.T) {
 		func(_ context.Context, source Source, _ struct{}) (string, error) {
 			return "@" + source["name"].(string), nil
 		})
-	require.NoError(t, executor.Register(resolver))
+	require.NoError(t, executor.register(resolver))
 
 	reply := executor.run(context.Background(), `mutation {
 		createUser(input: { name: "Alice", email: "alice@x.com" }) { name displayName }
@@ -252,12 +259,11 @@ func TestFieldResolverReplaceGenerated(t *testing.T) {
 		Input map[string]any `json:"input"`
 	}
 	override := NewResolver("Mutation", "createUser", "",
-		func(_ context.Context, _ Root, input args) (map[string]any, error) {
+		func(_ context.Context, _ Root[args, map[string]any], input args) (map[string]any, error) {
 			return map[string]any{"id": int64(99), "name": "custom:" + input.Input["name"].(string)}, nil
-		}, Existing())
+		})
 
-	require.Error(t, executor.Register(override), "已有schema字段必须显式Replace")
-	require.NoError(t, executor.Replace(override))
+	require.NoError(t, executor.register(override))
 
 	reply := executor.run(context.Background(), `mutation {
 		createUser(input: { name: "Alice", email: "alice@x.com" }) { id name }
@@ -266,34 +272,11 @@ func TestFieldResolverReplaceGenerated(t *testing.T) {
 	require.Equal(t, "custom:Alice", reply.Data["createUser"].(map[string]any)["name"])
 }
 
-func TestFieldResolverWrap(t *testing.T) {
-	executor, _, cleanup := newTestExecutor(t, nil)
-	defer cleanup()
-
-	type args struct {
-		Message string `json:"message"`
-	}
-	base := NewResolver("Query", "echo", "",
-		func(_ context.Context, _ Root, input args) (string, error) {
-			return input.Message, nil
-		})
-	require.NoError(t, executor.Register(base))
-	require.NoError(t, executor.Wrap("Query.echo",
-		NewResolverMiddleware(func(ctx context.Context, source Root, input args, next NextResolver[Root, args, string]) (string, error) {
-			input.Message = "wrapped:" + input.Message
-			return next(ctx, source, input)
-		})))
-
-	reply := executor.run(context.Background(), `{ echo(message: "ok") }`, nil, "")
-	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.Equal(t, "wrapped:ok", reply.Data["echo"])
-}
-
 func pingResolver() Resolver {
 	type args struct {
 		Msg string `json:"msg" validate:"required"`
 	}
-	return NewResolver("Query", "ping", "", func(_ context.Context, _ Root, input args) (string, error) {
+	return NewResolver("Query", "ping", "", func(_ context.Context, _ Root[args, string], input args) (string, error) {
 		return "pong:" + input.Msg, nil
 	})
 }
@@ -305,19 +288,21 @@ type signUpReq struct {
 }
 
 // newSignUpResolver 编排型根Resolver：建号返回id，引擎按选择集回查补全；
-// 返回类型int64本推导为Int，Result选项覆盖为实体User触发回查
-func newSignUpResolver(db *gorm.DB) Resolver {
-	return NewResolver("Mutation", "signUp", "建号并回查主档", func(ctx context.Context, _ Root, req signUpReq) (int64, error) {
+// 返回类型int64本推导为BigInt，Result选项覆盖为实体User触发回查
+func newSignUpResolver(db *std.Connection) Resolver {
+	return NewResolver("Mutation", "signUp", "建号并回查主档", func(ctx context.Context, _ Root[signUpReq, int64], req signUpReq) (int64, error) {
 		var id int64
-		err := db.WithContext(ctx).
-			Raw("INSERT INTO users(name, email) VALUES(?, ?) RETURNING id", req.Name, req.Email).
-			Scan(&id).Error
+		query := db.Pool().QueryRowContext
+		if execution, ok := ExecutionFrom(ctx); ok && execution.Transaction() != nil {
+			query = execution.Transaction().QueryRowContext
+		}
+		err := query(ctx, "INSERT INTO users(name, email) VALUES($1, $2) RETURNING id", req.Name, req.Email).Scan(&id)
 		return id, err
 	}, Result("User"))
 }
 
 // setupRootResolverExecutor 与setupTestExecutor同构，但透出db供Resolver闭包使用
-func setupRootResolverExecutor(t *testing.T) (*Executor, *gorm.DB, func()) {
+func setupRootResolverExecutor(t *testing.T) (*Engine, *std.Connection, func()) {
 	return newTestExecutor(t, nil)
 }
 
@@ -327,7 +312,7 @@ func TestRootResolverRoundTrip(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	require.NoError(t, executor.Register(pingResolver(), newSignUpResolver(db)))
+	require.NoError(t, executor.register(pingResolver(), newSignUpResolver(db)))
 
 	// 1. 内省可见：自定义字段与表CRUD一视同仁
 	reply := executor.run(ctx, `{ __type(name: "Mutation") { fields { name } } }`, nil, "")
@@ -367,12 +352,44 @@ func TestRootResolverRoundTrip(t *testing.T) {
 	require.NotNil(t, reply.Data["users"])
 }
 
+func TestMixedQueryRootsBatchDefaultSQLOnce(t *testing.T) {
+	executor, _, cleanup := setupRootResolverExecutor(t)
+	defer cleanup()
+	var queries atomic.Int32
+	executor.observer = testObserverFunc(func(_ context.Context, observation Observation) {
+		if observation.Phase == PhaseDatabase {
+			queries.Add(1)
+		}
+	})
+	require.NoError(t, executor.register(pingResolver()))
+	reply := executor.run(context.Background(), `query { ping(msg: "x") users { total } posts { total } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, "pong:x", reply.Data["ping"])
+	require.NotNil(t, reply.Data["users"])
+	require.NotNil(t, reply.Data["posts"])
+	require.EqualValues(t, 1, queries.Load(), "all default query roots should share one SQL fetch")
+}
+
+func TestMixedQueryRootsPreserveAliasesAndResolverErrors(t *testing.T) {
+	executor, _, cleanup := setupRootResolverExecutor(t)
+	defer cleanup()
+	require.NoError(t, executor.register(pingResolver(), NewResolver[Root[struct{}, string], struct{}, string]("Query", "broken", "", func(context.Context, Root[struct{}, string], struct{}) (string, error) {
+		return "", fmt.Errorf("resolver exploded")
+	})))
+	reply := executor.run(context.Background(), `query { p: ping(msg: "ok") broken users { total } }`, nil, "")
+	require.Equal(t, "pong:ok", reply.Data["p"])
+	require.Nil(t, reply.Data["broken"])
+	require.NotNil(t, reply.Data["users"])
+	require.NotEmpty(t, reply.Errors)
+	require.Equal(t, "broken", fmt.Sprint(reply.Errors[0].Path))
+}
+
 // TestRootResolverTypename __typename与Resolver共存（Apollo客户端默认注入）。
 func TestRootResolverTypename(t *testing.T) {
 	executor, db, cleanup := setupRootResolverExecutor(t)
 	defer cleanup()
 	ctx := context.Background()
-	require.NoError(t, executor.Register(pingResolver(), newSignUpResolver(db)))
+	require.NoError(t, executor.register(pingResolver(), newSignUpResolver(db)))
 
 	// 查询操作回填"Query"
 	reply := executor.run(ctx, `query { ping(msg: "hi") __typename }`, nil, "")
@@ -388,6 +405,35 @@ func TestRootResolverTypename(t *testing.T) {
 	require.Equal(t, "Mutation", reply.Data["t"])
 }
 
+func TestRootResolverCompletesInlineFragments(t *testing.T) {
+	executor, _, cleanup := setupRootResolverExecutor(t)
+	defer cleanup()
+	require.NoError(t, executor.register(NewResolver[Root[struct{}, map[string]any], struct{}, map[string]any](
+		"Query", "node", "", func(context.Context, Root[struct{}, map[string]any], struct{}) (map[string]any, error) {
+			return map[string]any{"__typename": "TestActor", "id": "7", "name": "Ada"}, nil
+		}, Result("Node"), Extra(`
+			interface Node { id: ID! }
+			type TestActor implements Node { id: ID! name: String! }
+		`),
+	), NewResolver[Root[struct{}, map[string]any], struct{}, map[string]any](
+		"Query", "actor", "", func(context.Context, Root[struct{}, map[string]any], struct{}) (map[string]any, error) {
+			return map[string]any{"id": "8", "name": "Grace"}, nil
+		}, Result("TestActor"),
+	)))
+
+	reply := executor.run(context.Background(), `{
+		node { __typename id ... on TestActor { name } }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, map[string]any{"__typename": "TestActor", "id": "7", "name": "Ada"}, reply.Data["node"])
+
+	reply = executor.run(context.Background(), `{
+		actor { id ... on TestActor { name } }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, map[string]any{"id": "8", "name": "Grace"}, reply.Data["actor"])
+}
+
 // TestRootResolverVariablePassthrough 回查合成查询透传原变量声明：
 // 回归——对象/枚举变量经json内联会产生带引号键、带引号枚举的非法GraphQL字面量，
 // 导致enrich合成回查解析失败
@@ -395,7 +441,7 @@ func TestRootResolverVariablePassthrough(t *testing.T) {
 	executor, db, cleanup := setupRootResolverExecutor(t)
 	defer cleanup()
 	ctx := context.Background()
-	require.NoError(t, executor.Register(newSignUpResolver(db)))
+	require.NoError(t, executor.register(newSignUpResolver(db)))
 
 	// 准备：建号并为其创建两篇文章（回查嵌套选择集有数据可过滤/排序）
 	reply := executor.run(ctx, `mutation ($n: String!, $e: String!) {
@@ -425,4 +471,55 @@ func TestRootResolverVariablePassthrough(t *testing.T) {
 		require.Equal(t, "Bob", user["name"])
 		require.NotNil(t, user["posts"], "回查嵌套选择集应生效")
 	}
+}
+
+type Membership struct {
+	TenantId string `json:"tenantId"`
+	Code     string `json:"code"`
+}
+
+type LookupRecord struct {
+	UserId int64 `json:"userId"`
+}
+
+func TestRootResolverEnrichesCompositeKeyEntity(t *testing.T) {
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+	testExec(t, db, `CREATE TABLE memberships (
+		tenant_id text NOT NULL,
+		code text NOT NULL,
+		value text NOT NULL,
+		PRIMARY KEY (tenant_id, code)
+	)`)
+	testExec(t, db, `CREATE TABLE lookup_records (
+		user_id bigint PRIMARY KEY,
+		value text NOT NULL
+	)`)
+	testExec(t, db, `INSERT INTO memberships VALUES ('acme', 'admin', 'resolved')`)
+	testExec(t, db, `INSERT INTO lookup_records VALUES (1, 'single-resolved')`)
+
+	k, err := std.NewKonfig()
+	require.NoError(t, err)
+	k.Set("mode", "dev")
+	k.Set("app.root", t.TempDir())
+	k.Set("schema.schema", "public")
+	meta, err := NewMetadata(k, db)
+	require.NoError(t, err)
+	compile, err := NewCompiler(meta, nil)
+	require.NoError(t, err)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
+	require.NoError(t, err)
+	defer executor.Close()
+	require.NoError(t, executor.register(NewResolver("Query", "membershipLookup", "", func(context.Context, Root[struct{}, Membership], struct{}) (Membership, error) {
+		return Membership{TenantId: "acme", Code: "admin"}, nil
+	}, Result("Membership")), NewResolver("Query", "recordLookup", "", func(context.Context, Root[struct{}, LookupRecord], struct{}) (LookupRecord, error) {
+		return LookupRecord{UserId: 1}, nil
+	}, Result("LookupRecord"))))
+
+	reply := executor.run(context.Background(), `{ membershipLookup { tenantId code value } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, "resolved", reply.Data["membershipLookup"].(map[string]interface{})["value"])
+	reply = executor.run(context.Background(), `{ recordLookup { userId value } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, "single-resolved", reply.Data["recordLookup"].(map[string]interface{})["value"])
 }

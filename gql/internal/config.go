@@ -1,6 +1,11 @@
 package internal
 
-import "github.com/ichaly/ideabase/std"
+import (
+	"time"
+
+	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/std"
+)
 
 // Config 表示GraphQL配置
 type Config struct {
@@ -33,17 +38,21 @@ type SubscriptionConfig struct {
 type SchemaConfig struct {
 	// 数据库schema
 	Schema string `mapstructure:"schema"`
+	// CatalogTimeout bounds startup metadata queries; zero uses the safe default.
+	CatalogTimeout time.Duration `mapstructure:"catalog-timeout"`
 
 	// GraphQL schema文件路径（配置后优先从文件加载，生产环境推荐）
 	File string `mapstructure:"file"`
 
-	// 默认分页限制
+	// 默认分页限制；非正数使用协议安全默认值
 	DefaultLimit int `mapstructure:"default-limit"`
 
 	// 查询选择集最大嵌套深度（0=不限制）
-	MaxDepth int `mapstructure:"max-depth"`
+	MaxDepth  int    `mapstructure:"max-depth"`
+	MaxTokens int    `mapstructure:"max-tokens"`
+	MaxCost   uint64 `mapstructure:"max-cost"`
 
-	// 是否允许自省查询（生产对外暴露时可关闭）
+	// 是否允许完整 Schema 自省；默认关闭，与运行模式无关，不改变执行权限。
 	Introspection bool `mapstructure:"introspection"`
 
 	// HTTP边界只接受持久化操作（operationName查已注册文档），拒绝原始查询文本
@@ -102,7 +111,16 @@ type ClassConfig struct {
 	Search []string `mapstructure:"search"`
 
 	// 行级作用域：编译期强制注入的过滤（租户/属主隔离），值由 gql.WithScope 在请求上下文注入
-	Scope []ScopeConfig `mapstructure:"scope"`
+	Scope []protocol.ScopeRule `mapstructure:"scope"`
+	// Global 显式声明shared-table模式下该实体跨租户共享；默认false必须有tenant scope。
+	Global bool `mapstructure:"global"`
+
+	// 允许的GraphQL操作；为空表示保持现有全开放语义
+	Operations []string             `mapstructure:"operations"`
+	SoftDelete *protocol.SoftDelete `mapstructure:"soft_delete"`
+	Where      []protocol.Predicate `mapstructure:"where"`
+	// 配置permissions后，未命中角色默认拒绝；未配置permissions时保持legacy全允许。
+	Permissions map[string]*protocol.Permission `mapstructure:"permissions"`
 
 	// 字段过滤配置
 	ExcludeFields []string `mapstructure:"exclude_fields"` // 排除这些字段
@@ -110,12 +128,6 @@ type ClassConfig struct {
 
 	// override: true 表示别名覆盖主类指针，false（默认）为附加模式
 	Override bool `mapstructure:"override"`
-}
-
-// ScopeConfig 行级作用域规则配置
-type ScopeConfig struct {
-	Column  string `mapstructure:"column"`  // 数据库列名（如 tenant_id / user_id）
-	Context string `mapstructure:"context"` // 上下文键名（如 tenant / userId）
 }
 
 // FieldConfig 表示字段配置
@@ -130,9 +142,12 @@ type FieldConfig struct {
 	Description string `mapstructure:"description"`
 
 	// 字段特性
-	IsPrimary  bool `mapstructure:"primary"`
-	IsNullable bool `mapstructure:"nullable"`
-	IsUnique   bool `mapstructure:"unique"`
+	IsPrimary    bool                  `mapstructure:"primary"`
+	IsNullable   bool                  `mapstructure:"nullable"`
+	IsUnique     bool                  `mapstructure:"unique"`
+	ReadOnly     bool                  `mapstructure:"read_only"`
+	InsertPreset *protocol.ValueSource `mapstructure:"insert_preset"`
+	UpdatePreset *protocol.ValueSource `mapstructure:"update_preset"`
 
 	// 默认值
 	DefaultValue string `mapstructure:"default_value"`

@@ -5,7 +5,9 @@
 package pgsql
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -18,10 +20,11 @@ import (
 type shape int
 
 const (
-	shapeResult shape = iota // 查询根字段：Result契约 items/total/pageInfo
-	shapeSingle              // 单对象：多对一关系、单条变更读回
-	shapeList                // 纯数组：列表关系、批量/upsert读回
-	shapeStats               // 统计聚合
+	shapeResult     shape = iota // 查询根字段：Result契约 items/total/pageInfo
+	shapeConnection              // 查询根字段：Relay Connection契约 edges/pageInfo/totalCount
+	shapeSingle                  // 单对象：多对一关系、单条变更读回
+	shapeList                    // 纯数组：列表关系、批量/upsert读回
+	shapeStats                   // 统计聚合
 )
 
 // unit 一个LATERAL JOIN子查询单元：查询根字段、关系字段或变更读回
@@ -37,6 +40,7 @@ type unit struct {
 	readback bool               // 变更读回顶层单元（读CTE非基表），跳过行级作用域注入
 	ordered  bool               // 显式排序的非游标列表：__rn行号在聚合内固化顺序
 	sorts    []*ast.ChildValue  // 解析后的sort项缓存（sortEntries惰性填充）
+	groups   []string           // 统计分组列（含变量解析结果，避免重复解析）
 }
 
 // sortEntries 惰性解析并缓存sort项，单元内多处消费只解析一次
@@ -47,10 +51,20 @@ func (u *unit) sortEntries() []*ast.ChildValue {
 	return u.sorts
 }
 
+func (u *unit) stableKeys() []string {
+	if u.args.ForName(protocol.LIMIT) == nil && u.args.ForName(protocol.OFFSET) == nil {
+		return nil
+	}
+	if len(u.class.PrimaryKeys) > 0 {
+		return u.class.PrimaryKeys
+	}
+	return u.class.PrimaryKeyFields()
+}
+
 // orderedList 是否携带显式排序语义：sort参数或search相关度（JSONB_AGG不保证
 // 维持输入序，并行/归并计划下会丢失，须经__rn在聚合内ORDER BY固化）
 func (u *unit) orderedList() bool {
-	return len(u.sortEntries()) > 0 || u.args.ForName(protocol.SEARCH) != nil
+	return len(u.sortEntries()) > 0 || len(u.stableKeys()) > 0 || u.args.ForName(protocol.SEARCH) != nil
 }
 
 // BuildQuery 构建查询语句：根JSON对象 + 每个根字段一个LATERAL单元
@@ -70,13 +84,20 @@ func (my *Dialect) BuildQuery(ctx *compiler.Context, set ast.SelectionSet) error
 			ctx.Write(`'`, field.Alias, `', 'Query'`)
 			continue
 		}
+		if field.Name == "_empty" {
+			ctx.Write(`'`, field.Alias, `', FALSE`)
+			continue
+		}
 
 		typeName := field.Definition.Type.Name()
 		kind := shapeResult
+		if strings.HasSuffix(typeName, protocol.SUFFIX_CONNECTION) {
+			kind = shapeConnection
+		}
 		if strings.HasSuffix(typeName, protocol.SUFFIX_STATS) {
 			kind = shapeStats
 		}
-		className := strings.TrimSuffix(strings.TrimSuffix(typeName, protocol.SUFFIX_RESULT), protocol.SUFFIX_STATS)
+		className := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(typeName, protocol.SUFFIX_RESULT), protocol.SUFFIX_STATS), protocol.SUFFIX_CONNECTION)
 		class, ok := ctx.GetClass(className)
 		if !ok {
 			return fmt.Errorf("不支持的根查询字段: %s", field.Name)
@@ -111,9 +132,16 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 		ctx.Write(`) AS `).Quote(`__sr_`, u.index)
 	case shapeResult:
 		err = my.buildResultWrap(ctx, u)
+	case shapeConnection:
+		err = my.buildConnectionWrap(ctx, u)
 	default: // shapeList / shapeStats：纯数组包装
 		core := func() error { return my.buildCore(ctx, u, compiler.FieldsOf(u.field.SelectionSet), false) }
 		if u.shape == shapeStats {
+			u.groups, err = fieldNames(ctx, scope{class: u.class, qualifier: u.class.Table}, u.args, protocol.GROUP_BY)
+			if err != nil {
+				return err
+			}
+			u.ordered = len(u.groups) > 0 && (u.args.ForName(protocol.LIMIT) != nil || u.args.ForName(protocol.OFFSET) != nil || ctx.DefaultLimit() > 0)
 			core = func() error { return my.buildStatsCore(ctx, u) }
 		} else {
 			u.ordered = u.orderedList()
@@ -135,16 +163,146 @@ func (my *Dialect) buildUnit(ctx *compiler.Context, u *unit) error {
 	return nil
 }
 
+// buildConnectionWrap 将同一条 keyset 查询包装为 Relay 风格的 edges 连接。
+// node 仍由 buildCore 完成投影和关系 LATERAL JOIN，只有请求 totalCount 时才注入窗口计数。
+func (my *Dialect) buildConnectionWrap(ctx *compiler.Context, u *unit) error {
+	var edge, pageInfo, totalField *ast.Field
+	var node []*ast.Field
+	var edgeFields, typeNames []*ast.Field
+	for _, f := range compiler.FieldsOf(u.field.SelectionSet) {
+		switch f.Name {
+		case "edges":
+			edge = f
+			edgeFields = compiler.FieldsOf(f.SelectionSet)
+			for _, e := range compiler.FieldsOf(f.SelectionSet) {
+				switch e.Name {
+				case "node":
+					node = compiler.FieldsOf(e.SelectionSet)
+				case "cursor":
+				}
+			}
+		case protocol.PAGE_INFO:
+			pageInfo = f
+		case "totalCount":
+			totalField = f
+		case typename:
+			typeNames = append(typeNames, f)
+		}
+	}
+	page, err := newPager(ctx, scope{class: u.class}, u.args)
+	if err != nil {
+		return err
+	}
+	if page == nil {
+		limit := ctx.DefaultLimit()
+		if limit <= 0 {
+			limit = protocol.DEFAULT_PAGE_SIZE
+		}
+		u.args = append(u.args, &ast.Argument{Name: protocol.FIRST, Value: &ast.Value{Kind: ast.IntValue, Raw: strconv.Itoa(limit)}})
+		page, err = newPager(ctx, scope{class: u.class}, u.args)
+		if err != nil {
+			return err
+		}
+	}
+	u.page = page
+	ctx.SetCursorContract(compiler.CursorContract{
+		StructuralFingerprint: ctx.CursorFingerprint(), Coordinate: ctx.CursorCoordinate(u.field.Name), Sort: cursorSort(page.keys),
+	})
+	ctx.MarkCursor()
+
+	sr := func() *compiler.Context { return ctx.Quote(`__sr_`, u.index) }
+	ctx.Write(`SELECT JSONB_BUILD_OBJECT(`)
+	first := true
+	commaField := func() {
+		if !first {
+			ctx.Write(`, `)
+		}
+		first = false
+	}
+	if edge != nil {
+		commaField()
+		ctx.Write(`'`, edge.Alias, `', COALESCE(JSONB_AGG(JSONB_BUILD_OBJECT(`)
+		for i, selected := range edgeFields {
+			if i > 0 {
+				ctx.Write(`, `)
+			}
+			ctx.Write(`'`, selected.Alias, `', `)
+			switch selected.Name {
+			case "node":
+				ctx.Write(`(TO_JSONB(`)
+				sr().Write(`.*) - '__rn' - '__cursor' - '__total')`)
+			case "cursor":
+				sr().Write(`."__cursor"`)
+			case typename:
+				ctx.Write(`'`, u.class.Name, protocol.SUFFIX_EDGE, `'`)
+			}
+		}
+		ctx.Write(`) ORDER BY `)
+		sr().Write(`."__rn"`)
+		if page.last {
+			ctx.Write(` DESC`)
+		}
+		ctx.Write(`) FILTER (WHERE `)
+		sr().Write(`."__rn" <= `)
+		page.writeSize(ctx, my, 0)
+		ctx.Write(`), '[]')`)
+	}
+	if pageInfo != nil {
+		commaField()
+		ctx.Write(`'`, pageInfo.Alias, `', `)
+		my.buildPageInfo(ctx, u, pageInfo)
+	}
+	if totalField != nil {
+		commaField()
+		ctx.Write(`'`, totalField.Alias, `', `)
+		if err := my.buildFilteredTotal(ctx, u, protocol.FIRST, protocol.AFTER, protocol.LAST, protocol.BEFORE, protocol.SORT); err != nil {
+			return err
+		}
+	}
+	for _, field := range typeNames {
+		commaField()
+		ctx.Write(`'`, field.Alias, `', '`, u.class.Name, protocol.SUFFIX_CONNECTION, `'`)
+	}
+	ctx.Write(`) AS "json" FROM (`)
+	if err := my.buildCore(ctx, u, node, false); err != nil {
+		return err
+	}
+	ctx.Write(`) AS `)
+	sr()
+	return nil
+}
+
+func (my *Dialect) buildFilteredTotal(ctx *compiler.Context, u *unit, ignored ...string) error {
+	count := *u
+	count.shape, count.page, count.sorts, count.ordered = shapeStats, nil, nil, false
+	count.args = make(ast.ArgumentList, 0, len(u.args))
+	for _, argument := range u.args {
+		if slices.Contains(ignored, argument.Name) {
+			continue
+		}
+		count.args = append(count.args, argument)
+	}
+	ctx.Write(`(SELECT COALESCE(MIN("__total"), 0) FROM (`)
+	if err := my.buildCore(ctx, &count, nil, true); err != nil {
+		return err
+	}
+	ctx.Write(`) AS `).Quote("__sc_", u.index).Write(`)`)
+	return nil
+}
+
 // buildResultWrap 根字段的 items/total/pageInfo 包装
 func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	var items, typeNames []*ast.Field
+	itemsAlias, totalAlias := protocol.ITEMS, protocol.TOTAL
 	var pageInfo *ast.Field
 	var hasTotal bool
 	for _, f := range compiler.FieldsOf(u.field.SelectionSet) {
 		switch f.Name {
 		case protocol.ITEMS:
+			itemsAlias = f.Alias
 			items = compiler.FieldsOf(f.SelectionSet)
 		case protocol.TOTAL:
+			totalAlias = f.Alias
 			hasTotal = true
 		case protocol.PAGE_INFO:
 			pageInfo = f
@@ -156,11 +314,17 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 		return fmt.Errorf("查询 %s 缺少items选择集", u.field.Name)
 	}
 
-	page, err := newPager(scope{class: u.class}, u.args)
+	page, err := newPager(ctx, scope{class: u.class}, u.args)
 	if err != nil {
 		return err
 	}
 	u.page = page
+	if page != nil {
+		ctx.SetCursorContract(compiler.CursorContract{
+			StructuralFingerprint: ctx.CursorFingerprint(), Coordinate: ctx.CursorCoordinate(u.field.Name), Sort: cursorSort(page.keys),
+		})
+		ctx.MarkCursor()
+	}
 	switch {
 	case pageInfo != nil && page == nil:
 		return fmt.Errorf("pageInfo需要配合first/last使用")
@@ -177,7 +341,12 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	if len(items) > 0 {
 		next()
 		// items聚合：游标模式剔除辅助列、按行号FILTER并保持显示顺序
-		ctx.Write(`'`, protocol.ITEMS, `', COALESCE(JSONB_AGG(`)
+		// Fixed aliases avoid boxing dynamic strings on the compiler hot path.
+		if itemsAlias == protocol.ITEMS {
+			ctx.Write(`'items', COALESCE(JSONB_AGG(`)
+		} else {
+			ctx.Write(`'`, itemsAlias, `', COALESCE(JSONB_AGG(`)
+		}
 		if page == nil {
 			ctx.Write(`TO_JSONB(`)
 			sr().Write(`.*)`)
@@ -211,8 +380,20 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 
 	if hasTotal {
 		next()
-		ctx.Write(`'`, protocol.TOTAL, `', COALESCE(MIN(`)
-		sr().Write(`."__total"), 0)`)
+		if totalAlias == protocol.TOTAL {
+			ctx.Write(`'total', COALESCE(MIN(`)
+		} else {
+			ctx.Write(`'`, totalAlias, `', COALESCE(MIN(`)
+		}
+		sr().Write(`."__total"), `)
+		if totalNeedsFallback(u.args) {
+			if err := my.buildFilteredTotal(ctx, u, protocol.LIMIT, protocol.OFFSET, protocol.SORT); err != nil {
+				return err
+			}
+		} else {
+			ctx.Write(0)
+		}
+		ctx.Write(`)`)
 	}
 	if pageInfo != nil {
 		next()
@@ -232,6 +413,14 @@ func (my *Dialect) buildResultWrap(ctx *compiler.Context, u *unit) error {
 	ctx.Write(`) AS `)
 	sr()
 	return nil
+}
+
+func totalNeedsFallback(args ast.ArgumentList) bool {
+	if args.ForName(protocol.OFFSET) != nil {
+		return true
+	}
+	limit := args.ForName(protocol.LIMIT)
+	return limit != nil && limit.Value != nil && (limit.Value.Kind == ast.Variable || limit.Value.Raw == "0")
 }
 
 // buildPageInfo 游标分页信息：N+1探测行决定hasNext/hasPrev，边界行游标为start/end
@@ -356,16 +545,27 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			}
 			continue
 		}
-		if field.Remote != nil {
-			// 远程关系字段不落SQL，但把宿主键列以内部别名补进投影：
-			// 执行期批量取数依赖它，别名避开选择集与codec路径保证键值原始，回填后剥除
-			alias := field.Remote.Alias()
-			if !hasAlias(scalars, alias) {
-				scalars = append(scalars, &ast.Field{Name: field.Remote.Key, Alias: alias})
-				appendColumn(sc.column(field.Remote.Key))
+		if field.Resolver != "" {
+			for _, dependency := range field.Requires {
+				required := u.class.Fields[dependency]
+				if required == nil || required.Column == "" {
+					return fmt.Errorf("resolver %s依赖未知列字段: %s", field.Resolver, dependency)
+				}
+				if !hasAlias(scalars, required.Name) {
+					scalars = append(scalars, &ast.Field{Name: required.Name, Alias: required.Name})
+					appendColumn(required.Column)
+				}
+			}
+			if field.BatchKey != "" {
+				alias := "__rk_" + field.BatchKey
+				if !hasAlias(scalars, alias) {
+					scalars = append(scalars, &ast.Field{Name: field.BatchKey, Alias: alias})
+					appendColumn(sc.column(field.BatchKey))
+				}
 			}
 			continue
 		}
+
 		if field.Column == "" {
 			continue // 虚拟字段（resolver等）不参与SQL
 		}
@@ -375,7 +575,10 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	for _, column := range sortColumns(sc, sorts) {
 		appendColumn(column)
 	}
-	distinctNames, err := fieldNames(sc, u.args, protocol.DISTINCT)
+	for _, column := range columnsOf(sc, u.stableKeys()) {
+		appendColumn(column)
+	}
+	distinctNames, err := fieldNames(ctx, sc, u.args, protocol.DISTINCT)
 	if err != nil {
 		return err
 	}
@@ -422,18 +625,12 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		ctx.Write(`ROW_NUMBER() OVER () AS "__rn"`)
 	}
 	if u.page != nil {
-		// 行号探测hasNext，行级游标=base64(排序键值JSON数组)
+		// 行号探测hasNext，行级游标携带结构、身份与完整排序契约。
 		next()
 		ctx.Write(`ROW_NUMBER() OVER () AS "__rn"`)
 		next()
-		ctx.Write(`encode(convert_to(JSONB_BUILD_ARRAY(`)
-		for i, key := range u.page.keys {
-			if i > 0 {
-				ctx.Write(`, `)
-			}
-			ctx.Column(base, key.column)
-		}
-		ctx.Write(`)::text, 'UTF8'), 'base64') AS "__cursor"`)
+		my.writeCursorToken(ctx, base, u.page)
+		ctx.Write(` AS "__cursor"`)
 	}
 	for _, child := range children {
 		next()
@@ -485,6 +682,9 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		return err
 	}
 	if search != nil {
+		if u.args.ForName(protocol.OFFSET) != nil && u.args.ForName(protocol.SORT) == nil {
+			return fmt.Errorf("search与offset分页同用时必须显式sort（相关度排序无法作为稳定分页键）")
+		}
 		if u.page != nil && len(sorts) == 0 {
 			return fmt.Errorf("search与游标分页同用时必须显式sort（相关度排序无法作为稳定游标键）")
 		}
@@ -497,6 +697,7 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 	// 读基表的查询单元才注入，变更读回顶层单元读CTE跳过
 	if !u.readback {
 		conjuncts = append(conjuncts, my.scopeConjuncts(ctx, sc.qualifier, u.class)...)
+		conjuncts = append(conjuncts, my.queryWhereConjuncts(ctx, sc.qualifier, u.class, protocol.OP_SELECT, u.args)...)
 	}
 	if err = my.buildWhere(ctx, sc, u.args, conjuncts...); err != nil {
 		return err
@@ -520,19 +721,24 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 			if search != nil {
 				return fmt.Errorf("distinct与search不能同时使用")
 			}
-			if err = my.buildOrderBy(ctx, sc, sorts, distinct...); err != nil {
+			if err = my.buildOrderBy(ctx, sc, sorts, distinct, u.stableKeys()); err != nil {
 				return err
 			}
 		// 无显式排序时按搜索相关度降序（ilike模式无相关度，维持自然序）
-		case search != nil && len(sorts) == 0:
+		case search != nil && u.args.ForName(protocol.SORT) == nil:
 			if search.hasRank() {
 				ctx.Space(`ORDER BY`)
 				if err = search.buildRank(my, ctx, sc); err != nil {
 					return err
 				}
+				for _, key := range u.stableKeys() {
+					ctx.Write(`, `).Column(sc.qualifier, sc.column(key)).SpaceBefore(`ASC`)
+				}
+			} else if err = my.buildOrderBy(ctx, sc, sorts, nil, u.stableKeys()); err != nil {
+				return err
 			}
 		default:
-			if err = my.buildOrderBy(ctx, sc, sorts); err != nil {
+			if err = my.buildOrderBy(ctx, sc, sorts, nil, u.stableKeys()); err != nil {
 				return err
 			}
 		}
@@ -549,6 +755,25 @@ func (my *Dialect) buildCore(ctx *compiler.Context, u *unit, selection []*ast.Fi
 		}
 	}
 	return nil
+}
+
+func (my *Dialect) writeCursorToken(ctx *compiler.Context, base string, page *pager) {
+	contract, _ := ctx.CursorContract()
+	order, _ := json.Marshal(contract.Sort)
+	ctx.Write(`'v1.' || encode(convert_to(JSONB_BUILD_OBJECT('v', 1, 'k', JSONB_BUILD_OBJECT(`)
+	ctx.Write(`'s', `, my.Placeholder(ctx.AddParam(contract.StructuralFingerprint)), `::text, `)
+	ctx.Write(`'p', `, my.Placeholder(ctx.AddContextSlot(compiler.CursorPolicyContext)), `::bigint, `)
+	ctx.Write(`'t', `, my.Placeholder(ctx.AddContextSlot(compiler.CursorTenantContext)), `::text, `)
+	ctx.Write(`'r', `, my.Placeholder(ctx.AddContextSlot(compiler.CursorRouteContext)), `::text, `)
+	ctx.Write(`'c', `, my.Placeholder(ctx.AddParam(contract.Coordinate)), `::text, `)
+	ctx.Write(`'o', `, my.Placeholder(ctx.AddParam(string(order))), `::jsonb), 'x', JSONB_BUILD_ARRAY(`)
+	for i, key := range page.keys {
+		if i > 0 {
+			ctx.Write(`, `)
+		}
+		ctx.Column(base, key.column)
+	}
+	ctx.Write(`))::text, 'UTF8'), 'base64')`)
 }
 
 // relationBond 生成父子关联条件（合取项）；多对多在基础查询追加中间表JOIN
@@ -619,6 +844,12 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 		}
 		ctx.Space(strings.ToUpper(name))
 		if arg.Value.Kind == ast.Variable {
+			if value, ok := ctx.Variable(arg.Value.Raw); ok && value != nil {
+				count, valid := paginationInt(value)
+				if !valid || count < 0 {
+					return fmt.Errorf("%s必须是非负整数，得到 %v", name, value)
+				}
+			}
 			ctx.Write(my.Placeholder(ctx.AddVariable(arg.Value.Raw)))
 			continue
 		}
@@ -635,7 +866,7 @@ func (my *Dialect) buildLimit(ctx *compiler.Context, u *unit) error {
 
 	// 缺省LIMIT兜底：无显式limit的列表注入配置的default-limit，防无界全表扫描；
 	// 变更读回须返回全部受影响行、统计分组保持完整语义、递归全树已有depth限深，均不注入
-	if !limited && !u.readback && u.shape != shapeStats && (u.rel == nil || !u.rel.Deep) {
+	if !limited && !u.readback && (u.shape != shapeStats || len(u.groups) > 0) && (u.rel == nil || !u.rel.Deep) {
 		if n := ctx.DefaultLimit(); n > 0 {
 			ctx.Space(`LIMIT`).Write(n)
 		}
@@ -679,6 +910,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 
 	// 行级作用域：递归CTE的起始层与步进层都注入，递归只在本租户内遍历（限范围、防跨租户）
 	scopeFilter := func() { my.appendScope(ctx, u.class.Table, u.class.Scope) }
+	fixedFilter := my.queryWhereConjuncts(ctx, u.class.Table, u.class, protocol.OP_SELECT, u.args)
 
 	ctx.Space(`FROM (WITH RECURSIVE`).QuotedWithSpace(tree).Write(`AS (SELECT `)
 	list(u.class.Table)
@@ -688,6 +920,12 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 		Column(u.class.Table, targetCol).
 		Write(` = `).Column(u.parent, parentCol)
 	scopeFilter()
+	for _, filter := range fixedFilter {
+		ctx.Write(` AND `)
+		if err := filter(); err != nil {
+			return err
+		}
+	}
 	ctx.Write(` UNION ALL SELECT `)
 	list(u.class.Table)
 	ctx.Write(`, `).Quote(tree).Write(`."__lv" + 1 FROM `)
@@ -697,6 +935,12 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 		Write(` = `).Column(tree, sourceCol).
 		Write(` AND `).Quote(tree).Write(`."__lv" < `, depth)
 	scopeFilter()
+	for _, filter := range fixedFilter {
+		ctx.Write(` AND `)
+		if err := filter(); err != nil {
+			return err
+		}
+	}
 	ctx.Write(`) SELECT `)
 	list(tree)
 	ctx.Write(` FROM `).Quote(tree)
@@ -706,7 +950,7 @@ func (my *Dialect) buildTree(ctx *compiler.Context, u *unit, sc scope, columns [
 	if err = my.buildWhere(ctx, treeScope, u.args); err != nil {
 		return err
 	}
-	if err = my.buildOrderBy(ctx, treeScope, u.sortEntries()); err != nil {
+	if err = my.buildOrderBy(ctx, treeScope, u.sortEntries(), nil, u.stableKeys()); err != nil {
 		return err
 	}
 	return my.buildLimit(ctx, u)

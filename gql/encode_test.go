@@ -25,10 +25,10 @@ func TestEncodeIdBytes(t *testing.T) {
 	paths := codecPaths{
 		"users": codecPaths{
 			"items": codecPaths{
-				"id":     idCodec{},
-				"userId": idCodec{},
-				"tags":   codecPaths{"id": idCodec{}},
-				"ids":    idCodec{}, // ID列表叶子
+				"id":     &idCodec{},
+				"userId": &idCodec{},
+				"tags":   codecPaths{"id": &idCodec{}},
+				"ids":    &idCodec{}, // ID列表叶子
 			},
 		},
 	}
@@ -84,7 +84,7 @@ func TestEncodeIdBytes(t *testing.T) {
 
 // TestEncodeIdBytes_Equivalence 与参考实现（解包→按树编码→重序列化）语义等价
 func TestEncodeIdBytes_Equivalence(t *testing.T) {
-	paths := codecPaths{"data": codecPaths{"id": idCodec{}, "sub": codecPaths{"userId": idCodec{}}}}
+	paths := codecPaths{"data": codecPaths{"id": &idCodec{}, "sub": codecPaths{"userId": &idCodec{}}}}
 	payloads := []string{
 		`{"data":{"id":123,"name":"张三 \"quote\" \\","sub":[{"userId":456,"v":1.5},{"userId":null}],"n":-7,"e":2e3,"empty":{},"list":[]}}`,
 		`{"data":{"id":9007199254740993,"sub":{"userId":540800000000000001},"deep":{"id":1}}}`,
@@ -133,7 +133,7 @@ func TestEncodeIdBytes_Equivalence(t *testing.T) {
 }
 
 // setupEncodeExecutor 注册内置ID codec的执行器，extra 追加业务codec
-func setupEncodeExecutor(t *testing.T, extra ...Codec) (*Executor, func()) {
+func setupEncodeExecutor(t *testing.T, extra ...Codec) (*Engine, func()) {
 	executor, _, cleanup := newTestExecutor(t, nil, WithCodecs(append([]Codec{NewIdCodec()}, extra...)...))
 	return executor, cleanup
 }
@@ -273,7 +273,7 @@ func TestEncodeIdListVariable(t *testing.T) {
 
 // BenchmarkEncodeBytes 流式转换性能：典型列表响应（100行×2个ID字段）
 func BenchmarkEncodeBytes(b *testing.B) {
-	paths := codecPaths{"users": codecPaths{"items": codecPaths{"id": idCodec{}, "userId": idCodec{}}}}
+	paths := codecPaths{"users": codecPaths{"items": codecPaths{"id": &idCodec{}, "userId": &idCodec{}}}}
 	var sb strings.Builder
 	sb.WriteString(`{"users":{"items":[`)
 	for i := 0; i < 100; i++ {
@@ -291,7 +291,7 @@ func BenchmarkEncodeBytes(b *testing.B) {
 			encodeBytes(data, paths)
 		}
 	})
-	miss := codecPaths{"other": idCodec{}} // 路径不命中：应零分配返回原字节
+	miss := codecPaths{"other": &idCodec{}} // 路径不命中：应零分配返回原字节
 	b.Run("无命中", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(data)))

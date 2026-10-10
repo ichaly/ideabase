@@ -130,36 +130,24 @@ func (my *Validator) RegisterStructValidationCtx(fn validator.StructLevelFuncCtx
 
 func (my *Validator) StructCtx(ctx context.Context, payload any) error {
 	trimSpaces(payload)
-	if err := my.validate.StructCtx(ctx, payload); err != nil {
-		if translated, ok := my.wrapValidationError(err); ok {
-			return translated
-		}
-		return err
-	}
-	return nil
+	return my.wrapValidationError(my.validate.StructCtx(ctx, payload))
+}
+
+// StructPartialCtx 仅校验指定 Go 字段，供 PATCH 输入使用；零值不会被当作省略。
+// 结构体级校验仍会执行，收到的是部分输入，不是数据库中的完整实体。
+func (my *Validator) StructPartialCtx(ctx context.Context, payload any, fields ...string) error {
+	trimSpaces(payload)
+	return my.wrapValidationError(my.validate.StructPartialCtx(ctx, payload, fields...))
 }
 
 func (my *Validator) Validate(out any) error { return my.Struct(out) }
 
 func (my *Validator) Struct(payload any) error {
-	trimSpaces(payload)
-	if err := my.validate.Struct(payload); err != nil {
-		if translated, ok := my.wrapValidationError(err); ok {
-			return translated
-		}
-		return err
-	}
-	return nil
+	return my.StructCtx(context.Background(), payload)
 }
 
 func (my *Validator) Var(field any, tag string) error {
-	if err := my.validate.Var(field, tag); err != nil {
-		if translated, ok := my.wrapValidationError(err); ok {
-			return translated
-		}
-		return err
-	}
-	return nil
+	return my.wrapValidationError(my.validate.Var(field, tag))
 }
 
 func (my *Validator) registerLocale(trans locales.Translator, register func(*validator.Validate, ut.Translator) error, generalMessage ...string) error {
@@ -187,15 +175,18 @@ func (my *Validator) registerLocale(trans locales.Translator, register func(*val
 	return nil
 }
 
-func (my *Validator) wrapValidationError(raw error) (error, bool) {
+func (my *Validator) wrapValidationError(raw error) error {
+	if raw == nil {
+		return nil
+	}
 	var errs validator.ValidationErrors
 	if !errors.As(raw, &errs) {
-		return nil, false
+		return raw
 	}
 
 	translator, ok := my.universal.GetTranslator(my.defaultLocale)
 	if !ok {
-		return nil, false
+		return raw
 	}
 
 	message := strings.TrimSpace(raw.Error())
@@ -209,7 +200,7 @@ func (my *Validator) wrapValidationError(raw error) (error, bool) {
 		ValidationErrors: append(validator.ValidationErrors(nil), errs...),
 		message:          message,
 		translator:       translator,
-	}, true
+	}
 }
 
 type translatedErrors struct {

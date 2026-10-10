@@ -1,0 +1,456 @@
+package gql
+
+import (
+	"cmp"
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/ichaly/ideabase/gql/protocol"
+)
+
+type FieldUse string
+
+const (
+	FieldUseSelect             FieldUse = "select"
+	FieldUseFilter             FieldUse = "filter"
+	FieldUseOrder              FieldUse = "order"
+	FieldUseGroup              FieldUse = "group"
+	FieldUseAggregate          FieldUse = "aggregate"
+	FieldUseJoin               FieldUse = "join"
+	FieldUseWrite              FieldUse = "write"
+	FieldUseReturn             FieldUse = "return"
+	FieldUseInternalDependency FieldUse = "internal-dependency"
+)
+
+type PolicyRequest struct {
+	Identity   Identity
+	Route      TenantRoute
+	Coordinate string
+	Resource   string
+	Actions    []string
+	FieldUses  []FieldUse
+	Fields     map[FieldUse][]string
+	Values     map[string]any
+}
+
+// Predicate is shared by metadata filters and runtime policy decisions.
+type Predicate = protocol.Predicate
+
+type RolePolicyBranch struct {
+	Role          string
+	RowPredicates []Predicate
+	Check         []Predicate
+}
+
+type PolicyDecision struct {
+	Allow               bool
+	Fields              map[FieldUse][]string
+	RowPredicates       []Predicate
+	RoleBranches        []RolePolicyBranch
+	Preset              []Predicate
+	Check               []Predicate
+	Limit               int
+	Cost                int
+	PolicyRevision      uint64
+	PermissionSignature string
+	ShapeSignature      string
+}
+
+type PolicyProvider interface {
+	Decide(context.Context, PolicyRequest) (PolicyDecision, error)
+}
+
+// PolicyCacheIdentity is an explicit provider assertion that its effective
+// schema shape is stable for the returned identity. Providers whose decisions
+// depend on request-local state should omit this interface; their schemas are
+// deliberately rebuilt instead of being unsafely cached.
+type PolicyCacheIdentity interface {
+	PolicyCacheIdentity(context.Context, Identity, TenantRoute, map[string]any) (string, bool)
+}
+
+func NormalizeDecision(request PolicyRequest, decision PolicyDecision) (PolicyDecision, error) {
+	if err := validatePolicyRequest(request); err != nil {
+		return PolicyDecision{}, err
+	}
+	if decision.Limit < 0 || decision.Cost < 0 {
+		return PolicyDecision{}, fmt.Errorf("policy limit and cost must be non-negative")
+	}
+	decision, err := clonePolicyDecision(decision)
+	if err != nil {
+		return PolicyDecision{}, err
+	}
+	for _, predicates := range [][]Predicate{decision.RowPredicates, decision.Preset, decision.Check} {
+		for _, p := range predicates {
+			if err := validatePredicate(p); err != nil {
+				return PolicyDecision{}, err
+			}
+		}
+	}
+	if decision.PolicyRevision == 0 {
+		decision.PolicyRevision = request.Identity.PolicyRevision()
+	}
+	decision.PermissionSignature = permissionSignature(request, decision)
+	decision.ShapeSignature = shapeSignature(decision)
+	return decision, nil
+}
+
+func clonePolicyDecision(decision PolicyDecision) (PolicyDecision, error) {
+	decision.Fields = cloneFieldMap(decision.Fields)
+	var err error
+	decision.RowPredicates, err = clonePredicates(decision.RowPredicates)
+	if err != nil {
+		return PolicyDecision{}, err
+	}
+	decision.Preset, err = clonePredicates(decision.Preset)
+	if err != nil {
+		return PolicyDecision{}, err
+	}
+	decision.Check, err = clonePredicates(decision.Check)
+	if err != nil {
+		return PolicyDecision{}, err
+	}
+	decision.RoleBranches, err = cloneRoleBranches(decision.RoleBranches)
+	return decision, err
+}
+
+func cloneFieldMap(in map[FieldUse][]string) map[FieldUse][]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[FieldUse][]string, len(in))
+	for use, fields := range in {
+		out[use] = sortedUnique(fields)
+	}
+	return out
+}
+
+func cloneRoleBranches(in []RolePolicyBranch) ([]RolePolicyBranch, error) {
+	out := make([]RolePolicyBranch, len(in))
+	for n, branch := range in {
+		out[n] = branch
+		var err error
+		out[n].RowPredicates, err = clonePredicates(branch.RowPredicates)
+		if err != nil {
+			return nil, err
+		}
+		out[n].Check, err = clonePredicates(branch.Check)
+		if err != nil {
+			return nil, err
+		}
+		for _, predicates := range [][]Predicate{out[n].RowPredicates, out[n].Check} {
+			for _, predicate := range predicates {
+				if err := validatePredicate(predicate); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b RolePolicyBranch) int { return cmp.Compare(a.Role, b.Role) })
+	return out, nil
+}
+
+func sortedUnique(values []string) []string {
+	result := append([]string(nil), values...)
+	slices.Sort(result)
+	return slices.Compact(result)
+}
+
+func validatePolicyRequest(request PolicyRequest) error {
+	if request.Identity.Tenant() == "" || request.Identity.Subject() == "" {
+		return fmt.Errorf("policy identity is required")
+	}
+	if request.Route.Tenant != "" && request.Route.Tenant != request.Identity.Tenant() {
+		return fmt.Errorf("policy tenant route does not match identity")
+	}
+	if request.Coordinate == "" || request.Resource == "" {
+		return fmt.Errorf("policy coordinate and resource are required")
+	}
+	if len(request.Actions) == 0 {
+		return fmt.Errorf("policy action is required")
+	}
+	return nil
+}
+
+func validatePredicate(p Predicate) error {
+	if p.Column == "" || strings.IndexByte(p.Column, 0) >= 0 {
+		return fmt.Errorf("unsafe policy column %q", p.Column)
+	}
+	switch p.Operator {
+	case "eq", "neq", "lt", "lte", "gt", "gte", "in", "is-null", "not-null":
+	default:
+		return fmt.Errorf("unsupported policy operator %q", p.Operator)
+	}
+	return nil
+}
+
+// ValidateDecisionCatalog closes the typed-policy boundary: providers name
+// fields or columns, never SQL fragments, and every name must resolve to the
+// immutable database catalog before a plan can be built.
+func ValidateDecisionCatalog(class *protocol.Class, decision PolicyDecision) error {
+	if class == nil {
+		return fmt.Errorf("policy resource catalog is required")
+	}
+	field := func(name string, relation bool) error {
+		if name == "*" {
+			return nil
+		}
+		candidate := class.Fields[name]
+		if candidate == nil || (candidate.Column == "" && (!relation || candidate.Relation == nil && candidate.Resolver == "")) {
+			return fmt.Errorf("policy references unknown field %s.%s", class.Name, name)
+		}
+		return nil
+	}
+	for use, fields := range decision.Fields {
+		for _, name := range fields {
+			if err := field(name, use == FieldUseJoin); err != nil {
+				return err
+			}
+		}
+	}
+	groups := [][]Predicate{decision.RowPredicates, decision.Preset, decision.Check}
+	for _, branch := range decision.RoleBranches {
+		groups = append(groups, branch.RowPredicates, branch.Check)
+	}
+	for _, predicates := range groups {
+		for _, predicate := range predicates {
+			if err := field(predicate.Column, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func clonePredicates(in []Predicate) ([]Predicate, error) {
+	out := make([]Predicate, len(in))
+	for n, p := range in {
+		out[n] = p
+		value, err := cloneClaim(p.Value)
+		if err != nil {
+			return nil, err
+		}
+		out[n].Value = value
+	}
+	return out, nil
+}
+
+func permissionSignature(r PolicyRequest, d PolicyDecision) string {
+	actions := append([]string(nil), r.Actions...)
+	slices.Sort(actions)
+	uses := make([]string, len(r.FieldUses))
+	for n := range r.FieldUses {
+		uses[n] = string(r.FieldUses[n])
+	}
+	slices.Sort(uses)
+	fieldShape := make([]string, 0, len(d.Fields))
+	for use, fields := range d.Fields {
+		fieldShape = append(fieldShape, string(use)+"="+strings.Join(fields, ","))
+	}
+	slices.Sort(fieldShape)
+	return digest(strings.Join([]string{fmt.Sprintf("allow=%t", d.Allow), r.Coordinate, r.Resource, strings.Join(actions, ","), strings.Join(uses, ","), strings.Join(fieldShape, ";")}, "\x00"))
+}
+
+func shapeSignature(d PolicyDecision) string {
+	parts := []string{fmt.Sprintf("limit=%d", d.Limit), fmt.Sprintf("cost=%d", d.Cost)}
+	for _, group := range [][]Predicate{d.RowPredicates, d.Preset, d.Check} {
+		shape := make([]string, len(group))
+		for n, p := range group {
+			shape[n] = p.Column + ":" + p.Operator + ":" + p.Context
+		}
+		slices.Sort(shape)
+		parts = append(parts, strings.Join(shape, ","))
+	}
+	for _, branch := range d.RoleBranches {
+		parts = append(parts, "role="+branch.Role)
+		for _, group := range [][]Predicate{branch.RowPredicates, branch.Check} {
+			shape := make([]string, len(group))
+			for i, predicate := range group {
+				shape[i] = predicate.Column + ":" + predicate.Operator + ":" + predicate.Context
+			}
+			slices.Sort(shape)
+			parts = append(parts, strings.Join(shape, ","))
+		}
+	}
+	return digest(strings.Join(parts, "\x00"))
+}
+
+func digest(value string) string { return fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(value))) }
+
+type ProtocolPolicyProvider struct {
+	permissions map[string]map[string]*protocol.Permission
+	err         error
+}
+
+func NewProtocolPolicyProvider(permissions map[string]map[string]*protocol.Permission) *ProtocolPolicyProvider {
+	out := make(map[string]map[string]*protocol.Permission, len(permissions))
+	var invalid error
+	for resource, byRole := range permissions {
+		out[resource] = make(map[string]*protocol.Permission, len(byRole))
+		for role, permission := range byRole {
+			if permission != nil {
+				copy := *permission
+				copy.Select = append([]string(nil), permission.Select...)
+				copy.Insert = append([]string(nil), permission.Insert...)
+				copy.Update = append([]string(nil), permission.Update...)
+				copy.Filter, invalid = clonePredicates(permission.Filter)
+				if invalid == nil {
+					copy.Check, invalid = clonePredicates(permission.Check)
+				}
+				if invalid != nil {
+					return &ProtocolPolicyProvider{err: invalid}
+				}
+				out[resource][role] = &copy
+			}
+		}
+	}
+	return &ProtocolPolicyProvider{permissions: out, err: invalid}
+}
+
+func (p *ProtocolPolicyProvider) Decide(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+	if p == nil {
+		return PolicyDecision{}, fmt.Errorf("policy provider is nil")
+	}
+	if p.err != nil {
+		return PolicyDecision{}, fmt.Errorf("invalid protocol policy: %w", p.err)
+	}
+	if err := validatePolicyRequest(request); err != nil {
+		return PolicyDecision{}, err
+	}
+	byRole := p.permissions[request.Resource]
+	roles := request.Identity.Roles()
+	if len(roles) == 0 {
+		d, err := NormalizeDecision(request, PolicyDecision{})
+		return d, err
+	}
+	d := PolicyDecision{Allow: true, PolicyRevision: request.Identity.PolicyRevision(), Fields: make(map[FieldUse][]string)}
+	allowsAction := func(permission *protocol.Permission, action string) (bool, error) {
+		switch action {
+		case protocol.OP_SELECT:
+			return len(permission.Select) > 0, nil
+		case protocol.OP_INSERT:
+			return len(permission.Insert) > 0, nil
+		case protocol.OP_UPDATE:
+			return len(permission.Update) > 0, nil
+		case protocol.OP_DELETE:
+			return permission.Delete, nil
+		case protocol.OP_RESTORE:
+			return permission.Restore, nil
+		case protocol.OP_PURGE:
+			return permission.Purge, nil
+		case protocol.OP_AGGREGATE:
+			return permission.Aggregate, nil
+		default:
+			return false, fmt.Errorf("unsupported policy action %q", action)
+		}
+	}
+	authorizedRoles := make([]string, 0, len(roles))
+	for _, role := range roles {
+		permission := byRole[role]
+		if permission == nil {
+			continue
+		}
+		authorized := true
+		for _, action := range request.Actions {
+			allowed, err := allowsAction(permission, action)
+			if err != nil {
+				return PolicyDecision{}, err
+			}
+			if !allowed {
+				authorized = false
+				break
+			}
+		}
+		if authorized {
+			authorizedRoles = append(authorizedRoles, role)
+		}
+	}
+	if len(authorizedRoles) == 0 {
+		d, err := NormalizeDecision(request, PolicyDecision{})
+		return d, err
+	}
+	readAction := slices.Contains(request.Actions, protocol.OP_SELECT) || slices.Contains(request.Actions, protocol.OP_AGGREGATE)
+	for _, role := range authorizedRoles {
+		permission := byRole[role]
+		branch := RolePolicyBranch{Role: role, RowPredicates: permission.Filter, Check: permission.Check}
+		// Keep an authorized role even when it contributes no predicates. An
+		// empty branch is the explicit unrestricted arm of the role union.
+		d.RoleBranches = append(d.RoleBranches, branch)
+	}
+	selectFields := intersectPermissionFields(authorizedRoles, byRole, func(permission *protocol.Permission) []string { return permission.Select })
+	if readAction {
+		for _, use := range []FieldUse{FieldUseSelect, FieldUseFilter, FieldUseOrder, FieldUseGroup, FieldUseAggregate, FieldUseReturn} {
+			d.Fields[use] = append([]string(nil), selectFields...)
+		}
+	}
+	d.Fields[FieldUseWrite] = policyWriteFields(request.Actions, authorizedRoles, byRole)
+	for _, use := range request.FieldUses {
+		if use == FieldUseWrite {
+			if _, ok := d.Fields[use]; !ok {
+				d.Fields[use] = nil
+			}
+			continue
+		}
+		if _, ok := d.Fields[use]; !ok {
+			d.Fields[use] = append([]string(nil), selectFields...)
+		}
+	}
+	return NormalizeDecision(request, d)
+}
+
+func (p *ProtocolPolicyProvider) PolicyCacheIdentity(_ context.Context, identity Identity, _ TenantRoute, _ map[string]any) (string, bool) {
+	if p == nil {
+		return "", false
+	}
+	roles := identity.Roles()
+	slices.Sort(roles)
+	return strings.Join(roles, "\x00"), true
+}
+
+// policyWriteFields intersects grants across roles and actions. A role branch
+// owns its fields together with its row filter/check; exposing a union would
+// let one role's row scope use another role's field grant.
+func policyWriteFields(actions, roles []string, permissions map[string]*protocol.Permission) []string {
+	var result []string
+	first := true
+	for _, action := range actions {
+		if action != protocol.OP_INSERT && action != protocol.OP_UPDATE {
+			continue
+		}
+		fields := intersectPermissionFields(roles, permissions, func(permission *protocol.Permission) []string {
+			if action == protocol.OP_INSERT {
+				return permission.Insert
+			}
+			return permission.Update
+		})
+		if first {
+			result, first = fields, false
+			continue
+		}
+		result = intersectFieldNames(result, fields)
+	}
+	return result
+}
+
+func intersectPermissionFields(roles []string, permissions map[string]*protocol.Permission, fields func(*protocol.Permission) []string) []string {
+	if len(roles) == 0 {
+		return nil
+	}
+	result := sortedUnique(fields(permissions[roles[0]]))
+	for _, role := range roles[1:] {
+		result = intersectFieldNames(result, fields(permissions[role]))
+	}
+	return result
+}
+
+type OperationPolicyProvider func(context.Context, PolicyRequest) (PolicyDecision, error)
+
+func (p OperationPolicyProvider) Decide(ctx context.Context, request PolicyRequest) (PolicyDecision, error) {
+	d, err := p(ctx, request)
+	if err != nil {
+		return PolicyDecision{}, err
+	}
+	return NormalizeDecision(request, d)
+}

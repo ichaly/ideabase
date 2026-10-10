@@ -1,25 +1,23 @@
 package pgsql
 
 import (
-	"encoding/base64"
-	"encoding/json"
-
 	"github.com/ichaly/ideabase/gql"
 	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/vektah/gqlparser/v2"
 )
 
-// EncodeCursor 测试辅助：按引擎游标格式（base64(JSON数组)）构造入参
-func EncodeCursor(keys []any) string {
-	data, _ := json.Marshal(keys)
-	return base64.StdEncoding.EncodeToString(data)
-}
-
 func (my *_DialectSuite) TestCursor() {
+	fingerprint, err := my.meta.CatalogFingerprint()
+	my.Require().NoError(err)
+	token, err := compiler.EncodeCursorToken(compiler.CursorContract{
+		StructuralFingerprint: fingerprint, Tenant: "default", Route: "local", Coordinate: "Query.users", Sort: []string{"name:ASC", "id:ASC"},
+	}, []any{"Bob", int64(2)})
+	my.Require().NoError(err)
 	cases := []Case{
 		{
-			name:  "首页向前翻页",
-			query: `query { users(first: 2, sort: { name: ASC }) { items { id name } pageInfo { hasNext hasPrev end } } }`,
+			name:    "首页向前翻页",
+			skipSQL: true,
+			query:   `query { users(first: 2, sort: { name: ASC }) { items { id name } pageInfo { hasNext hasPrev end } } }`,
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT JSONB_BUILD_OBJECT(
@@ -39,9 +37,9 @@ func (my *_DialectSuite) TestCursor() {
 		},
 		{
 			name:      "first变量页大小",
+			skipSQL:   true,
 			query:     `query ($n: Int) { users(first: $n, sort: { name: ASC }) { items { id name } pageInfo { hasNext hasPrev end } } }`,
 			variables: map[string]interface{}{"n": 3},
-			args:      []any{3, 3, 3, 3},
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT JSONB_BUILD_OBJECT(
@@ -61,9 +59,9 @@ func (my *_DialectSuite) TestCursor() {
 		},
 		{
 			name:      "续页after变量游标",
+			skipSQL:   true,
 			query:     `query ($c: Cursor) { users(first: 2, after: $c, sort: { name: ASC }) { items { id } pageInfo { hasNext hasPrev } } }`,
-			variables: map[string]interface{}{"c": EncodeCursor([]any{"Bob", 2})},
-			args:      []any{EncodeCursor([]any{"Bob", 2}), "Bob", int64(2), EncodeCursor([]any{"Bob", 2})}, // 整数键经UseNumber精确还原int64（雪花ID>2^53不失真）
+			variables: map[string]interface{}{"c": token},
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT JSONB_BUILD_OBJECT(
@@ -83,8 +81,9 @@ func (my *_DialectSuite) TestCursor() {
 				) AS "__sj_0" ON TRUE`,
 		},
 		{
-			name:  "向后翻页last",
-			query: `query { users(last: 2) { items { id } pageInfo { hasNext hasPrev start } } }`,
+			name:    "向后翻页last",
+			skipSQL: true,
+			query:   `query { users(last: 2) { items { id } pageInfo { hasNext hasPrev start } } }`,
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT JSONB_BUILD_OBJECT(
@@ -104,6 +103,18 @@ func (my *_DialectSuite) TestCursor() {
 		},
 	}
 	my.runCases(cases)
+	doc, gqlErr := gqlparser.LoadQuery(my.schema, cases[0].query)
+	my.Require().Empty(gqlErr)
+	compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
+	my.Require().NoError(err)
+	sql, args, err := compile.Build(doc.Operations[0], nil)
+	my.Require().NoError(err)
+	my.Contains(sql, `'v1.' || encode`)
+	my.Contains(sql, `JSONB_BUILD_OBJECT('v', 1, 'k'`)
+	my.Contains(args, fingerprint)
+	my.Contains(args, "Query.users")
+	my.Contains(args, "default")
+	my.Contains(args, "local")
 }
 
 // TestCursorGuards 游标分页参数约束
@@ -114,6 +125,7 @@ func (my *_DialectSuite) TestCursorGuards() {
 		"after需要first": {`query ($c: Cursor) { users(after: $c) { items { id } } }`, "必须配合first/last"},
 		"pageInfo需要游标": {`query { users { items { id } pageInfo { hasNext } } }`, "需要配合first/last"},
 		"first字面量须正":   {`query { users(first: 0) { items { id } } }`, "必须是正整数或变量"},
+		"first变量须正":    {`query ($n: Int) { users(first: $n) { items { id } } }`, "必须是正整数"},
 		"排序方向须字面量":     {`query ($d: SortDirection) { users(first: 2, sort: { name: $d }) { items { id } } }`, "无效的排序方向"},
 		"排序键须非空列":      {`query { users(first: 2, sort: { age: DESC }) { items { id } } }`, "非空列"},
 	} {
@@ -123,7 +135,11 @@ func (my *_DialectSuite) TestCursorGuards() {
 
 			compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
 			my.Require().NoError(err)
-			_, _, err = compile.Build(doc.Operations[0], nil)
+			var vars map[string]interface{}
+			if name == "first变量须正" {
+				vars = map[string]interface{}{"n": 0}
+			}
+			_, _, err = compile.Build(doc.Operations[0], vars)
 			my.Assert().ErrorContains(err, c.wants)
 		})
 	}

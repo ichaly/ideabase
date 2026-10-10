@@ -2,12 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 func TestResolverExamples(t *testing.T) {
@@ -22,60 +21,104 @@ func TestResolverExamples(t *testing.T) {
 		t.Fatalf("批量Resolver示例失败: values=%v err=%v", values, err)
 	}
 
-	root, err := serverInfoResolver().Resolve(context.Background(), gql.Root{}, nil)
+	root, err := serverInfoResolver().Resolve(context.Background(), nil, nil)
 	if err != nil || root.(ServerInfo).Name == "" {
 		t.Fatalf("根Resolver示例失败: value=%v err=%v", root, err)
 	}
 
-	remote, err := reputationRemote().Fetch(context.Background(), []any{int64(1), int64(2)})
+	remote, err := reputationResolver().(gql.BatchResolver).ResolveBatch(context.Background(), []gql.Source{{"__rk_id": int64(1)}, {"__rk_id": int64(2)}}, nil)
 	if err != nil || len(remote) != 2 {
-		t.Fatalf("Remote示例失败: values=%v err=%v", remote, err)
+		t.Fatalf("按键Resolver示例失败: values=%v err=%v", remote, err)
 	}
 }
 
-// TestCompleteDemoDocuments 使用真实Demo库时验证所有命名操作都能通过当前动态schema校验，
-// 并验证公开Execute确实返回标准GraphQL字节；无数据库的普通单测环境安全跳过。
+// TestCompleteDemoDocuments 使用真实Demo库逐个执行所有持久化操作；数据库不可用直接失败。
 func TestCompleteDemoDocuments(t *testing.T) {
-	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
+	db, err := openDemoDB()
 	if err != nil {
-		t.Skipf("demo数据库不可用: %v", err)
+		t.Fatalf("demo数据库不可用: %v（先运行 docker compose up -d）", err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil || sqlDB.Ping() != nil {
-		t.Skip("demo数据库不可用，运行 docker compose up -d 后可执行完整契约测试")
-	}
-	defer sqlDB.Close()
+	defer db.Pool().Close()
 
-	executor, err := buildExecutor(db)
+	executor, err := buildEngine(db)
 	if err != nil {
 		t.Fatalf("装配完整Demo失败: %v", err)
 	}
-	if err = executor.LoadDocuments("./queries"); err != nil {
-		t.Fatalf("示例GraphQL文档与动态schema不一致: %v", err)
+	defer executor.Close()
+	ctx := demoContext(context.Background(), 1)
+	bytesBody, err := executor.Execute(ctx, `{ serverInfo { name version } }`, nil)
+	if err != nil || !strings.Contains(string(bytesBody), `gql-complete-demo`) || strings.Contains(string(bytesBody), `"errors"`) {
+		t.Fatalf("Engine.Execute字节快路径失败: body=%s err=%v", bytesBody, err)
 	}
-	body, err := executor.Execute(context.Background(), `query { serverInfo { name version } }`, nil)
-	if err != nil {
-		t.Fatalf("Execute字节出口失败: %v", err)
-	}
-	if !strings.Contains(string(body), `"name":"gql-complete-demo"`) {
-		t.Fatalf("非标准GraphQL响应: %s", body)
-	}
+	created := executeNamed(t, executor, ctx, "CrudCreate", map[string]any{
+		"name": "全能力Demo用户", "email": "complete-demo@example.test",
+	})
+	createdID := nestedString(t, created, "data", "createUser", "id")
+	executeNamed(t, executor, ctx, "CrudUpdate", map[string]any{"id": createdID, "name": "全能力Demo用户已更新"})
+	executeNamed(t, executor, ctx, "CrudDelete", map[string]any{"id": createdID})
 
-	ctx := gql.WithScope(context.Background(), map[string]any{"tenant": 1})
-	checks := []string{
-		`{ users { items { id name email greeting sign reputation { level title } } } }`,
-		`mutation { echo(message: "hello") }`,
-		`mutation {
-			uuid: createUuidRecord(input: { name: "UUID" }) { id }
-			snowflake: createSnowflakeRecord(input: { name: "雪花" }) { id }
-			custom: createVirtualRecord(input: { name: "虚化" }) { id }
-		}`,
-		`{ __schema { queryType { name } } __type(name: "User") { name kind } }`,
+	for _, operation := range []struct {
+		name string
+		vars map[string]any
+	}{
+		{"BatchCreate", nil},
+		{"UpsertByUnique", nil},
+		{"NestedCreate", nil},
+		{"NestedConnectDisconnect", nil},
+		{"GeneratedPrimaryKeys", nil},
+		{"AddTag", map[string]any{"name": "Demo新增标签"}},
+		{"PostList", map[string]any{"kw": "数据库"}},
+		{"FilterSortOffset", map[string]any{"limit": 2, "offset": 0}},
+		{"ForwardCursorPage", nil},
+		{"BackwardCursorPage", nil},
+		{"JsonDistinctRelations", nil},
+		{"AggregateHaving", nil},
+		{"RecursiveComments", nil},
+		{"TenantScopedPosts", nil},
+		{"ResolverAndRemote", map[string]any{"lang": "en"}},
+		{"CustomRootQuery", nil},
+		{"CustomRootMutation", map[string]any{"message": "hello"}},
+		{"StandardIntrospection", nil},
+	} {
+		executeNamed(t, executor, ctx, operation.name, operation.vars)
 	}
-	for _, query := range checks {
-		body, err = executor.Execute(ctx, query, nil)
-		if err != nil || strings.Contains(string(body), `"errors"`) {
-			t.Fatalf("扩展能力执行失败: query=%s body=%s err=%v", query, body, err)
+}
+
+func executeNamed(t *testing.T, executor *gql.Engine, ctx context.Context, name string, variables map[string]any) map[string]any {
+	t.Helper()
+	body, err := executor.ExecuteOperation(ctx, "", variables, name)
+	if err != nil {
+		t.Fatalf("持久化操作 %s 执行失败: %v", name, err)
+	}
+	var reply map[string]any
+	if err = json.Unmarshal(body, &reply); err != nil {
+		t.Fatalf("持久化操作 %s 返回非法JSON: %v body=%s", name, err, body)
+	}
+	if _, ok := reply["errors"]; ok {
+		t.Fatalf("持久化操作 %s 返回GraphQL errors: %s", name, body)
+	}
+	if _, ok := reply["data"]; !ok {
+		t.Fatalf("持久化操作 %s 缺少data: %s", name, body)
+	}
+	return reply
+}
+
+func nestedString(t *testing.T, value map[string]any, path ...string) string {
+	t.Helper()
+	var current any = value
+	for _, segment := range path {
+		object, ok := current.(map[string]any)
+		if !ok {
+			t.Fatalf("响应路径 %s 不是对象: %#v", strings.Join(path, "."), current)
+		}
+		current, ok = object[segment]
+		if !ok {
+			t.Fatalf("响应缺少路径 %s: %#v", strings.Join(path, "."), value)
 		}
 	}
+	result, ok := current.(string)
+	if !ok || result == "" {
+		t.Fatalf("响应路径 %s 不是非空字符串: %#v", strings.Join(path, "."), current)
+	}
+	return result
 }

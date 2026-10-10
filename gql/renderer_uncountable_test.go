@@ -30,7 +30,7 @@ func TestRenderer_UncountableClassName(t *testing.T) {
 
 	meta, err := NewMetadata(k, nil)
 	require.NoError(t, err)
-	schema, err := NewRenderer(meta).Generate()
+	schema, err := NewRenderer(meta).Render()
 	require.NoError(t, err)
 
 	_, gqlErr := gqlparser.LoadSchema(&ast.Source{Name: "uncountable.graphql", Input: schema})

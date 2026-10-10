@@ -1,36 +1,40 @@
 package std
 
 import (
+	"database/sql"
 	"fmt"
-	"net/url"
-	"time"
+	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
-// Dialector 数据库方言工厂函数
-type Dialector func(url string) gorm.Dialector
+// Dialector 负责打开底层连接，以及在共享池上创建 GORM 方言。
+type Dialector struct {
+	Open func(string) (*sql.DB, string, error)
+	Gorm func(*Connection) gorm.Dialector
+	name string
+}
 
 var dialectors = map[string]Dialector{}
 
-// RegisterDatabase 注册数据库方言（由 std/postgres、std/mysql 等子包在 init() 中调用）
-func RegisterDatabase(scheme string, d Dialector) {
-	dialectors[scheme] = d
+// RegisterDatabase 在启动时注册驱动及 URL 协议别名。
+func RegisterDatabase(name string, d Dialector, aliases ...string) {
+	d.name = strings.ToLower(name)
+	dialectors[d.name] = d
+	for _, alias := range aliases {
+		dialectors[strings.ToLower(alias)] = d
+	}
 }
 
-// NewDatabase 根据 Config URL 创建数据库连接
-func NewDatabase(e []interface{}, p []gorm.Plugin, c *Config) (*gorm.DB, error) {
-	u, err := url.Parse(c.Database)
-	if err != nil {
-		return nil, fmt.Errorf("database: invalid url: %w", err)
-	}
-	d, ok := dialectors[u.Scheme]
+// NewDatabase 在共享池上装配 GORM，不创建或接管连接池。
+func NewDatabase(e []any, p []gorm.Plugin, c *Config, connection *Connection) (*gorm.DB, error) {
+	d, ok := dialectors[connection.Driver()]
 	if !ok {
-		return nil, fmt.Errorf("database driver '%s' not registered", u.Scheme)
+		return nil, fmt.Errorf("database driver '%s' not registered", connection.Driver())
 	}
-	db, err := gorm.Open(d(c.Database), &gorm.Config{
-		PrepareStmt: u.Scheme == "mysql" || !c.IsDebug(),
+	db, err := gorm.Open(d.Gorm(connection), &gorm.Config{
+		PrepareStmt: connection.Driver() == "mysql" || !c.IsDebug(),
 		Logger:      logger.Default.LogMode(logger.Info),
 	})
 	if err != nil {
@@ -59,12 +63,5 @@ func NewDatabase(e []interface{}, p []gorm.Plugin, c *Config) (*gorm.DB, error) 
 			}
 		}
 	}
-	sqlDb, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("database: failed to get sql.DB: %w", err)
-	}
-	sqlDb.SetMaxIdleConns(5)
-	sqlDb.SetMaxOpenConns(90)
-	sqlDb.SetConnMaxLifetime(5 * time.Minute)
 	return db, nil
 }

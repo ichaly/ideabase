@@ -42,12 +42,12 @@ func (p *pager) writeSize(ctx *compiler.Context, d *Dialect, plus int) {
 }
 
 // newPager 解析游标分页参数并校验约束；非游标模式返回nil
-func newPager(sc scope, args ast.ArgumentList) (*pager, error) {
-	firstHas, first, firstVar, err := parseCount(args, protocol.FIRST)
+func newPager(ctx *compiler.Context, sc scope, args ast.ArgumentList) (*pager, error) {
+	firstHas, first, firstVar, err := parseCount(ctx, args, protocol.FIRST)
 	if err != nil {
 		return nil, err
 	}
-	lastHas, last, lastVar, err := parseCount(args, protocol.LAST)
+	lastHas, last, lastVar, err := parseCount(ctx, args, protocol.LAST)
 	if err != nil {
 		return nil, err
 	}
@@ -116,12 +116,17 @@ func newPager(sc scope, args ast.ArgumentList) (*pager, error) {
 
 // parseCount 解析first/last：present标识是否提供，变量返回varName，字面量返回正整数。
 // 变量页大小执行期填入（须为正整数），同一查询文本缓存一份计划
-func parseCount(args ast.ArgumentList, name string) (present bool, count int, varName string, err error) {
+func parseCount(ctx *compiler.Context, args ast.ArgumentList, name string) (present bool, count int, varName string, err error) {
 	arg := args.ForName(name)
 	if arg == nil || arg.Value == nil {
 		return false, 0, "", nil
 	}
 	if arg.Value.Kind == ast.Variable {
+		if value, ok := ctx.Variable(arg.Value.Raw); ok && value != nil {
+			if count, ok := paginationInt(value); !ok || count <= 0 {
+				return false, 0, "", fmt.Errorf("%s必须是正整数或变量", name)
+			}
+		}
 		return true, 0, arg.Value.Raw, nil
 	}
 	count, err = strconv.Atoi(arg.Value.Raw)
@@ -131,16 +136,40 @@ func parseCount(args ast.ArgumentList, name string) (present bool, count int, va
 	return true, count, "", nil
 }
 
+func paginationInt(value any) (int, bool) {
+	switch value := value.(type) {
+	case int:
+		return value, true
+	case int8:
+		return int(value), true
+	case int16:
+		return int(value), true
+	case int32:
+		return int(value), true
+	case int64:
+		return int(value), true
+	case uint:
+		return int(value), uint64(value) <= uint64(^uint(0)>>1)
+	case uint8:
+		return int(value), true
+	case uint16:
+		return int(value), true
+	case uint32:
+		return int(value), uint64(value) <= uint64(^uint(0)>>1)
+	case uint64:
+		return int(value), value <= uint64(^uint(0)>>1)
+	default:
+		return 0, false
+	}
+}
+
 // order 第i个键的实际方向（向后翻页时反转取行，items聚合时再还原显示顺序）
 func (my *pager) order(i int) string {
 	desc := my.keys[i].desc
 	if my.last {
 		desc = !desc
 	}
-	if desc {
-		return "DESC"
-	}
-	return "ASC"
+	return sortDirection(desc)
 }
 
 // buildKeyset 边界条件展开：k1>v1 OR (k1=v1 AND k2>v2) ...（方向按键序与翻页方向决定）
@@ -191,9 +220,17 @@ func (my *Dialect) buildKeyset(ctx *compiler.Context, sc scope, p *pager) error 
 // cursorParams 游标键值参数化：字面量编译期解码，变量执行期按下标抽取
 func (my *Dialect) cursorParams(ctx *compiler.Context, p *pager) ([]string, error) {
 	placeholders := make([]string, len(p.keys))
-	if p.cursor.Kind == ast.Variable {
+	contract, strict := ctx.CursorContract()
+	if strict && !cursorSortMatches(contract.Sort, p.keys) {
+		return nil, compiler.BadCursor(fmt.Errorf("游标排序契约不匹配"))
+	}
+	if p.cursor.Kind == ast.Variable || strict {
 		for i := range p.keys {
-			placeholders[i] = my.Placeholder(ctx.AddCursor(p.cursor.Raw, i))
+			if p.cursor.Kind == ast.Variable {
+				placeholders[i] = my.Placeholder(ctx.AddCursor(p.cursor.Raw, i))
+			} else {
+				placeholders[i] = my.Placeholder(ctx.AddCursorValue(p.cursor.Raw, i))
+			}
 		}
 		return placeholders, nil
 	}
@@ -209,4 +246,24 @@ func (my *Dialect) cursorParams(ctx *compiler.Context, p *pager) ([]string, erro
 		placeholders[i] = my.Placeholder(ctx.AddParam(value))
 	}
 	return placeholders, nil
+}
+
+func cursorSort(keys []pageKey) []string {
+	out := make([]string, len(keys))
+	for i, key := range keys {
+		out[i] = key.column + ":" + sortDirection(key.desc)
+	}
+	return out
+}
+
+func cursorSortMatches(expected []string, keys []pageKey) bool {
+	if len(expected) != len(keys) {
+		return false
+	}
+	for i, key := range keys {
+		if expected[i] != key.column+":"+sortDirection(key.desc) {
+			return false
+		}
+	}
+	return true
 }

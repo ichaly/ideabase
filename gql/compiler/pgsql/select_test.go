@@ -41,10 +41,10 @@ func (my *_DialectSuite) TestSelect() {
 			query: `query { users(limit: 10, offset: 20) { items { id } total } }`,
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
-					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__total'), '[]'), 'total', COALESCE(MIN("__sr_0"."__total"), 0)) AS "json"
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__rn' - '__total' ORDER BY "__sr_0"."__rn"), '[]'), 'total', COALESCE(MIN("__sr_0"."__total"), (SELECT COALESCE(MIN("__total"), 0) FROM (SELECT "sys_user_0"."__total" FROM (SELECT COUNT(*) OVER() AS "__total" FROM "public"."sys_user") AS "sys_user_0") AS "__sc_0"))) AS "json"
 					FROM (
-						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."__total"
-						FROM (SELECT "sys_user"."id", COUNT(*) OVER() AS "__total" FROM "public"."sys_user" LIMIT 10 OFFSET 20) AS "sys_user_0"
+						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."__total", ROW_NUMBER() OVER () AS "__rn"
+						FROM (SELECT "sys_user"."id", COUNT(*) OVER() AS "__total" FROM "public"."sys_user" ORDER BY "sys_user"."id" ASC LIMIT 10 OFFSET 20) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},
@@ -100,6 +100,29 @@ func (my *_DialectSuite) TestSelect() {
 		},
 	}
 	my.runCases(cases)
+}
+
+func (my *_DialectSuite) TestFilteredTotalDoesNotMutatePaginationArguments() {
+	compile := func(query string) (string, []any) {
+		doc, gqlErr := gqlparser.LoadQuery(my.schema, query)
+		my.Require().Empty(gqlErr)
+		builder, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
+		my.Require().NoError(err)
+		sql, args, err := builder.Build(doc.Operations[0], nil)
+		my.Require().NoError(err)
+		return normalizeSQL(sql), args
+	}
+
+	first, firstArgs := compile(`query { users(limit: 0, where: {name: {eq: "a"}}) { items { id } total } }`)
+	second, secondArgs := compile(`query { users(where: {name: {eq: "a"}}, limit: 0) { items { id } total } }`)
+	my.Equal(second, first)
+	my.Equal(secondArgs, firstArgs)
+	my.Contains(first, "LIMIT 0")
+
+	first, firstArgs = compile(`query { userConnection(first: 2, where: {name: {eq: "a"}}) { edges { node { id } } totalCount } }`)
+	second, secondArgs = compile(`query { userConnection(where: {name: {eq: "a"}}, first: 2) { edges { node { id } } totalCount } }`)
+	my.Equal(second, first)
+	my.Equal(secondArgs, firstArgs)
 }
 
 func (my *_DialectSuite) TestRelation() {
@@ -205,9 +228,9 @@ func (my *_DialectSuite) TestRelation() {
 							SELECT COALESCE(JSONB_AGG(TO_JSONB("__sr_1".*) - '__rn' ORDER BY "__sr_1"."__rn"), '[]') AS "json"
 							FROM (
 								SELECT "sys_post_1"."title" AS "title", ROW_NUMBER() OVER () AS "__rn"
-								FROM (SELECT "sys_post"."title" FROM "public"."sys_post"
+								FROM (SELECT "sys_post"."title", "sys_post"."id" FROM "public"."sys_post"
 									WHERE "sys_post"."user_id" = "sys_user_0"."id" AND "sys_post"."title" LIKE $1
-									ORDER BY "sys_post"."title" DESC LIMIT 3) AS "sys_post_1"
+									ORDER BY "sys_post"."title" DESC, "sys_post"."id" ASC LIMIT 3) AS "sys_post_1"
 							) AS "__sr_1"
 						) AS "__sj_1" ON TRUE
 					) AS "__sr_0"
@@ -250,7 +273,7 @@ func (my *_DialectSuite) TestRelation() {
 // TestSelectGuards 列表查询参数约束:distinct去重后行数与COUNT(*) OVER()窗口
 // 计数(去重前求值)语义冲突,须编译期拒绝而非静默返回错误total
 func (my *_DialectSuite) TestSelectGuards() {
-	doc, gqlErr := gqlparser.LoadQuery(my.schema, `query { users(distinct: ["name"]) { items { id } total } }`)
+	doc, gqlErr := gqlparser.LoadQuery(my.schema, `query { users(distinct: [name]) { items { id } total } }`)
 	my.Require().Empty(gqlErr, "解析失败")
 
 	compile, err := gql.NewCompiler(my.meta, []compiler.Dialect{my.dialect})
@@ -313,7 +336,7 @@ func (my *_DialectSuite) TestCompositeRelation() {
 
 	meta, err := gql.NewMetadata(k, nil)
 	my.Require().NoError(err)
-	schemaStr, err := gql.NewRenderer(meta).Generate()
+	schemaStr, err := gql.NewRenderer(meta).Render()
 	my.Require().NoError(err)
 	schema, gqlErr := gqlparser.LoadSchema(&ast.Source{Name: "composite.graphql", Input: schemaStr})
 	my.Require().Nil(gqlErr)

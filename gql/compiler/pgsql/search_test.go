@@ -19,7 +19,7 @@ func (my *_DialectSuite) TestSearch() {
 						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name", ROW_NUMBER() OVER () AS "__rn"
 						FROM (SELECT "sys_user"."id", "sys_user"."name" FROM "public"."sys_user"
 							WHERE ("sys_user"."name" ILIKE '%' || $1 || '%' OR "sys_user"."email" ILIKE '%' || $1 || '%')
-							ORDER BY GREATEST(similarity("sys_user"."name", $1), similarity("sys_user"."email", $1)) DESC
+							ORDER BY GREATEST(similarity("sys_user"."name", $1), similarity("sys_user"."email", $1)) DESC, "sys_user"."id" ASC
 							LIMIT 5) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
@@ -78,7 +78,7 @@ func (my *_DialectSuite) TestDistinctAndJsonb() {
 	cases := []Case{
 		{
 			name:  "distinct去重并前置排序",
-			query: `query { users(distinct: ["name"], sort: { age: DESC }) { items { id name } } }`,
+			query: `query { users(distinct: [name], sort: { age: DESC }) { items { id name } } }`,
 			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
 				LEFT OUTER JOIN LATERAL (
 					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*) - '__rn' ORDER BY "__sr_0"."__rn"), '[]')) AS "json"
@@ -86,6 +86,20 @@ func (my *_DialectSuite) TestDistinctAndJsonb() {
 						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name", ROW_NUMBER() OVER () AS "__rn"
 						FROM (SELECT DISTINCT ON ("sys_user"."name") "sys_user"."id", "sys_user"."name", "sys_user"."age" FROM "public"."sys_user"
 							ORDER BY "sys_user"."name", "sys_user"."age" DESC LIMIT 10) AS "sys_user_0"
+					) AS "__sr_0"
+				) AS "__sj_0" ON TRUE`,
+		},
+		{
+			name:      "变量distinct去重",
+			query:     `query($fields: [UserDistinctField!]) { users(distinct: $fields) { items { id name } } }`,
+			variables: map[string]interface{}{"fields": []any{"name"}},
+			expected: `SELECT JSONB_BUILD_OBJECT('users', "__sj_0"."json") AS "__root" FROM (SELECT TRUE) AS "__root_x"
+				LEFT OUTER JOIN LATERAL (
+					SELECT JSONB_BUILD_OBJECT('items', COALESCE(JSONB_AGG(TO_JSONB("__sr_0".*)), '[]')) AS "json"
+					FROM (
+						SELECT "sys_user_0"."id" AS "id", "sys_user_0"."name" AS "name"
+						FROM (SELECT DISTINCT ON ("sys_user"."name") "sys_user"."id", "sys_user"."name" FROM "public"."sys_user"
+							ORDER BY "sys_user"."name" LIMIT 10) AS "sys_user_0"
 					) AS "__sr_0"
 				) AS "__sj_0" ON TRUE`,
 		},

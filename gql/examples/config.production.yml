@@ -4,5 +4,6 @@ schema:
   persisted-only: true
   default-limit: 50
   max-depth: 12
+  max-cost: 100000
 subscription:
   publication: ideabase_cdc

@@ -2,13 +2,15 @@ package metadata
 
 import (
 	"fmt"
-	"github.com/ichaly/ideabase/gql/internal"
+	"maps"
+	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/huandu/go-clone"
 	"github.com/iancoleman/strcase"
+	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
 )
 
@@ -36,6 +38,9 @@ func (my *ConfigLoader) Load(h protocol.Hoster) error {
 	// 1. 分组排序
 	var tableClasses, canonClasses, overrideClasses, aliasClasses, virtualClasses []string
 	for className, classConfig := range my.cfg.Metadata.Classes {
+		if classConfig == nil {
+			return fmt.Errorf("配置坐标 metadata.classes.%s 为空", className)
+		}
 		switch {
 		case classConfig.Table == "":
 			virtualClasses = append(virtualClasses, className)
@@ -49,13 +54,13 @@ func (my *ConfigLoader) Load(h protocol.Hoster) error {
 			aliasClasses = append(aliasClasses, className)
 		}
 	}
-	orderedClasses := append(tableClasses, canonClasses...)
-	orderedClasses = append(orderedClasses, overrideClasses...)
-	orderedClasses = append(orderedClasses, aliasClasses...)
-	orderedClasses = append(orderedClasses, virtualClasses...)
+	orderedClasses := slices.Concat(tableClasses, canonClasses, overrideClasses, aliasClasses, virtualClasses)
 
 	for _, className := range orderedClasses {
 		classConfig := my.cfg.Metadata.Classes[className]
+		if classConfig == nil {
+			return fmt.Errorf("配置坐标 metadata.classes.%s 为空", className)
+		}
 		canonName := ConvertClassName(classConfig.Table, my.cfg.Metadata)
 
 		// 虚拟类
@@ -121,22 +126,82 @@ func (my *ConfigLoader) buildClassFromConfig(className string, classConfig *inte
 	if len(classConfig.Search) > 0 {
 		newClass.Search = classConfig.Search
 	}
-	for _, s := range classConfig.Scope {
-		newClass.Scope = append(newClass.Scope, protocol.ScopeRule(s)) // 字段同构，直接转换
+	if classConfig.Global {
+		newClass.Global = true
 	}
+	newClass.Scope = append(newClass.Scope, classConfig.Scope...)
 	my.applyFieldFilter(newClass, classConfig)
 	if err := my.applyFieldConfig(newClass, classConfig.Fields); err != nil {
 		return nil, err
 	}
+	if err := my.applyGovernance(newClass, classConfig); err != nil {
+		return nil, err
+	}
+	if err := validateCatalogOverrides(baseClass, newClass, classConfig); err != nil {
+		return nil, err
+	}
 	// 主键列表缺省时从IsPrimary字段推导（与db加载器行为对齐）
 	if len(newClass.PrimaryKeys) == 0 {
-		for _, name := range utl.SortKeys(newClass.Fields) {
+		for _, name := range slices.Sorted(maps.Keys(newClass.Fields)) {
 			if field := newClass.Fields[name]; name == field.Name && field.IsPrimary {
 				newClass.PrimaryKeys = append(newClass.PrimaryKeys, name)
 			}
 		}
 	}
 	return newClass, nil
+}
+
+func validateCatalogOverrides(base, class *protocol.Class, config *internal.ClassConfig) error {
+	if base == nil || (len(base.Constraints) == 0 && len(base.Indexes) == 0) {
+		return nil
+	}
+	columns := func(names []string) ([]string, error) {
+		result := make([]string, len(names))
+		for i, name := range names {
+			field := class.Fields[name]
+			if field == nil || field.Column == "" {
+				return nil, fmt.Errorf("catalog覆盖引用未知字段 %s.%s", class.Name, name)
+			}
+			result[i] = field.Column
+		}
+		return result, nil
+	}
+	if len(config.PrimaryKeys) > 0 {
+		configured, err := columns(config.PrimaryKeys)
+		if err != nil {
+			return err
+		}
+		var catalog []string
+		for _, constraint := range base.Constraints {
+			if constraint != nil && constraint.Kind == protocol.ConstraintPrimary {
+				catalog = constraint.Columns
+				break
+			}
+		}
+		if !slices.Equal(configured, catalog) {
+			return fmt.Errorf("catalog主键覆盖冲突 %s: 数据库=%v 配置=%v", class.Name, catalog, configured)
+		}
+	}
+	for name, fieldConfig := range config.Fields {
+		if fieldConfig == nil || !fieldConfig.IsUnique {
+			continue
+		}
+		field := class.Fields[name]
+		if field == nil {
+			return fmt.Errorf("catalog unique覆盖引用未知字段 %s.%s", class.Name, name)
+		}
+		backed := false
+		for _, key := range base.ConflictTargets() {
+			if len(key.Columns) == 1 && key.Columns[0] == field.Column {
+				backed = true
+				break
+			}
+		}
+		if !backed {
+			return fmt.Errorf("catalog unique覆盖冲突 %s.%s: 数据库无可用唯一约束", class.Name, name)
+		}
+	}
+	return nil
 }
 
 // 应用字段过滤
@@ -163,6 +228,18 @@ func (my *ConfigLoader) applyFieldConfig(class *protocol.Class, fieldConfigs map
 		return nil
 	}
 	config := my.cfg.Metadata
+	for fieldName, fieldConfig := range fieldConfigs {
+		if fieldConfig.InsertPreset != nil {
+			if err := validateValue(fieldConfig.InsertPreset.Context, fieldConfig.InsertPreset.Value); err != nil {
+				return fmt.Errorf("字段 %s insert-preset: %w", fieldName, err)
+			}
+		}
+		if fieldConfig.UpdatePreset != nil {
+			if err := validateValue(fieldConfig.UpdatePreset.Context, fieldConfig.UpdatePreset.Value); err != nil {
+				return fmt.Errorf("字段 %s update-preset: %w", fieldName, err)
+			}
+		}
+	}
 
 	// 1. 分组排序
 	var tableFields, classFields, overrideFields, aliasFields, virtualFields []string
@@ -180,10 +257,7 @@ func (my *ConfigLoader) applyFieldConfig(class *protocol.Class, fieldConfigs map
 			aliasFields = append(aliasFields, fieldName)
 		}
 	}
-	orderedFields := append(tableFields, classFields...)
-	orderedFields = append(orderedFields, overrideFields...)
-	orderedFields = append(orderedFields, aliasFields...)
-	orderedFields = append(orderedFields, virtualFields...)
+	orderedFields := slices.Concat(tableFields, classFields, overrideFields, aliasFields, virtualFields)
 
 	fields := class.Fields
 	for _, fieldName := range orderedFields {
@@ -205,7 +279,11 @@ func (my *ConfigLoader) applyFieldConfig(class *protocol.Class, fieldConfigs map
 
 		// 列字段、标准字段、覆盖字段统一处理
 		if fieldName == column || fieldName == canonName || fieldConfig.Override {
-			fields[column] = my.buildFieldFromConfig(class.Name, fieldName, column, fieldConfig, class.Fields[column])
+			field := my.buildFieldFromConfig(class.Name, fieldName, column, fieldConfig, class.Fields[column])
+			fields[column] = field
+			if fieldName != column {
+				fields[fieldName] = field
+			}
 			continue
 		}
 
@@ -248,6 +326,21 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName, column string
 	if baseField == nil || config.IsNullable {
 		field.Nullable = config.IsNullable
 	}
+	if baseField == nil || config.ReadOnly {
+		field.ReadOnly = config.ReadOnly
+	}
+	if config.DefaultValue != "" {
+		if field.Catalog == nil {
+			field.Catalog = &protocol.Column{}
+		}
+		field.Catalog.Default = &protocol.ColumnDefault{Expression: config.DefaultValue}
+	}
+	if config.InsertPreset != nil {
+		field.InsertPreset = &protocol.ValueSource{Context: config.InsertPreset.Context, Value: config.InsertPreset.Value}
+	}
+	if config.UpdatePreset != nil {
+		field.UpdatePreset = &protocol.ValueSource{Context: config.UpdatePreset.Context, Value: config.UpdatePreset.Value}
+	}
 	// 关系处理
 	if config.Relation != nil {
 		if field.Relation == nil {
@@ -264,9 +357,12 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName, column string
 		if relConfig.TargetField != "" {
 			rel.TargetField = relConfig.TargetField
 		}
-		if len(relConfig.SourceFields) > 1 { // 复合外键列组（首列冗余进单列字段，消费方统一经SourceColumns读取）
+		if len(relConfig.SourceFields) > 0 { // 显式列组覆盖单列字段；首列冗余供旧消费方读取
 			rel.SourceFields, rel.SourceField = relConfig.SourceFields, relConfig.SourceFields[0]
-			rel.TargetFields, rel.TargetField = relConfig.TargetFields, relConfig.TargetFields[0]
+			rel.TargetFields = relConfig.TargetFields
+			if len(rel.TargetFields) > 0 {
+				rel.TargetField = rel.TargetFields[0]
+			}
 		}
 		if relConfig.Type != "" {
 			rel.Type = protocol.RelationType(relConfig.Type)
@@ -289,6 +385,165 @@ func (my *ConfigLoader) buildFieldFromConfig(className, fieldName, column string
 		}
 	}
 	return field
+}
+
+func validateValue(context string, value any) error {
+	if context != "" && value != nil {
+		return fmt.Errorf("value同时设置context和value")
+	}
+	if context == "" && value == nil {
+		return fmt.Errorf("value必须设置context或value")
+	}
+	return nil
+}
+
+func validatePredicate(p protocol.Predicate) error {
+	switch p.Operator {
+	case "eq", "ne":
+		if err := validateValue(p.Context, p.Value); err != nil {
+			return err
+		}
+	case "is-null", "not-null":
+		if p.Context != "" || p.Value != nil {
+			return fmt.Errorf("%s谓词不能带值", p.Operator)
+		}
+	default:
+		return fmt.Errorf("未知谓词操作符 %q", p.Operator)
+	}
+	return nil
+}
+
+func (my *ConfigLoader) resolveColumn(class *protocol.Class, name string) (*protocol.Field, error) {
+	field, ok := class.Fields[name]
+	if !ok {
+		for _, candidate := range class.Fields {
+			if candidate != nil && candidate.Name == name {
+				field, ok = candidate, true
+				break
+			}
+		}
+	}
+	if !ok || field == nil || field.Column == "" {
+		return nil, fmt.Errorf("未知字段或列 %q", name)
+	}
+	return field, nil
+}
+
+func (my *ConfigLoader) resolvePredicate(class *protocol.Class, p protocol.Predicate) (protocol.Predicate, error) {
+	if err := validatePredicate(p); err != nil {
+		return protocol.Predicate{}, err
+	}
+	field, err := my.resolveColumn(class, p.Column)
+	if err != nil {
+		return protocol.Predicate{}, err
+	}
+	p.Column = field.Column
+	return p, nil
+}
+
+func (my *ConfigLoader) resolvePredicates(class *protocol.Class, configs []protocol.Predicate) ([]protocol.Predicate, error) {
+	result := make([]protocol.Predicate, 0, len(configs))
+	for _, config := range configs {
+		p, err := my.resolvePredicate(class, config)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, p)
+	}
+	return result, nil
+}
+
+func samePredicate(a, b protocol.Predicate) bool {
+	return a.Column == b.Column && a.Operator == b.Operator && a.Context == b.Context && reflect.DeepEqual(a.Value, b.Value)
+}
+
+func (my *ConfigLoader) resolvePermissionFields(class *protocol.Class, names []string) ([]string, error) {
+	if len(names) == 1 && names[0] == "*" {
+		return []string{"*"}, nil
+	}
+	result := make([]string, 0, len(names))
+	seen := make(map[string]bool)
+	for _, name := range names {
+		field, err := my.resolveColumn(class, name)
+		if err != nil {
+			return nil, err
+		}
+		if !seen[field.Name] {
+			result = append(result, field.Name)
+			seen[field.Name] = true
+		}
+	}
+	return result, nil
+}
+
+func (my *ConfigLoader) applyGovernance(class *protocol.Class, config *internal.ClassConfig) error {
+	if len(config.Operations) > 0 {
+		allowed := map[string]bool{"select": true, "aggregate": true, "insert": true, "update": true, "delete": true, "restore": true, "purge": true}
+		seen := make(map[string]bool)
+		class.Operations = nil
+		for _, operation := range config.Operations {
+			if !allowed[operation] {
+				return fmt.Errorf("未知操作 %q", operation)
+			}
+			if !seen[operation] {
+				class.Operations = append(class.Operations, operation)
+				seen[operation] = true
+			}
+		}
+	}
+	appendPredicate := func(predicate protocol.Predicate) {
+		for _, existing := range class.Where {
+			if samePredicate(existing, predicate) {
+				return
+			}
+		}
+		class.Where = append(class.Where, predicate)
+	}
+	if config.SoftDelete != nil {
+		field, err := my.resolveColumn(class, config.SoftDelete.Column)
+		if err != nil {
+			return fmt.Errorf("soft-delete: %w", err)
+		}
+		class.SoftDelete = &protocol.SoftDelete{Column: field.Column}
+		appendPredicate(protocol.Predicate{Column: field.Column, Operator: "is-null"})
+	}
+	where, err := my.resolvePredicates(class, config.Where)
+	if err != nil {
+		return fmt.Errorf("where: %w", err)
+	}
+	for _, p := range where {
+		appendPredicate(p)
+	}
+	if config.Permissions == nil {
+		return nil
+	}
+	if class.Permissions == nil {
+		class.Permissions = make(map[string]*protocol.Permission)
+	}
+	for role, pc := range config.Permissions {
+		if pc == nil {
+			return fmt.Errorf("permission %s 不能为空", role)
+		}
+		perm := &protocol.Permission{Delete: pc.Delete, Restore: pc.Restore, Purge: pc.Purge, Aggregate: pc.Aggregate}
+		var err error
+		if perm.Select, err = my.resolvePermissionFields(class, pc.Select); err != nil {
+			return fmt.Errorf("permission %s select: %w", role, err)
+		}
+		if perm.Insert, err = my.resolvePermissionFields(class, pc.Insert); err != nil {
+			return fmt.Errorf("permission %s insert: %w", role, err)
+		}
+		if perm.Update, err = my.resolvePermissionFields(class, pc.Update); err != nil {
+			return fmt.Errorf("permission %s update: %w", role, err)
+		}
+		if perm.Filter, err = my.resolvePredicates(class, pc.Filter); err != nil {
+			return fmt.Errorf("permission %s filter: %w", role, err)
+		}
+		if perm.Check, err = my.resolvePredicates(class, pc.Check); err != nil {
+			return fmt.Errorf("permission %s check: %w", role, err)
+		}
+		class.Permissions[role] = perm
+	}
+	return nil
 }
 
 // ConvertClassName 根据配置将表名转换为类名（去前缀、单数化、驼峰化等）

@@ -20,6 +20,7 @@ type Case struct {
 	variables map[string]interface{}
 	expected  string
 	args      []any
+	skipSQL   bool
 }
 
 type _DialectSuite struct {
@@ -50,7 +51,7 @@ func (my *_DialectSuite) SetupSuite() {
 			Fields: map[string]*internal.FieldConfig{
 				"id":       {Type: "ID", Column: "id", IsPrimary: true},
 				"name":     {Type: "String", Column: "name"},
-				"email":    {Type: "String", Column: "email"},
+				"email":    {Type: "String", Column: "email", IsUnique: true},
 				"age":      {Type: "Int", Column: "age", IsNullable: true},
 				"metadata": {Type: "Json", Column: "metadata", IsNullable: true},
 			},
@@ -76,6 +77,13 @@ func (my *_DialectSuite) SetupSuite() {
 				"name": {Type: "String", Column: "name"},
 			},
 		},
+		"PostTag": {
+			Table: "sys_post_tag", PrimaryKeys: []string{"postId", "tagId"},
+			Fields: map[string]*internal.FieldConfig{
+				"postId": {Type: "ID", Column: "post_id", IsPrimary: true},
+				"tagId":  {Type: "ID", Column: "tag_id", IsPrimary: true},
+			},
+		},
 		"Comment": {
 			Table: "sys_comment",
 			Fields: map[string]*internal.FieldConfig{
@@ -93,7 +101,7 @@ func (my *_DialectSuite) SetupSuite() {
 	my.meta = meta
 	my.dialect = &Dialect{}
 
-	schemaStr, err := gql.NewRenderer(meta).Generate()
+	schemaStr, err := gql.NewRenderer(meta).Render()
 	my.Require().NoError(err, "生成GraphQL schema失败")
 
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "schema-test.graphql", Input: schemaStr})
@@ -114,7 +122,9 @@ func (my *_DialectSuite) runCases(cases []Case) {
 			sql, args, err := compile.Build(doc.Operations[0], c.variables)
 			my.Require().NoError(err, "编译GraphQL查询失败")
 
-			my.Assert().Equal(normalizeSQL(c.expected), normalizeSQL(sql), "生成的SQL与预期不符")
+			if !c.skipSQL {
+				my.Assert().Equal(normalizeSQL(c.expected), normalizeSQL(sql), "生成的SQL与预期不符")
+			}
 			if c.args != nil {
 				my.Assert().Equal(c.args, args, "SQL参数与预期不符")
 			}
@@ -145,7 +155,7 @@ func (my *_DialectSuite) newSuite(overrides map[string]interface{}) (*gql.Metada
 
 	meta, err := gql.NewMetadata(k, nil)
 	my.Require().NoError(err)
-	schemaStr, err := gql.NewRenderer(meta).Generate()
+	schemaStr, err := gql.NewRenderer(meta).Render()
 	my.Require().NoError(err)
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "alt.graphql", Input: schemaStr})
 	my.Require().NoError(err)

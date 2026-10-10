@@ -20,10 +20,17 @@ var directions = map[string]string{
 	"DESC_NULLS_LAST":  "DESC NULLS LAST",
 }
 
+func sortDirection(desc bool) string {
+	if desc {
+		return "DESC"
+	}
+	return "ASC"
+}
+
 // buildOrderBy 构建ORDER BY子句；entries由调用方解析（sortEntries），
 // lead为前置列（DISTINCT ON要求排序以去重列开头）
-func (my *Dialect) buildOrderBy(ctx *compiler.Context, sc scope, entries []*ast.ChildValue, lead ...string) error {
-	if len(entries) == 0 && len(lead) == 0 {
+func (my *Dialect) buildOrderBy(ctx *compiler.Context, sc scope, entries []*ast.ChildValue, lead, tail []string) error {
+	if len(entries) == 0 && len(lead) == 0 && len(tail) == 0 {
 		return nil
 	}
 
@@ -49,7 +56,28 @@ func (my *Dialect) buildOrderBy(ctx *compiler.Context, sc scope, entries []*ast.
 		}
 		ctx.SpaceBefore(direction)
 	}
+	for _, name := range tail {
+		if orderContains(name, lead, entries) {
+			continue
+		}
+		next()
+		ctx.Column(sc.qualifier, sc.column(name)).SpaceBefore("ASC")
+	}
 	return nil
+}
+
+func orderContains(name string, lead []string, entries []*ast.ChildValue) bool {
+	for _, column := range lead {
+		if column == name {
+			return true
+		}
+	}
+	for _, entry := range entries {
+		if entry.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // sortEntries 提取排序键值对，sort参数兼容单对象与对象列表两种写法

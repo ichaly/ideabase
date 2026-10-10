@@ -10,8 +10,9 @@ import (
 
 // Compiler 编译上下文
 type Compiler struct {
-	meta    *Metadata        // 元数据引用
-	dialect compiler.Dialect // 方言实现引用，避免重复查询
+	meta              *Metadata        // 元数据引用
+	dialect           compiler.Dialect // 方言实现引用，避免重复查询
+	cursorFingerprint string
 }
 
 // NewCompiler 创建新的编译上下文
@@ -21,6 +22,13 @@ func NewCompiler(m *Metadata, dialects []compiler.Dialect) (*Compiler, error) {
 		dialects = compiler.Dialects()
 	}
 	my := &Compiler{meta: m}
+	if m != nil {
+		fingerprint, err := m.CatalogFingerprint()
+		if err != nil {
+			return nil, err
+		}
+		my.cursorFingerprint = fingerprint
+	}
 	if err := my.selectDialect(dialects); err != nil {
 		return nil, err
 	}
@@ -30,13 +38,20 @@ func NewCompiler(m *Metadata, dialects []compiler.Dialect) (*Compiler, error) {
 // Plan 编译产物：SQL + 参数槽位 + 变量默认值 + resolver绑定
 // 非volatile的计划可按查询文本缓存，执行期仅需解析参数槽位
 type Plan struct {
-	SQL       string
-	slots     []compiler.Slot
-	defaults  map[string]interface{}
-	volatile  bool
-	resolvers []binding
-	tables    []string   // 涉及的表集合，订阅按表变更唤醒
-	paths     codecPaths // 选择集中codec字段路径树，出参流式转换用（executor首次编译时固化）
+	operation   *ast.OperationDefinition
+	intro       *ast.OperationDefinition
+	SQL         string
+	slots       []compiler.Slot
+	defaults    map[string]interface{}
+	volatile    bool
+	resolvers   []binding
+	decode      decodeTrie
+	tables      []string   // 涉及的表集合，订阅按表变更唤醒
+	paths       codecPaths // 选择集中codec字段路径树，出参流式转换用（executor首次编译时固化）
+	policyRoles []string
+	policyScope map[string]any
+	cursor      bool
+	audit       bool
 }
 
 // Volatile 编译产物是否依赖变量内容（如整体input变量），不可缓存
@@ -58,6 +73,22 @@ func (my *Plan) ResolveArgs(variables, scope map[string]interface{}) ([]any, err
 		}
 		variables = merged
 	}
+	if my.cursor {
+		copy := make(map[string]any, len(scope)+3)
+		for key, value := range scope {
+			copy[key] = value
+		}
+		if _, ok := copy[compiler.CursorTenantContext]; !ok {
+			copy[compiler.CursorTenantContext] = "default"
+		}
+		if _, ok := copy[compiler.CursorRouteContext]; !ok {
+			copy[compiler.CursorRouteContext] = "local"
+		}
+		if _, ok := copy[compiler.CursorPolicyContext]; !ok {
+			copy[compiler.CursorPolicyContext] = uint64(0)
+		}
+		scope = copy
+	}
 	return compiler.ResolveSlots(my.slots, variables, scope)
 }
 
@@ -65,8 +96,13 @@ func (my *Plan) ResolveArgs(variables, scope map[string]interface{}) ([]any, err
 func depthOf(set ast.SelectionSet) int {
 	deepest := 0
 	for _, s := range set {
-		if f, ok := s.(*ast.Field); ok {
-			if d := depthOf(f.SelectionSet) + 1; d > deepest {
+		switch node := s.(type) {
+		case *ast.Field:
+			if d := depthOf(node.SelectionSet) + 1; d > deepest {
+				deepest = d
+			}
+		case *ast.InlineFragment:
+			if d := depthOf(node.SelectionSet); d > deepest {
 				deepest = d
 			}
 		}
@@ -103,6 +139,12 @@ func (my *Compiler) Compile(operation *ast.OperationDefinition, variables map[st
 		}
 	}
 	ctx := compiler.NewContext(my.meta, my.dialect.Quotation(), variables)
+	ctx.SetCursorFingerprint(my.cursorFingerprint)
+	root := "Query"
+	if operation.Operation == ast.Subscription {
+		root = "Subscription"
+	}
+	ctx.SetCursorRoot(root)
 	defer ctx.Release()
 
 	var err error
@@ -117,10 +159,13 @@ func (my *Compiler) Compile(operation *ast.OperationDefinition, variables map[st
 	}
 
 	plan := &Plan{
-		SQL:      ctx.String(),
-		slots:    ctx.Slots(),
-		volatile: ctx.Volatile(),
-		tables:   ctx.Tables(),
+		operation: operation,
+		SQL:       ctx.String(),
+		slots:     ctx.Slots(),
+		volatile:  ctx.Volatile(),
+		tables:    ctx.Tables(),
+		cursor:    ctx.UsesCursor(),
+		audit:     ctx.UsesAudit(),
 	}
 	for _, def := range operation.VariableDefinitions {
 		if def.DefaultValue == nil {
@@ -160,7 +205,7 @@ func (my *Compiler) selectDialect(list []compiler.Dialect) error {
 
 	// 已知驱动严格按名匹配
 	if my.meta != nil && my.meta.db != nil {
-		driver := my.meta.db.Name()
+		driver := my.meta.db.Driver()
 		for prefix, name := range map[string]string{"postgres": "postgresql", "mysql": "mysql"} {
 			if !strings.Contains(driver, prefix) {
 				continue

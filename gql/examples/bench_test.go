@@ -1,6 +1,6 @@
-// 端到端性能基准：复用demo实际装配（buildExecutor），打真实PostgreSQL。
+// 端到端性能基准：复用demo实际装配（buildEngine），打真实PostgreSQL。
 // 前提与e2e一致——demo数据库需在运行（docker compose up -d，暴露5433）；
-// 不可达时跳过。运行：go test -bench=. -benchmem -run=^$
+// 不可达时直接失败，避免基准空成功。运行：go test -bench=. -benchmem -run=^$
 package main
 
 import (
@@ -9,22 +9,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/ichaly/ideabase/gql"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
+	"github.com/ichaly/ideabase/gql/transport"
 )
 
-// benchExecutor 连demo库并装配引擎；库不可达则跳过基准
-func benchExecutor(b *testing.B) *gql.Executor {
-	db, err := gorm.Open(postgres.Open(demoDSN()), &gorm.Config{})
+// benchEngine 连demo库并装配引擎；库不可达则直接失败
+func benchEngine(b *testing.B) *gql.Engine {
+	db, err := openDemoDB()
 	if err != nil {
-		b.Skipf("demo数据库不可用（docker compose up -d）: %v", err)
+		b.Fatalf("demo数据库不可用（先运行 docker compose up -d）: %v", err)
 	}
-	if sqlDB, err := db.DB(); err != nil || sqlDB.Ping() != nil {
-		b.Skip("demo数据库无法连接（docker compose up -d）")
-	}
-	executor, err := buildExecutor(db)
+	b.Cleanup(func() { _ = db.Pool().Close() })
+	executor, err := buildEngine(db)
 	if err != nil {
 		b.Fatalf("引擎装配失败: %v", err)
 	}
@@ -33,16 +29,16 @@ func benchExecutor(b *testing.B) *gql.Executor {
 
 // runQuery 经公开 HTTP 入口端到端跑一条查询并校验无错（计划缓存首次后命中，测稳态吞吐）
 func runQuery(b *testing.B, query string) {
-	executor := benchExecutor(b)
-	app := fiber.New()
-	executor.Bind(app.Group(executor.Path()))
+	executor := benchEngine(b)
+	handler := transport.NewHandler(executor, transport.Options{})
 	body := `{"query":` + strconv.Quote(query) + `}`
 	do := func() {
-		req := httptest.NewRequest("POST", executor.Path(), strings.NewReader(body))
+		req := httptest.NewRequest("POST", "/graphql", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := app.Test(req)
-		if err != nil || resp.StatusCode != 200 {
-			b.Fatalf("查询出错: err=%v status=%v", err, resp)
+		resp := httptest.NewRecorder()
+		handler.ServeHTTP(resp, req.WithContext(demoContext(req.Context(), 1)))
+		if resp.Code != 200 {
+			b.Fatalf("查询出错: status=%v", resp.Code)
 		}
 	}
 	do() // 预热编译缓存

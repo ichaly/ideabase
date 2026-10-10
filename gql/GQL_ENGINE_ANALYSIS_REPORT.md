@@ -1,5 +1,16 @@
 # GQL 引擎架构审查与完善方案
 
+> 2026-08-26 更新：引擎、元数据加载、事务、RLS、CDC 与 PostgreSQL 治理存储已统一迁移到
+> `database/sql` 边界；GQL API 与实现不再直接调用 GORM。已有 GORM 应用可通过
+> `gormDB.DB()` 复用同一个连接池。下文涉及 GORM 的内容均为历史问题与方案记录。
+
+> 2026-08-09 更新：本文主体是基于 `2e63dac` 的历史差距分析，评分不代表当前
+> `feat/gql-gateway-engine`。该分支已完成统一 Resolver/Handler、标准 mutation 串行事务、
+> fail-closed 权限与 RLS、审计/软删/purge、有效 Schema、可组合 Gateway、远程 delegation、
+> transport-neutral runtime、HTTP/SSE/WS、健康检查、资源上限和低基数观测。当前行为与
+> 迁移边界以 [`README.md`](README.md)、[`MIGRATION.md`](MIGRATION.md) 和执行测试为准；
+> 下文保留作为问题来源及设计决策记录。
+
 > 审查范围：`/Users/Chaly/Documents/Workspace/ideabase/gql`
 >
 > 审查基线：`2e63dac`

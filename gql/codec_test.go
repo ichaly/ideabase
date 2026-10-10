@@ -30,7 +30,7 @@ func TestFinalize(t *testing.T) {
 			}},
 		}}},
 	}
-	meta.setCodecs([]Codec{idCodec{}})
+	meta.setCodecs([]Codec{&idCodec{}})
 
 	meta.finalize()
 
@@ -46,7 +46,7 @@ func TestFinalize(t *testing.T) {
 // TestIdCodec 内置ID codec契约：数字token→带引号shortId，0/非数字不处理；
 // 入参shortId/十进制字符串→int64，其余原样
 func TestIdCodec(t *testing.T) {
-	codec := idCodec{}
+	codec := &idCodec{}
 
 	repl := codec.Encode([]byte("42"))
 	assert.NotNil(t, repl)
@@ -60,6 +60,17 @@ func TestIdCodec(t *testing.T) {
 	assert.Equal(t, int64(42), codec.Decode(token), "shortId还原")
 	assert.Equal(t, int64(42), codec.Decode("42"), "十进制字符串兼容")
 	assert.Equal(t, int64(7), codec.Decode(int64(7)), "数字入参原样")
+}
+
+func TestIdCodecCacheIsInstanceScoped(t *testing.T) {
+	first, second := &idCodec{}, &idCodec{}
+	first.Encode([]byte("42"))
+	second.Encode([]byte("43"))
+
+	_, firstHasSecond := first.tokens.Load(uint64(43))
+	_, secondHasFirst := second.tokens.Load(uint64(42))
+	assert.False(t, firstHasSecond)
+	assert.False(t, secondHasFirst)
 }
 
 // phoneClashCodec 与实体类同名的codec:scalar Phone与type Phone并存schema无法加载

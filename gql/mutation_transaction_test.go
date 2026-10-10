@@ -2,10 +2,12 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
 	"github.com/ichaly/ideabase/gql/compiler"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -28,12 +30,12 @@ func TestMutationRootFieldsExecuteSerially(t *testing.T) {
 
 	operation := `mutation SerialMutation($email: String!) {
 		created: createUser(input: { name: "Alice", email: $email }) { id }
-		updated: updateUser(input: { name: "Bob" }, where: { email: { eq: $email } }) { name }
+		updated: updateUsers(input: { name: "Bob" }, where: { email: { eq: $email } }) { returning { name } }
 	}`
 	for _, email := range []string{"serial-1@x.com", "serial-2@x.com"} {
 		reply := executor.run(context.Background(), operation, map[string]any{"email": email}, "")
 		require.Empty(t, reply.Errors, "%v", reply.Errors)
-		require.Equal(t, "Bob", reply.Data["updated"].(map[string]any)["name"])
+		require.Equal(t, "Bob", reply.Data["updated"].(map[string]any)["returning"].([]any)[0].(map[string]any)["name"])
 	}
 	require.Equal(t, 2, dialect.mutations, "非volatile子计划在热请求中不得重复编译")
 }
@@ -46,7 +48,7 @@ func TestMutationRootPlansOnlyCacheNonVolatileFields(t *testing.T) {
 
 	operation := `mutation VolatileMutation($input: UserCreateInput!, $email: String!) {
 		createUser(input: $input) { id }
-		updateUser(input: { name: "Updated" }, where: { email: { eq: $email } }) { name }
+		updateUsers(input: { name: "Updated" }, where: { email: { eq: $email } }) { affectedCount }
 	}`
 	for _, email := range []string{"volatile-1@x.com", "volatile-2@x.com"} {
 		reply := executor.run(context.Background(), operation, map[string]any{
@@ -59,7 +61,7 @@ func TestMutationRootPlansOnlyCacheNonVolatileFields(t *testing.T) {
 }
 
 func TestRootExecutionKeepsDefaultFastPaths(t *testing.T) {
-	executor := &Executor{resolvers: map[string]Resolver{}}
+	executor := &Engine{resolvers: map[string]Resolver{}}
 	field := func(name string) *ast.Field { return &ast.Field{Name: name} }
 
 	require.False(t, executor.needsRootExecution(&ast.OperationDefinition{
@@ -71,6 +73,17 @@ func TestRootExecutionKeepsDefaultFastPaths(t *testing.T) {
 	require.True(t, executor.needsRootExecution(&ast.OperationDefinition{
 		Operation: ast.Mutation, SelectionSet: ast.SelectionSet{field("createUser"), field("createPost")},
 	}))
+	require.True(t, executor.needsRootExecution(&ast.OperationDefinition{
+		Operation: ast.Mutation, SelectionSet: ast.SelectionSet{field("__typename")},
+	}))
+}
+
+func TestMutationTypenameDoesNotRequireSQLMutation(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	reply := executor.run(context.Background(), `mutation { root: __typename }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, "Mutation", reply.Data["root"])
 }
 
 func TestMutationFailureRollsBackEarlierRootFields(t *testing.T) {
@@ -78,15 +91,15 @@ func TestMutationFailureRollsBackEarlierRootFields(t *testing.T) {
 	defer cleanup()
 
 	fail := NewResolver("Mutation", "failMutation", "测试事务回滚",
-		func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
-			if err := Tx(ctx).Exec(
-				"INSERT INTO users(name, email) VALUES(?, ?)", "Resolver", "resolver-rollback@x.com",
-			).Error; err != nil {
+		func(ctx context.Context, _ Root[struct{}, bool], _ struct{}) (bool, error) {
+			if _, err := transactionFromContext(ctx).ExecContext(ctx,
+				"INSERT INTO users(name, email) VALUES($1, $2)", "Resolver", "resolver-rollback@x.com",
+			); err != nil {
 				return false, err
 			}
 			return false, errors.New("stop mutation")
 		})
-	require.NoError(t, executor.Register(fail))
+	require.NoError(t, executor.register(fail))
 
 	reply := executor.run(context.Background(), `mutation {
 		createUser(input: { name: "Rollback", email: "rollback@x.com" }) { id }
@@ -95,10 +108,23 @@ func TestMutationFailureRollsBackEarlierRootFields(t *testing.T) {
 
 	require.NotEmpty(t, reply.Errors)
 	var count int64
-	require.NoError(t, db.Table("users").Where("email IN ?", []string{
-		"rollback@x.com", "resolver-rollback@x.com",
-	}).Count(&count).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM users WHERE email IN ($1, $2)`,
+		"rollback@x.com", "resolver-rollback@x.com").Scan(&count))
 	require.Zero(t, count, "失败必须同时回滚默认CRUD和Resolver写入")
+}
+
+func TestRootTransactionTreatsRollbackConnectionLossAsIndeterminate(t *testing.T) {
+	db, cleanup := setupTestDatabase(t)
+	defer cleanup()
+	sentinel := errors.New("mutation failed")
+	err, rolledBack := runRootTransaction(context.Background(), db, nil, func(tx *sql.Tx) error {
+		var pid int
+		require.NoError(t, tx.QueryRowContext(context.Background(), `SELECT pg_backend_pid()`).Scan(&pid))
+		testExec(t, db, `SELECT pg_terminate_backend($1)`, pid)
+		return sentinel
+	})
+	require.Error(t, err)
+	require.False(t, rolledBack)
 }
 
 func TestMutationResolverSharesTransactionWithDefaultFields(t *testing.T) {
@@ -106,30 +132,31 @@ func TestMutationResolverSharesTransactionWithDefaultFields(t *testing.T) {
 	defer cleanup()
 
 	seed := NewResolver("Mutation", "seedUser", "测试Resolver事务连接",
-		func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
-			tx := Tx(ctx)
+		func(ctx context.Context, _ Root[struct{}, bool], _ struct{}) (bool, error) {
+			tx := transactionFromContext(ctx)
 			if tx == nil {
 				return false, errors.New("mutation transaction missing")
 			}
-			return true, tx.Exec(
-				"INSERT INTO users(name, email) VALUES(?, ?)", "Resolver", "resolver-tx@x.com",
-			).Error
+			_, err := tx.ExecContext(ctx,
+				"INSERT INTO users(name, email) VALUES($1, $2)", "Resolver", "resolver-tx@x.com",
+			)
+			return err == nil, err
 		})
-	require.NoError(t, executor.Register(seed))
+	require.NoError(t, executor.register(seed))
 
 	reply := executor.run(context.Background(), `mutation {
 		seedUser
-		updated: updateUser(input: { name: "Shared" }, where: { email: { eq: "resolver-tx@x.com" } }) { name }
+		updated: updateUsers(input: { name: "Shared" }, where: { email: { eq: "resolver-tx@x.com" } }) { returning { name } }
 	}`, nil, "")
 
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.Equal(t, "Shared", reply.Data["updated"].(map[string]any)["name"])
+	require.Equal(t, "Shared", reply.Data["updated"].(map[string]any)["returning"].([]any)[0].(map[string]any)["name"])
 }
 
 func TestMutationResolverWithoutDatabase(t *testing.T) {
 	resolver := NewResolver("Mutation", "pingMutation", "纯计算mutation",
-		func(context.Context, Root, struct{}) (string, error) { return "pong", nil })
-	executor := &Executor{resolvers: map[string]Resolver{resolver.Name(): resolver}}
+		func(context.Context, Root[struct{}, string], struct{}) (string, error) { return "pong", nil })
+	executor := &Engine{resolvers: map[string]Resolver{resolver.Name(): resolver}}
 	operation := &ast.OperationDefinition{
 		Operation: ast.Mutation,
 		SelectionSet: ast.SelectionSet{&ast.Field{
@@ -164,15 +191,39 @@ func TestPersistedMutationKeepsSerialExecutionAfterPrewarm(t *testing.T) {
 	require.Equal(t, "After", post["user"].(map[string]any)["name"])
 }
 
+func TestPersistedRootPlanPrewarmKeepsGovernanceFlags(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+
+	// 多根 mutation 会走 rootResolver 预热路径；User 的治理配置必须同步写入
+	// 持久化缓存条目，否则执行期会直接跳过 authorize。
+	executor.metadata.Nodes["User"].Permissions = map[string]*protocol.Permission{
+		"writer": {Insert: []string{"name", "email"}},
+	}
+	resolver := NewResolver("Mutation", "pingMutation", "测试持久化根计划治理标记",
+		func(context.Context, Root[struct{}, string], struct{}) (string, error) { return "pong", nil })
+	require.NoError(t, executor.register(resolver))
+
+	content := `mutation PersistedGoverned($email: String!) {
+		createUser(input: { name: "Alice", email: $email }) { id }
+		pingMutation
+	}`
+	require.NoError(t, executor.loadDocument(content))
+
+	entry, ok := executor.cache.Get(planKeyFor("PersistedGoverned", content, "", ""))
+	require.True(t, ok)
+	require.True(t, entry.rootResolver)
+}
+
 func TestNestedMutationReusesOuterTransaction(t *testing.T) {
 	executor, db, cleanup := newTestExecutor(t, nil)
 	defer cleanup()
 
 	nested := NewResolver("Mutation", "nestedMutation", "嵌套执行mutation",
-		func(ctx context.Context, _ Root, _ struct{}) (bool, error) {
+		func(ctx context.Context, _ Root[struct{}, bool], _ struct{}) (bool, error) {
 			reply := executor.execute(ctx, `mutation {
 				createUser(input: { name: "Nested", email: "nested@x.com" }) { id }
-				updateUser(input: { name: "Inner" }, where: { email: { eq: "nested@x.com" } }) { id }
+				updateUsers(input: { name: "Inner" }, where: { email: { eq: "nested@x.com" } }) { affectedCount }
 			}`, nil, "")
 			if len(reply.Errors) > 0 {
 				return false, reply.Errors
@@ -180,10 +231,10 @@ func TestNestedMutationReusesOuterTransaction(t *testing.T) {
 			return true, nil
 		})
 	fail := NewResolver("Mutation", "failOuterMutation", "触发外层回滚",
-		func(context.Context, Root, struct{}) (bool, error) {
+		func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
 			return false, errors.New("rollback outer mutation")
 		})
-	require.NoError(t, executor.Register(nested, fail))
+	require.NoError(t, executor.register(nested, fail))
 
 	reply := executor.run(context.Background(), `mutation {
 		nestedMutation
@@ -191,6 +242,34 @@ func TestNestedMutationReusesOuterTransaction(t *testing.T) {
 	}`, nil, "")
 	require.NotEmpty(t, reply.Errors)
 	var count int64
-	require.NoError(t, db.Table("users").Where("email = ?", "nested@x.com").Count(&count).Error)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM users WHERE email = $1`, "nested@x.com").Scan(&count))
 	require.Zero(t, count, "嵌套mutation必须随外层事务一起回滚")
+}
+
+func TestCaughtNestedMutationFailureRollsBackOnlyItsSavepoint(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+
+	fail := NewResolver("Mutation", "failNestedMutation", "", func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
+		return false, errors.New("nested secret failure")
+	})
+	catch := NewResolver("Mutation", "catchNestedMutation", "", func(ctx context.Context, _ Root[struct{}, bool], _ struct{}) (bool, error) {
+		reply := executor.execute(ctx, `mutation {
+			createUser(input: { name: "Inner", email: "inner-savepoint@x.com" }) { id }
+			failNestedMutation
+		}`, nil, "")
+		return len(reply.Errors) > 0, nil
+	})
+	require.NoError(t, executor.register(fail, catch))
+
+	reply := executor.run(context.Background(), `mutation {
+		catchNestedMutation
+		createUser(input: { name: "Outer", email: "outer-savepoint@x.com" }) { id }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	var inner, outer int64
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM users WHERE email = $1`, "inner-savepoint@x.com").Scan(&inner))
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM users WHERE email = $1`, "outer-savepoint@x.com").Scan(&outer))
+	require.Zero(t, inner)
+	require.EqualValues(t, 1, outer)
 }

@@ -4,24 +4,27 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 自注册PostgreSQL方言
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/gqlerror"
-	"gorm.io/gorm"
 )
 
 // newTestExecutor 基于真实PostgreSQL构建完整执行器（各测试的唯一构造入口）；
 // tweak 在元数据构建前调整配置，opts 传递元数据选项（如WithCodecs）
-func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOption) (*Executor, *gorm.DB, func()) {
+func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOption) (*Engine, *std.Connection, func()) {
 	db, cleanup := setupTestDatabase(t)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err, "创建配置失败")
 	k.Set("mode", "dev")
+	k.Set("schema.introspection", true)
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	if tweak != nil {
@@ -35,20 +38,23 @@ func newTestExecutor(t *testing.T, tweak func(*std.Konfig), opts ...MetadataOpti
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err, "创建编译器失败")
 
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err, "创建执行器失败")
 
-	return executor, db, cleanup
+	return executor, db, func() {
+		executor.Close()
+		cleanup()
+	}
 }
 
 // setupTestExecutor 默认配置的执行器
-func setupTestExecutor(t *testing.T) (*Executor, func()) {
+func setupTestExecutor(t *testing.T) (*Engine, func()) {
 	executor, _, cleanup := newTestExecutor(t, nil)
 	return executor, cleanup
 }
 
 // run 是测试侧的对象化辅助：生产API只返回字节，需要断言Data时由测试自行解码。
-func (my *Executor) run(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
+func (my *Engine) run(ctx context.Context, query string, variables map[string]interface{}, operationName string) gqlReply {
 	body, err := my.executeBytes(ctx, query, variables, operationName)
 	if err != nil {
 		return gqlReply{Errors: gqlerror.List{gqlerror.Wrap(err)}}
@@ -68,6 +74,122 @@ func TestExecuteReturnsGraphQLBytes(t *testing.T) {
 	out, err := executor.Execute(context.Background(), `query { users { total } }`, nil)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"data":{"users":{"total":0}}}`, string(out))
+}
+
+func TestOffsetPageBeyondEndKeepsFilteredTotal(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	reply := executor.run(context.Background(), `mutation {
+		createUser(input: { name: "offset-total", email: "offset-total@example.com" }) { id }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+
+	reply = executor.run(context.Background(), `{
+		users(where: { name: { eq: "offset-total" } }, limit: 1, offset: 10) {
+			items { id }
+			total
+		}
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	users := reply.Data["users"].(map[string]any)
+	require.Empty(t, users["items"])
+	require.EqualValues(t, 1, users["total"])
+}
+
+func TestNestedCreatePreservesDefaultsAcrossRowShapes(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	testExec(t, db, `ALTER TABLE posts ALTER COLUMN content SET DEFAULT 'db-default'`)
+
+	reply := executor.run(context.Background(), `mutation {
+		createUser(input: { name: "shape", email: "shape@x.com", posts: { create: [
+			{ title: "defaulted" },
+			{ title: "explicit", content: "value" }
+		] } }) { id }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+
+	var posts []struct{ Title, Content string }
+	rows, err := db.Pool().QueryContext(context.Background(), `SELECT title, content FROM posts WHERE title IN ($1, $2) ORDER BY title`, "defaulted", "explicit")
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var post struct{ Title, Content string }
+		require.NoError(t, rows.Scan(&post.Title, &post.Content))
+		posts = append(posts, post)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []struct{ Title, Content string }{{"defaulted", "db-default"}, {"explicit", "value"}}, posts)
+}
+
+func TestEngineCloseRejectsExecuteAndIsIdempotent(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	executor.Close()
+	executor.Close()
+	_, err := executor.Execute(context.Background(), `query { users { total } }`, nil)
+	require.Error(t, err)
+}
+
+func TestEngineCloseClosesActiveSubscription(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	executor.cdc = runtimeTestNotifier{}
+	ctx := context.Background()
+	events, err := executor.subscribe(ctx, `subscription { users { total } }`, nil, "")
+	require.NoError(t, err)
+	select {
+	case <-events:
+	case <-time.After(3 * time.Second):
+		t.Fatal("missing initial subscription result")
+	}
+	executor.Close()
+	select {
+	case _, ok := <-events:
+		require.False(t, ok)
+	case <-time.After(3 * time.Second):
+		t.Fatal("active subscription was not closed")
+	}
+}
+
+func TestLoadDocumentRejectsConflictingOperationName(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	one := `query SameName { users { total } }`
+	two := `query SameName { users { items { name } } }`
+	require.NoError(t, executor.loadDocument(one))
+	require.Error(t, executor.loadDocument(two))
+	require.NoError(t, executor.loadDocument(one))
+}
+
+func TestPersistedConditionalOperationCachesFrontendDocument(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	query := `query Conditional($skip: Boolean!) { users { total items @skip(if: $skip) { name } } }`
+	require.NoError(t, executor.loadDocument(query))
+	cached := executor.documents["Conditional"].doc
+	require.NotNil(t, cached)
+	_, err := executor.plan(query, "Conditional", map[string]any{"skip": true})
+	require.NoError(t, err)
+	plan, err := executor.plan(query, "Conditional", map[string]any{"skip": false})
+	require.NoError(t, err)
+	require.NotEmpty(t, plan.operation.SelectionSet)
+	require.Same(t, cached, executor.documents["Conditional"].doc)
+}
+
+func TestPersistedPrewarmFeedsRuntimePlanWithoutCompile(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	query := `query Warmed { users { total } }`
+	require.NoError(t, executor.loadDocument(query))
+	key := planKeyFor("Warmed", query, "", executor.baseView.artifact.Fingerprint+"\x00"+executor.baseView.artifact.PermissionSignature)
+	warmed, ok := executor.cache.Get(key)
+	require.True(t, ok)
+	_, err := executor.plan(query, "Warmed", nil)
+	require.NoError(t, err)
+	runtime, ok := executor.cache.Get(key)
+	require.True(t, ok)
+	require.Same(t, warmed, runtime)
 }
 
 // TestExecutorRoundTrip 端到端冒烟：增删改查 + 关系查询 + 计划缓存
@@ -112,14 +234,14 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Equal(t, "Hello", posts[0].(map[string]interface{})["title"])
 
 	// 4. 更新
-	reply = executor.run(ctx, `mutation ($id: ID) {
+	reply = executor.run(ctx, `mutation ($id: ID!) {
 		updateUser(input: { name: "Bob" }, id: $id) { id name }
 	}`, map[string]interface{}{"id": userId}, "")
 	require.Empty(t, reply.Errors, "更新用户失败: %v", reply.Errors)
 	require.Equal(t, "Bob", reply.Data["updateUser"].(map[string]interface{})["name"])
 
 	// 5. 计划缓存：同一查询第二次命中缓存且结果一致
-	cached := executor.cache.order.Len()
+	cached := executor.cache.Len()
 	reply = executor.run(ctx, `query {
 		users(where: { name: { eq: "Bob" } }) { items { id name } }
 	}`, nil, "")
@@ -128,7 +250,7 @@ func TestExecutorRoundTrip(t *testing.T) {
 		users(where: { name: { eq: "Bob" } }) { items { id name } }
 	}`, nil, "")
 	require.Empty(t, reply.Errors)
-	require.Equal(t, cached+1, executor.cache.order.Len(), "重复查询应命中缓存而非新增计划")
+	require.Equal(t, cached+1, executor.cache.Len(), "重复查询应命中缓存而非新增计划")
 	require.Equal(t, "Bob", reply.Data["users"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["name"])
 
 	// 6. 删除（先删文章再删用户，验证计数返回）
@@ -136,7 +258,7 @@ func TestExecutorRoundTrip(t *testing.T) {
 	require.Empty(t, reply.Errors, "删除文章失败: %v", reply.Errors)
 	require.EqualValues(t, 1, reply.Data["deletePost"])
 
-	reply = executor.run(ctx, `mutation ($id: ID) { deleteUser(id: $id) }`, map[string]interface{}{"id": userId}, "")
+	reply = executor.run(ctx, `mutation ($id: ID!) { deleteUser(id: $id) }`, map[string]interface{}{"id": userId}, "")
 	require.Empty(t, reply.Errors, "删除用户失败: %v", reply.Errors)
 	require.EqualValues(t, 1, reply.Data["deleteUser"])
 
@@ -222,7 +344,7 @@ func TestExecutorDistinct(t *testing.T) {
 	]) { id } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 
-	reply = executor.run(ctx, `query { users(distinct: ["name"]) { items { name } } }`, nil, "")
+	reply = executor.run(ctx, `query { users(distinct: [name]) { items { name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "distinct查询失败: %v", reply.Errors)
 	items := reply.Data["users"].(map[string]interface{})["items"].([]interface{})
 	require.Len(t, items, 2, "按name去重应得2行")
@@ -241,7 +363,7 @@ func TestExecutorBulk(t *testing.T) {
 	}
 
 	// 批量创建（变量数组形态）
-	data := run(`mutation ($in: [UserCreateInput!]!) { createUsers(input: $in) { id name } }`,
+	data := run(`mutation ($in: [UserCreateRowInput!]!) { createUsers(input: $in) { id name } }`,
 		map[string]interface{}{"in": []interface{}{
 			map[string]interface{}{"name": "A", "email": "a@x.com"},
 			map[string]interface{}{"name": "B", "email": "b@x.com"},
@@ -252,7 +374,7 @@ func TestExecutorBulk(t *testing.T) {
 	data = run(`mutation { upsertUsers(input: [
 		{ name: "A2", email: "a@x.com" },
 		{ name: "C", email: "c@x.com" }
-	], on: ["email"]) { name email } }`, nil)
+	], on: UNIQUE_1) { name email } }`, nil)
 	require.Len(t, data["upsertUsers"].([]interface{}), 2)
 	users := run(`query { users(sort: { name: ASC }) { items { name } total } }`, nil)["users"].(map[string]interface{})
 	require.EqualValues(t, 3, users["total"], "upsert应更新1条插入1条")
@@ -271,7 +393,7 @@ func TestExecutorBulk(t *testing.T) {
 	// m2m内联创建：更新文章时内联建新标签并关联
 	postId := run(`mutation ($u: ID!) { createPost(input: { title: "M", userId: $u }) { id } }`,
 		map[string]interface{}{"u": owner["id"]})["createPost"].(map[string]interface{})["id"]
-	run(`mutation ($id: ID) { updatePost(input: { tags: { create: [{ name: "newtag" }] } }, id: $id) { id } }`,
+	run(`mutation ($id: ID!) { updatePost(input: { tags: { create: [{ name: "newtag" }] } }, id: $id) { id } }`,
 		map[string]interface{}{"id": postId})
 	tags := run(`query ($id: ID) { posts(id: $id) { items { tags { name } } } }`,
 		map[string]interface{}{"id": postId})["posts"].(map[string]interface{})["items"].([]interface{})[0].(map[string]interface{})["tags"].([]interface{})
@@ -297,7 +419,7 @@ func TestExecutorSearch(t *testing.T) {
 	require.NoError(t, err)
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 
 	// 官方镜像无jieba：应探测出trigram（contrib自动启用）
@@ -403,7 +525,7 @@ func TestExecutorRelationOps(t *testing.T) {
 	require.Equal(t, "PA", posts[0].(map[string]interface{})["title"])
 
 	// 多对多connect：文章挂两个标签（原子，单语句）
-	run(`mutation ($id: ID, $t1: ID!, $t2: ID!) {
+	run(`mutation ($id: ID!, $t1: ID!, $t2: ID!) {
 		updatePost(input: { tags: { connect: [$t1, $t2] } }, id: $id) { id }
 	}`, map[string]interface{}{"id": orphanA, "t1": tag1, "t2": tag2})
 	data = run(`query ($id: ID) { posts(id: $id) { items { tags { name } } } }`, map[string]interface{}{"id": orphanA})
@@ -411,7 +533,7 @@ func TestExecutorRelationOps(t *testing.T) {
 	require.Len(t, tags, 2)
 
 	// disconnect解除一个
-	run(`mutation ($id: ID, $t: ID!) {
+	run(`mutation ($id: ID!, $t: ID!) {
 		updatePost(input: { tags: { disconnect: [$t] } }, id: $id) { id }
 	}`, map[string]interface{}{"id": orphanA, "t": tag1})
 	data = run(`query ($id: ID) { posts(id: $id) { items { tags { name } } } }`, map[string]interface{}{"id": orphanA})
@@ -489,6 +611,47 @@ func TestExecutorCursor(t *testing.T) {
 	}
 }
 
+func TestExecutorCursorRejectsCrossIdentityRevisionCoordinateAndSort(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	create := executor.run(context.Background(), `mutation { createUser(input: { name: "cursor", email: "cursor@x.com" }) { id } }`, nil, "")
+	require.Empty(t, create.Errors, "%v", create.Errors)
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user", PolicyRevision: 7})
+	require.NoError(t, err)
+	first := executor.run(WithIdentity(context.Background(), identity), `{ users(first: 1, sort: { id: ASC }) { pageInfo { end } items { id } } }`, nil, "")
+	require.Empty(t, first.Errors, "%v", first.Errors)
+	cursor := first.Data["users"].(map[string]any)["pageInfo"].(map[string]any)["end"].(string)
+	require.True(t, strings.HasPrefix(cursor, "v1."), cursor)
+
+	for name, ctx := range map[string]context.Context{
+		"tenant": WithIdentity(context.Background(), mustIdentity(t, IdentityInput{Tenant: "tenant-b", Subject: "user", PolicyRevision: 7})),
+		"policy": WithIdentity(context.Background(), mustIdentity(t, IdentityInput{Tenant: "tenant-a", Subject: "user", PolicyRevision: 8})),
+	} {
+		t.Run(name, func(t *testing.T) {
+			reply := executor.run(ctx, `query($cursor: Cursor) { users(first: 1, after: $cursor, sort: { id: ASC }) { items { id } } }`, map[string]any{"cursor": cursor}, "")
+			require.NotEmpty(t, reply.Errors)
+			require.Equal(t, "BAD_CURSOR", reply.Errors[0].Extensions["code"])
+		})
+	}
+	for name, query := range map[string]string{
+		"coordinate": `query($cursor: Cursor) { posts(first: 1, after: $cursor, sort: { id: ASC }) { items { id } } }`,
+		"sort":       `query($cursor: Cursor) { users(first: 1, after: $cursor, sort: { id: DESC }) { items { id } } }`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			reply := executor.run(WithIdentity(context.Background(), identity), query, map[string]any{"cursor": cursor}, "")
+			require.NotEmpty(t, reply.Errors)
+			require.Equal(t, "BAD_CURSOR", reply.Errors[0].Extensions["code"])
+		})
+	}
+}
+
+func mustIdentity(t *testing.T, input IdentityInput) Identity {
+	t.Helper()
+	identity, err := NewIdentity(input)
+	require.NoError(t, err)
+	return identity
+}
+
 // TestExecutorStats 统计聚合真库验证：全表聚合与分组聚合
 func TestExecutorStats(t *testing.T) {
 	executor, cleanup := setupTestExecutor(t)
@@ -514,7 +677,7 @@ func TestExecutorStats(t *testing.T) {
 	require.EqualValues(t, 3, row["email"].(map[string]interface{})["countDistinct"])
 
 	// 分组聚合
-	reply = executor.run(ctx, `query { userStats(groupBy: ["name"], where: { name: { eq: "B" } }) { key count } }`, nil, "")
+	reply = executor.run(ctx, `query { userStats(groupBy: [name], where: { name: { eq: "B" } }) { key count } }`, nil, "")
 	require.Empty(t, reply.Errors, "分组聚合失败: %v", reply.Errors)
 	rows = reply.Data["userStats"].([]interface{})
 	require.Len(t, rows, 1)
@@ -523,7 +686,7 @@ func TestExecutorStats(t *testing.T) {
 	require.Equal(t, "B", row["key"].(map[string]interface{})["name"])
 
 	// having：分组后按聚合值过滤（库内HAVING，A组count=1被滤，只剩B组count=2）
-	reply = executor.run(ctx, `query { userStats(groupBy: ["name"], having: { count: { gt: 1 } }) { key count } }`, nil, "")
+	reply = executor.run(ctx, `query { userStats(groupBy: [name], having: { count: { gt: 1 } }) { key count } }`, nil, "")
 	require.Empty(t, reply.Errors, "having过滤失败: %v", reply.Errors)
 	rows = reply.Data["userStats"].([]interface{})
 	require.Len(t, rows, 1, "having count>1 只应返回B组")
@@ -548,7 +711,7 @@ func TestExecutorDocuments(t *testing.T) {
 		}
 	`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "user.graphql"), []byte(document), 0644))
-	require.NoError(t, executor.LoadDocuments(dir), "加载操作文档失败")
+	require.NoError(t, executor.loadDocuments(dir), "加载操作文档失败")
 
 	// 按名执行变更与查询
 	reply := executor.runOperation(ctx, "AddUser", map[string]interface{}{
@@ -573,7 +736,7 @@ func TestExecutorScope(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
 
-	require.NoError(t, db.Exec(`ALTER TABLE users ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
+	testExec(t, db, `ALTER TABLE users ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
@@ -581,17 +744,17 @@ func TestExecutorScope(t *testing.T) {
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
-		"User": {Table: "users", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+		"User": {Table: "users", Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}}},
 	})
 	meta, err := NewMetadata(k, db)
 	require.NoError(t, err, "加载元数据失败")
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 
-	require.NoError(t, db.Exec(`INSERT INTO users (name, email, tenant_id) VALUES
-		('t1a','t1a@x.com',1), ('t1b','t1b@x.com',1), ('t2a','t2a@x.com',2)`).Error)
+	testExec(t, db, `INSERT INTO users (name, email, tenant_id) VALUES
+		('t1a','t1a@x.com',1), ('t1b','t1b@x.com',1), ('t2a','t2a@x.com',2)`)
 
 	// 租户1上下文：只看到自己的2条
 	ctx := WithScope(context.Background(), map[string]any{"tenant": 1})
@@ -621,36 +784,40 @@ func TestExecutorScope(t *testing.T) {
 	require.Empty(t, reply.Errors, "租户1创建失败: %v", reply.Errors)
 	newID := reply.Data["createUser"].(map[string]interface{})["id"]
 	var tid int
-	require.NoError(t, db.Raw(`SELECT tenant_id FROM users WHERE id = ?`, newID).Scan(&tid).Error)
+	require.NoError(t, testQueryRow(db, `SELECT tenant_id FROM users WHERE id = $1`, newID).Scan(&tid))
 	require.Equal(t, 1, tid, "create 应自动填当前租户")
 
 	// 写隔离：update/delete 只能改本租户的行——租户2 改不到租户1 的 new1
 	ctx2 := WithScope(context.Background(), map[string]any{"tenant": 2})
-	reply = executor.run(ctx2, `mutation { updateUser(input: { name: "hacked" }, where: { name: { eq: "new1" } }) { id } }`, nil, "")
+	reply = executor.run(ctx2, `mutation { updateUsers(input: { name: "hacked" }, where: { name: { eq: "new1" } }) { affectedCount } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.Empty(t, reply.Data["updateUser"], "租户2 不应改到租户1 的行")
+	require.EqualValues(t, 0, reply.Data["updateUsers"].(map[string]any)["affectedCount"], "租户2 不应改到租户1 的行")
 	var name string
-	require.NoError(t, db.Raw(`SELECT name FROM users WHERE id = ?`, newID).Scan(&name).Error)
+	require.NoError(t, testQueryRow(db, `SELECT name FROM users WHERE id = $1`, newID).Scan(&name))
 	require.Equal(t, "new1", name, "租户1 的行未被租户2 篡改")
 
 	// 租户1 自己能改
-	reply = executor.run(ctx1, `mutation { updateUser(input: { name: "own" }, where: { name: { eq: "new1" } }) { id name } }`, nil, "")
+	reply = executor.run(ctx1, `mutation { updateUsers(input: { name: "own" }, where: { name: { eq: "new1" } }) { affectedCount returning { id name } } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
-	require.Equal(t, "own", reply.Data["updateUser"].(map[string]interface{})["name"], "租户1 改自己的行成功")
+	updated := reply.Data["updateUsers"].(map[string]interface{})
+	require.EqualValues(t, 1, updated["affectedCount"])
+	require.Equal(t, "own", updated["returning"].([]any)[0].(map[string]any)["name"], "租户1 改自己的行成功")
 
-	// 安全回归：客户端整体变量 input 偷传作用域列 → 编译器层硬拒绝（堵整体变量绕过 schema）
-	reply = executor.run(ctx1, `mutation ($i: UserUpdateInput!) { updateUser(input: $i, where: { name: { eq: "own" } }) { id } }`,
+	// 安全回归：客户端整体变量 input 偷传作用域列 → 变量强校验先于编译器拒绝（堵整体变量绕过 schema）
+	reply = executor.run(ctx1, `mutation ($i: UserUpdateRowInput!) { updateUsers(input: $i, where: { name: { eq: "own" } }) { affectedCount } }`,
 		map[string]any{"i": map[string]any{"name": "z", "tenantId": 2}}, "")
 	require.NotEmpty(t, reply.Errors, "偷传作用域列应被拒绝")
-	require.Contains(t, reply.Errors[0].Message, "作用域列")
-	require.NoError(t, db.Raw(`SELECT name FROM users WHERE id = ?`, newID).Scan(&name).Error)
+	require.Contains(t, reply.Errors[0].Message, "unknown field")
+	require.NoError(t, testQueryRow(db, `SELECT name FROM users WHERE id = $1`, newID).Scan(&name))
 	require.Equal(t, "own", name, "被拒绝后行未被篡改")
 
-	// 安全回归：别租户用本租户行的唯一键 upsert → DO UPDATE 被作用域 WHERE 阻止，不劫持
-	reply = executor.run(ctx2, `mutation { upsertUsers(input: [{ name: "hijacked", email: "new1@x.com" }], on: ["email"]) { id } }`, nil, "")
-	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	// 安全回归：全局唯一键不含 tenant_id，upsert 不得出现在作用域实体 schema 中，
+	// 避免把跨租户冲突变成存在性探针；生产库应迁移为 (tenant_id, logical_key) unique。
+	reply = executor.run(ctx2, `mutation { upsertUsers(input: [{ name: "hijacked", email: "new1@x.com" }], on: UNIQUE_1) { id } }`, nil, "")
+	require.NotEmpty(t, reply.Errors)
+	require.Contains(t, reply.Errors[0].Message, `Cannot query field "upsertUsers"`)
 	var hijTenant int
-	require.NoError(t, db.Raw(`SELECT name, tenant_id FROM users WHERE email = 'new1@x.com'`).Row().Scan(&name, &hijTenant))
+	require.NoError(t, testQueryRow(db, `SELECT name, tenant_id FROM users WHERE email = 'new1@x.com'`).Scan(&name, &hijTenant))
 	require.Equal(t, "own", name, "租户2 不应劫持租户1 的行（DO UPDATE 被作用域 WHERE 阻止）")
 	require.Equal(t, 1, hijTenant, "租户1 行的 tenant_id 未被改写")
 
@@ -668,8 +835,9 @@ func TestExecutorScope(t *testing.T) {
 func TestExecutorScopeRelation(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`ALTER TABLE posts ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
-	require.NoError(t, db.Exec(`ALTER TABLE tags ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
+	testExec(t, db, `ALTER TABLE posts ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`)
+	testExec(t, db, `ALTER TABLE tags ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`)
+	testExec(t, db, `ALTER TABLE post_tags ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
@@ -677,25 +845,26 @@ func TestExecutorScopeRelation(t *testing.T) {
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
-		"Post": {Table: "posts", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
-		"Tag":  {Table: "tags", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+		"Post":    {Table: "posts", Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}}},
+		"Tag":     {Table: "tags", Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}}},
+		"PostTag": {Table: "post_tags", Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}}},
 	})
 	meta, err := NewMetadata(k, db)
 	require.NoError(t, err)
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 
 	// 租户1 的 post 与 tag1，租户2 的 tag2
-	require.NoError(t, db.Exec(`INSERT INTO users (id, name, email) VALUES (1, 'u', 'u@x.com')`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO posts (id, title, user_id, tenant_id) VALUES (1, 'p1', 1, 1)`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO tags (id, name, tenant_id) VALUES (1, 't1', 1), (2, 't2', 2)`).Error)
+	testExec(t, db, `INSERT INTO users (id, name, email) VALUES (1, 'u', 'u@x.com')`)
+	testExec(t, db, `INSERT INTO posts (id, title, user_id, tenant_id) VALUES (1, 'p1', 1, 1)`)
+	testExec(t, db, `INSERT INTO tags (id, name, tenant_id) VALUES (1, 't1', 1), (2, 't2', 2)`)
 
 	ctx1 := WithScope(context.Background(), map[string]any{"tenant": 1})
 	count := func(tagID int) int {
 		var c int
-		require.NoError(t, db.Raw(`SELECT COUNT(*) FROM post_tags WHERE post_id=1 AND tag_id=?`, tagID).Scan(&c).Error)
+		require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM post_tags WHERE post_id=1 AND tag_id=$1`, tagID).Scan(&c))
 		return c
 	}
 
@@ -708,4 +877,13 @@ func TestExecutorScopeRelation(t *testing.T) {
 	reply = executor.run(ctx1, `mutation { updatePost(input: { tags: { connect: [1] } }, id: 1) { id } }`, nil, "")
 	require.Empty(t, reply.Errors, "%v", reply.Errors)
 	require.Equal(t, 1, count(1), "应能挂接本租户 tag")
+	var linkTenant int
+	require.NoError(t, testQueryRow(db, `SELECT tenant_id FROM post_tags WHERE post_id=1 AND tag_id=1`).Scan(&linkTenant))
+	require.Equal(t, 1, linkTenant, "through row must inherit tenant scope")
+
+	// 即使两端仍属于租户1，中间行的作用域不匹配也不能被删除。
+	testExec(t, db, `UPDATE post_tags SET tenant_id=2 WHERE post_id=1 AND tag_id=1`)
+	reply = executor.run(ctx1, `mutation { updatePost(input: { tags: { disconnect: [1] } }, id: 1) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, 1, count(1), "through scope must protect relation deletion")
 }

@@ -2,13 +2,155 @@ package gql
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ichaly/ideabase/gql/internal"
+	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/std"
 	"github.com/stretchr/testify/require"
 )
+
+func decodeSubscriptionReply(t *testing.T, reply gqlReply) gqlReply {
+	t.Helper()
+	if reply.encoded == nil {
+		return reply
+	}
+	var decoded gqlReply
+	require.NoError(t, jsonNumeric.Unmarshal(reply.encoded, &decoded))
+	normalizeNumbers(decoded.Data)
+	return decoded
+}
+
+func TestSubscriptionAdmissionLimitsFeedsAndSubscribers(t *testing.T) {
+	engine := &Engine{feeds: make(map[string]*feed)}
+	for i := range maxTenantSubscriptionFeeds {
+		key := fmt.Sprint(i)
+		engine.feeds[key] = &feed{key: key, tenant: "tenant", subs: make(map[chan gqlReply]bool)}
+	}
+	err := engine.checkSubscriptionLimit("tenant", nil)
+	require.Equal(t, "LIMIT_EXCEEDED", GraphQLErrors(err)[0].Extensions["code"])
+	require.NoError(t, engine.checkSubscriptionLimit("other", nil))
+
+	shared := &feed{subs: make(map[chan gqlReply]bool)}
+	for range maxSubscribersPerFeed {
+		shared.subs[make(chan gqlReply)] = true
+	}
+	err = engine.checkSubscriptionLimit("tenant", shared)
+	require.Equal(t, "LIMIT_EXCEEDED", GraphQLErrors(err)[0].Extensions["code"])
+}
+
+func TestAcquireRefreshDoesNotHoldTenantWhileGlobalIsBusy(t *testing.T) {
+	engine := &Engine{refreshSem: make(chan struct{}, 1)}
+	for i := range engine.tenantRefresh {
+		engine.tenantRefresh[i] = make(chan struct{}, 1)
+	}
+	engine.refreshSem <- struct{}{}
+	identity, err := NewIdentity(IdentityInput{Tenant: "tenant-b", Subject: "user"})
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(WithIdentity(context.Background(), identity), 10*time.Millisecond)
+	defer cancel()
+	release, acquired := engine.acquireRefresh(ctx)
+	require.False(t, acquired)
+	release()
+	select {
+	case engine.tenantRefresh[tenantRefreshSlot("tenant-b")] <- struct{}{}:
+	default:
+		t.Fatal("tenant slot remained held after global wait timed out")
+	}
+}
+
+func TestSubscriptionReplyLimitReturnsBoundedTerminalError(t *testing.T) {
+	ctx := WithResponseLimit(context.Background(), 256)
+	body, err := marshalSubscriptionReply(ctx, gqlReply{Data: map[string]any{"value": strings.Repeat("x", 1024)}})
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(body), 256)
+	require.Contains(t, string(body), "LIMIT_EXCEEDED")
+	require.NotContains(t, string(body), strings.Repeat("x", 64))
+
+	_, err = marshalSubscriptionReply(WithResponseLimit(context.Background(), 8), gqlReply{Data: map[string]any{"value": strings.Repeat("x", 1024)}})
+	require.ErrorIs(t, err, errResponseLimit)
+}
+
+func TestSubscriptionFeedReplyIsBoundedBeforeCaching(t *testing.T) {
+	reply := boundSubscriptionReply(WithResponseLimit(context.Background(), 128), gqlReply{Data: map[string]any{"value": strings.Repeat("x", 4096)}})
+	require.Nil(t, reply.Data)
+	require.LessOrEqual(t, len(reply.encoded), 128)
+	require.Contains(t, string(reply.encoded), "LIMIT_EXCEEDED")
+}
+
+func TestSubscriptionFeedKeyHasFixedLengthAndIsolatesIdentity(t *testing.T) {
+	first, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-a", Roles: []string{"reader"}})
+	require.NoError(t, err)
+	second, err := NewIdentity(IdentityInput{Tenant: "tenant-a", Subject: "user-b", Roles: []string{"reader"}})
+	require.NoError(t, err)
+	small := subscriptionFeedKey("query", "Op", map[string]any{"n": 1}, nil, first, TenantRoute{}, "policy")
+	large := subscriptionFeedKey(strings.Repeat("query", 10000), "Op", map[string]any{"n": strings.Repeat("x", 10000)}, map[string]any{"tenant": strings.Repeat("t", 10000)}, first, TenantRoute{}, "policy")
+	require.Equal(t, len(small), len(large))
+	require.NotEqual(t, small, subscriptionFeedKey("query", "Op", map[string]any{"n": 1}, nil, second, TenantRoute{}, "policy"))
+}
+
+func TestSubscriptionIdenticalFailurePublishesOnceAndKeepsRetrying(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	plan := &Plan{SQL: `SELECT '{'::text`}
+	digest := fnv.New64a()
+	var last uint64
+	for attempt := 0; attempt < 2; attempt++ {
+		reply, changed := executor.tick(context.Background(), plan, nil, digest, &last)
+		require.Equal(t, attempt == 0, changed)
+		require.NotEmpty(t, reply.Errors)
+		require.NotZero(t, last, "failed result must be retained for duplicate suppression")
+	}
+}
+
+func TestSubscriptionFingerprintSeparatesDataAndErrors(t *testing.T) {
+	digest := fnv.New64a()
+	var last uint64
+	require.True(t, publishFingerprint(digest, &last, 'd', []byte("same")))
+	require.True(t, publishFingerprint(digest, &last, 'e', []byte("same")))
+	require.False(t, publishFingerprint(digest, &last, 'e', []byte("same")))
+}
+
+func TestSubscriptionRetriesUntilDatabaseRecovers(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	if executor.cdc != nil {
+		executor.cdc.close()
+	}
+	executor.cdc = runtimeTestNotifier{}
+	plan, err := executor.plan(`subscription { users { total } }`, "", nil)
+	require.NoError(t, err)
+	plan.SQL = strings.ReplaceAll(plan.SQL, `"public"."users"`, `"public"."retry_users"`)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &watcher{wake: make(chan struct{}, 1)}
+	events := make(chan gqlReply, 2)
+	f := &feed{key: "retry", subs: map[chan gqlReply]bool{events: true}, stop: cancel, done: ctx.Done()}
+	executor.streamWG.Add(1)
+	go executor.stream(ctx, plan, nil, w, f)
+
+	select {
+	case reply := <-events:
+		reply = decodeSubscriptionReply(t, reply)
+		require.NotEmpty(t, reply.Errors)
+	case <-time.After(3 * time.Second):
+		t.Fatal("missing initial database error")
+	}
+	testExec(t, db, `CREATE VIEW retry_users AS SELECT * FROM users`)
+	select {
+	case reply := <-events:
+		reply = decodeSubscriptionReply(t, reply)
+		require.Empty(t, reply.Errors)
+		require.EqualValues(t, 0, reply.Data["users"].(map[string]any)["total"])
+	case <-time.After(3 * time.Second):
+		t.Fatal("subscription did not recover through retry")
+	}
+}
 
 // TestSubscribe CDC订阅：首推当前结果，WAL变更触发推送，取消后通道关闭
 func TestSubscribe(t *testing.T) {
@@ -27,6 +169,7 @@ func TestSubscribe(t *testing.T) {
 		select {
 		case reply, ok := <-events:
 			require.True(t, ok, "事件通道意外关闭: %s", hint)
+			reply = decodeSubscriptionReply(t, reply)
 			require.Empty(t, reply.Errors, "%s: %v", hint, reply.Errors)
 			return reply
 		case <-time.After(5 * time.Second):
@@ -86,6 +229,7 @@ func TestSubscribeShared(t *testing.T) {
 		select {
 		case reply, ok := <-events:
 			require.True(t, ok, "通道意外关闭: %s", hint)
+			reply = decodeSubscriptionReply(t, reply)
 			require.Empty(t, reply.Errors, "%s: %v", hint, reply.Errors)
 		case <-time.After(5 * time.Second):
 			t.Fatalf("等待首次推送超时: %s", hint)
@@ -124,7 +268,7 @@ func TestSubscribeShared(t *testing.T) {
 func TestSubscribeScope(t *testing.T) {
 	db, cleanup := setupTestDatabase(t)
 	defer cleanup()
-	require.NoError(t, db.Exec(`ALTER TABLE users ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`).Error)
+	testExec(t, db, `ALTER TABLE users ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`)
 
 	k, err := std.NewKonfig()
 	require.NoError(t, err)
@@ -132,17 +276,17 @@ func TestSubscribeScope(t *testing.T) {
 	k.Set("app.root", t.TempDir())
 	k.Set("schema.schema", "public")
 	k.Set("metadata.classes", map[string]*internal.ClassConfig{
-		"User": {Table: "users", Scope: []internal.ScopeConfig{{Column: "tenant_id", Context: "tenant"}}},
+		"User": {Table: "users", Scope: []protocol.ScopeRule{{Column: "tenant_id", Context: "tenant"}}},
 	})
 	meta, err := NewMetadata(k, db)
 	require.NoError(t, err)
 	compile, err := NewCompiler(meta, nil)
 	require.NoError(t, err)
-	executor, err := NewExecutor(db, NewRenderer(meta), meta, compile)
+	executor, err := newEngineForTest(db, NewRenderer(meta), meta, compile)
 	require.NoError(t, err)
 
 	// 租户2 预存数据——租户1 的订阅不应看到
-	require.NoError(t, db.Exec(`INSERT INTO users (name, email, tenant_id) VALUES ('t2', 't2@x.com', 2)`).Error)
+	testExec(t, db, `INSERT INTO users (name, email, tenant_id) VALUES ('t2', 't2@x.com', 2)`)
 
 	ctx, cancel := context.WithTimeout(WithScope(context.Background(), map[string]any{"tenant": 1}), 15*time.Second)
 	defer cancel()
@@ -154,6 +298,7 @@ func TestSubscribeScope(t *testing.T) {
 		select {
 		case reply, ok := <-events:
 			require.True(t, ok, "通道意外关闭: %s", hint)
+			reply = decodeSubscriptionReply(t, reply)
 			require.Empty(t, reply.Errors, "%s: %v", hint, reply.Errors)
 			return reply
 		case <-time.After(5 * time.Second):
@@ -173,4 +318,11 @@ func TestSubscribeScope(t *testing.T) {
 	users := reply.Data["users"].(map[string]interface{})
 	require.EqualValues(t, 1, users["total"])
 	require.Equal(t, "t1u", users["items"].([]interface{})[0].(map[string]interface{})["name"])
+}
+
+func TestSubscriptionRetryDelayIsBoundedAndExponential(t *testing.T) {
+	a := subscriptionRetryDelay(0)
+	b := subscriptionRetryDelay(1)
+	require.Greater(t, b, a)
+	require.LessOrEqual(t, subscriptionRetryDelay(20), 30*time.Second)
 }

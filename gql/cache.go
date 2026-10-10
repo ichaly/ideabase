@@ -1,7 +1,7 @@
 package gql
 
 import (
-	"container/list"
+	"crypto/sha256"
 	"sync"
 
 	"github.com/vektah/gqlparser/v2/ast"
@@ -10,7 +10,13 @@ import (
 // planKey 缓存键：结构体避免每请求拼接字符串的分配
 type planKey struct {
 	operation string
-	query     string
+	query     [sha256.Size]byte
+	shape     string
+	view      string
+}
+
+func planKeyFor(operation, query, shape, view string) planKey {
+	return planKey{operation: operation, query: sha256.Sum256([]byte(query)), shape: shape, view: view}
 }
 
 // planEntry 缓存值：恒存operation（变量声明的唯一事实源，入参解码用）；
@@ -18,63 +24,10 @@ type planKey struct {
 type planEntry struct {
 	plan         *Plan                    // 编译成品，volatile时为nil
 	operation    *ast.OperationDefinition // 已解析展开的AST
+	intro        *ast.OperationDefinition // 与业务字段混排的自省投影
 	resolvers    []binding                // resolver绑定只依赖AST，volatile重编译复用（非volatile时plan内已含，恒存仅为构造统一）
+	decode       decodeTrie               // resolver宿主路径树只构建一次
 	paths        codecPaths               // codec路径树只依赖AST，volatile重编译复用（同上）
 	rootResolver bool                     // 自定义Query/Mutation根字段Resolver
 	rootPlans    sync.Map                 // 多根执行中按字段缓存非volatile子计划（key: *ast.Field）
-}
-
-// planCache 执行计划LRU缓存：命中路径零解析；非volatile零编译
-type planCache struct {
-	mu    sync.Mutex
-	limit int
-	items map[planKey]*list.Element
-	order *list.List // 最近使用在前
-}
-
-// cacheEntry 缓存项
-type cacheEntry struct {
-	key   planKey
-	value *planEntry
-}
-
-// newPlanCache 创建指定容量的计划缓存
-func newPlanCache(limit int) *planCache {
-	return &planCache{
-		limit: limit,
-		items: make(map[planKey]*list.Element, limit),
-		order: list.New(),
-	}
-}
-
-// Get 查找缓存项并刷新热度
-func (my *planCache) Get(key planKey) (*planEntry, bool) {
-	my.mu.Lock()
-	defer my.mu.Unlock()
-
-	element, ok := my.items[key]
-	if !ok {
-		return nil, false
-	}
-	my.order.MoveToFront(element)
-	return element.Value.(*cacheEntry).value, true
-}
-
-// Put 写入缓存项，超出容量时淘汰最久未用项
-func (my *planCache) Put(key planKey, value *planEntry) {
-	my.mu.Lock()
-	defer my.mu.Unlock()
-
-	if element, ok := my.items[key]; ok {
-		element.Value.(*cacheEntry).value = value
-		my.order.MoveToFront(element)
-		return
-	}
-
-	my.items[key] = my.order.PushFront(&cacheEntry{key: key, value: value})
-	if my.order.Len() > my.limit {
-		oldest := my.order.Back()
-		my.order.Remove(oldest)
-		delete(my.items, oldest.Value.(*cacheEntry).key)
-	}
 }

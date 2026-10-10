@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ type Profile struct {
 	Level string `json:"level" doc:"等级"`
 }
 
-// TestRemoteJoin 远程关系端到端（注册即声明）：NewRemote挂载关系字段+反射虚拟类型→
+// TestRemoteJoin 远程关系端到端（注册即声明）：NewLoader挂载关系字段+反射虚拟类型→
 // 无查询面→自动补投影→批量取数回填→内部键剥除→键缺失容错置null
 func TestRemoteJoin(t *testing.T) {
 	executor, _, cleanup := newTestExecutor(t, nil)
@@ -23,7 +24,7 @@ func TestRemoteJoin(t *testing.T) {
 	ctx := context.Background()
 
 	data := map[any]Profile{}
-	require.NoError(t, executor.Register(NewRemote("User", "profile", "用户画像", "id",
+	require.NoError(t, executor.register(NewLoader("User", "profile", "用户画像", "id",
 		func(_ context.Context, keys []any) (map[any]Profile, error) {
 			out := make(map[any]Profile, len(keys))
 			for _, k := range keys {
@@ -46,7 +47,9 @@ func TestRemoteJoin(t *testing.T) {
 			createUser(input: { name: $n, email: $e }) { id }
 		}`, map[string]interface{}{"n": name, "e": name + "@x.com"}, "")
 		require.Empty(t, reply.Errors)
-		ids = append(ids, reply.Data["createUser"].(map[string]interface{})["id"].(int64))
+		id, err := strconv.ParseInt(reply.Data["createUser"].(map[string]interface{})["id"].(string), 10, 64)
+		require.NoError(t, err)
+		ids = append(ids, id)
 	}
 	data[ids[0]] = Profile{Level: "gold"} // u2故意缺失验证键未命中置null
 
@@ -84,9 +87,9 @@ func TestRemoteSharedKey(t *testing.T) {
 			return out, nil
 		}
 	}
-	require.NoError(t, executor.Register(
-		NewRemote("User", "profileA", "画像A", "id", fetch("gold")),
-		NewRemote("User", "profileB", "画像B", "id", fetch("silver")),
+	require.NoError(t, executor.register(
+		NewLoader("User", "profileA", "画像A", "id", fetch("gold")),
+		NewLoader("User", "profileB", "画像B", "id", fetch("silver")),
 	))
 
 	reply := executor.run(ctx, `mutation { createUser(input: { name: "S", email: "s@x.com" }) { id } }`, nil, "")
@@ -100,4 +103,13 @@ func TestRemoteSharedKey(t *testing.T) {
 	assert.Equal(t, "gold", item["profileA"].(map[string]interface{})["level"])
 	assert.Equal(t, "silver", item["profileB"].(map[string]interface{})["level"])
 	assert.NotContains(t, item, "__rk_id", "内部键最终仍须剥除")
+}
+
+func TestLoaderIncomparableKeyDoesNotPanic(t *testing.T) {
+	loader := NewLoader("User", "profile", "", "id", func(context.Context, []any) (map[any]Profile, error) {
+		t.Fatal("invalid keys must not reach loader")
+		return nil, nil
+	})
+	_, err := loader.(BatchResolver).ResolveBatch(context.Background(), []Source{{"__rk_id": []string{"invalid"}}}, nil)
+	require.ErrorContains(t, err, "not comparable")
 }

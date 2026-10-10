@@ -1,5 +1,13 @@
 package pgsql
 
+import (
+	"testing"
+
+	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/ast"
+)
+
 // 排序用例共用的SQL骨架：基础查询里带name列（排序列自动带出）；
 // 显式排序经__rn行号在聚合内ORDER BY固化（JSONB_AGG不保证维持输入序）
 func sortQuery(clause string) string {
@@ -41,7 +49,12 @@ func (my *_DialectSuite) TestSort() {
 		{
 			name:     "排序与分页组合",
 			query:    `query { users(sort: { name: DESC_NULLS_FIRST }, limit: 5, offset: 10) { items { id } } }`,
-			expected: sortQuery(`ORDER BY "sys_user"."name" DESC NULLS FIRST LIMIT 5 OFFSET 10`),
+			expected: sortQuery(`ORDER BY "sys_user"."name" DESC NULLS FIRST, "sys_user"."id" ASC LIMIT 5 OFFSET 10`),
+		},
+		{
+			name:     "首个传统分页也包含稳定键",
+			query:    `query { users(sort: { name: DESC }, limit: 5) { items { id } } }`,
+			expected: sortQuery(`ORDER BY "sys_user"."name" DESC, "sys_user"."id" ASC LIMIT 5`),
 		},
 		{
 			name:     "条件排序组合",
@@ -51,4 +64,13 @@ func (my *_DialectSuite) TestSort() {
 		},
 	}
 	my.runCases(cases)
+}
+
+func TestStableSortUsesLegacyPrimaryField(t *testing.T) {
+	class := &protocol.Class{Fields: map[string]*protocol.Field{
+		"id": {Name: "id", Column: "id", IsPrimary: true},
+	}}
+	u := unit{class: class, args: nil}
+	u.args = ast.ArgumentList{{Name: protocol.LIMIT, Value: &ast.Value{Kind: ast.IntValue, Raw: "1"}}}
+	require.Equal(t, []string{"id"}, u.stableKeys())
 }

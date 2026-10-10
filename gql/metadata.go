@@ -1,25 +1,28 @@
 package gql
 
 import (
+	"cmp"
+	"crypto/sha256"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/huandu/go-clone"
 	"github.com/iancoleman/strcase"
+	"github.com/ichaly/ideabase/gql/compiler"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/metadata"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
-	"github.com/ichaly/ideabase/utl"
 	"github.com/jinzhu/inflection"
-	"github.com/samber/lo"
 	"github.com/sony/sonyflake"
-	"gorm.io/gorm"
 )
 
 func init() {
@@ -35,20 +38,22 @@ func queryField(className string) string {
 // Metadata 表示GraphQL元数据
 type Metadata struct {
 	k   *std.Konfig
-	db  *gorm.DB
+	db  *std.Connection
 	cfg *internal.Config
 
 	// 统一索引: 支持类名、表名、原始表名查找
-	Nodes   map[string]*protocol.Class `json:"nodes"`
-	Version string                     `json:"version"`
+	Nodes    map[string]*protocol.Class   `json:"nodes"`
+	Routines map[string]*protocol.Routine `json:"routines,omitempty"`
+	Version  string                       `json:"version"`
 
 	// 全文搜索能力（启动探测或配置指定）
 	searchMode   string
 	searchConfig string
 
 	// 标量编解码器：slice保留注册序（认领优先级），index供热路径按名查找
-	codecs []Codec
-	index  map[string]Codec
+	codecs     []Codec
+	index      map[string]Codec
+	operations map[string]operationCapability
 }
 
 var defaultSnowflake = sonyflake.NewSonyflake(sonyflake.Settings{})
@@ -71,9 +76,32 @@ func (my *Metadata) setCodecs(codecs []Codec) {
 type MetadataOption func(*metadataOptions)
 
 type metadataOptions struct {
-	loaders    []protocol.Loader
-	codecs     []Codec
-	generators map[string]protocol.IDGenerator
+	loaders         []protocol.Loader
+	optionalLoaders map[string]bool
+	codecs          []Codec
+	generators      map[string]protocol.IDGenerator
+}
+
+// LoaderError identifies a metadata loader failure without losing its cause.
+// Optional is true only when the failed loader was explicitly allowed to skip.
+type LoaderError struct {
+	Loader   string
+	Optional bool
+	Err      error
+}
+
+func (e *LoaderError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("加载器 %s 执行失败（optional=%t）: %v", e.Loader, e.Optional, e.Err)
+}
+
+func (e *LoaderError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 // WithIDGenerator 注册命名主键生成器；同名可覆盖内置snowflake。
@@ -91,6 +119,10 @@ func WithLoader(loader protocol.Loader) MetadataOption {
 		if loader == nil {
 			return
 		}
+		if opts.optionalLoaders == nil {
+			opts.optionalLoaders = make(map[string]bool)
+		}
+		opts.optionalLoaders[loader.Name()] = false
 		// 替换同名Loader
 		for i, l := range opts.loaders {
 			if l.Name() == loader.Name() {
@@ -102,52 +134,48 @@ func WithLoader(loader protocol.Loader) MetadataOption {
 	}
 }
 
+// WithOptionalLoader 添加或替换一个失败时允许跳过的Loader。
+// Loader默认是required；只有显式使用此选项才会获得optional语义。
+func WithOptionalLoader(loader protocol.Loader) MetadataOption {
+	return func(opts *metadataOptions) {
+		if loader == nil {
+			return
+		}
+		WithLoader(loader)(opts)
+		opts.optionalLoaders[loader.Name()] = true
+	}
+}
+
 // WithoutLoader 移除指定名称的Loader
 func WithoutLoader(names ...string) MetadataOption {
 	return func(opts *metadataOptions) {
 		for _, name := range names {
-			for i := 0; i < len(opts.loaders); {
-				if opts.loaders[i].Name() == name {
-					opts.loaders = append(opts.loaders[:i], opts.loaders[i+1:]...)
-				} else {
-					i++
-				}
-			}
+			delete(opts.optionalLoaders, name)
+			opts.loaders = slices.DeleteFunc(opts.loaders, func(loader protocol.Loader) bool {
+				return loader.Name() == name
+			})
 		}
 	}
 }
 
-// HookedLoader 装饰器，支持afterLoad钩子
-type HookedLoader struct {
-	protocol.Loader
-	afterLoad func(h protocol.Hoster) error
-}
-
-func (my *HookedLoader) Load(h protocol.Hoster) error {
-	if err := my.Loader.Load(h); err != nil {
-		return err
-	}
-	if my.afterLoad != nil {
-		return my.afterLoad(h)
-	}
-	return nil
-}
-
 // NewMetadata 策略模式重构，支持Loader注册与优先级排序
-func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, error) {
-	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: protocol.DataTypes}}
+func NewMetadata(k *std.Konfig, d *std.Connection, opts ...MetadataOption) (*Metadata, error) {
+	cfg := &internal.Config{Schema: internal.SchemaConfig{TypeMapping: protocol.DefaultDataTypes()}}
+	fileConfigured := k.IsSet("metadata.file")
 
 	// 设置默认配置
 	k.SetDefault("schema.schema", "public")
+	k.SetDefault("schema.catalog-timeout", 30*time.Second)
 	k.SetDefault("schema.default-limit", 10)
 	k.SetDefault("schema.max-depth", 20)
-	k.SetDefault("schema.introspection", true)
+	k.SetDefault("schema.max-tokens", 15000)
+	k.SetDefault("schema.max-cost", uint64(100_000))
+	k.SetDefault("schema.introspection", false)
 	k.SetDefault("schema.table-prefix", []string{})
 	k.SetDefault("schema.exclude-tables", []string{})
 	k.SetDefault("schema.exclude-fields", []string{})
 
 	// 设置元数据默认配置
-	k.SetDefault("metadata.file", "cfg/metadata.{mode}.json")
 	k.SetDefault("metadata.use-camel", true)
 	k.SetDefault("metadata.use-singular", true)
 	k.SetDefault("metadata.show-through", true)
@@ -155,31 +183,26 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	if err := k.Unmarshal(cfg); err != nil {
 		return nil, err
 	}
+	if !cfg.IsDebug() && cfg.Schema.MaxCost == 0 {
+		return nil, fmt.Errorf("production schema.max-cost must be greater than zero")
+	}
 
 	my := &Metadata{
 		k: k, db: d, cfg: cfg,
-		Nodes:   make(map[string]*protocol.Class),
-		Version: time.Now().Format("20060102150405"),
-		// 配置显式指定的搜索模式立即生效；为空时由NewExecutor启动探测补全
+		Nodes:    make(map[string]*protocol.Class),
+		Routines: make(map[string]*protocol.Routine),
+		Version:  time.Now().Format("20060102150405"),
+		// 配置显式指定的搜索模式立即生效；为空时由newEngine启动探测补全
 		searchMode:   cfg.Search.Mode,
 		searchConfig: cfg.Search.Config,
 	}
 
-	// 默认Loader注册，Pgsql和Mysql用HookedLoader包装，dev模式下自动保存
-	after := func(h protocol.Hoster) error {
-		if cfg.IsDebug() {
-			return my.saveToFile(metadata.ResolveMetadataPath(cfg))
-		}
-		return nil
-	}
-	defaultLoaders := []protocol.Loader{
-		&HookedLoader{Loader: metadata.NewPgsqlLoader(cfg, d), afterLoad: after},
-		&HookedLoader{Loader: metadata.NewMysqlLoader(cfg, d), afterLoad: after},
-		metadata.NewFileLoader(cfg),
-		metadata.NewConfigLoader(cfg),
-	}
+	pgsql, mysql := metadata.NewPgsqlLoader(cfg, d), metadata.NewMysqlLoader(cfg, d)
+	defaultLoaders := []protocol.Loader{pgsql, mysql, metadata.NewFileLoader(cfg), metadata.NewConfigLoader(cfg)}
 	options := &metadataOptions{
-		loaders: defaultLoaders,
+		codecs:          []Codec{numericCodec(protocol.SCALAR_ID), numericCodec(protocol.SCALAR_BIG_INT), numericCodec(protocol.SCALAR_DECIMAL)},
+		loaders:         defaultLoaders,
+		optionalLoaders: make(map[string]bool),
 		generators: map[string]protocol.IDGenerator{
 			"snowflake": func() (any, error) {
 				id, err := defaultSnowflake.NextID()
@@ -187,31 +210,65 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 			},
 		},
 	}
+	// 默认文件只是数据库/配置的兼容回退；用户显式配置了文件时，缺失或损坏必须失败。
+	if !fileConfigured {
+		options.optionalLoaders[metadata.LoaderFile] = true
+	}
 	// 应用自定义选项
 	for _, opt := range opts {
 		opt(options)
 	}
+	if options.optionalLoaders[metadata.LoaderConfig] {
+		return nil, fmt.Errorf("加载器 %s 不允许配置为 optional", metadata.LoaderConfig)
+	}
+	if fileConfigured && options.optionalLoaders[metadata.LoaderFile] {
+		return nil, fmt.Errorf("加载器 %s 在显式配置 metadata.file 时不允许配置为 optional", metadata.LoaderFile)
+	}
 	my.setCodecs(options.codecs)
 	// 按优先级排序
 	loaders := options.loaders
-	sort.Slice(loaders, func(i, j int) bool { return loaders[i].Priority() < loaders[j].Priority() })
+	slices.SortFunc(loaders, func(a, b protocol.Loader) int { return cmp.Compare(a.Priority(), b.Priority()) })
 
 	// 依次执行Loader
 	for _, loader := range loaders {
-		if loader.Support() {
-			if err := loader.Load(my); err != nil {
-				log.Warn().Err(err).Str("loader", loader.Name()).Msg("加载器执行失败")
+		// A connected database is the default source in every mode. An explicit
+		// artifact replaces catalog inspection; do not merge stale cached files.
+		supported := loader.Support()
+		if loader.Name() == metadata.LoaderFile {
+			supported = fileConfigured || (d == nil && supported)
+		}
+		if fileConfigured && (loader == pgsql || loader == mysql) {
+			supported = false
+		}
+		if supported {
+			err := loader.Load(my)
+			if err == nil && cfg.IsDebug() && (loader == pgsql || loader == mysql) {
+				err = my.saveToFile(metadata.ResolveMetadataPath(cfg))
+			}
+			if err != nil {
+				loaderErr := &LoaderError{Loader: loader.Name(), Optional: options.optionalLoaders[loader.Name()], Err: err}
+				if loaderErr.Optional {
+					log.Warn().Err(loaderErr).Str("loader", loader.Name()).Msg("可选加载器执行失败，已跳过")
+					continue
+				}
+				return nil, loaderErr
 			}
 		}
 	}
+	// Loaders are allowed to retain and reuse their construction-time objects,
+	// but the runtime metadata must be immutable with respect to those owners.
+	my.cloneCatalog()
 	// 所有Loader执行完仍无任何元数据：生产环境直接报错避免带空schema启动，debug模式保留宽松行为便于排查
 	if len(my.Nodes) == 0 && !cfg.IsDebug() {
 		return nil, fmt.Errorf("元数据加载失败：所有加载器执行后无任何实体（请检查数据库连接、metadata.file 或 metadata.classes 配置）")
 	}
+	if err := my.rejectNilRelations(); err != nil {
+		return nil, err
+	}
 	// 进行驼峰命名和过滤处理
 	my.normalize()
 	// 启动期把命名策略绑定为函数；database/空策略完全不进入生成路径。
-	for _, name := range utl.SortKeys(my.Nodes) {
+	for _, name := range slices.Sorted(maps.Keys(my.Nodes)) {
 		class := my.Nodes[name]
 		if name != class.Name || class.IDGenerator == "" || class.IDGenerator == "database" {
 			continue
@@ -230,16 +287,104 @@ func NewMetadata(k *std.Konfig, d *gorm.DB, opts ...MetadataOption) (*Metadata, 
 	}
 	// 字段级关系声明（config/旧格式文件）收进类级关系集合
 	my.collectRelations()
+	if err := my.validateRelations(); err != nil {
+		return nil, err
+	}
 	// 统一关系处理
 	my.processRelations()
 	// 类型定型：结构推导 + Codec认领
 	my.finalize()
+	my.operations = buildOperationCatalog(my)
 	return my, nil
+}
+
+func (my *Metadata) rejectNilRelations() error {
+	var invalid error
+	my.eachClass(func(class *protocol.Class) {
+		if invalid == nil && slices.Contains(class.Relations, nil) {
+			invalid = fmt.Errorf("实体 %s 包含空关系", class.Name)
+		}
+	})
+	return invalid
+}
+
+func (my *Metadata) validateRelations() error {
+	var invalid error
+	my.eachClass(func(class *protocol.Class) {
+		for _, relation := range class.Relations {
+			if invalid != nil {
+				continue
+			}
+			source, target := relation.SourceColumns(), relation.TargetColumns()
+			if len(source) == 0 || len(source) != len(target) {
+				invalid = fmt.Errorf("关系 %s.%s 的 source_fields 与 target_fields 必须非空且等长", class.Name, relation.SourceField)
+				continue
+			}
+			targetClass := my.Nodes[relation.TargetClass]
+			if targetClass == nil {
+				// Catalog filtering may intentionally remove one side of a database
+				// relation. processRelations already ignores that dangling edge.
+				continue
+			}
+			for index := range source {
+				if class.Fields[source[index]] == nil || targetClass.Fields[target[index]] == nil {
+					invalid = fmt.Errorf("关系 %s.%s 引用了不存在的字段 %s -> %s", class.Name, relation.SourceField, source[index], target[index])
+					break
+				}
+			}
+		}
+	})
+	return invalid
+}
+
+func (my *Metadata) cloneCatalog() {
+	clones := make(map[*protocol.Class]*protocol.Class, len(my.Nodes))
+	for key, class := range my.Nodes {
+		if class == nil {
+			continue
+		}
+		cloned, ok := clones[class]
+		if !ok {
+			cloned = clone.Slowly(class).(*protocol.Class)
+			clones[class] = cloned
+		}
+		my.Nodes[key] = cloned
+	}
+	for key, routine := range my.Routines {
+		if routine != nil {
+			my.Routines[key] = clone.Slowly(routine).(*protocol.Routine)
+		}
+	}
+}
+
+// freeze returns the Engine-owned catalog. Builders and loaders may keep
+// their Metadata value, but serving never shares its mutable maps or classes.
+func (my *Metadata) freeze() *Metadata {
+	frozen := *my
+	if my.cfg != nil {
+		frozen.cfg = clone.Slowly(my.cfg).(*internal.Config)
+	}
+	frozen.Nodes = make(map[string]*protocol.Class, len(my.Nodes))
+	for key, class := range my.Nodes {
+		frozen.Nodes[key] = class
+	}
+	frozen.Routines = make(map[string]*protocol.Routine, len(my.Routines))
+	for key, routine := range my.Routines {
+		frozen.Routines[key] = routine
+	}
+	frozen.cloneCatalog()
+	frozen.codecs = append([]Codec(nil), my.codecs...)
+	frozen.index = make(map[string]Codec, len(my.index))
+	for name, codec := range my.index {
+		frozen.index[name] = codec
+	}
+	frozen.operations = buildOperationCatalog(&frozen)
+	return &frozen
 }
 
 // eachClass 按类名有序遍历主名类（跳过表名/别名索引）
 func (my *Metadata) eachClass(fn func(class *protocol.Class)) {
-	for _, className := range utl.SortKeys(my.Nodes) {
+	for _, className := range slices.Sorted(maps.Keys(my.Nodes)) {
 		if class := my.Nodes[className]; className == class.Name {
 			fn(class)
 		}
@@ -247,18 +392,20 @@ func (my *Metadata) eachClass(fn func(class *protocol.Class)) {
 }
 
 // finalize 元数据定型，field.Type自此成为schema类型的唯一真相：
-//  1. 结构推导：主键与外键实列固定为ID标量（关系载体是Virtual字段不受影响），
-//     使加解密与精度处理覆盖全部主外键；
+//  1. 结构推导：单列主键与单列外键固定为ID标量；复合键保留各列原生类型，
+//     供typed KeyInput无损表达；
 //  2. Codec认领：实现了Matcher的codec把命中字段改写为对应标量。
 //
 // 字段级配置显式指定类型时保留配置（配置是最终裁决的例外通道）
 func (my *Metadata) finalize() {
 	my.eachClass(func(class *protocol.Class) {
+		class.CanonicalizePrimaryKeys()
+		primaryKeys := class.PrimaryKeyFields()
 		for name, field := range class.Fields {
 			if name != field.Name || field.Virtual || my.configured(class, field) {
 				continue
 			}
-			if field.IsPrimary || field.Relation != nil {
+			if (field.IsPrimary && len(primaryKeys) == 1) || (field.Relation != nil && !field.Relation.Composite()) {
 				field.Type = protocol.SCALAR_ID
 				continue
 			}
@@ -306,6 +453,191 @@ func (my *Metadata) PutNode(className string, node *protocol.Class) error {
 	return nil
 }
 
+func (my *Metadata) PutRoutine(key string, routine *protocol.Routine) error {
+	if err := routine.Validate(); err != nil {
+		return err
+	}
+	want := routine.Schema + "." + routine.Name + "(" + routine.Identity + ")"
+	if key != want {
+		return fmt.Errorf("routine key不一致: want=%s got=%s", want, key)
+	}
+	if my.Routines == nil {
+		my.Routines = make(map[string]*protocol.Routine)
+	}
+	if existing, exists := my.Routines[key]; exists {
+		if reflect.DeepEqual(existing, routine) {
+			return nil
+		}
+		return fmt.Errorf("routine冲突: %s", key)
+	}
+	my.Routines[key] = routine
+	return nil
+}
+
+func (my *Metadata) GetRoutine(key string) (*protocol.Routine, bool) {
+	routine, ok := my.Routines[key]
+	return routine, ok
+}
+
+// CatalogFingerprint identifies database shape while deliberately excluding
+// the trusted tenant schema identifier. Compatible schema-per-tenant catalogs
+// may share GraphQL/logical plans; SQL templates still key on SchemaName.
+func (my *Metadata) CatalogFingerprint() (string, error) {
+	type fieldShape struct {
+		Name, Column, Type  string
+		Nullable, ReadOnly  bool
+		IsPrimary, IsUnique bool
+		Catalog             *protocol.Column
+	}
+	type classShape struct {
+		Name, Table string
+		Kind        protocol.TableKind
+		ReadOnly    bool
+		PrimaryKeys []string
+		Fields      []fieldShape
+		Constraints []*protocol.Constraint
+		Indexes     []*protocol.Index
+	}
+	normalizeType := func(ref protocol.TypeRef) protocol.TypeRef {
+		ref.Schema = ""
+		if ref.Element != nil {
+			element := *ref.Element
+			element.Schema = ""
+			ref.Element = &element
+		}
+		return ref
+	}
+	classes := make([]classShape, 0)
+	for _, name := range slices.Sorted(maps.Keys(my.Nodes)) {
+		class := my.Nodes[name]
+		if class == nil || name != class.Name {
+			continue
+		}
+		fields := make([]fieldShape, 0)
+		for _, fieldName := range slices.Sorted(maps.Keys(class.Fields)) {
+			if field := class.Fields[fieldName]; field != nil && fieldName == field.Name && !field.Virtual {
+				var catalog *protocol.Column
+				if field.Catalog != nil {
+					copy := *field.Catalog
+					copy.Type = normalizeType(copy.Type)
+					if copy.Default != nil {
+						value := *copy.Default
+						value.Expression = unqualifyCatalog(value.Expression, class.Schema)
+						copy.Default = &value
+					}
+					if copy.Generation != nil {
+						value := *copy.Generation
+						value.Expression = unqualifyCatalog(value.Expression, class.Schema)
+						copy.Generation = &value
+					}
+					catalog = &copy
+				}
+				fields = append(fields, fieldShape{field.Name, field.Column, field.Type, field.Nullable, field.ReadOnly, field.IsPrimary, field.IsUnique, catalog})
+			}
+		}
+		constraints := make([]*protocol.Constraint, len(class.Constraints))
+		for i, constraint := range class.Constraints {
+			if constraint != nil {
+				copy := *constraint
+				copy.Expression = unqualifyCatalog(copy.Expression, class.Schema)
+				constraints[i] = &copy
+			}
+		}
+		indexes := make([]*protocol.Index, len(class.Indexes))
+		for i, index := range class.Indexes {
+			if index != nil {
+				copy := *index
+				copy.Predicate = unqualifyCatalog(copy.Predicate, class.Schema)
+				copy.Keys = append([]protocol.IndexKey(nil), copy.Keys...)
+				for n := range copy.Keys {
+					copy.Keys[n].Expression = unqualifyCatalog(copy.Keys[n].Expression, class.Schema)
+				}
+				indexes[i] = &copy
+			}
+		}
+		classes = append(classes, classShape{class.Name, class.Table, class.TableKind, class.ReadOnly, class.PrimaryKeys, fields, constraints, indexes})
+	}
+	routines := make([]protocol.Routine, 0, len(my.Routines))
+	for _, key := range slices.Sorted(maps.Keys(my.Routines)) {
+		if routine := my.Routines[key]; routine != nil {
+			shape := *routine
+			schema := shape.Schema
+			shape.Schema = ""
+			shape.Identity = unqualifyCatalog(shape.Identity, schema)
+			shape.ReturnType = unqualifyCatalog(shape.ReturnType, schema)
+			shape.Arguments = append([]protocol.RoutineArgument(nil), shape.Arguments...)
+			for i := range shape.Arguments {
+				shape.Arguments[i].Type = unqualifyCatalog(shape.Arguments[i].Type, schema)
+			}
+			routines = append(routines, shape)
+		}
+	}
+	contract, err := json.Marshal(struct {
+		Classes  []classShape
+		Routines []protocol.Routine
+	}{classes, routines})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(contract)), nil
+}
+
+func unqualifyCatalog(value, schema string) string {
+	var result strings.Builder
+	for start := 0; start < len(value); {
+		quote := strings.IndexByte(value[start:], '\'')
+		if quote < 0 {
+			result.WriteString(stripCatalogQualifier(value[start:], schema))
+			break
+		}
+		quote += start
+		result.WriteString(stripCatalogQualifier(value[start:quote], schema))
+		end := quote + 1
+		for end < len(value) {
+			if value[end] != '\'' {
+				end++
+				continue
+			}
+			end++
+			if end >= len(value) || value[end] != '\'' {
+				break
+			}
+			end++
+		}
+		literal := value[quote:end]
+		rest := strings.TrimLeft(value[end:], " \t\r\n")
+		if strings.HasPrefix(rest, "::regclass") || strings.HasPrefix(rest, "::regtype") {
+			literal = stripCatalogQualifier(literal, schema)
+		}
+		result.WriteString(literal)
+		start = end
+	}
+	return result.String()
+}
+
+func stripCatalogQualifier(value, schema string) string {
+	quoted := `"` + strings.ReplaceAll(schema, `"`, `""`) + `".`
+	plain := schema + "."
+	var result strings.Builder
+	for i := 0; i < len(value); {
+		if strings.HasPrefix(value[i:], quoted) {
+			i += len(quoted)
+			continue
+		}
+		if strings.HasPrefix(value[i:], plain) && (i == 0 || !catalogIdentifierByte(value[i-1])) {
+			i += len(plain)
+			continue
+		}
+		result.WriteByte(value[i])
+		i++
+	}
+	return result.String()
+}
+
+func catalogIdentifierByte(value byte) bool {
+	return value == '_' || value == '$' || value >= '0' && value <= '9' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
+}
+
 // 配置类型公开别名：实体/字段的代码内配置（k.Set("metadata.classes", ...)）
 // internal包外部模块不可import，公共API经此别名暴露
 type (
@@ -313,7 +645,7 @@ type (
 	FieldConfig = internal.FieldConfig
 )
 
-// SetSearchMode 记录探测/配置得到的全文搜索能力（NewExecutor启动时写入）
+// SetSearchMode 记录探测/配置得到的全文搜索能力（newEngine启动时写入）
 func (my *Metadata) SetSearchMode(mode, config string) {
 	my.searchMode, my.searchConfig = mode, config
 }
@@ -331,10 +663,11 @@ func (my *Metadata) SchemaName() string {
 	return my.cfg.Schema.Schema
 }
 
-// DefaultLimit 返回列表查询缺省LIMIT（实现compiler.Limiter），0=不注入
+// DefaultLimit 返回列表查询缺省LIMIT。所有列表都有同一条有界路径；
+// 零值元数据也使用协议默认值，避免成本模型、权限预算与 SQL 行为分叉。
 func (my *Metadata) DefaultLimit() int {
-	if my.cfg == nil {
-		return 0
+	if my.cfg == nil || my.cfg.Schema.DefaultLimit <= 0 {
+		return protocol.DEFAULT_PAGE_SIZE
 	}
 	return my.cfg.Schema.DefaultLimit
 }
@@ -347,9 +680,38 @@ func (my *Metadata) MaxDepth() int {
 	return my.cfg.Schema.MaxDepth
 }
 
+func (my *Metadata) MaxTokens() int {
+	if my.cfg == nil {
+		return 0
+	}
+	return my.cfg.Schema.MaxTokens
+}
+
+func (my *Metadata) MaxCost() uint64 {
+	if my.cfg == nil {
+		return 0
+	}
+	return my.cfg.Schema.MaxCost
+}
+
 func (my *Metadata) GetNode(name string) (*protocol.Class, bool) {
 	n, ok := my.Nodes[name]
 	return n, ok
+}
+
+// LookupOperation implements compiler.OperationProvider. Coordinates are
+// looked up exactly in the immutable operation catalog; mutation meaning is
+// never recovered from a field-name prefix by the SQL compiler.
+func (my *Metadata) LookupOperation(coordinate string) (compiler.OperationSpec, bool) {
+	capability, ok := my.operations[coordinate]
+	if !ok || capability.class == nil || len(capability.actions) == 0 || capability.operation == "" {
+		return compiler.OperationSpec{}, false
+	}
+	return compiler.OperationSpec{
+		Class:     capability.class,
+		Operation: capability.operation,
+		Shape:     capability.shape,
+	}, true
 }
 
 func (my *Metadata) SetVersion(version string) {
@@ -367,8 +729,9 @@ func (my *Metadata) MarshalJSON() ([]byte, error) {
 		}
 	}
 	return json.Marshal(Metadata{
-		Nodes:   nodes,
-		Version: my.Version,
+		Nodes:    nodes,
+		Routines: my.Routines,
+		Version:  my.Version,
 	})
 }
 
@@ -384,7 +747,7 @@ type relationField struct {
 // 递归只收外键侧方向；AddRelation按身份键去重，db已登记的不重复
 func (my *Metadata) collectRelations() {
 	my.eachClass(func(class *protocol.Class) {
-		for _, fieldName := range utl.SortKeys(class.Fields) {
+		for _, fieldName := range slices.Sorted(maps.Keys(class.Fields)) {
 			field := class.Fields[fieldName]
 			if fieldName != field.Name || field.Relation == nil || field.Virtual || field.Column == "" {
 				continue
@@ -424,7 +787,7 @@ func (my *Metadata) processRelations() {
 	// 排序遍历保证收集顺序确定，命名跨启动稳定
 	my.eachClass(func(class *protocol.Class) {
 		relations := append([]*protocol.Relation(nil), class.Relations...)
-		sort.Slice(relations, func(i, j int) bool { return relations[i].Key() < relations[j].Key() })
+		slices.SortFunc(relations, func(a, b *protocol.Relation) int { return cmp.Compare(a.Key(), b.Key()) })
 		for _, relation := range relations {
 			targetClass := my.Nodes[relation.TargetClass]
 			if targetClass == nil {
@@ -562,6 +925,7 @@ func (my *Metadata) collectManyToMany(class *protocol.Class, rel *protocol.Relat
 	fields := []relationField{my.listField(class, rel.TargetClass, false, rel.Clone(protocol.MANY_TO_MANY, false))}
 	if through := rel.Through; through != nil {
 		if throughClass := my.Nodes[through.TableName]; throughClass != nil {
+			throughClass.IsThrough = true
 			// 指向中间表本身是普通一对多：源类主键 -> 中间表的源外键
 			fields = append(fields, my.listField(class, throughClass.Name, true, &protocol.Relation{
 				Type:        protocol.ONE_TO_MANY,
@@ -671,7 +1035,7 @@ func (my *Metadata) normalize() error {
 		fields := make(map[string]*protocol.Field)
 		for fieldKey, field := range class.Fields {
 			// 跳过需要忽略的字段
-			if field.Column != "" && lo.IndexOf(config.ExcludeFields, field.Column) > -1 {
+			if field.Column != "" && slices.Contains(config.ExcludeFields, field.Column) {
 				continue
 			}
 			if field.Column == "" {

@@ -6,6 +6,8 @@ GraphQL schema，请求编译为**单条 SQL**（LATERAL JOIN + JSONB 聚合）�
 
 ## 架构
 
+标准使用文档见 [`docs/README.md`](docs/README.md)，按教程、指南、参考和运维四类组织。
+
 ```
 GraphQL 请求
   → gqlparser 解析/校验（schema 由 renderer 从元数据生成，或从文件加载）
@@ -22,40 +24,148 @@ GraphQL 请求
 | 组件 | 职责 |
 |------|------|
 | `metadata` | 四种加载器（pgsql/mysql/file/config）多源融合，自动推导关系并在虚拟字段挂载 join 元数据 |
-| `protocol` | 元数据结构（Class/Field/Relation）与协议常量，方言唯一允许依赖的包 |
+| `protocol` | 元数据结构（Class/Field/Relation/Constraint/Routine）与协议常量，方言唯一允许依赖的包 |
 | `renderer` | 从元数据生成 GraphQL schema（Result/WhereInput/SortInput/CreateInput/UpdateInput） |
 | `compiler` | 编译上下文（对象池、参数槽位、全局别名计数）与 Dialect 接口 |
 | `compiler/pgsql` | PostgreSQL 方言：SELECT 单元化编译 + 变更 CTE |
-| `executor` | HTTP 入口、计划 LRU 缓存、执行与结果组织、Resolver/Remote 分发、codec 出入参转换、持久化查询 |
+| `executor` | 计划 LRU 缓存、执行与结果组织、Resolver 分发、codec 出入参转换、持久化查询 |
+| `Snapshot` | Build 后不可变的 SDL、参数、Handler、Planner、授权 action、resource、cost 与稳定指纹 |
 
 ## 快速开始
 
 ```go
-import _ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 空白导入自注册PostgreSQL方言
+import (
+	_ "github.com/ichaly/ideabase/gql/compiler/pgsql" // 空白导入自注册PostgreSQL方言
+	"github.com/ichaly/ideabase/std"
+	"github.com/ichaly/ideabase/gql/transport"
+	_ "github.com/ichaly/ideabase/std/postgres"
+)
 
-k, _ := std.NewKonfig()                    // 配置（可声明虚拟字段/关系/排除表等）
-meta, _ := gql.NewMetadata(k, db)          // db: *gorm.DB，自动加载表结构与外键关系
-compile, _ := gql.NewCompiler(meta, nil)   // nil：按驱动名从注册表自动路由方言
-executor, _ := gql.NewExecutor(db, gql.NewRenderer(meta), meta, compile)
+config := &std.Config{}
+config.Database = dsn
+db, err := std.NewConnection(config)
+if err != nil { log.Fatal(err) }
+defer db.Close()                // 应用退出时关闭共享池
+k, _ := std.NewKonfig()         // 配置中为生产实体声明 permissions
+builder := gql.New(k, db)       // 接收 Connection，自动加载表结构与外键关系
+builder.LoadDocuments("queries")
+engine, err := builder.Build()  // 构建一次 capability snapshot，随后冻结
+if err != nil { log.Fatal(err) }
+defer engine.Close()           // 先停止引擎及 CDC，再关闭共享池
 
-executor.Bind(app.Group(executor.Path()))  // fiber v3：POST查询变更 + GET订阅WebSocket升级
+http.Handle("/graphql", transport.NewHandler(engine, transport.Options{}))
 
 // 非HTTP场景使用同一字节快路径；GraphQL字段错误位于响应体errors中
-body, err := executor.Execute(ctx, `query { users { items { id name } } }`, nil)
+body, err := engine.Execute(ctx, `query { users { items { id name } } }`, nil)
+
+snapshot, _ := engine.Snapshot()
+fmt.Println(snapshot.Fingerprint(), snapshot.Capabilities())
 ```
+
+Builder 是唯一装配入口。每个 Engine 必须通过 `Builder.Policy` 或 metadata
+`permissions` 获得唯一 PolicyProvider；两者冲突或两者都缺失时 Build 失败并保持
+fail-closed。Build 后 Engine 只提供执行、快照、健康检查和订阅接口。
+每个请求先生成与可信 Identity/租户路由一致的 Effective Schema；校验、普通执行、订阅
+和 Gateway 组合共用该不可变 artifact。Engine 自省展示启动时构建的完整 Schema，
+文档可见不代表有权执行；artifact 仍包含按身份过滤后的 capability 目录，
+其 schema 指纹、结构指纹、权限签名与 policy/route revision 是独立字段，不混用缓存身份。
+内置角色策略和显式实现 `PolicyCacheIdentity` 的自定义 provider 使用有界 LRU +
+singleflight；依赖请求临时状态的 provider 不声明缓存身份，引擎就不冒险复用 Schema。
+
+### 独立服务与命名空间组合
+
+`Engine` 和 `Gateway` 实现同一个传输无关执行契约。标准库 HTTP、SSE、manifest 与
+健康检查只是薄适配器，因此接入任意支持 `net/http` 的框架、gRPC 或命令行时无需改变执行内核：
+
+```go
+mux.Handle("/graphql", transport.NewHandler(engine, transport.Options{}))
+mux.Handle("/gql/manifest", transport.NewManifestHandler("accounts", engine, authenticateManifest))
+mux.Handle("/gql/effective-schema", transport.NewEffectiveSchemaHandler(engine, delegationVerifier))
+mux.Handle("/health/gql", transport.NewHealthHandler(engine))
+mux.Handle("/.well-known/gql", transport.NewTransportDescriptorHandler(transport.TransportDescriptor{
+    EndpointID: "accounts", ManifestURL: "/gql/manifest", EffectiveSchemaURL: "/gql/effective-schema",
+    ExecuteURL: "/graphql", SubscribeURL: "/graphql", HealthURL: "/health/gql",
+}))
+
+gateway, err := gql.NewGateway("public-api",
+    gql.Namespace{Name: "accounts", EndpointID: "accounts", Endpoint: accounts},
+    gql.Namespace{Name: "orders", EndpointID: "orders", Endpoint: orders},
+)
+```
+
+组合后的 Query 以 namespace 对象呈现；Mutation 使用带 namespace 的顶层字段并保持
+GraphQL 规定的串行顺序。不同 namespace Query 并行，同 namespace 选择只下发一次。
+child 的 object/input/enum/interface/union/scalar 会确定性改名；目前只接受
+GraphQL 标准 directive，自定义 directive 在组合时显式拒绝，不会在运行期被静默忽略。
+返回值会按公共 Schema 重新完成，额外字段、错误路径和 `__typename` 不会泄漏
+child 内部名字。生产控制面用 `Gateway.Apply(GatewayUpdate{Revision, Namespaces})` 发布
+snapshot 保留为滚动发布兼容窗口，执行中的请求继续固定启动时的 child fingerprint。
+
+远程组合使用 `transport.NewRemoteEndpoint`，只接受启动时配置的 HTTPS 地址，禁止跳转，
+并校验 endpoint identity、manifest、snapshot fingerprint、响应大小和返回类型。身份通过
+短期签名 delegation envelope 传播，child 仍必须按自己的 policy 再授权；客户端伪造
+tenant/role header 不构成可信身份。
+`DelegationConfig.Replay` 必须显式提供；单实例可用 `NewMemoryReplayStore`，多实例直接使用
+`NewPostgresReplayStore`（部署迁移执行 `PostgresReplayDDL`），或实现等价的共享原子
+`ReplayStore.Consume`。重放返回 `ErrReplay`，共享存储故障保留原始错误且一律 fail closed。
+远程 Gateway 必须同时配置 manifest 与 effective-schema 地址；后者携带 delegation identity，
+父 Gateway 的自省和 capability 目录因此与 child 实际可执行权限保持一致。
+`AllowHTTP` 仅用于显式的 localhost/回环测试地址，不会放行内网或公网明文连接。
+`GQL-Snapshot` 会把 HTTP/SSE 请求绑定到不可变修订，不是仅在执行前比较一次指纹。
+通用客户端也可通过 `transport.DiscoverRemoteEndpoint` 读取版本化 descriptor；显式配置与
+自动发现最终都进入同一个 `RemoteEndpoint` 构造和校验路径，不存在宽松的第二套协议。
+
+自动化客户端只从认证后的 `/gql/effective-schema` 获取当前身份的 Schema 和 capability
+artifact，以 `fingerprint`、`policyRevision`、`routeRevision` 为缓存身份；artifact 变化后重新
+生成/校验操作，执行和订阅始终携带返回的 `GQL-Snapshot`。标准 GraphQL 自省只描述类型，
+不重复承载成本、幂等和重试元数据，避免两套能力发现协议。
+
+### 多实例部署合同
+
+- 所有副本使用相同的数据库元数据、Policy revision、Gateway revision 和 delegation key epoch。
+- `EndpointID` 必须唯一标识不可变的目标与传输配置；同一 control revision 下复用 ID 指向
+  不同地址属于控制面 split-brain，调用方必须拒绝发布。
+- `Builder.Security` / `WithSecurityState` 注入同一个共享撤权事实源；多实例直接使用
+  `NewPostgresSecurityStateProvider`（部署迁移执行 `PostgresSecurityStateDDL`）。本地
+  `RevocationBarrier` 只用于单实例或由控制面向每个副本可靠同步的部署。
+- 每个副本使用独立的 128-bit 随机临时复制槽；断线自动重连并广播重查，语义是“最新状态
+  收敛”而不是持久事件日志。需要逐事件交付时应使用独立 outbox/消息系统。
+- 租户路由在一个请求内固定；数据库/Schema 迁移通过单调 route revision 与安全状态一起发布。
+- 撤权在请求开始和订阅 lease 边界生效，不承诺与已在数据库执行中的请求瞬时线性化；需要
+  强制即时撤权的写操作必须同时使用数据库 RLS/事务内 policy predicate。
+- `PostgresSecurityStateProvider` 在 `DefaultPostgresSecurityMaxStaleness` 窗口内读取本地不可变
+  快照，过期刷新失败即 fail closed；可用 `WithPostgresSecurityMaxStaleness` 收紧窗口。
+- `TenantGateway.Health` 无身份时报告 aggregate readiness 与 `DegradedSources`，单个闲置路由
+  故障不会摘掉仍可服务的进程；携带可信 Identity 时只检查实际路由并设置 `RouteScoped`。
+- 新副本启动时必须按序回放当前 revision 及之前的滚动窗口，再接入负载均衡；仅加载最新
+  revision 的新副本无法接受旧父节点的 snapshot pin。
+- CI 的 GA 门禁包含共享 token 并发消费、滚动 snapshot、真实 PostgreSQL 锁超时恢复、真实
+  CDC backend 终止后重连，以及稳定的分配预算；`scripts/perf.sh` 生成 10 轮相对性能样本。
+
+### 稳定错误合同
+
+GraphQL 错误始终包含 `extensions.code`；HTTP 控制面和握手错误统一返回版本化
+`application/problem+json`（`code`、`message`、`retryable`）。客户端只按 code 分类，
+不解析 message。认证/授权/校验错误不可重试；`*_UNAVAILABLE`、`HEALTH_BUSY` 和瞬时远端
+故障可退避重试；`CONTROL_REVISION_STALE` 要先读取当前 control state，
+`CONTROL_REVISION_CONFLICT` 必须人工或控制面重新仲裁。
 
 ## 查询能力
 
 - 过滤：`where: { name: { eq/ne/gt/ge/lt/le/in/like/iLike/regex/iRegex/is/hasKey... } }`，
-  支持 `and/or/not` 任意组合；`id: X` 是主键等值的快捷方式
+  支持 `and/or/not` 任意组合；单主键用 `id: X` 快捷定位，复合主键由自省生成
+  实体专属 `XKeyInput`，例如 `orders(key: {tenantId: 7, code: "A"})`
 - 排序：`sort: { name: ASC, age: DESC_NULLS_LAST }`（单对象或列表均可）
 - 分页：`limit/offset` + `total`（窗口函数一次查询同时取数与总数）；
   游标分页 `first/after`、`last/before` + `pageInfo{hasNext,hasPrev,start,end}`，
   keyset 语义性能恒定（排序键自动追加主键兜底；排序键应为非空列）；页大小
   支持变量（`first: $n`），同一查询文本一份计划适配任意页大小。无显式 limit 的
-  列表自动注入 `schema.default-limit`（缺省 10，设 0 关闭）防无界全表扫描；
+  列表自动注入 `schema.default-limit`（缺省 10，非正数使用协议安全默认 20）防无界全表扫描；
   变更读回、统计分组与递归全树不受此限制。选择集嵌套深度超过
-  `schema.max-depth`（缺省 20，设 0 关闭）编译期拒绝，防深选择集代价攻击
+  `schema.max-depth`（缺省 20，设 0 关闭）在执行前拒绝。可执行文档同时受
+  `schema.max-tokens`（缺省 15000，设 0 不限制）保护；`schema.max-cost`（缺省
+  100000；生产环境禁止设 0）限制请求成本预算。成本消费规范化后的
+  选择树，按分页上界和批量 `input` 长度乘算；无可证明上界的列表在预算模式下fail closed
 - 统计：`userStats(where, groupBy, having, limit, offset)` 返回 `count` 与各列的
   sum/avg/min/max/countDistinct，选择驱动只算请求的聚合。`having` 对聚合值过滤
   （`having: { count: { gt: 10 }, score: { sum: { gt: 1000 } } }`），复用 where
@@ -76,22 +186,40 @@ body, err := executor.Execute(ctx, `query { users { items { id name } } }`, nil)
   嵌套关系字段同样支持 `where/sort/limit/offset`
 - 递归全树：自关联实体自动生成 `descendants/ancestors(depth: Int)` 字段，
   递归 CTE 单查询全树遍历，depth 缺省 5（1~32，限深防爆炸）；建议 parent_id 建索引
-- 去重：`distinct: ["列"]` 编译为 DISTINCT ON；Json 列支持
+- 去重：`distinct: [field]` 使用实体专属枚举并编译为 DISTINCT ON；Json 列支持
   `contains/containedIn`（jsonb @>/<@，可配 GIN 索引）
-- 变更：`createX(input)` / `updateX(input, id|where)` / `deleteX(id|where)`，
-  变更 CTE + 读回单条 SQL 原子完成；update/delete 强制要求条件
+- 变更：`createX(input)` / `updateX(id|key, input)` / `updateXs(where, input)` / `deleteX(id|key|where)`，
+  变更 CTE + 读回单条 SQL 原子完成；单对象 update 只接受必填主键，条件更新只走批量结果
 - 主键策略：实体 `id-generator` 支持 `database`（缺省，数据库自增/UUID default）、
   `snowflake` 与 `WithIDGenerator` 注册的自定义策略；生成发生在缓存计划执行期，
   批量和嵌套创建逐行生成且不重复
 - 批量与 upsert：`createUsers(input: [..!]!)` 多行单条 INSERT（约束：参数总数
-  受 PG 协议 65535 上限，万行级请分批）；`upsertUsers(input, on: ["email"])`（`on` 兼容单值写法 `on: "email"`）
-  ON CONFLICT DO UPDATE，on 缺省主键
+  受 PG 协议 65535 上限，万行级请分批）；`on` 是由真实 primary/unique 约束生成的
+  `UserConflictTarget` 枚举，例如 `upsertUsers(input: [...], on: UNIQUE_1)`。
+  partial/expression/deferrable unique 不会被误报为通用冲突目标；存在主键时 `on` 可省略
 - 嵌套写入：输入中列表关系字段接受 `{connect:[ID!], disconnect:[ID!], create:[子CreateInput!]}`
   （connect/disconnect 挂接解除既有行，create 内联建新行并自动填外键），
   一对多改外键、多对多插删中间表，与主变更同语句原子；携带关系操作的
-  更新必须按 id 定位。注意 PG 快照语义：同请求读回看不到关系变更，
+  更新必须按主键定位。注意 PG 快照语义：同请求读回看不到关系变更，
   需后续查询确认（写入本身原子生效）
 - GraphQL 变量：编译为参数槽位，同一查询文本的计划可缓存复用
+
+### PostgreSQL catalog 契约
+
+引擎直接读取 `pg_catalog`，一次构建保留列序、default、identity/generated、enum/domain、
+array、PK/unique/FK/check/exclusion、partial/expression/include index、table/view/materialized
+view/partitioned/foreign table，以及重载 function/procedure 的结构化参数和返回事实。
+
+- `NOT NULL DEFAULT` 在 `CreateInput` 中可省略；identity/generated 不进入写输入
+- 实体全部写列由 preset/default/identity/generated 提供时，生成无 `input` 参数的单条
+  `createX`；不会生成无意义的 bulk create 或 upsert
+- 数据库 enum 只有在类型名和值都能无损表示为 GraphQL Name 时才生成 enum，否则构建失败，
+  可用显式 type mapping 裁决，绝不静默改值
+- PostgreSQL array 以真实 GraphQL list 暴露并可参数化写入；尚未实现的数组过滤不会出现在自省
+- view/materialized view/foreign table 默认只读；没有可执行 Mutation 就不生成 Mutation 字段
+- 复合主键保留每列原生类型并生成 typed `KeyInput`；当前不支持的复合关系嵌套写入不会出现在输入类型
+- `CatalogFingerprint()` 忽略可信 tenant schema 标识符但包含真实结构，用于判断多租户 catalog
+  能否共享 canonical Schema/logical plan；SQL 始终使用配置中的 schema 限定表名
 
 ```go
 meta, err := gql.NewMetadata(k, db,
@@ -107,23 +235,71 @@ metadata:
     User:  { table: users, id-generator: database }
 ```
 
+## 新增、覆盖和扩展
+
+统一使用 `Register(NewResolver(...))`。不存在的字段从函数签名生成 schema；已有原生字段保留
+原来的 schema 契约，并在 Build 检查绑定类型。注册仅影响指定坐标，不自动传播到同实体的其他 CRUD。
+同一坐标重复注册用户 Resolver 会报错。
+
+```go
+type ProductInput struct {
+    Name string `validate:"required,max=100" label:"名称"`
+}
+type ProductArgs struct { Input ProductInput }
+type ProductResult struct { ID string `json:"id"` }
+
+save := func(ctx context.Context, root gql.Root[ProductArgs, *ProductResult], args ProductArgs) (*ProductResult, error) {
+    result, err := root.Next(args)
+    if err != nil || result == nil { return result, err }
+    // 这里可以通过 ExecutionFrom(ctx).Transaction() 写审计，失败返回 error，整次事务回滚。
+    return result, nil
+}
+err := builder.Register(
+    gql.NewResolver("Mutation", "createProduct", "", save),
+    gql.NewResolver("Mutation", "updateProduct", "", save),
+)
+```
+
+- 根字段统一使用 `Root[I, O]`，I 是完整 GraphQL 参数，O 是返回值。原生实现存在时由引擎绑定
+  `root.Next(args)`；不调用 Next 就覆盖字段实现。新字段调用 Next、重复调用或在回调结束后调用
+  都返回明确错误。吞掉 Next 错误仍会使本次操作失败；Next 固定沿用当前请求上下文和事务。
+- 输入字段按 `json` 标签或小驼峰绑定。可以仅声明关心的参数和输入列，其余原始参数保留。
+  原生字段未声明的顶层标量参数可由结构体补充，例如 `Token string`；扩展只作用于当前注册字段。
+  普通新增 Resolver 在调用前校验，原生 Resolver 在 Next 执行前校验处理后的输入；覆盖而不调用 Next 时仍校验输入。
+- `root.Has("input.name")` 区分省略与显式 null/零值；给省略字段赋值后须使用
+  `root.Include("input.enabled")` 加入写入集，批量路径使用 `input[0].name`。未提交字段不覆盖数据库默认值。
+  create/upsert 校验完整参数，update 只校验已提交或 Include 的字段；切片元素沿用 validator 的 `validate:"dive"`。
+  列表按原始行位置保留未绑定字段和提交状态，处理参数时不能增删或重排行；可空列表支持显式设为 nil。
+- `builder.Validator(v)` 接入应用的共享验证器，自定义标签在 Build 前注册。标签和结构体规则使用请求 context，
+  错误保留 `VALIDATION_ERROR` 与中文字段提示。依赖旧状态的判断仍在 Resolver 中显式读取、加锁。
+- 返回结构体可以只声明后处理所需字段，如 ID；引擎在同一次 SQL 中补投影，并剥除内部别名。
+  客户端选择的其他字段继续保留，不额外回查数据库。对可能返回 null 的单条结果使用指针返回类型。
+  Query、批量结果和计数结果需绑定与原生结果对应的结构；强类型投影必须是有限结构，不支持递归 Go 类型。
+- 顺序为权限检查 → 事务内解码和用户处理 → Next 校验与重新授权 → 原生 SQL → 用户后处理 → 提交。
+  返回依赖也受读取权限约束。覆盖实现不能绕过权限；有行策略但不调用 Next 时，需用 `ConsumePolicy()`
+  声明并实际执行策略。原生 Resolver 的资源与动作始终来自原生操作目录。
+- 嵌套关系写入没有独立的根 Resolver 边界；会绕过已注册 create/update 扩展的对应关系写入被拒绝。
+  直接调用其他未注册的 CRUD 不自动执行当前扩展，须分别授权、注册。没有扩展的原生操作保留 SQL 快路径。
+- 删除 `Mutation`、`NewMutation`、`Builder.Mutations`、`Replace`、`Wrap` 和专用中间件 API，不保留兼容入口。
+  共享逻辑直接复用 Go 函数和输入结构体；实体字段继续使用 `Source`、`NewBatch`、`NewLoader`。
+
 ## 自定义 Resolver
 
 SQL 表达不了的字段逻辑用 Resolver 处理。**注册即声明**：字段挂载进宿主实体、
 参数与字段类型反射自函数签名，不写 yaml：
 
 ```go
-// source 是该行已查出的字段——只能读取查询已选择的字段（引擎不会偷偷多查）；
-// args 强类型（json定名/validate校验），客户端可传 hello(lang: "zh")
-executor.Register(gql.NewResolver("User", "hello", "问候语",
+// source 默认只有客户端选择的列；Requires 声明业务依赖，planner 内部补投影并在响应前剥除。
+// args 及其嵌套 struct 都生成强类型、自省可见的 GraphQL input。
+builder.Register(gql.NewResolver("User", "hello", "问候语",
     func(ctx context.Context, source gql.Source, args struct {
         Lang string `json:"lang" validate:"omitempty,oneof=zh en"`
     }) (string, error) {
         return greet(args.Lang, source["name"]), nil
-    }))
+    }, gql.Requires("name"), gql.Timeout(200*time.Millisecond)))
 
 // 批量版：整结果集一次调用免 N+1，返回值与 sources 等长对位
-executor.Register(gql.NewBatch("User", "level", "等级",
+builder.Register(gql.NewBatch("User", "level", "等级",
     func(ctx context.Context, sources []gql.Source, _ struct{}) ([]int, error) { ... }))
 ```
 
@@ -137,28 +313,106 @@ executor.Register(gql.NewBatch("User", "level", "等级",
 仍直接编译为单 SQL；只有复杂业务字段进入 Resolver 分发：
 
 ```go
-executor.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
-    func(ctx context.Context, _ gql.Root, req CreateReq) (*ent.Profile, error) {
+builder.Register(gql.NewResolver("Mutation", "botSave", "注册闭环建号",
+    func(ctx context.Context, _ gql.Root[CreateReq, *ent.Profile], req CreateReq) (*ent.Profile, error) {
         return svc.Create(ctx, req)
-    }, gql.Result("BotProfile")))
+    }, gql.Result("BotProfile"), gql.Cost(8)))
 ```
 
-Mutation 根 Resolver 会在引擎事务中执行，数据库写入应从 `gql.Tx(ctx)` 取得连接；
-Query、无数据库执行器或事务外调用返回 `nil`。直接捕获全局 `*gorm.DB` 的旧写法无法
-自动加入引擎事务，需要把事务连接继续传给 service/repository。
+`Cost`、`Requires`、`Timeout`、`MaxBatch`、`Semantic` 与显式 `RetrySafe(idempotencyKey)` 都会进入
+不可变 Snapshot。命名的嵌套输入/输出 struct 自动生成结构化 SDL，`Extra` 仅保留为兼容逃生口；
+`engine.OperationCost(query, operationName, variables)` 使用与真实执行相同的验证、
+coercion、directive 和选择集合并路径，但不受当前预算上限影响。
 
-`Register` 新增字段；构造时传 `gql.Existing()` 后用 `Replace` 显式覆盖 schema 已有字段；
+Mutation 根 Resolver 会在引擎事务中执行；Resolver 先调用
+`execution, ok := gql.ExecutionFrom(ctx)`，再通过 `execution.Transaction()`
+取得当前 `*sql.Tx`，并继续传给 service/repository。事务由引擎提交或回滚，业务代码不接管其生命周期。
+`execution.Connection()` 返回应用共享的 `*std.Connection`，不包含事务状态。
+普通查询没有事务时使用 `Connection().Pool()`；有事务时必须使用 `Transaction()`，
+包括开启 RLS 或读快照的 Query。两者缺失时分别返回 nil，Resolver 应按自己的依赖检查。
+同一只读视图还提供 identity、selection、deadline、snapshot fingerprint、scope、route、
+policy decision、capability 和 coordinate。直接使用共享连接池不会自动加入请求事务。
+
+在应用初始化处用 `std.NewConnection(config)` 创建统一数据库对象，连接串配置在 `config.Database` 中。
+连接类型及实现位于 `std/connection.go`，GORM 装配位于 `std/database.go`。
+连接实现不调用 GORM，但二者同属已有 GORM 依赖的 `std` 包。
+导入 `_ "github.com/ichaly/ideabase/std/postgres"` 后支持 `postgres://` URL，
+自动使用 `pgx` SQL 驱动与 GQL 的 `postgres` 方言；导入 `std/mysql` 后支持 `mysql://` URL。
+每个驱动包负责 URL 转换、默认连接参数、SQL 建连和 GORM 方言，公共连接层管理返回的共享池。
+只导入底层 SQL 驱动不足以启用 `NewConnection`；未注册的 URL 协议会明确报错。
+例如 `postgres://user:pass%40word@localhost:5432/demo?sslmode=disable`，
+密码中的 `@` 等 URL 特殊字符应使用百分号编码。无类型标识的原生 DSN 和不支持的数据库类型
+会明确报错。
+返回对象可直接传给 `gql.New(k, db)`；`db.Pool()` 返回同一个 `*sql.DB`，
+`db.DSN()` 为 CDC 提供复制连接配置。`NewConnection` 不主动 Ping，
+需要立即检查数据库连通性时调用 `db.Pool().PingContext(ctx)`。
+
+GORM 在应用侧使用这个共享池即可（以下需要应用导入 GORM 及其 PostgreSQL 驱动）：
+
+```go
+orm, err := gorm.Open(postgres.New(postgres.Config{
+    Conn: db.Pool(),
+}), &gorm.Config{})
+```
+
+使用 IdeaBase 标准装配时，`std.NewConnection(config)` 创建同一种公共连接对象并设置池参数，
+`std.NewDatabase(entities, plugins, config, db)` 复用它并保留插件、迁移、日志和预编译设置。
+`std/postgres` 或 `std/mysql` 同时注册连接解析与 GORM 方言。IoC 会注入同一个
+`*std.Connection` 和基于它的 `*gorm.DB`，停止时关闭共享池；GQL 直接接收公共连接对象。
+
+GORM 和 GQL 的业务 SQL 共用连接池；WAL CDC 仍单独建立一条复制连接，不创建第二个池。
+应用负责共享池生命周期：先关闭引擎、停止其他数据库使用方，再调用 `db.Close()`。
+`engine.Close()` 不会关闭共享池。池参数可直接通过 `db.Pool().SetMaxOpenConns(...)` 等设置。
+连接统一由 `std.NewConnection(config)` 创建，不再提供已有池包装入口。
+默认池参数为最多 5 个空闲连接、90 个打开连接、连接最长存活 5 分钟。
+CDC 默认复用 `db.DSN()`；使用独立复制账号时，可显式配置 `subscription.dsn`。
+
+自定义 Mutation 修改了 CDC 无法观察的外部状态时，调用
+`execution.Invalidate("table")` 登记刷新；引擎只在自有事务成功提交后去重发布，回滚和外部
+事务不会误唤醒。需要 SQL 与后处理 Resolver 共享一致读快照时，执行入口传
+`gql.WithReadSnapshot(ctx)`；它只接受 Query，并使用 read-only repeatable-read 事务。
+
+`Register` 新增字段；用 `Replace` 显式覆盖 schema 已有字段；
 `Wrap` 用强类型中间件增强已注册 Resolver。自定义根字段可与默认数据库字段混排；
 单根默认 CRUD 保持原单 SQL 快路径，多根 Mutation 按文本顺序在同一事务中执行。
 
 - 类型映射：`std.Id`→ID、`time.Time`→DateTime、切片→列表（`[]std.Id`→`[ID!]`）、
-  map/嵌套struct→Json；`validate:"required"` 渲染非空 `!`，`doc` tag 作参数文档
+  map/匿名 struct→Json、命名嵌套 struct→结构化类型；`validate:"required"` 渲染非空 `!`，
+  `doc` tag 作字段文档
 - 返回类型名匹配元数据实体 → 触发回查补全（返回实体结构体自动取 Id，等价于返回 id）；
   标量/map/切片 → 直接输出；`gql.Extra(sdl)` 可附加辅助 input/type 声明
 - 回查补全时 resolver/关系/codec 全部生效；要完全控制 schema
   时直接实现 `Resolver` 接口
 
 ## 标量编解码器（Codec）
+
+### 默认精确数值
+
+`gql.New(k, connection).Build()` 默认启用精确数值处理，无需业务注册 Codec：
+
+| 来源 | GraphQL 类型 | JSON 输出 |
+|---|---|---|
+| 数据库 `bigint/int8/bigserial` | `BigInt` | 十进制字符串 |
+| 数据库 `numeric/decimal` | `Decimal` | 十进制字符串 |
+| 数字主键、外键 | `ID` | 十进制字符串 |
+| Resolver 的 Go `int64/uint64` | `BigInt` | 十进制字符串 |
+| 数据库普通整数、浮点数 | `Int`、`Float` | 数字，保持原规则 |
+
+数据库数组元素及 domain 基础类型使用相同映射。`BigInt/Decimal` 支持数值过滤、排序及聚合；
+`sum/avg/min/max` 使用 `DecimalStats` 返回字符串，避免 bigint 求和超出 64 位或平均值产生小数。
+`count/countDistinct` 仍为 `Int`；任意 `Json` 内容与聚合 `key: Json` 不做类型猜测。
+
+输入推荐使用十进制字符串（包括变量、过滤器和 mutation input），例如 `"9007199254740993"`、
+`"1.2300"`。JSON number 与 GraphQL 数字字面量也保留原文；直接调用 Go API 时使用字符串、
+`json.Number` 或整数，不接受 `float32/float64` 作为精确数值输入，以免接收已经舍入的值。
+`BigInt` 仅接受整数字面形式；`Decimal` 支持小数及指数。拒绝布尔值、对象、NaN、Infinity 等输入，
+具体位数、范围和小数位约束仍由数据库列或 Resolver 的目标 Go 类型检查。
+
+兼容性：数据库大整数/小数字段的 GraphQL 类型和数字 ID 的 JSON 类型已变化；客户端需更新
+变量声明及生成类型。显式字段类型配置、`schema.mapping` 和 `WithCodecs` 同名覆盖仍可用。
+Go `int` 仍按原规则映射为 `Int`，需要 64 位范围的 Resolver 应明确使用 `int64/uint64`。
+
+### 自定义编解码器
 
 为一个 GraphQL 标量类型声明请求边界的双向转换（ID 加解密、手机号脱敏等）。
 数据库任何场景（含 jsonb）永远存原始值，转换只发生在出入参：出参在取数出口对
@@ -180,10 +434,10 @@ type Codec interface {
 - `Baser`——`Base() string` 声明过滤器操作符集的借用来源，缺省借用 String
 
 主键与外键实列经元数据定型期的结构推导恒定映射为 ID 标量（零声明、与 codec 无关）。
-所有 codec 统一经 `WithCodecs` 注册（认领需改写字段类型，须在元数据构建期传入）：
+额外的 codec 经 `WithCodecs` 注册（认领需改写字段类型，须在元数据构建期传入）：
 
 ```go
-// 需要ID加解密就注册内置 NewIdCodec()，不注册则ID保持数字；业务codec同列追加
+// 需要短码就注册 NewIdCodec()，不注册则 ID 输出十进制字符串；业务 codec 同列追加
 meta, _ := gql.NewMetadata(k, db, gql.WithCodecs(gql.NewIdCodec(), PhoneCodec{}))
 ```
 
@@ -195,7 +449,7 @@ Match 认领为 ID。注册同名 `"ID"` codec 即可整体替换为自定义实
 内置 ID 实现）。注意 Encode 收到的是原始 JSON token 字节：字符串 token 含引号与
 原始转义，返回值须是合法 JSON token。
 
-## 远程关系（Remote Join）
+## 按键批量 Resolver
 
 把外部服务（REST/gRPC/另一个 GraphQL）声明为图里的关系字段，客户端一次查询同时
 拿到数据库数据与远程数据，拼接由引擎完成。**注册即声明**：关系字段与虚拟类型
@@ -208,19 +462,19 @@ type Profile struct {
 }
 
 // "id" 为宿主键字段；Fetch 一次收到本批去重后的键集合，天然免 N+1
-executor.RegisterRemote(gql.NewRemote("User", "profile", "用户画像", "id",
+builder.Register(gql.NewLoader("User", "profile", "用户画像", "id",
     func(ctx context.Context, keys []any) (map[any]Profile, error) {
         // 批量调用外部服务，返回 键→值 映射；超时用 ctx 自行控制
     }))
 ```
 
 执行语义：编译期自动把 key 列以内部别名补进投影（不受 codec 转换影响，回填后
-剥除，响应形状严格等于选择集）；Fetch 失败时字段整体置 null 并记录告警，
+剥除，响应形状严格等于选择集）；加载失败时字段置 null 并返回 GraphQL 字段错误（Non-Null 字段按 Schema 冒泡），
 不中断主查询；键未命中的行该字段为 null。变更读回的选择集同样生效。
-多个远程共享同一返回类型时，虚拟类型 SDL 按文本去重。
+`NewLoader` 返回 `Resolver`，内部复用批量执行、权限、超时和结果完成流程。数据可以来自本地或远程；独立按键加载并发执行，多个字段共享类型声明。
 
 > 诚实边界：远程字段不支持 where/sort 下推（数据不在库里），虚拟类型不渲染任何
-> 查询面——schema 里看不到的就是不能用的。要完全控制时直接实现 `Remote` 接口。
+> 查询面——schema 里看不到的就是不能用的。要完全控制时直接实现 `BatchResolver` 接口。
 
 ## 行级作用域（多租户 / 当前登录人）
 
@@ -236,15 +490,18 @@ metadata:
     # 当前登录人:{ column: user_id, context: userId }；可同时声明多条，各注入一条 AND
 ```
 
-认证中间件把值注入请求上下文（`gql.WithScope`）：
+认证中间件把值注入请求上下文（`gql.WithScope`）。HTTP 生产入口统一使用
+`transport.NewHandler`，同一路径同时支持 JSON 查询/突变与 SSE 订阅；根包不再提供
+Fiber 适配器或 GraphQL WebSocket 协议实现：
 
 ```go
-func AuthMiddleware(c fiber.Ctx) error {
-    claims := parseJWT(c.Get("Authorization"))      // 服务端解出当前租户/登录人
-    ctx := gql.WithScope(c.Context(),
+func AuthMiddleware(next http.Handler) http.Handler {
+  return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    claims := parseJWT(r.Header.Get("Authorization")) // 服务端解出当前租户/登录人
+    ctx := gql.WithScope(r.Context(),
         map[string]any{"tenant": claims.Tenant, "userId": claims.UserId})
-    c.SetContext(ctx)
-    return c.Next()
+    next.ServeHTTP(w, r.WithContext(ctx))
+  })
 }
 ```
 
@@ -268,6 +525,93 @@ SELECT ... FROM posts WHERE posts.tenant_id = $1   -- $1 = ctx 的 tenant
 - 无作用域上下文时该参数为 `NULL`，匹配/影响不到任何行（安全默认）
 - 变更读回（读 CTE）跳过注入，不误过滤刚写入的行
 - 作用域值是参数（不影响 SQL 文本），同查询不同租户共享一份计划
+
+## 数据治理（软删除、审计与角色权限）
+
+治理规则仍编译进参数化 SQL；角色和上下文值不进入计划缓存键。同一查询文本在不同
+角色间复用同一计划。Engine 启动必须有唯一 PolicyProvider：显式 provider，或由非空
+`permissions` 生成的内置 provider；缺失时直接拒绝 Build，不存在默认全开放路径。
+
+```yaml
+metadata:
+  classes:
+    Post:
+      table: posts
+      operations: [select, aggregate, insert, update, delete, restore, purge]
+      soft_delete: { column: deleted_at }
+      where:
+        - { column: enabled, operator: eq, value: true }
+      fields:
+        createdBy: { column: created_by, read_only: true, insert_preset: { context: userId } }
+        updatedBy: { column: updated_by, read_only: true, update_preset: { context: userId } }
+      permissions:
+        editor:
+          select: [id, title, createdBy, updatedBy]
+          insert: [title]
+          update: [title]
+          delete: true
+          restore: true
+          purge: true
+          aggregate: true
+          filter:
+            - { column: tenant_id, operator: eq, context: tenant }
+          check:
+            - { column: tenant_id, operator: eq, context: tenant }
+```
+
+认证层注入作用域与完整身份；角色随服务端签发的 Identity 传递，不能由 GraphQL variables 伪造：
+
+```go
+ctx := gql.WithScope(ctx, map[string]any{
+    "tenant": claims.Tenant,
+    "userId": claims.UserId,
+})
+identity, _ := gql.NewIdentity(gql.IdentityInput{
+    Tenant: claims.Tenant, Subject: claims.Subject, Roles: claims.Roles,
+})
+ctx = gql.WithIdentity(ctx, identity)
+```
+
+规则语义：
+
+- `operations` 为空兼容旧行为；配置后只渲染并执行列出的能力
+- 存在约定列 `deleted_at` 时自动启用软删，也可用 `soft_delete` 显式指定；查询的
+  `deletion: ACTIVE | WITH_DELETED | ONLY_DELETED` 完整出现在自省中并受字段权限控制
+- delete 标记当前活动行，restore 只恢复已删除行；显式声明并授权 `purge` 后才暴露物理删除
+- 约定的 `created_at/created_by/updated_at/updated_by/deleted_at/deleted_by` 是服务端审计列，
+  不进入写入 Input；`*_at` 使用数据库时钟，`*_by` 来自可信 Identity actor
+- `where` 是客户端无法移除的固定条件，覆盖根查询、嵌套、统计与变更
+- `read_only` 不进入写入 input；`insert_preset` / `update_preset` 由服务端强制写入
+- 每个 Engine 必须配置一个显式 `PolicyProvider`，或由非空 `permissions` 自动生成；两者同时存在或同时缺失都拒绝启动
+- `select` / `insert` / `update` 是字段白名单，`*` 表示全部，空列表表示拒绝；
+  filter/sort/distinct/groupBy/having/search 同样受读取字段白名单约束
+- 一个 Identity 同时具有多个角色时，字段白名单先取交集，再对这些角色的行级分支取并集；
+  因而任一可命中的行分支都授权同一字段形状，不允许跨角色拼接字段权限与行范围
+- `filter` 在 SQL 中限制可见/可改行；`check` 在发 SQL 前逐行验证新值，批量任一行失败则整次拒绝
+
+明确的 mutation 契约：
+
+```graphql
+updatePost(id: ID!, input: PostUpdateInput!): Post
+updatePosts(where: PostWhereInput!, input: PostUpdateRowInput!): PostMutationResult!
+deletePostByPk(id: ID!): Post
+deletePosts(where: PostWhereInput!): PostMutationResult!
+restorePostByPk(id: ID!): Post
+restorePosts(where: PostWhereInput!): PostMutationResult!
+purgePostByPk(id: ID!): Post
+purgePosts(where: PostWhereInput!): PostMutationResult!
+
+type PostMutationResult {
+  affectedCount: Int!
+  returning: [Post!]!
+}
+```
+
+不可数类名的批量字段使用 `Many` 后缀，避免与单条字段重名。
+
+`purge` 会在同一条 PostgreSQL 语句中写入内部 `gql_audit_outbox`；缺表或写入失败会回滚
+物理删除。迁移系统应执行 `pgsql.AuditOutboxDDL`，并让业务数据库角色只拥有 INSERT；
+外部 sink 在提交后按 `event_key` 幂等消费。内部 outbox 表永不进入 GraphQL Schema。
 
 ### 批量机制：resolver 如何不产生 N+1
 
@@ -304,10 +648,9 @@ events, _ := executor.Subscribe(ctx, `subscription { users { items { name } tota
 for reply := range events { ... } // ctx取消后通道关闭
 ```
 
-HTTP 侧 `Bind` 已注册 GET 路由为 WebSocket 升级入口，
-实现 [graphql-transport-ws](https://github.com/enisdenjo/graphql-ws/blob/master/PROTOCOL.md)
-子协议（connection_init/ack、subscribe、next、complete、ping/pong），
-可直接对接 Apollo Client / graphql-ws 客户端。
+HTTP 订阅只走 `transport.NewHandler` 的 SSE 协议，与程序内 `Subscribe`
+共用同一执行链。其他 Web 框架通过其标准 `net/http` adaptor 挂载；引擎不再维护第二套
+WebSocket 状态机。
 
 **部署要求**（官方 PG 镜像即可，无需扩展或自定义镜像）：
 
@@ -324,31 +667,58 @@ services:
 - 复制连接缺省复用主连接 DSN，可用 `subscription.dsn` 单独指定
 - 断线自动退避重连，重连后广播唤醒补偿期间可能错过的变更
 
+订阅是 **latest-state** 语义，不是 durable event log：每次连接先发送当前查询结果，
+CDC 只负责触发重查，慢消费者只保留最新结果。断线重连会重新读取当前状态，但不提供
+历史事件 offset 或 exactly-once replay；需要审计事件流时应把 outbox/事件表作为显式
+GraphQL 实体，或实现带持久 offset 契约的 `Endpoint.Subscribe`，不能把临时复制槽当事件存储。
+
 ## 数据库 schema
 
 元数据按 `schema.schema`（缺省 `public`）加载，生成 SQL 中所有基表引用
 带 schema 限定（`"public"."users"`），不依赖 search_path；变更 CTE 及其
 读回引用为裸名（CTE 名与表名一致，语句作用域内命中）。
+`schema.catalog-timeout`（缺省 30s）限制启动期 catalog 读取；超时、空结果或游标错误都会
+fail closed，不会以部分元数据启动。
 
 ## schema 与操作文档加载
 
-- `schema.file` 配置后从文件加载 schema（生产推荐，启动更快且可人工裁剪）；
-  未配置时由 renderer 现场生成并写入 `cfg/schema.graphql`
-- `executor.LoadDocuments(dir)` 加载目录下 `.graphql` 操作文档（持久化查询），
+- `schema.file` 配置后把文件作为生成 catalog 的只读 artifact 加载；类型、参数、输入字段
+  或坐标有任何漂移都会拒绝启动，不能用它声明引擎实际不支持的隐藏能力
+- `builder.LoadDocuments(dir)` 在 Build 前加载目录下 `.graphql` 操作文档（持久化查询），
   操作按名注册并预热编译缓存；HTTP 请求省略 `query` 仅传 `operationName` 即可执行
 
 ## 生产安全开关
 
-- `schema.introspection: false` 关闭自省（`__schema/__type` 拒绝，常规查询不受影响）
-- `schema.persisted-only: true` HTTP 边界只接受持久化操作（原始查询文本 403），
-  程序内 `Execute`/订阅 channel API 不受限（服务端代码可信）
+- `schema.introspection` 是唯一自省开关：默认 `false`，与 `mode` 无关；开发配置显式设置 `schema.introspection: true`，线上保持关闭。开启时 Engine 的 `__schema/__type` 返回完整的已注册 Schema（仍受 metadata 表/字段白名单约束），不按角色裁剪文档；关闭时拒绝自省，常规查询和 `__typename` 不受影响。执行鉴权、数据隔离与 `EffectiveSchema` 能力描述保持不变。
+- `schema.persisted-only: true` 所有 `ExecuteOperation` 入口只接受已注册操作；原始查询
+  返回标准 GraphQL `errors` 响应，所有适配器共用一套分支语义
 - `Register`/`LoadDocuments` 仅限启动期：首次执行后注册表冻结，运行期调用明确报错
   （schema 重建与并发请求不互斥，冻结防静默数据竞争）
-- 订阅 WebSocket 实现 graphql-transport-ws 完整状态机：未 `connection_init` 即
-  subscribe 关 4401，init 超时 4408、重复 init 4429、重复订阅 ID 4409——
-  鉴权握手不可绕过
+- SSE 必须由支持连接 deadline 的 `net/http` server 或等价适配器承载；无法施加写
+  deadline 时握手 fail closed，避免慢客户端永久占用 handler 和订阅资源
+- `builder.Observe(observer)` 仅在 Build 前安装。观测事件只有
+  `execute/plan/authorize/database/handler`、耗时和稳定错误码，不包含 query、variables、
+  token、cursor、tenant 或 user；observer panic 会被隔离，关闭时热路径约 2ns、零分配
+
+## 生产业务验收
+
+[多租户订单示例](examples/orders/README.md) 使用生产模式、JWT、RLS 和两个业务 Resolver，验证幂等、防超卖、实例组合和有数据的持续负载。
+
+默认在启动时读取已连接数据库的 catalog；显式配置 `metadata.file` 时改用该 artifact，不混用隐式缓存。
 
 ## 性能要点
+
+### 全量测试
+
+需要真实 PostgreSQL 的测试使用 `examples/docker-compose.yml` 中的临时 fixture。
+脚本会清理旧 volume、启动并等待数据库、运行全量测试，结束时自动销毁 fixture：
+
+```bash
+./scripts/test-all.sh
+```
+
+可通过 `GQL_TEST_KEEP_DB=1` 保留数据库用于失败排查；`DEMO_DSN` 可用 PostgreSQL URL 覆盖示例连接串。
+真实 Demo、HTTP、多实例和性能门禁使用 `./examples/scripts/test-demo.sh`。
 
 - 任意深度嵌套 = 单条 SQL，无 N+1
 - 编译计划 LRU 缓存（默认 512），key 为操作名+查询文本，变量不参与 key；
@@ -386,23 +756,14 @@ services:
   打真实 PostgreSQL，覆盖平铺查询、嵌套关系（单条 SQL 零 N+1）、batch resolver。
   `cd example && go test -bench=. -benchmem -run=^$`。
 
-## 扩展新数据库（纯新增，零修改）
+## 扩展新数据库
 
-所有数据库相关能力都走自注册（`database/sql` 驱动同款模式），
-将来支持 MySQL 只需**新增**以下代码，不修改任何现有文件：
+SQL 方言保留公开的 `compiler.Register` 扩展入口，空白导入方言包后，
+`NewCompiler(meta, nil)` 按驱动选择实现。当前提供 PostgreSQL 方言。
 
-1. **方言**：新建 `compiler/mysql` 包实现 `compiler.Dialect` 的 5 个方法
-   （契约见接口注释：单行单列 __root JSON、参数槽位、MarkTable 等），
-   `init` 中 `compiler.Register(NewDialect())`——空白导入即生效，
-   `NewCompiler(meta, nil)` 自动按驱动名路由；已知驱动未注册方言会明确报错
-2. **订阅唤醒源**：新增文件实现 `notifier` 接口（binlog 监听）并
-   `registerNotifier("mysql", 工厂)`——执行器按 `db.Name()` 自动选取
-3. **全文搜索探测**：新增文件实现探测函数并 `registerSearchDetector("mysql", 探测)`
-   ——执行器按 `db.Name()` 自动选取；未注册的驱动降级为 ilike
-4. **元数据**：`MysqlLoader` 已就绪，按驱动自动启用，无需任何动作
-
-当前未注册 MySQL 的任何实现：连 MySQL 时编译器报「没有注册对应的SQL
-方言实现」，订阅报「没有注册CDC唤醒源」，搜索降级 ilike，不会静默出错。
+`MysqlLoader` 已支持元数据读取，但执行 MySQL 查询仍需实现对应方言。
+CDC 和搜索探测目前只有 PostgreSQL 实现，直接在启动装配中选择；其他驱动
+不提供 CDC，搜索使用 ilike。将来新增实际实现时再扩展装配，不预设注册框架。
 
 ## 契约一致性
 
@@ -415,9 +776,10 @@ schema、能力、自省三者严格一致，没有任何方向的偏差：
 ## 当前限制
 
 - MySQL 方言未实现（扩展方式见上节；已知驱动未注册方言会明确报错，不会静默回退）
-- 同一 mutation 内不能两次变更同一张表（变更 CTE 同名限制）
+- 同一 Engine 的多个 mutation 根字段按顺序执行并共享事务，可再次修改同一张表；因此整个操作不保证只有一条 SQL。跨 Gateway namespace 不提供分布式事务。
 - 复合外键关系支持查询 JOIN（逐列 AND），不支持嵌套关系操作（connect/create，编译期明确报错）；
   复合自引用外键不生成递归字段；中间表识别限单列外键约束
 
 设计细节见 [`../doc/gql-rework-plan.md`](../doc/gql-rework-plan.md) 与
-[`../doc/pgsql-template-design.md`](../doc/pgsql-template-design.md)。
+[`../doc/pgsql-template-design.md`](../doc/pgsql-template-design.md)。升级与滚动发布见
+[`MIGRATION.md`](MIGRATION.md)。

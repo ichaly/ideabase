@@ -1,0 +1,642 @@
+package gql
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"testing"
+
+	"github.com/ichaly/ideabase/gql/protocol"
+	"github.com/ichaly/ideabase/std"
+	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
+)
+
+func TestPolicyProviderFailureDoesNotLeakInternalDetails(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{}, errors.New("secret policy backend DSN")
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users { total } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "policy evaluation failed")
+	require.Contains(t, string(body), "POLICY_ERROR")
+	require.NotContains(t, string(body), "secret policy backend DSN")
+}
+
+func emptyMetadata(t *testing.T) *Metadata {
+	t.Helper()
+	k, err := std.NewKonfig()
+	require.NoError(t, err)
+	k.Set("mode", "dev")
+	k.Set("app.root", t.TempDir())
+	meta, err := NewMetadata(k, nil)
+	require.NoError(t, err)
+	return meta
+}
+
+func TestPolicyProviderRequiresExplicitRootResolverAccess(t *testing.T) {
+	meta := emptyMetadata(t)
+	compiler, err := NewCompiler(meta, nil)
+	require.NoError(t, err)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
+	require.NoError(t, err)
+	provider := OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{Allow: true}, nil
+	})
+	installTestPolicy(t, executor, provider)
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
+		return true, nil
+	})))
+	_, err = executor.Snapshot()
+	require.ErrorContains(t, err, "Query.health")
+	require.ErrorContains(t, err, "policy resource/action")
+}
+
+func TestPolicyProviderAcceptsDeclaredRootResolverAccess(t *testing.T) {
+	meta := emptyMetadata(t)
+	compiler, err := NewCompiler(meta, nil)
+	require.NoError(t, err)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
+	require.NoError(t, err)
+	provider := OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{Allow: true}, nil
+	})
+	installTestPolicy(t, executor, provider)
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
+		return true, nil
+	}, Access("system", "read"))))
+	snapshot, err := executor.Snapshot()
+	require.NoError(t, err)
+	capability, ok := snapshot.Capability("Query.health")
+	require.True(t, ok)
+	require.Equal(t, "system", capability.Resource)
+	require.Equal(t, []string{"read"}, capability.Actions)
+}
+
+func TestPolicyProviderDeniesBeforeRootResolver(t *testing.T) {
+	meta := emptyMetadata(t)
+	compiler, err := NewCompiler(meta, nil)
+	require.NoError(t, err)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
+	require.NoError(t, err)
+	called, handled := 0, false
+	provider := OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		called++
+		require.Equal(t, "Query.health", request.Coordinate)
+		require.Equal(t, "system", request.Resource)
+		require.Equal(t, []string{"read"}, request.Actions)
+		return PolicyDecision{Allow: false}, nil
+	})
+	installTestPolicy(t, executor, provider)
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
+		handled = true
+		return true, nil
+	}, Access("system", "read"))))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ health }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `Cannot query field \"health\" on type \"Query\"`)
+	require.Equal(t, 1, called)
+	require.False(t, handled)
+}
+
+func TestPolicyProviderRejectsStaleRevisionAndUnawareHandler(t *testing.T) {
+	for name, test := range map[string]struct {
+		decision PolicyDecision
+		want     string
+	}{
+		"stale":    {PolicyDecision{Allow: true, PolicyRevision: 4}, "revision mismatch"},
+		"row fact": {PolicyDecision{Allow: true, RowPredicates: []Predicate{{Column: "id", Operator: "eq", Value: 1}}}, "policy-aware"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			meta := emptyMetadata(t)
+			compiler, err := NewCompiler(meta, nil)
+			require.NoError(t, err)
+			executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
+			require.NoError(t, err)
+			installTestPolicy(t, executor, OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
+				return test.decision, nil
+			}))
+			handled := false
+			require.NoError(t, executor.register(NewResolver("Query", "health", "", func(context.Context, Root[struct{}, bool], struct{}) (bool, error) {
+				handled = true
+				return true, nil
+			}, Access("system", "read"))))
+			identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u", PolicyRevision: 5})
+			require.NoError(t, err)
+			body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ health }`, nil)
+			require.NoError(t, err)
+			require.Contains(t, string(body), test.want)
+			require.False(t, handled)
+		})
+	}
+}
+
+func TestPolicyAwareResolverReceivesDefensiveDecision(t *testing.T) {
+	meta := emptyMetadata(t)
+	compiler, err := NewCompiler(meta, nil)
+	require.NoError(t, err)
+	executor, err := newEngineForTest(nil, NewRenderer(meta), meta, compiler)
+	require.NoError(t, err)
+	installTestPolicy(t, executor, OperationPolicyProvider(func(context.Context, PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{Allow: true, RowPredicates: []Predicate{{Column: "id", Operator: "eq", Value: 1}}}, nil
+	}))
+	require.NoError(t, executor.register(NewResolver("Query", "health", "", func(ctx context.Context, _ Root[struct{}, bool], _ struct{}) (bool, error) {
+		decision, ok := PolicyDecisionFromContext(ctx, "Query.health")
+		if !ok {
+			return false, nil
+		}
+		decision.RowPredicates[0].Column = "mutated"
+		fresh, _ := PolicyDecisionFromContext(ctx, "Query.health")
+		return fresh.RowPredicates[0].Column == "id", nil
+	}, Access("system", "read"), ConsumePolicy())))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ health }`, nil)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":{"health":true}}`, string(body))
+}
+
+func TestPolicyProviderRejectsUnlistedFieldUse(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	provider := OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Coordinate != "Query.users" {
+			return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+		}
+		return PolicyDecision{Allow: true, Fields: map[FieldUse][]string{
+			FieldUseSelect: {"id"}, FieldUseReturn: {"id"},
+		}}, nil
+	})
+	installTestPolicy(t, executor, provider)
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users { items { id name } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `Cannot query field \"name\" on type \"User\"`)
+	require.NotContains(t, string(body), `"data"`)
+}
+
+func TestPolicyProviderCoversNestedRelationResource(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	seen := map[string]PolicyRequest{}
+	provider := OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		seen[request.Coordinate] = request
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	})
+	installTestPolicy(t, executor, provider)
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users { items { id posts { title } } } }`, nil)
+	require.NoError(t, err)
+	require.NotContains(t, string(body), `"errors"`)
+	require.Contains(t, seen, "Query.users")
+	require.Contains(t, seen, "User.posts")
+	require.Equal(t, "Post", seen["User.posts"].Resource)
+	require.Equal(t, []string{"title"}, seen["User.posts"].Fields[FieldUseSelect])
+}
+
+func TestPolicyProviderRowPredicateIsCompiledWithRequestValue(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	testExec(t, db, `INSERT INTO users(name, email) VALUES ($1, $2), ($3, $4)`,
+		"Policy A", "policy-a@x.com", "Policy B", "policy-b@x.com")
+	provider := OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{
+			Allow: true, Fields: request.Fields,
+			RowPredicates: []Predicate{{Column: "email", Operator: "eq", Value: request.Identity.Subject()}},
+		}, nil
+	})
+	installTestPolicy(t, executor, provider)
+	query := `{ users { items { name } } }`
+	for subject, name := range map[string]string{"policy-a@x.com": "Policy A", "policy-b@x.com": "Policy B"} {
+		identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: subject})
+		require.NoError(t, err)
+		reply := executor.run(WithIdentity(context.Background(), identity), query, nil, "")
+		require.Empty(t, reply.Errors, "%v", reply.Errors)
+		users := reply.Data["users"].(map[string]any)["items"].([]any)
+		require.Len(t, users, 1)
+		require.Equal(t, name, users[0].(map[string]any)["name"])
+	}
+	require.Equal(t, 1, executor.policyCache.Len(), "同一策略形状应复用SQL计划，值只走参数槽")
+}
+
+func TestPolicyProviderCreateCheckRejectsBeforeWrite(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	provider := OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{
+			Allow: true, Fields: request.Fields,
+			Check: []Predicate{{Column: "name", Operator: "eq", Value: "Allowed"}},
+		}, nil
+	})
+	installTestPolicy(t, executor, provider)
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	denied := executor.run(ctx, `mutation { createUser(input: { name: "Denied", email: "policy-denied@x.com" }) { id } }`, nil, "")
+	require.NotEmpty(t, denied.Errors)
+	var count int64
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM users WHERE email = $1`, "policy-denied@x.com").Scan(&count))
+	require.Zero(t, count)
+	allowed := executor.run(ctx, `mutation { createUser(input: { name: "Allowed", email: "policy-allowed@x.com" }) { id } }`, nil, "")
+	require.Empty(t, allowed.Errors, "%v", allowed.Errors)
+}
+
+func TestPolicyProviderUpdateCheckReadsUnsubmittedColumns(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	var user struct {
+		ID int64
+	}
+	require.NoError(t, testQueryRow(db, `INSERT INTO users(name, email) VALUES ($1, $2) RETURNING id`, "Allowed", "partial-check@x.com").Scan(&user.ID))
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{
+			Allow: true, Fields: request.Fields,
+			Check: []Predicate{{Column: "name", Operator: "eq", Value: "Allowed"}},
+		}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity),
+		`mutation ($id: ID!) { updateUser(input: { email: "partial-check-updated@x.com" }, id: $id) { id email } }`, map[string]any{"id": user.ID}, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	var email string
+	require.NoError(t, testQueryRow(db, `SELECT email FROM users WHERE email = $1`, "partial-check-updated@x.com").Scan(&email))
+	require.Equal(t, "partial-check-updated@x.com", email)
+
+	var denied struct{ ID int64 }
+	require.NoError(t, testQueryRow(db, `INSERT INTO users(name, email) VALUES ($1, $2) RETURNING id`, "Denied", "post-state@x.com").Scan(&denied.ID))
+	allowed := executor.run(WithIdentity(context.Background(), identity),
+		`mutation ($id: ID!) { updateUser(input: { name: "Allowed" }, id: $id) { id name } }`, map[string]any{"id": denied.ID}, "")
+	require.Empty(t, allowed.Errors, "%v", allowed.Errors)
+	rejected := executor.run(WithIdentity(context.Background(), identity),
+		`mutation ($id: ID!) { updateUser(input: { name: "Denied" }, id: $id) { id name } }`, map[string]any{"id": denied.ID}, "")
+	require.Nil(t, rejected.Data["updateUser"])
+	var name string
+	require.NoError(t, testQueryRow(db, `SELECT name FROM users WHERE id = $1`, denied.ID).Scan(&name))
+	require.Equal(t, "Allowed", name)
+}
+
+func TestPolicyProviderUpdateKeepsRoleFilterAndCheckAtomic(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	var user struct{ ID int64 }
+	require.NoError(t, testQueryRow(db, `INSERT INTO users(name, email) VALUES ($1, $2) RETURNING id`, "Before", "a@x.com").Scan(&user.ID))
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{Allow: true, Fields: request.Fields, RoleBranches: []RolePolicyBranch{
+			{Role: "a", RowPredicates: []Predicate{{Column: "email", Operator: "eq", Value: "a@x.com"}}, Check: []Predicate{{Column: "name", Operator: "eq", Value: "Allowed"}}},
+			{Role: "b", RowPredicates: []Predicate{{Column: "email", Operator: "eq", Value: "b@x.com"}}, Check: []Predicate{{Column: "name", Operator: "eq", Value: "Denied"}}},
+		}}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity),
+		`mutation ($id: ID!) { updateUser(input: { name: "Denied" }, id: $id) { id } }`, map[string]any{"id": user.ID}, "")
+	require.Nil(t, reply.Data["updateUser"])
+	var name string
+	require.NoError(t, testQueryRow(db, `SELECT name FROM users WHERE id = $1`, user.ID).Scan(&name))
+	require.Equal(t, "Before", name, "filter from one role must not combine with check from another")
+}
+
+func TestPolicyProviderChecksRelationOnlyParentAndTargetUpdates(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	type row struct{ ID int64 }
+	var owner, denied, allowed row
+	for target, values := range map[*row][2]string{&owner: {"Owner", "owner@x.com"}, &denied: {"Denied", "denied@x.com"}, &allowed: {"Allowed", "allowed@x.com"}} {
+		require.NoError(t, testQueryRow(db, `INSERT INTO users(name, email) VALUES ($1, $2) RETURNING id`, values[0], values[1]).Scan(&target.ID))
+	}
+	var posts []row
+	rows, err := db.Pool().QueryContext(context.Background(), `INSERT INTO posts(title, user_id) VALUES ('first', $1), ('second', $2) RETURNING id`, owner.ID, owner.ID)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var post row
+		require.NoError(t, rows.Scan(&post.ID))
+		posts = append(posts, post)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, posts, 2)
+	first, second := posts[0], posts[1]
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		decision := PolicyDecision{Allow: true, Fields: request.Fields}
+		if request.Resource == "User" && slices.Contains(request.Actions, protocol.OP_UPDATE) {
+			decision.Check = []Predicate{{Column: "name", Operator: "eq", Value: "Allowed"}}
+		}
+		if request.Resource == "Post" && slices.Contains(request.Actions, protocol.OP_UPDATE) {
+			decision.Check = []Predicate{{Column: "user_id", Operator: "in", Value: []any{owner.ID, denied.ID}}}
+		}
+		return decision, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	for _, mutation := range []string{
+		fmt.Sprintf(`mutation { updateUser(input: { posts: { connect: [%d] } }, id: %d) { id } }`, first.ID, denied.ID),
+		fmt.Sprintf(`mutation { updateUser(input: { posts: { connect: [%d] } }, id: %d) { id } }`, second.ID, allowed.ID),
+	} {
+		_ = executor.run(ctx, mutation, nil, "")
+	}
+	var owners []int64
+	ownerRows, err := db.Pool().QueryContext(context.Background(), `SELECT user_id FROM posts WHERE id IN ($1, $2) ORDER BY id`, first.ID, second.ID)
+	require.NoError(t, err)
+	defer ownerRows.Close()
+	for ownerRows.Next() {
+		var ownerID int64
+		require.NoError(t, ownerRows.Scan(&ownerID))
+		owners = append(owners, ownerID)
+	}
+	require.NoError(t, ownerRows.Err())
+	require.Equal(t, []int64{owner.ID, owner.ID}, owners)
+}
+
+func TestMutationRelationOpsDoNotCreateRowsWithoutParent(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	beforePosts, beforeTags := int64(0), int64(0)
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM posts`).Scan(&beforePosts))
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM tags`).Scan(&beforeTags))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	postCreate := executor.run(ctx, `mutation { updateUser(input: { posts: { create: [{ title: "orphan" }] } }, id: 999999) { id } }`, nil, "")
+	require.Empty(t, postCreate.Errors, "%v", postCreate.Errors)
+	tagCreate := executor.run(ctx, `mutation { updatePost(input: { tags: { create: [{ name: "orphan-tag" }] } }, id: 999999) { id } }`, nil, "")
+	require.Empty(t, tagCreate.Errors, "%v", tagCreate.Errors)
+	var afterPosts, afterTags int64
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM posts`).Scan(&afterPosts))
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM tags`).Scan(&afterTags))
+	require.Equal(t, beforePosts, afterPosts)
+	require.Equal(t, beforeTags, afterTags)
+}
+
+func TestPolicyProviderAuthorizesNestedRelationTarget(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	seenTarget := false
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "Post" && slices.Contains(request.Actions, protocol.OP_UPDATE) && len(request.Fields) > 0 {
+			seenTarget = true
+			require.ElementsMatch(t, []string{"id"}, request.Fields[FieldUseFilter], "nested relation target keys must be authorized as filters")
+			require.ElementsMatch(t, []string{"userId"}, request.Fields[FieldUseWrite], "nested relation foreign key must be authorized as a write")
+			return PolicyDecision{Allow: false}, nil
+		}
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `mutation {
+		createUser(input: { name: "Nested policy", email: "nested-policy@x.com", posts: { connect: [1] } }) { id }
+	}`, nil, "")
+	require.True(t, seenTarget, "nested connect must authorize the target update capability")
+	require.NotEmpty(t, reply.Errors)
+	require.Contains(t, reply.Errors.Error(), "policy denied")
+}
+
+func TestRelationTargetCompositeKeysAreFilterUses(t *testing.T) {
+	target := &policyTarget{fields: make(map[FieldUse][]string)}
+	addRelationTargetFilterFields(target, &protocol.Class{PrimaryKeys: []string{"tenantId", "code"}})
+	require.ElementsMatch(t, []string{"tenantId", "code"}, target.fields[FieldUseFilter])
+	require.Empty(t, target.fields[FieldUseWrite])
+}
+
+func TestPolicyProviderChecksNestedRelationCreate(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		decision := PolicyDecision{Allow: true, Fields: request.Fields}
+		if request.Resource == "Post" && slices.Contains(request.Actions, protocol.OP_INSERT) && len(request.Fields) > 0 {
+			decision.Check = []Predicate{{Column: "title", Operator: "eq", Value: "Allowed"}}
+		}
+		return decision, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `mutation {
+		createUser(input: { name: "Nested policy", email: "nested-create-policy@x.com", posts: { create: [{ title: "Denied" }] } }) { id }
+	}`, nil, "")
+	require.NotEmpty(t, reply.Errors)
+	require.Contains(t, reply.Errors.Error(), "check failed")
+}
+
+func TestPolicyProviderAuthorizesNestedCreateForeignKeyWrite(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "Post" && slices.Contains(request.Actions, protocol.OP_INSERT) && len(request.Fields) > 0 {
+			require.ElementsMatch(t, []string{"title", "userId"}, request.Fields[FieldUseWrite])
+			return PolicyDecision{Allow: true, Fields: map[FieldUse][]string{FieldUseWrite: {"title"}}}, nil
+		}
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `mutation {
+		createUser(input: { name: "Nested policy", email: "nested-fk-policy@x.com", posts: { create: [{ title: "Denied FK" }] } }) { id }
+	}`, nil, "")
+	require.NotEmpty(t, reply.Errors)
+	var count int64
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM posts WHERE title = $1`, "Denied FK").Scan(&count))
+	require.Zero(t, count)
+}
+
+func TestPolicyProviderAuthorizesManyToManyThroughWrite(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	seen := false
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "PostTag" && slices.Contains(request.Actions, protocol.OP_INSERT) {
+			seen = true
+			return PolicyDecision{Allow: false}, nil
+		}
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `mutation {
+		updatePost(input: { tags: { connect: [1] } }, id: 1) { id }
+	}`, nil, "")
+	require.True(t, seen, "many-to-many link insert must authorize the through resource")
+	require.NotEmpty(t, reply.Errors)
+	require.Contains(t, reply.Errors.Error(), "policy denied")
+}
+
+func TestManyToManyDisconnectUsesThroughFilterFields(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	seen := false
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		if request.Resource == "PostTag" && slices.Contains(request.Actions, protocol.OP_DELETE) && len(request.Fields[FieldUseFilter]) > 0 {
+			seen = true
+			require.Empty(t, request.Fields[FieldUseWrite])
+			require.ElementsMatch(t, []string{"postId", "tagId"}, request.Fields[FieldUseFilter])
+		}
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	reply := executor.run(WithIdentity(context.Background(), identity), `mutation {
+		updatePost(input: { tags: { disconnect: [1] } }, id: 1) { id }
+	}`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.True(t, seen)
+}
+
+func TestManyToManyConnectChecksCompleteThroughRowInSQL(t *testing.T) {
+	executor, db, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	testExec(t, db, `INSERT INTO users (id, name, email) VALUES (1, 'u', 'u@x')`)
+	testExec(t, db, `INSERT INTO posts (id, title, user_id) VALUES (1, 'p', 1)`)
+	testExec(t, db, `INSERT INTO tags (id, name) VALUES (1, 'one'), (2, 'two')`)
+	allowedSource := 1
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		decision := PolicyDecision{Allow: true, Fields: request.Fields}
+		if request.Resource == "PostTag" && slices.Contains(request.Actions, protocol.OP_INSERT) {
+			decision.Check = []Predicate{{Column: "postId", Operator: "eq", Value: allowedSource}}
+		}
+		return decision, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	reply := executor.run(ctx, `mutation { updatePost(input: { tags: { connect: [1] } }, id: 1) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	allowedSource = 2
+	reply = executor.run(ctx, `mutation { updatePost(input: { tags: { connect: [2] } }, id: 1) { id } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	var allowed, denied int64
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM post_tags WHERE post_id=1 AND tag_id=1`).Scan(&allowed))
+	require.NoError(t, testQueryRow(db, `SELECT COUNT(*) FROM post_tags WHERE post_id=1 AND tag_id=2`).Scan(&denied))
+	require.EqualValues(t, 1, allowed)
+	require.Zero(t, denied)
+}
+
+func TestPolicyPlanCacheIsPartitionedByTenantRoute(t *testing.T) {
+	executor, _, cleanup := newTestExecutor(t, nil)
+	defer cleanup()
+	seen := map[string]string{}
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		seen[request.Identity.Tenant()] = request.Route.CacheKey
+		return PolicyDecision{Allow: true, Fields: request.Fields}, nil
+	}))
+	router, err := NewTenantRouter(TenantRouterConfig{Mode: TenantModeDatabase, Revision: 3, Routes: map[string]TenantRoute{
+		"a": {DataSource: "db"}, "b": {DataSource: "db"},
+	}})
+	require.NoError(t, err)
+	gateway, err := NewTenantGateway(router, map[string]*Engine{"db": executor}, testTenantSecurity(router))
+	require.NoError(t, err)
+	for _, tenant := range []string{"a", "b"} {
+		identity, identityErr := NewIdentity(IdentityInput{Tenant: tenant, Subject: "u"})
+		require.NoError(t, identityErr)
+		body, executeErr := gateway.Execute(WithIdentity(context.Background(), identity), `{ users { items { id } } }`, nil)
+		require.NoError(t, executeErr)
+		require.NotContains(t, string(body), `"errors"`)
+	}
+	require.NotEmpty(t, seen["a"])
+	require.NotEqual(t, seen["a"], seen["b"])
+	require.Equal(t, 2, executor.policyCache.Len())
+}
+
+func TestPolicyProviderFiltersArtifactButNotIntrospection(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		fields := map[FieldUse][]string{}
+		allowed := []string{"*"}
+		for _, use := range request.FieldUses {
+			useAllowed := allowed
+			if request.Resource == "User" && (use == FieldUseSelect || use == FieldUseReturn || use == FieldUseJoin || use == FieldUseAggregate || use == FieldUseFilter || use == FieldUseGroup) {
+				useAllowed = []string{"id"}
+			}
+			fields[use] = useAllowed
+		}
+		return PolicyDecision{Allow: true, Fields: fields, PolicyRevision: 7}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u", PolicyRevision: 7})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	reply := executor.run(ctx, `{ __type(name: "User") { fields { name } inputFields { name } } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	typeInfo := reply.Data["__type"].(map[string]any)
+	require.Contains(t, typeInfo["fields"], map[string]any{"name": "id"})
+	require.Contains(t, typeInfo["fields"], map[string]any{"name": "name"})
+	reply = executor.run(ctx, `{ __type(name: "UserStats") { fields { name } } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Contains(t, reply.Data["__type"].(map[string]any)["fields"], map[string]any{"name": "count"})
+	require.Greater(t, len(reply.Data["__type"].(map[string]any)["fields"].([]any)), 2)
+	reply = executor.run(ctx, `{ __type(name: "UserDistinctField") { enumValues { name } } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Contains(t, reply.Data["__type"].(map[string]any)["enumValues"], map[string]any{"name": "name"})
+	artifact, err := executor.EffectiveSchema(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, artifact.PermissionSignature)
+	require.Equal(t, uint64(7), artifact.PolicyRevision)
+	require.NotEqual(t, artifact.StructuralFingerprint, artifact.Fingerprint)
+	profile, err := executor.GenerateSchemaProfile(ctx, "reader")
+	require.NoError(t, err)
+	require.NoError(t, profile.ValidateOperation(`query { users { items { id } } }`))
+	require.Error(t, profile.ValidateOperation(`query { users { items { name } } }`))
+	require.NoError(t, CheckProfileCompatibility(profile, profile))
+}
+
+func TestPolicyProviderEnforcesRequestLimitBeforeSQL(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{Allow: true, Fields: request.Fields, Limit: 1}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users(limit: 2) { items { id } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "limit 2 exceeds 1")
+	require.NotContains(t, string(body), `"data"`)
+}
+
+func TestPolicyProviderEnforcesImplicitListLimitWhenDefaultIsUnset(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	executor.metadata.cfg.Schema.DefaultLimit = 0
+	installTestPolicy(t, executor, OperationPolicyProvider(func(_ context.Context, request PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{Allow: true, Fields: request.Fields, Limit: 1}, nil
+	}))
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "u"})
+	require.NoError(t, err)
+	body, err := executor.Execute(WithIdentity(context.Background(), identity), `{ users { items { id } } }`, nil)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "limit 20 exceeds 1")
+}
+
+func TestBuiltinPermissionsFilterArtifactButNotIntrospection(t *testing.T) {
+	executor, cleanup := setupTestExecutor(t)
+	defer cleanup()
+	user, ok := executor.metadata.GetNode("User")
+	require.True(t, ok)
+	user.Permissions = map[string]*protocol.Permission{"reader": {Select: []string{"id"}}}
+	executor.policy = metadataPolicy(executor.metadata)
+	executor.policyBuiltin = true
+	identity, err := NewIdentity(IdentityInput{Tenant: "t", Subject: "reader", Roles: []string{"reader"}})
+	require.NoError(t, err)
+	ctx := WithIdentity(context.Background(), identity)
+	reply := executor.run(ctx, `{ __type(name: "User") { fields { name } } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	fields := reply.Data["__type"].(map[string]any)["fields"]
+	require.Contains(t, fields, map[string]any{"name": "id"})
+	require.Contains(t, fields, map[string]any{"name": "name"})
+	reply = executor.run(ctx, `{ __type(name: "UserCreateInput") { name } }`, nil, "")
+	require.Empty(t, reply.Errors, "%v", reply.Errors)
+	require.Equal(t, map[string]any{"name": "UserCreateInput"}, reply.Data["__type"])
+	artifact, err := executor.EffectiveSchema(ctx)
+	require.NoError(t, err)
+	_, err = gqlparser.LoadSchema(&ast.Source{Name: "reader.graphql", Input: artifact.Schema})
+	require.NoError(t, err)
+}

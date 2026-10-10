@@ -270,6 +270,7 @@ docs/_book
 test/
 .idea/**
 *.sum
+!gql/tools/go.sum
 *.iml
 .vscode/
 

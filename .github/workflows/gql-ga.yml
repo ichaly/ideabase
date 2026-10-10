@@ -1,0 +1,149 @@
+name: gql-ga
+
+on:
+  pull_request:
+    paths: ["gql/**", ".github/workflows/gql-ga.yml"]
+  push:
+    branches: [main]
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache-dependency-path: |
+            gql/go.sum
+            gql/tools/go.sum
+      - run: GOWORK=off go vet ./...
+
+  correctness:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [15, 16, 17, 18]
+    env:
+      GOWORK: "off"
+      GQL_TEST_POSTGRES_IMAGE: postgres:${{ matrix.postgres }}-alpine
+    defaults:
+      run:
+        working-directory: gql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache-dependency-path: |
+            gql/go.sum
+            gql/tools/go.sum
+      - run: docker compose -f examples/docker-compose.yml up -d --wait
+      - run: go test ./... -count=1
+      - run: go test ./transport -run '^TestGraphQLHTTPProtocolAudit$' -count=1
+      - name: Run real multi-process cluster GA
+        env:
+          GQL_RUN_CLUSTER_GA: "1"
+        run: go test . -run '^TestGACluster' -count=1
+      - name: Run real HTTP Remote/Gateway multi-process GA
+        env:
+          GQL_RUN_CLUSTER_GA: "1"
+        run: go test ./transport -run '^TestGAHTTPRemoteGatewayRoundTripAndStateChange$' -count=1
+
+  race-and-fuzz:
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+      GQL_TEST_POSTGRES_IMAGE: postgres:15-alpine
+    defaults:
+      run:
+        working-directory: gql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache-dependency-path: |
+            gql/go.sum
+            gql/tools/go.sum
+      - run: docker compose -f examples/docker-compose.yml up -d --wait
+      - run: go test -race ./... -count=1
+      - run: go test . -run '^$' -fuzz '^FuzzExecutableFrontend$' -fuzztime 10s
+
+  security:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gql
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache-dependency-path: |
+            gql/go.sum
+            gql/tools/go.sum
+      - run: GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+      - run: '"$RUNNER_TEMP/bin/govulncheck" ./...'
+
+  performance:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gql
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache-dependency-path: gql/go.sum
+      - run: GOWORK=off ./scripts/perf.sh allocations | tee performance.txt
+      - name: Test performance tools module
+        run: cd tools && GOWORK=off go test ./...
+      - name: Enforce real PostgreSQL SQL-count budgets
+        env:
+          GOWORK: "off"
+          GQL_RUN_CLUSTER_GA: "1"
+          GQL_TEST_POSTGRES_IMAGE: postgres:15-alpine
+        run: go test . -run '^TestGAPerformanceRealPostgres(MutationSQL|ConcurrentWarm)Gate$' -count=1
+      - name: Run populated tenant order workload
+        env:
+          GOWORK: "off"
+          ORDERS_SOAK_SECONDS: "30"
+        run: go test ./examples/orders -run TestOrderPopulatedHTTPWorkload -count=1 -v | tee orders-performance.txt
+      - name: Compare base and head
+        shell: bash
+        run: |
+          base='${{ github.event.pull_request.base.sha }}'
+          if [[ -z "$base" ]]; then base='${{ github.event.before }}'; fi
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then base=HEAD^; fi
+          ./scripts/perf-compare.sh "$base" | tee performance-delta.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gql-performance
+          path: |
+            gql/performance.txt
+            gql/performance-delta.txt
+            gql/orders-performance.txt
+
+  demo-e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache-dependency-path: gql/go.sum
+      - run: ./examples/scripts/test-demo.sh

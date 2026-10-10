@@ -2,24 +2,55 @@ package gql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"github.com/ichaly/ideabase/gql/internal"
 	"github.com/ichaly/ideabase/gql/protocol"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ichaly/ideabase/log"
 	"github.com/ichaly/ideabase/std"
+	_ "github.com/ichaly/ideabase/std/postgres"
 	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
+
+var testPostgres struct {
+	once sync.Once
+	id   string
+	port string
+	err  error
+	dbs  atomic.Uint64
+}
+
+func testExec(t testing.TB, db *std.Connection, query string, args ...any) sql.Result {
+	t.Helper()
+	result, err := db.Pool().ExecContext(context.Background(), query, args...)
+	if err != nil {
+		t.Fatalf("execute SQL: %v", err)
+	}
+	return result
+}
+
+func testQueryRow(db *std.Connection, query string, args ...any) *sql.Row {
+	return db.Pool().QueryRowContext(context.Background(), query, args...)
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if testPostgres.id != "" {
+		_ = exec.Command("docker", "rm", "-f", testPostgres.id).Run()
+	}
+	os.Exit(code)
+}
 
 func init() {
 	// 加载.env文件
@@ -94,64 +125,81 @@ COMMENT ON COLUMN post_tags.post_id IS '文章ID';
 COMMENT ON COLUMN post_tags.tag_id IS '标签ID';`
 
 // setupTestDatabase 初始化测试数据库
-func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
-	ctx := context.Background()
-
-	// 创建PostgreSQL容器请求
-	req := testcontainers.ContainerRequest{
-		Image:        "postgres:15-alpine",
-		ExposedPorts: []string{"5432/tcp"},
-		// CDC订阅依赖逻辑复制（生产部署同样只需此启动参数，pgoutput为内置插件）
-		Cmd: []string{"postgres", "-c", "wal_level=logical"},
-		Env: map[string]string{
-			"POSTGRES_DB":       "test",
-			"POSTGRES_USER":     "test",
-			"POSTGRES_PASSWORD": "test",
-		},
-		// 使用等待日志和端口可用策略，比固定时间更可靠
-		WaitingFor: wait.ForAll(
-			// 等待日志
-			wait.ForLog("database system is ready to accept connections"),
-			// 等待端口可用
-			wait.ForListeningPort("5432/tcp"),
-		).WithDeadline(30 * time.Second),
-	}
-
-	// 启动容器
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	require.NoError(t, err, "创建PostgreSQL容器失败")
-
-	// 获取连接信息
-	host, err := container.Host(ctx)
-	require.NoError(t, err, "获取容器主机失败")
-	port, err := container.MappedPort(ctx, "5432")
-	require.NoError(t, err, "获取容器端口失败")
-
-	// 构建连接字符串
-	dsn := fmt.Sprintf("host=%s port=%s user=test password=test dbname=test sslmode=disable", host, port.Port())
+func setupTestDatabase(t *testing.T) (*std.Connection, func()) {
+	testPostgres.once.Do(startTestPostgres)
+	require.NoError(t, testPostgres.err)
+	host := "127.0.0.1"
+	adminDSN := fmt.Sprintf("postgres://test:test@%s:%s/test?sslmode=disable", host, testPostgres.port)
+	adminConfig := &std.Config{}
+	adminConfig.Database = adminDSN
+	admin, err := std.NewConnection(adminConfig)
+	require.NoError(t, err, "连接 PostgreSQL 测试实例失败")
+	database := fmt.Sprintf("gql_test_%d", testPostgres.dbs.Add(1))
+	_, err = admin.Pool().ExecContext(context.Background(), `CREATE DATABASE "`+database+`"`)
+	require.NoError(t, err)
+	dsn := fmt.Sprintf("postgres://test:test@%s:%s/%s?sslmode=disable", host, testPostgres.port, database)
 
 	// 连接数据库
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	require.NoError(t, err, "连接数据库失败")
+	config := &std.Config{}
+	config.Database = dsn
+	db, err := std.NewConnection(config)
+	require.NoError(t, err)
+	pool := db.Pool()
 
 	// 创建测试表结构
-	require.NoError(t, db.Exec(testSchemaSQL).Error, "创建测试表结构失败")
+	_, err = pool.ExecContext(context.Background(), testSchemaSQL)
+	require.NoError(t, err, "创建测试表结构失败")
 
 	// 返回清理函数
 	cleanup := func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
+		_ = db.Close()
+		for deadline := time.Now().Add(time.Second); ; time.Sleep(10 * time.Millisecond) {
+			_, dropErr := admin.Pool().ExecContext(context.Background(), `DROP DATABASE IF EXISTS "`+database+`" WITH (FORCE)`)
+			if dropErr == nil || time.Now().After(deadline) {
+				break
+			}
 		}
-		if err := container.Terminate(ctx); err != nil {
-			t.Logf("终止容器失败: %v", err)
-		}
+		_ = admin.Close()
 	}
 
 	return db, cleanup
+}
+
+func startTestPostgres() {
+	image := os.Getenv("GQL_TEST_POSTGRES_IMAGE")
+	if image == "" {
+		image = "postgres:15-alpine"
+	}
+	output, err := exec.Command("docker", "run", "-d", "--rm", "-p", "127.0.0.1::5432",
+		"-e", "POSTGRES_DB=test", "-e", "POSTGRES_USER=test", "-e", "POSTGRES_PASSWORD=test",
+		image, "postgres", "-c", "wal_level=logical").CombinedOutput()
+	if err != nil {
+		testPostgres.err = fmt.Errorf("start PostgreSQL container: %w: %s", err, output)
+		return
+	}
+	testPostgres.id = strings.TrimSpace(string(output))
+	output, err = exec.Command("docker", "port", testPostgres.id, "5432/tcp").CombinedOutput()
+	if err != nil {
+		testPostgres.err = fmt.Errorf("read PostgreSQL port: %w: %s", err, output)
+		return
+	}
+	_, testPostgres.port, _ = strings.Cut(strings.TrimSpace(string(output)), ":")
+	dsn := fmt.Sprintf("postgres://test:test@127.0.0.1:%s/test?sslmode=disable", testPostgres.port)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		config := &std.Config{}
+		config.Database = dsn
+		db, openErr := std.NewConnection(config)
+		if openErr == nil {
+			pingErr := db.Pool().Ping()
+			_ = db.Close()
+			if pingErr == nil {
+				return
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	testPostgres.err = fmt.Errorf("PostgreSQL container did not become ready")
 }
 
 // TestMetadataLoadingModes 测试三种元数据加载模式
@@ -1174,7 +1222,7 @@ func TestFinalizeConfiguredRawKeys(t *testing.T) {
 	meta.finalize()
 
 	assert.Equal(t, "Custom", class.Fields["userId"].Type, "配置原文键(表名/列名)显式指定的类型不应被finalize覆盖")
-	assert.Equal(t, protocol.SCALAR_ID, class.Fields["id"].Type, "未配置的主键仍应定型为ID")
+	assert.Equal(t, "integer", class.Fields["id"].Type, "复合主键的未配置列保留原生类型供KeyInput使用")
 }
 
 // TestNewMetadataEmptyNodesError 所有加载器执行后无任何实体：

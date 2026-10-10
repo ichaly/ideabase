@@ -9,15 +9,23 @@ import (
 
 // 导入本包即自动注册PostgreSQL方言
 func init() {
-	compiler.Register(NewDialect())
+	compiler.Register(func() compiler.Dialect { return NewDialect() })
 }
 
 // Dialect PostgreSQL方言实现
-type Dialect struct{}
+type Dialect struct{ Audit AuditWriter }
+
+type Option func(*Dialect)
+
+func WithAuditWriter(writer AuditWriter) Option { return func(d *Dialect) { d.Audit = writer } }
 
 // NewDialect 创建PostgreSQL方言实例
-func NewDialect() compiler.Dialect {
-	return &Dialect{}
+func NewDialect(options ...Option) compiler.Dialect {
+	dialect := &Dialect{}
+	for _, option := range options {
+		option(dialect)
+	}
+	return dialect
 }
 
 // Name 方言名称

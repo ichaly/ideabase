@@ -1,0 +1,201 @@
+spec: gql-engine-five-round-simplification
+run_id: "20260809T180000+0800"
+started_at: "2026-08-09T18:00:00+08:00"
+
+baseline:
+  timestamp: "2026-08-09T18:00:00+08:00"
+  gates:
+    unit_tests_passed: 1
+    race_tests_passed: 1
+    vet_passed: 1
+    staticcheck_findings: 11
+    api_compatibility_passed: 1
+    simple_compile_allocs: 22
+    nested_compile_allocs: 51
+    gateway_warm_allocs: 75
+    observer_disabled_allocs: 0
+  diagnostics:
+    production_go_lines: 22190
+    production_go_files: 76
+    production_functions: 893
+    production_branch_tokens: 3701
+    test_go_lines: 14673
+    simple_compile_ns: 2049
+    nested_compile_ns: 4866
+    gateway_warm_ns: 8484
+    observer_disabled_ns: 2.135
+
+experiments:
+  - iteration: 1
+    batch: 1
+    hypothesis: Remove private functions proven unreachable by production and tests.
+    category: dead-code
+    outcome: kept
+    changes:
+      - file: gql/derive.go
+        summary: Removed the unused scalar wrapper.
+      - file: gql/frontend.go
+        summary: Removed the unused schema-less selection normalizer.
+      - file: gql/subscription.go
+        summary: Removed the superseded feed-key builder.
+      - file: gql/tenant_gateway.go
+        summary: Removed the superseded tenant target wrapper.
+    gates:
+      unit_tests_passed: 1
+      race_tests_passed: 1
+      vet_passed: 1
+      staticcheck_findings: 7
+      api_compatibility_passed: 1
+      simple_compile_allocs: 22
+      nested_compile_allocs: 51
+      gateway_warm_allocs: 75
+      observer_disabled_allocs: 0
+    gates_passed: true
+    diagnostics:
+      production_go_lines: 22166
+      production_go_files: 76
+      production_functions: 889
+      production_branch_tokens: 3701
+      test_go_lines: 14673
+      simple_compile_ns: 2099
+      nested_compile_ns: 4949
+      gateway_warm_ns: 8480
+      observer_disabled_ns: 2.149
+    primary_delta: "-24"
+    learnings: Private compatibility wrappers can be removed safely only after checking both production and same-package tests; observable error text must remain unchanged.
+  - iteration: 2
+    batch: 2
+    hypothesis: Replace hand-written ordered concatenation and deletion loops in metadata assembly with standard-library slice algorithms.
+    category: metadata-schema
+    outcome: kept
+    changes:
+      - file: gql/metadata.go
+        summary: Replaced the loader deletion loop with slices.DeleteFunc.
+      - file: gql/metadata/loader_config.go
+        summary: Replaced repeated ordered appends with exact-capacity slices.Concat.
+    gates:
+      unit_tests_passed: 1
+      race_tests_passed: 1
+      vet_passed: 1
+      staticcheck_findings: 7
+      api_compatibility_passed: 1
+      simple_compile_allocs: 22
+      nested_compile_allocs: 51
+      gateway_warm_allocs: 75
+      observer_disabled_allocs: 0
+    gates_passed: true
+    diagnostics:
+      production_go_lines: 22157
+      production_go_files: 76
+      production_functions: 889
+      production_branch_tokens: 3699
+      test_go_lines: 14673
+      simple_compile_ns: 2060
+      nested_compile_ns: 4706
+      gateway_warm_ns: 7928
+      observer_disabled_ns: 2.101
+    primary_delta: "-9"
+    learnings: Standard-library slice algorithms express startup ordering exactly while reducing branches and leaving request-path allocations unchanged.
+  - iteration: 3
+    batch: 3
+    hypothesis: Use one inlineable direction function for keyset ordering and cursor contract serialization.
+    category: compiler
+    outcome: kept
+    changes:
+      - file: gql/compiler/pgsql/cursor.go
+        summary: Reused one direction mapping in page ordering and cursor signatures.
+      - file: gql/compiler/pgsql/sort.go
+        summary: Added the canonical boolean-to-sort-token mapping.
+    gates:
+      unit_tests_passed: 1
+      race_tests_passed: 1
+      vet_passed: 1
+      staticcheck_findings: 7
+      api_compatibility_passed: 1
+      simple_compile_allocs: 22
+      nested_compile_allocs: 51
+      gateway_warm_allocs: 75
+      observer_disabled_allocs: 0
+    gates_passed: true
+    diagnostics:
+      production_go_lines: 22153
+      production_go_files: 76
+      production_functions: 890
+      production_branch_tokens: 3697
+      test_go_lines: 14673
+      simple_compile_ns: 2069
+      nested_compile_ns: 4845
+      gateway_warm_ns: 7879
+      observer_disabled_ns: 2.107
+    primary_delta: "-4"
+    learnings: A tiny inlineable value mapping can remove repeated branches from a hot compiler path without changing its allocation budget.
+  - iteration: 4
+    batch: 4
+    hypothesis: Reuse the canonical operation membership scan inside policy authorization.
+    category: execution
+    outcome: kept
+    changes:
+      - file: gql/policy.go
+        summary: Removed a second hand-written operation membership loop.
+    gates:
+      unit_tests_passed: 1
+      race_tests_passed: 1
+      vet_passed: 1
+      staticcheck_findings: 7
+      api_compatibility_passed: 1
+      simple_compile_allocs: 22
+      nested_compile_allocs: 51
+      gateway_warm_allocs: 75
+      observer_disabled_allocs: 0
+    gates_passed: true
+    diagnostics:
+      production_go_lines: 22144
+      production_go_files: 76
+      production_functions: 890
+      production_branch_tokens: 3694
+      test_go_lines: 14673
+      simple_compile_ns: 2092
+      nested_compile_ns: 4786
+      gateway_warm_ns: 7998
+      observer_disabled_ns: 2.126
+    primary_delta: "-9"
+    learnings: Reusing an existing inlineable linear scan reduces policy branching without changing gateway allocations or measured latency.
+  - iteration: 5
+    batch: 5
+    hypothesis: Replace duplicate topology snapshot loops with the standard-library map clone algorithm.
+    category: gateway-transport
+    outcome: kept
+    changes:
+      - file: gql/gateway.go
+        summary: Reused maps.Clone for both gateway and pinned-revision topology snapshots.
+    gates:
+      unit_tests_passed: 1
+      race_tests_passed: 1
+      vet_passed: 1
+      staticcheck_findings: 7
+      api_compatibility_passed: 1
+      simple_compile_allocs: 22
+      nested_compile_allocs: 51
+      gateway_warm_allocs: 75
+      observer_disabled_allocs: 0
+    gates_passed: true
+    diagnostics:
+      production_go_lines: 22137
+      production_go_files: 76
+      production_functions: 890
+      production_branch_tokens: 3692
+      test_go_lines: 14673
+      simple_compile_ns: 2021
+      nested_compile_ns: 4895
+      gateway_warm_ns: 8634
+      observer_disabled_ns: 2.107
+    primary_delta: "-7"
+    learnings: maps.Clone preserves ownership isolation while replacing two copies of the same lifecycle algorithm.
+
+best:
+  iteration: 5
+  metrics:
+    production_go_lines: 22137
+  total_judge_cost_usd: 0
+
+hypothesis_backlog: []
