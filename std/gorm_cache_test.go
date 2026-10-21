@@ -141,7 +141,7 @@ func TestCacheSecondLoadShouldReturnData(t *testing.T) {
 	require.Len(t, cached, 1, "第二次命中缓存仍然返回空数据")
 }
 
-func waitForCachedQuery(t *testing.T, store cache.Cache, result *gorm.DB) {
+func waitForCachedQuery(t *testing.T, store cache.Cache, result *gorm.DB) string {
 	t.Helper()
 	dry := result.Session(&gorm.Session{DryRun: true}).Find(&[]cacheUser{})
 	require.NoError(t, dry.Error)
@@ -151,6 +151,21 @@ func waitForCachedQuery(t *testing.T, store cache.Cache, result *gorm.DB) {
 		_, err := store.Get(context.Background(), key)
 		return err == nil
 	}, time.Second, time.Millisecond)
+	return key
+}
+
+func openCacheSQLTest(t testing.TB) (*gorm.DB, cache.Cache, *sql.DB) {
+	t.Helper()
+	db := openTestDB(t)
+	store, err := cache.New(nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&cacheUser{}))
+	require.NoError(t, db.Create(&cacheUser{ID: 1, Name: "Tom"}).Error)
+	require.NoError(t, db.Use(NewGormCache(store)))
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	return db, store, sqlDB
 }
 
 func TestCacheInvalidatesOverriddenTable(t *testing.T) {
@@ -168,6 +183,89 @@ func TestCacheInvalidatesOverriddenTable(t *testing.T) {
 	var updated []cacheUser
 	require.NoError(t, db.Table("other_users").Find(&updated).Error)
 	require.Equal(t, "new", updated[0].Name)
+}
+
+func TestCacheRawQueryHit(t *testing.T) {
+	db, store, sqlDB := openCacheSQLTest(t)
+	conn := &blockConn{DB: sqlDB, err: errors.New("database query blocked")}
+	db.ConnPool, db.Statement.ConnPool = conn, conn
+
+	const query = "SELECT id, name FROM cache_users WHERE id = ?"
+	var first []cacheUser
+	result := db.Raw(query, 1).Find(&first)
+	require.NoError(t, result.Error)
+	require.Equal(t, []cacheUser{{ID: 1, Name: "Tom"}}, first)
+	dry := db.Session(&gorm.Session{DryRun: true}).Raw(query, 1).Find(&[]cacheUser{})
+	waitForCachedQuery(t, store, dry)
+
+	conn.fail = true
+	var cached []cacheUser
+	result = db.Raw(query, 1).Find(&cached)
+	require.NoError(t, result.Error)
+	require.Equal(t, first, cached)
+	require.EqualValues(t, 1, result.RowsAffected)
+	var uncached []cacheUser
+	require.Error(t, db.Raw(query, 2).Find(&uncached).Error, "不同参数不能命中同一条缓存")
+	require.Error(t, db.Raw(query, 1).Scan(&uncached).Error, "Scan 仍然直接查库")
+}
+
+func TestCacheExecInvalidates(t *testing.T) {
+	tests := []struct {
+		name, query string
+		args        []any
+		want        []cacheUser
+	}{
+		{"insert", "INSERT INTO cache_users (id, name) VALUES (?, ?)", []any{2, "Jerry"}, []cacheUser{{1, "Tom"}, {2, "Jerry"}}},
+		{"update", "UPDATE cache_users SET name = ? WHERE id = ?", []any{"Updated", 1}, []cacheUser{{1, "Updated"}}},
+		{"delete", "DELETE FROM cache_users WHERE id = ?", []any{1}, []cacheUser{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, store, _ := openCacheSQLTest(t)
+			const query = "SELECT id, name FROM cache_users ORDER BY id"
+			var first []cacheUser
+			require.NoError(t, db.Raw(query).Find(&first).Error)
+			dry := db.Session(&gorm.Session{DryRun: true}).Raw(query).Find(&[]cacheUser{})
+			key := waitForCachedQuery(t, store, dry)
+
+			require.NoError(t, db.Exec(tt.query, tt.args...).Error)
+			_, err := store.Get(context.Background(), key)
+			require.ErrorIs(t, err, cache.ErrNotFound)
+			var updated []cacheUser
+			require.NoError(t, db.Raw(query).Find(&updated).Error)
+			require.Equal(t, tt.want, updated)
+		})
+	}
+}
+
+func TestCacheExecPreservesCacheWhenNotWritten(t *testing.T) {
+	tests := []struct {
+		name, query string
+		dryRun      bool
+		wantError   bool
+	}{
+		{"failed write", "UPDATE cache_users SET missing_column = 1", false, true},
+		{"dry run", "UPDATE cache_users SET name = 'Updated'", true, false},
+		{"select", "SELECT * FROM cache_users", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, store, _ := openCacheSQLTest(t)
+			var first []cacheUser
+			result := db.Find(&first)
+			require.NoError(t, result.Error)
+			key := waitForCachedQuery(t, store, result)
+
+			result = db.Session(&gorm.Session{DryRun: tt.dryRun}).Exec(tt.query)
+			if tt.wantError {
+				require.Error(t, result.Error)
+			} else {
+				require.NoError(t, result.Error)
+			}
+			_, err := store.Get(context.Background(), key)
+			require.NoError(t, err, "没有成功执行写入时不应清除查询缓存")
+		})
+	}
 }
 
 func TestCacheUnsupportedDialectBypassesStore(t *testing.T) {

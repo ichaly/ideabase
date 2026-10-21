@@ -103,3 +103,42 @@ func TestTagsSafetyAndScopes(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteTags(t *testing.T) {
+	tests := []struct {
+		name, dialect, query string
+		want                 []string
+		ok                   bool
+	}{
+		{"mysql insert select", "mysql", "INSERT INTO archive.users SELECT * FROM users", []string{"archive.users", "users"}, true},
+		{"mysql join update", "mysql", "UPDATE users u JOIN profiles p ON p.user_id=u.id SET u.name=p.name", []string{"profiles", "users"}, true},
+		{"mysql multi delete", "mysql", "DELETE u, p FROM users u JOIN profiles p ON p.user_id=u.id", []string{"profiles", "users"}, true},
+		{"mysql replace", "mysql", "REPLACE INTO users (id) SELECT id FROM legacy_users", []string{"legacy_users", "users"}, true},
+		{"mysql quoted insert", "mysql", "INSERT INTO `App`.`Users` (id) VALUES (?)", []string{"app.users", "users"}, true},
+		{"mysql delete using", "mysql", "DELETE FROM u USING users u JOIN profiles p ON p.user_id=u.id", []string{"profiles", "users"}, true},
+		{"postgres update from", "postgres", `UPDATE public.users u SET name = p.name FROM profiles p WHERE p.id = u.id`, []string{"profiles", "users", "public.users"}, true},
+		{"postgres delete using", "postgres", `DELETE FROM users u USING stale_users s WHERE s.id = u.id`, []string{"stale_users", "users"}, true},
+		{"postgres insert select", "postgres", `INSERT INTO archive.users SELECT * FROM users`, []string{"archive.users", "users"}, true},
+		{"postgres writable cte", "postgres", `WITH gone AS (DELETE FROM users RETURNING *) INSERT INTO audit SELECT * FROM gone`, []string{"audit", "gone", "users"}, true},
+		{"postgres merge", "postgres", `MERGE INTO users u USING incoming i ON u.id=i.id WHEN MATCHED THEN UPDATE SET name=i.name WHEN NOT MATCHED THEN INSERT (id,name) VALUES(i.id,i.name)`, []string{"incoming", "users"}, true},
+		{"postgres quoted insert", "postgresql", `INSERT INTO public."Users" (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, []string{"Users", "public.Users"}, true},
+		{"select rejected", "postgres", "SELECT * FROM users", nil, false},
+		{"mysql select rejected", "mysql", "SELECT * FROM users", nil, false},
+		{"ddl rejected", "mysql", "CREATE TABLE users (id INT)", nil, false},
+		{"postgres ddl rejected", "postgres", "TRUNCATE users", nil, false},
+		{"multiple rejected", "postgres", "DELETE FROM users; DELETE FROM orders", nil, false},
+		{"mysql multiple rejected", "mysql", "DELETE FROM users; DELETE FROM orders", nil, false},
+		{"postgres invalid rejected", "postgres", "UPDATE users SET", nil, false},
+		{"mysql invalid rejected", "mysql", "UPDATE users SET", nil, false},
+		{"unknown rejected", "sqlite", "DELETE FROM users", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := WriteTags(tt.dialect, tt.query)
+			require.Equal(t, tt.ok, ok)
+			if ok {
+				require.ElementsMatch(t, tt.want, got)
+			}
+		})
+	}
+}

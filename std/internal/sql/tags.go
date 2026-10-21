@@ -18,6 +18,19 @@ func Tags(dialect, sql string) ([]string, bool) {
 	}
 }
 
+// WriteTags 提取单条受支持 DML 的显式关系，用于写入后的表级失效。
+// 保守地包含源表和 CTE 名称，可能多失效；不解析触发器和函数内部的依赖。
+func WriteTags(dialect, query string) ([]string, bool) {
+	switch strings.ToLower(dialect) {
+	case "postgres", "postgresql":
+		return extractPostgresWriteTags(query)
+	case "mysql":
+		return extractMySQLWriteTags(query)
+	default:
+		return nil, false
+	}
+}
+
 func addTableTags(seen map[string]struct{}, schema, table string) {
 	if table == "" {
 		return

@@ -48,6 +48,7 @@ func (my *GormCache) Initialize(db *gorm.DB) error {
 	name := my.Name()
 	return errors.Join(
 		db.Callback().Query().Replace("gorm:query", my.query),
+		db.Callback().Raw().After("gorm:raw").Register(name+":raw", my.purgeRaw),
 		db.Callback().Create().After("gorm:create").Register(name+":create", my.purge),
 		db.Callback().Update().After("gorm:update").Register(name+":update", my.purge),
 		db.Callback().Delete().After("gorm:delete").Register(name+":delete", my.purge),
@@ -135,6 +136,16 @@ func (my *GormCache) purge(db *gorm.DB) {
 		return
 	}
 	if tags := purgeTags(db); len(tags) > 0 {
+		_ = my.store.Flush(context.Background(), tags...)
+	}
+}
+
+func (my *GormCache) purgeRaw(db *gorm.DB) {
+	if db.Error != nil || db.DryRun || my.store == nil {
+		return
+	}
+	// Exec 没有可靠的 Statement.Table，必须从已执行的 SQL 中提取关系。
+	if tags, ok := sql.WriteTags(db.Dialector.Name(), db.Statement.SQL.String()); ok && len(tags) > 0 {
 		_ = my.store.Flush(context.Background(), tags...)
 	}
 }

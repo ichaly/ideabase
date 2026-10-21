@@ -26,6 +26,41 @@ func extractMySQLTags(sql string) ([]string, bool) {
 	return sortedTags(v.tables), true
 }
 
+func extractMySQLWriteTags(sql string) ([]string, bool) {
+	stmts, _, err := parser.New().Parse(sql, "", "")
+	if err != nil || len(stmts) != 1 {
+		return nil, false
+	}
+	switch stmts[0].(type) {
+	case *ast.InsertStmt, *ast.UpdateStmt, *ast.DeleteStmt:
+	default:
+		return nil, false
+	}
+	v := &mysqlWriteVisitor{tables: map[string]struct{}{}}
+	if _, ok := stmts[0].Accept(v); !ok {
+		return nil, false
+	}
+	return sortedTags(v.tables), true
+}
+
+type mysqlWriteVisitor struct {
+	tables map[string]struct{}
+}
+
+func (my *mysqlWriteVisitor) Enter(node ast.Node) (ast.Node, bool) {
+	if source, ok := node.(*ast.TableSource); ok {
+		if table, ok := source.Source.(*ast.TableName); ok {
+			// 从 TableSource 取实际表名，避免把多表 DELETE 目标中的别名当作物理表。
+			addTableTags(my.tables, table.Schema.L, table.Name.L)
+		}
+	}
+	return node, false
+}
+
+func (my *mysqlWriteVisitor) Leave(node ast.Node) (ast.Node, bool) {
+	return node, true
+}
+
 type mysqlTableVisitor struct {
 	tables, ctes map[string]struct{}
 	scopes       []map[string]struct{}

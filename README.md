@@ -58,14 +58,33 @@ IdeaBase/
 多语句、DML、带锁查询和 SELECT INTO 绕过缓存，照常访问数据库。
 
 查询记录表名 tag，GORM Create/Update/Delete 回调清除对应 tag。
+`Exec` 成功执行支持的单条写入 SQL 后，也会解析表依赖并清除对应 tag；
+失败执行和 DryRun 不清除缓存。写入解析采用保守策略，关联的源表也可能一起失效。
+支持 PostgreSQL 的 INSERT/UPDATE/DELETE/MERGE，以及 MySQL 的
+INSERT/REPLACE/UPDATE/DELETE；DDL（包括 TRUNCATE）、多语句和解析失败不自动失效。
 限定表名同时记录 `schema.table` 和 `table`，保证未限定表名的写入也能失效；
 不同 schema 的同名表可能一起失效。缓存键使用 `sql:v2:<dialect>:` 命名空间。
 MySQL tag 统一小写以兼容不同的表名大小写配置，PostgreSQL 保留引用标识符的大小写。
 
 表解析不等于完整数据血缘：视图、函数内部读取的表需通过 `std.WithCacheTags`
 显式补充。依赖时间、会话状态或有副作用的函数不能仅靠表 tag 判断缓存有效性。
-此插件仍为表级失效，不提供主键级失效；原生 SQL/外部写入、事务提交时序与
+此插件仍为表级失效，不提供主键级失效；未支持的原生写入/外部写入、事务提交时序与
 并发旧结果回填需要业务层另行协调，不能把本次方言解析当作一致性保证。
+
+原生查询需要缓存时使用 `Raw(...).Find(...)`，它复用 Query 回调：
+
+```go
+var users []User
+err := db.Raw("SELECT * FROM users WHERE status = ?", "active").Find(&users).Error
+
+// 成功执行后，自动清除 users 表对应的查询缓存。
+err = db.Exec("UPDATE users SET status = ? WHERE id = ?", "inactive", id).Error
+```
+
+`Raw(...).Scan(...)`、`Row()`、`Rows()` 仍直接访问数据库；Query 路径中的
+`FOR UPDATE` 等锁查询也绕过缓存。`Raw(...).Find(...)` 走 GORM 查询回调，
+不保证与 `Scan` 的钩子行为完全相同。`Exec` 的失效发生在语句成功执行之后，
+不代表外层显式事务已经提交；事务内写入仍需在最终提交后协调失效。
 
 ## 技术栈
 

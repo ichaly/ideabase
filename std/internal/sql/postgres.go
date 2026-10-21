@@ -25,6 +25,43 @@ func extractPostgresTags(sql string) ([]string, bool) {
 	return sortedTags(seen), true
 }
 
+func extractPostgresWriteTags(sql string) ([]string, bool) {
+	tree, err := pgquery.Parse(sql)
+	if err != nil || len(tree.GetStmts()) != 1 {
+		return nil, false
+	}
+	stmt := tree.Stmts[0].GetStmt()
+	switch stmt.GetNode().(type) {
+	case *pg.Node_InsertStmt, *pg.Node_UpdateStmt, *pg.Node_DeleteStmt, *pg.Node_MergeStmt:
+	default:
+		return nil, false
+	}
+	seen := map[string]struct{}{}
+	walkPostgresWrite(stmt.ProtoReflect(), seen)
+	return sortedTags(seen), true
+}
+
+func walkPostgresWrite(m protoreflect.Message, seen map[string]struct{}) {
+	if rangeVar, ok := m.Interface().(*pg.RangeVar); ok {
+		addTableTags(seen, rangeVar.Schemaname, rangeVar.Relname)
+		return
+	}
+	m.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		if field.Kind() != protoreflect.MessageKind {
+			return true
+		}
+		if field.IsList() {
+			list := value.List()
+			for i := 0; i < list.Len(); i++ {
+				walkPostgresWrite(list.Get(i).Message(), seen)
+			}
+		} else {
+			walkPostgresWrite(value.Message(), seen)
+		}
+		return true
+	})
+}
+
 func walkPostgres(m protoreflect.Message, ctes, seen map[string]struct{}) bool {
 	switch n := m.Interface().(type) {
 	case *pg.InsertStmt, *pg.UpdateStmt, *pg.DeleteStmt, *pg.MergeStmt:
