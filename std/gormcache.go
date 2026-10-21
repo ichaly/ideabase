@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/ichaly/ideabase/std/cache"
+	"github.com/ichaly/ideabase/std/internal/sql"
 	"github.com/ichaly/ideabase/utl"
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
@@ -28,10 +27,8 @@ func WithCacheTags(ctx context.Context, tags ...string) context.Context {
 }
 
 func contextTags(ctx context.Context) []string {
-	if v, ok := ctx.Value(cacheTagsKey{}).([]string); ok {
-		return v
-	}
-	return nil
+	tags, _ := ctx.Value(cacheTagsKey{}).([]string)
+	return tags
 }
 
 // GormCache 基于表名 tag 的 GORM 查询缓存插件（桥接 cache.Cache）
@@ -58,67 +55,21 @@ func (my *GormCache) Initialize(db *gorm.DB) error {
 }
 
 func (my *GormCache) key(db *gorm.DB) string {
-	return "sql:" + utl.MD5(db.Dialector.Explain(db.Statement.SQL.String(), db.Statement.Vars...))
+	return "sql:v2:" + db.Dialector.Name() + ":" + utl.MD5(db.Dialector.Explain(db.Statement.SQL.String(), db.Statement.Vars...))
 }
 
-var tableRe = regexp.MustCompile("(?i)\\b(?:FROM|JOIN|INTO)\\s+(?:[`\"]?(\\w+)|(\\s*\\())")
-var cteRe = regexp.MustCompile(`(?i)\bWITH\s+(\w+)\s+AS\s*\(`)
-
-func extractTags(sql string) []string {
-	cteNames := map[string]struct{}{}
-	for _, m := range cteRe.FindAllStringSubmatch(sql, -1) {
-		cteNames[strings.ToLower(m[1])] = struct{}{}
+func purgeTags(db *gorm.DB) []string {
+	stmt := db.Statement
+	if stmt.Table == "" {
+		return nil
 	}
-	seen := map[string]struct{}{}
-	collectTables(sql, cteNames, seen)
-	result := make([]string, 0, len(seen))
-	for t := range seen {
-		result = append(result, t)
+	from := stmt.Quote(stmt.Table)
+	if stmt.TableExpr != nil {
+		// Table("users AS u") 的 Statement.Table 是别名，实际表来自 TableExpr。
+		from = db.Dialector.Explain(stmt.TableExpr.SQL, stmt.TableExpr.Vars...)
 	}
-	return result
-}
-
-func collectTables(sql string, cteNames map[string]struct{}, seen map[string]struct{}) {
-	matches := tableRe.FindAllStringSubmatchIndex(sql, -1)
-	for _, idx := range matches {
-		if idx[2] >= 0 {
-			name := strings.ToLower(sql[idx[2]:idx[3]])
-			if _, isCTE := cteNames[name]; !isCTE {
-				seen[name] = struct{}{}
-			}
-		} else if idx[4] >= 0 {
-			if inner, ok := extractParenContent(sql, idx[4]); ok {
-				collectTables(inner, cteNames, seen)
-			}
-		}
-	}
-}
-
-func extractParenContent(sql string, start int) (string, bool) {
-	depth := 0
-	for i := start; i < len(sql); i++ {
-		switch sql[i] {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return sql[start+1 : i], true
-			}
-		}
-	}
-	return "", false
-}
-
-func purgeTag(db *gorm.DB) string {
-	if db.Statement.Schema != nil && db.Statement.Schema.Table != "" {
-		return db.Statement.Schema.Table
-	}
-	t := db.Statement.Table
-	if i := strings.IndexByte(t, ' '); i > 0 {
-		return t[:i]
-	}
-	return t
+	tags, _ := sql.Tags(db.Dialector.Name(), "SELECT * FROM "+from)
+	return tags
 }
 
 func (my *GormCache) query(db *gorm.DB) {
@@ -131,11 +82,12 @@ func (my *GormCache) query(db *gorm.DB) {
 		return
 	}
 	key := my.key(db)
-
-	if raw, err := my.store.Get(db.Statement.Context, key); err == nil {
-		var entry cacheEntry
-		if utl.Unmarshal(raw, &entry) == nil {
-			if utl.Unmarshal(entry.Data, db.Statement.Dest) == nil {
+	tags, cacheable := sql.Tags(db.Dialector.Name(), db.Statement.SQL.String())
+	cacheable = cacheable && my.store != nil
+	if cacheable {
+		if raw, err := my.store.Get(db.Statement.Context, key); err == nil {
+			var entry cacheEntry
+			if utl.Unmarshal(raw, &entry) == nil && utl.Unmarshal(entry.Data, db.Statement.Dest) == nil {
 				db.RowsAffected = entry.Rows
 				db.Statement.RowsAffected = entry.Rows
 				return
@@ -153,32 +105,36 @@ func (my *GormCache) query(db *gorm.DB) {
 	defer func() { _ = rows.Close() }()
 	gorm.Scan(rows, db, 0)
 
-	if db.Error != nil {
+	if db.Error != nil || !cacheable {
 		return
 	}
-	if data, err := utl.Marshal(db.Statement.Dest); err == nil {
-		t := extractTags(db.Statement.SQL.String())
-		if extra := contextTags(db.Statement.Context); len(extra) > 0 {
-			seen := make(map[string]struct{}, len(t)+len(extra))
-			for _, v := range t {
-				seen[v] = struct{}{}
-			}
-			for _, v := range extra {
-				if _, ok := seen[v]; !ok {
-					t = append(t, v)
-				}
+	data, err := utl.Marshal(db.Statement.Dest)
+	if err != nil {
+		return
+	}
+	if extra := contextTags(db.Statement.Context); len(extra) > 0 {
+		seen := make(map[string]struct{}, len(tags)+len(extra))
+		for _, tag := range tags {
+			seen[tag] = struct{}{}
+		}
+		for _, tag := range extra {
+			if _, ok := seen[tag]; !ok {
+				tags = append(tags, tag)
+				seen[tag] = struct{}{}
 			}
 		}
-		entry := cacheEntry{Rows: db.RowsAffected, Data: data, Tags: t}
-		if encoded, err := utl.Marshal(entry); err == nil {
-			_ = my.store.Set(db.Statement.Context, key, encoded, my.ttl, t...)
-		}
+	}
+	entry := cacheEntry{Rows: db.RowsAffected, Data: data, Tags: tags}
+	if encoded, err := utl.Marshal(entry); err == nil {
+		_ = my.store.Set(db.Statement.Context, key, encoded, my.ttl, tags...)
 	}
 }
 
 func (my *GormCache) purge(db *gorm.DB) {
-	if db.Error != nil || db.Statement.Table == "" {
+	if db.Error != nil || db.DryRun || my.store == nil {
 		return
 	}
-	_ = my.store.Flush(context.Background(), purgeTag(db))
+	if tags := purgeTags(db); len(tags) > 0 {
+		_ = my.store.Flush(context.Background(), tags...)
+	}
 }

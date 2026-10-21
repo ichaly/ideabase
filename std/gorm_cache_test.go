@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ichaly/ideabase/std/cache"
 	_ "github.com/ichaly/ideabase/std/cache/memory"
@@ -18,6 +19,11 @@ type cacheUser struct {
 	ID   int64  `gorm:"primaryKey"`
 	Name string `gorm:"size:30"`
 }
+
+// dialectAlias keeps the SQLite test backend while exercising the MySQL parser.
+type dialectAlias struct{ gorm.Dialector }
+
+func (d dialectAlias) Name() string { return "mysql" }
 
 // blockConn 在 fail=true 时拒绝查询，确保第二次查询只能依赖缓存。
 type blockConn struct {
@@ -59,6 +65,7 @@ func openTestDB(t testing.TB) *gorm.DB {
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	require.NoError(t, err)
+	db.Dialector = dialectAlias{db.Dialector}
 	return db
 }
 
@@ -119,9 +126,11 @@ func TestCacheSecondLoadShouldReturnData(t *testing.T) {
 	db.Statement.ConnPool = db.ConnPool
 
 	var first []cacheUser
-	err = db.Find(&first).Error
+	firstResult := db.Find(&first)
+	err = firstResult.Error
 	require.NoError(t, err)
 	require.Len(t, first, 1, "第一次从数据库读取应该返回数据并写入缓存")
+	waitForCachedQuery(t, store, firstResult)
 
 	// 关闭数据库访问，强制依赖缓存
 	conn.fail = true
@@ -130,6 +139,46 @@ func TestCacheSecondLoadShouldReturnData(t *testing.T) {
 	err = db.Find(&cached).Error
 	require.NoError(t, err, "缓存读取失败时会继续访问数据库导致报错")
 	require.Len(t, cached, 1, "第二次命中缓存仍然返回空数据")
+}
+
+func waitForCachedQuery(t *testing.T, store cache.Cache, result *gorm.DB) {
+	t.Helper()
+	dry := result.Session(&gorm.Session{DryRun: true}).Find(&[]cacheUser{})
+	require.NoError(t, dry.Error)
+	key := (&GormCache{}).key(dry)
+	// Ristretto 的写入异步可见，先确认入缓存再关闭数据库或验证失效。
+	require.Eventually(t, func() bool {
+		_, err := store.Get(context.Background(), key)
+		return err == nil
+	}, time.Second, time.Millisecond)
+}
+
+func TestCacheInvalidatesOverriddenTable(t *testing.T) {
+	db := openTestDB(t)
+	store, err := cache.New(nil)
+	require.NoError(t, err)
+	require.NoError(t, db.Use(NewGormCache(store)))
+	require.NoError(t, db.Table("other_users").AutoMigrate(&cacheUser{}))
+	require.NoError(t, db.Table("other_users").Create(&cacheUser{ID: 1, Name: "old"}).Error)
+	var first []cacheUser
+	result := db.Table("other_users").Find(&first)
+	require.NoError(t, result.Error)
+	waitForCachedQuery(t, store, result)
+	require.NoError(t, db.Model(&cacheUser{}).Table("other_users AS u").Where("u.id = ?", 1).Update("name", "new").Error)
+	var updated []cacheUser
+	require.NoError(t, db.Table("other_users").Find(&updated).Error)
+	require.Equal(t, "new", updated[0].Name)
+}
+
+func TestCacheUnsupportedDialectBypassesStore(t *testing.T) {
+	db := openTestDB(t)
+	db.Dialector = db.Dialector.(dialectAlias).Dialector
+	require.NoError(t, db.AutoMigrate(&cacheUser{}))
+	require.NoError(t, db.Create(&cacheUser{ID: 1, Name: "Tom"}).Error)
+	require.NoError(t, db.Use(NewGormCache(nil)))
+	var users []cacheUser
+	require.NoError(t, db.Find(&users).Error)
+	require.Len(t, users, 1)
 }
 
 func TestCacheInvalidatesOnWrite(t *testing.T) {
@@ -223,51 +272,5 @@ func BenchmarkCacheMiss(b *testing.B) {
 		// 每次用不同 offset 绕过缓存，模拟 miss
 		var list []cacheUser
 		_ = db.Offset(i % 10).Find(&list).Error
-	}
-}
-
-func TestExtractTags(t *testing.T) {
-	cases := []struct {
-		name string
-		sql  string
-		want []string
-	}{
-		{
-			name: "普通查询",
-			sql:  `SELECT * FROM users WHERE id = 1`,
-			want: []string{"users"},
-		},
-		{
-			name: "带别名",
-			sql:  `SELECT * FROM cms_channel_lineage cl JOIN cms_lineage l ON l.id = cl.lineage_id`,
-			want: []string{"cms_channel_lineage", "cms_lineage"},
-		},
-		{
-			name: "子查询",
-			sql:  `SELECT * FROM (SELECT id FROM cms_lineage WHERE state = 1) sub`,
-			want: []string{"cms_lineage"},
-		},
-		{
-			name: "CTE",
-			sql:  `WITH cte AS (SELECT id FROM cms_lineage) SELECT * FROM cte`,
-			want: []string{"cms_lineage"},
-		},
-		{
-			name: "CTE 加 JOIN",
-			sql:  `WITH cte AS (SELECT id FROM cms_lineage) SELECT * FROM cte JOIN cms_channel c ON c.id = 1`,
-			want: []string{"cms_lineage", "cms_channel"},
-		},
-		{
-			name: "嵌套子查询",
-			sql:  `SELECT * FROM (SELECT * FROM (SELECT id FROM orders) t1) t2`,
-			want: []string{"orders"},
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := extractTags(c.sql)
-			require.ElementsMatch(t, c.want, got)
-		})
 	}
 }

@@ -50,6 +50,23 @@ IdeaBase/
 - 字段映射
 - 权限控制
 
+## GORM 查询缓存
+
+`std.NewGormCache` 根据 GORM 方言提取查询涉及的表：PostgreSQL 使用
+`wasilibs/go-pgquery` 的 WASM 解析入口（无需 CGO），MySQL 使用 TiDB parser。
+支持 JOIN、子查询、集合查询和按作用域解析的 CTE。SQLite、未知方言、解析失败、
+多语句、DML、带锁查询和 SELECT INTO 绕过缓存，照常访问数据库。
+
+查询记录表名 tag，GORM Create/Update/Delete 回调清除对应 tag。
+限定表名同时记录 `schema.table` 和 `table`，保证未限定表名的写入也能失效；
+不同 schema 的同名表可能一起失效。缓存键使用 `sql:v2:<dialect>:` 命名空间。
+MySQL tag 统一小写以兼容不同的表名大小写配置，PostgreSQL 保留引用标识符的大小写。
+
+表解析不等于完整数据血缘：视图、函数内部读取的表需通过 `std.WithCacheTags`
+显式补充。依赖时间、会话状态或有副作用的函数不能仅靠表 tag 判断缓存有效性。
+此插件仍为表级失效，不提供主键级失效；原生 SQL/外部写入、事务提交时序与
+并发旧结果回填需要业务层另行协调，不能把本次方言解析当作一致性保证。
+
 ## 技术栈
 
 - Go 1.21+
